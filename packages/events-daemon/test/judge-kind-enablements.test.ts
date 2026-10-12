@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
-import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { JudgeKinds } from '../src/runtime/judge-kinds.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -48,10 +47,12 @@ test('E4 judge kind: laya refuses before an enablement can create authority', { 
   const store = await openEventDatabase({ stateDir: root });
   try {
     const kinds = new JudgeKinds({ store, now: () => 1 });
-    assert.throws(
-      () => kinds.disable('laya'),
-      (error: unknown) => error instanceof EventDomainError && error.code === 'E2_REQUIRED',
-    );
+    assert.deepEqual(kinds.disable('laya'), {
+      kind: 'laya',
+      disabled: true,
+      pointer: 'absent',
+      pendingActivationsCancelled: 0,
+    });
     assert.equal(new ImmutableVersions(store.database).activeVersion('judge-kind', 'laya'), null);
   } finally {
     store.close();

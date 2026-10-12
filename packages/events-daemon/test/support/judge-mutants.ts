@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { copyShippedPackageAssets } from './shipped-assets.ts';
 import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface JudgeMutation {
@@ -174,6 +175,7 @@ async function copyMutationClosure(root: string): Promise<void> {
   ]);
   await Promise.all([
     cp(join(packageRoot, 'src'), join(copiedPackage, 'src'), { recursive: true }),
+    copyShippedPackageAssets(packageRoot, copiedPackage),
     cp(join(packageRoot, 'test'), join(copiedPackage, 'test'), { recursive: true }),
     cp(join(packageRoot, 'package.json'), join(copiedPackage, 'package.json')),
     cp(join(repositoryRoot, 'capabilities.json'), join(root, 'capabilities.json')),

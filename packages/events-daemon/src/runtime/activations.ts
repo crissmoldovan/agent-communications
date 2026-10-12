@@ -15,7 +15,7 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import { JUDGE_BUDGET_ID } from '../domain/judges.ts';
+import { JUDGE_BUDGET_ID, type LayaEnablementInputs } from '../domain/judges.ts';
 import { assertJudgeKindEnabled } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
@@ -187,6 +187,10 @@ export interface ActivationRuntimeOptions {
         };
       }) => Promise<unknown>)
     | undefined;
+  /** Tests may inject strict reviewed fixture bytes; production always reads the daemon's shipped asset bytes. */
+  readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
+  /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
+  readonly layaPlatformProbe?: LayaEnablementInputs['layaPlatformProbe'];
 }
 
 export type ActivationDeadlineFailpoint = (
@@ -213,6 +217,7 @@ export class ActivationRuntime {
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
+  readonly #layaInputs: LayaEnablementInputs;
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
   readonly #approvalOperations = new Map<string, Promise<void>>();
   constructor(options: ActivationRuntimeOptions) {
@@ -242,13 +247,17 @@ export class ActivationRuntime {
     this.#failpoint = options.failpoint;
     this.#deadlineFailpoint = options.deadlineFailpoint;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
+    this.#layaInputs = {
+      ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
+      ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
+    };
   }
 
   async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
     // A tightening swaps the pointer at once and an exact replacement plans against it: neither may move a pointer a
     // claimed completion is still working against (it would wedge that completion and its drain for good).
     await this.assertNoCompletingMutation(input.ruleId);
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     const document = versions.prepareRule(input.ruleId, input.version);
     await this.#assertDocumentSecretsReady(document.rule);
     this.#sourceRegistry.require(document.rule.source.channel);
@@ -361,7 +370,7 @@ export class ActivationRuntime {
       switchGeneration: current.generation,
       ruleVersions: rows.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version })),
     };
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     // K6: fresh points for every account still in the configuration; a removed one stays dark (it cannot be sampled),
     // and one re-added since its removal gets a fresh cut-over here, under this approval.
     const liveBySource = new Map<SourceOptions['channel'], ReadonlySet<string>>();
@@ -388,7 +397,7 @@ export class ActivationRuntime {
   /** Prepares the singleton budget solely from its immutable stored document. */
   async prepareJudgeBudget(input: { readonly version: number }): Promise<PreparedActivation> {
     await this.assertNoCompletingMutation();
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     const document = versions.prepareJudgeBudget(input.version);
     const active = versions.activeVersion('judge-budget', JUDGE_BUDGET_ID);
     if (active?.version === input.version)
@@ -402,7 +411,7 @@ export class ActivationRuntime {
   /** Prepares a separately approved available judge-kind pointer; it performs no provider work. */
   async prepareJudgeKind(input: { readonly kind: string; readonly version: number }): Promise<PreparedActivation> {
     const disableGeneration = this.#judgeKindDisableGeneration(input.kind);
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     // Availability is a local, closed document check. In particular Laya must report E2_REQUIRED before waiting on
     // another activation and before it can create an intent, approval, pointer or download request.
     const document = versions.prepareJudgeKind(input.kind, input.version);
@@ -726,7 +735,7 @@ export class ActivationRuntime {
     replacementOfVersion?: string,
   ): Promise<PreparedActivation> {
     const intentId = this.#newIntentId();
-    const binding = disclosureBindingFor(intentId, document);
+    const binding = disclosureBindingFor(intentId, document, this.#layaInputs);
     const now = this.#now();
     const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
     this.#store.immediate(() => {
@@ -1105,7 +1114,7 @@ export class ActivationRuntime {
         }
       }
       if (document.kind === 'rule') {
-        const active = new ImmutableVersions(this.#store.database).activeVersion('rule', document.rule.ruleId);
+        const active = this.#versions().activeVersion('rule', document.rule.ruleId);
         if (latest.replacement_of_version === null && active !== null)
           throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
             details: { reason: 'ACTIVATION_COMPLETING' },
@@ -1284,12 +1293,12 @@ export class ActivationRuntime {
 
   #liveBinding(intent: IntentRow): DisclosureBinding {
     const document = this.#document(intent);
-    const binding = disclosureBindingFor(intent.id, document);
-    if (binding.digest !== intent.digest || activationDocumentDigest(document) !== intent.digest) {
+    const binding = disclosureBindingFor(intent.id, document, this.#layaInputs);
+    if (binding.digest !== intent.digest || activationDocumentDigest(document, this.#layaInputs) !== intent.digest) {
       throw new CommsError('APPROVAL_VOID', 'the activation document changed after preparation');
     }
     if (document.kind === 'rule') {
-      const versions = new ImmutableVersions(this.#store.database);
+      const versions = this.#versions();
       const active = versions.activeVersion('rule', document.rule.ruleId);
       if (
         active !== null &&
@@ -1339,7 +1348,7 @@ export class ActivationRuntime {
       pointer.disableGeneration !== this.#judgeKindDisableGeneration(expectedObjectId)
     )
       assertJudgeKindEnabled(document.enablement.kind, false);
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     const active = versions.activeVersion(pointer.kind, pointer.objectId);
     if ((active?.version ?? null) !== pointer.version)
       throw new CommsError('APPROVAL_VOID', 'the judge activation pointer changed after preparation');
@@ -1349,12 +1358,16 @@ export class ActivationRuntime {
         : versions.prepareJudgeKind(expectedObjectId, expectedVersion);
     if (
       canonicalJson(live) !== canonicalJson(document) ||
-      activationDocumentDigest(live) !== activationDocumentDigest(document)
+      activationDocumentDigest(live, this.#layaInputs) !== activationDocumentDigest(document, this.#layaInputs)
     )
       throw new CommsError('APPROVAL_VOID', 'the immutable judge activation document changed after preparation');
   }
 
   /** A disable advances this durable fence even when the kind has no active pointer yet. */
+  #versions(): ImmutableVersions {
+    return new ImmutableVersions(this.#store.database, this.#layaInputs);
+  }
+
   #judgeKindDisableGeneration(kind: string): number {
     const row = this.#store.database
       .prepare('SELECT generation FROM judge_kind_disable_generations WHERE kind = ?')
@@ -1366,7 +1379,7 @@ export class ActivationRuntime {
   #assertRuleJudgeKindEnabled(document: ActivationDocumentV1): void {
     if (document.kind !== 'rule' || document.rule.agentic === undefined) return;
     const kind = document.rule.agentic.judge.kind;
-    const versions = new ImmutableVersions(this.#store.database);
+    const versions = this.#versions();
     assertJudgeKindEnabled(kind, versions.activeVersion('judge-kind', kind) !== null);
   }
 

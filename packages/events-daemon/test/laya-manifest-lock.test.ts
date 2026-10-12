@@ -228,7 +228,8 @@ test('E2 runtime lock: blocked placeholder keeps daemon Laya enablement from rea
         kind: 'judge-kind',
         enablement: { id: 'judge-kind:laya', kind: 'laya', version: 1 },
       }),
-    (error: unknown) => error instanceof EventDomainError && error.code === 'E2_REQUIRED',
+    // E2 Task 1 replaced E's E2_REQUIRED seam: the placeholder lock now refuses with the plan's own blocked code.
+    (error: unknown) => error instanceof EventDomainError && error.code === 'E2_EXTERNAL_REFERENCE_BLOCKED',
   );
 });
 

@@ -30,6 +30,6 @@ test('E2 runtime package: daemon package ships reviewed assets without importing
   assert.doesNotThrow(() => assertDaemonRuntimeBoundary(manifest));
   assert.deepEqual(
     manifest.files.filter((entry) => entry.startsWith('laya-')),
-    ['laya-manifest.json', 'laya-runtime.json'],
+    ['laya-enablement-disclosures.json', 'laya-manifest.json', 'laya-runtime.json'],
   );
 });

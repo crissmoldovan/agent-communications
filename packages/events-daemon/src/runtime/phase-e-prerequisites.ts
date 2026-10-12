@@ -87,7 +87,10 @@ export function assertPhaseEPrerequisites(): void {
       JUDGE_KIND_DEFINITIONS.some((entry) => entry.kind === 'local-endpoint' && entry.availability === 'available') &&
       JUDGE_KIND_DEFINITIONS.some(
         (entry) =>
-          entry.kind === 'laya' && entry.availability === 'unavailable' && entry.unavailableCode === 'E2_REQUIRED',
+          entry.kind === 'laya' &&
+          entry.availability === 'unavailable' &&
+          entry.unavailableCode === 'E2_REQUIRED' &&
+          entry.implementation !== undefined,
       ),
     'Phase E judge-kind registry',
   );

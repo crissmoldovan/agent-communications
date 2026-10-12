@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { cp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { copyShippedPackageAssets } from './shipped-assets.ts';
 import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface CutoverMutation {
@@ -872,6 +873,7 @@ export async function withCutoverMutant<T>(
   try {
     const copiedSource = join(root, 'src');
     await cp(productionSource, copiedSource, { recursive: true });
+    await copyShippedPackageAssets(packageRoot, root);
     // B2's network modules import checked-in test fixtures at module evaluation time.  Copy the whole test tree
     // before importing the mutant so every production import resolves exactly as it does from the package root.
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });

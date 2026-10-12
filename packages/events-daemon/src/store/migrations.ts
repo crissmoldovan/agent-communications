@@ -572,6 +572,23 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '19' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // E2 keeps model lifecycle state separate from the sole kind-enablement pointer.  It records no tree location
+    // or model material: the pointer remains the authority and this table is only content-free progress state.
+    version: 20,
+    name: 'event-laya-model-state-v1',
+    statements: [
+      `CREATE TABLE laya_models (
+        manifest_id TEXT PRIMARY KEY CHECK (manifest_id <> ''),
+        state TEXT NOT NULL CHECK (state IN ('installing', 'downloading', 'ready', 'failed', 'removed')),
+        bytes_verified INTEGER NOT NULL CHECK (bytes_verified >= 0),
+        verified_at INTEGER,
+        failure_code TEXT,
+        updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+      ) STRICT`,
+      "UPDATE meta SET value = '20' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

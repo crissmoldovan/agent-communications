@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { cp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { copyShippedPackageAssets } from './shipped-assets.ts';
 import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface JudgeTask4Mutation {
@@ -268,6 +269,7 @@ export async function expectJudgeTask4MutationToFail(mutation: JudgeTask4Mutatio
   await rm(root, { recursive: true, force: true });
   try {
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
+    await copyShippedPackageAssets(packageRoot, root);
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
     await cp(join(repositoryRoot, 'scripts'), join(root, 'scripts'), { recursive: true });
     await rewriteImports(root);

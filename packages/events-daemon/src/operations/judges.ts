@@ -1,4 +1,6 @@
 import { EventControlClient } from '../control/client.ts';
+import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
+import type { B3JudgeUnavailableV1 } from './b3-contract.ts';
 
 type Options = { readonly stateDir?: string | undefined };
 
@@ -37,8 +39,8 @@ export function disableJudgeKind(kind: string, options: Options = {}): Promise<u
   return request('disableJudgeKind', { kind }, options);
 }
 export function judgeModelStatus(options: Options = {}): Promise<unknown> {
-  return request('judgeModelStatus', {}, options);
+  return request('judgeModelStatus', {}, options) as Promise<LayaModelStatus | B3JudgeUnavailableV1>;
 }
-export function removeJudgeModel(options: Options = {}): Promise<unknown> {
-  return request('removeJudgeModel', {}, options);
+export function removeJudgeModel(options: Options = {}): Promise<LayaModelStatus | B3JudgeUnavailableV1> {
+  return request('removeJudgeModel', {}, options) as Promise<LayaModelStatus | B3JudgeUnavailableV1>;
 }

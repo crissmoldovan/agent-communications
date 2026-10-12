@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { JudgeKind } from '../domain/lifecycle.ts';
+import { JUDGE_KINDS } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
-import { WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
+import { LAYA_MODEL_FAILURE_CODES, type LayaModelFailureCode, type LayaModelState } from '../runtime/laya/contracts.ts';
+import { type WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
 import { type AadComponent, encodeAad } from './aad.ts';
 import {
   decryptPackedRecord,
@@ -115,6 +117,153 @@ export interface JudgeTestChargeRecord {
   readonly judgeVersion: number;
   readonly chargedAt: number;
   readonly workId: string;
+}
+
+/** D8's content-free local model progress row.  It deliberately has no tree, source, input or output field. */
+export interface LayaModelRecord {
+  readonly manifestId: string;
+  readonly state: LayaModelState;
+  readonly bytesVerified: number;
+  readonly verifiedAt: number | null;
+  readonly failureCode: LayaModelFailureCode | null;
+  readonly updatedAt: number;
+}
+
+export interface WriteLayaModelRecord {
+  readonly manifestId: string;
+  readonly state: LayaModelState;
+  readonly bytesVerified: number;
+  readonly verifiedAt?: number | null | undefined;
+  readonly failureCode?: LayaModelFailureCode | null | undefined;
+  readonly now: number;
+}
+
+function layaModelText(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} is a non-empty string`);
+  return value;
+}
+
+function layaModelInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${name} is a non-negative safe integer`);
+  return value as number;
+}
+
+function layaModelState(value: unknown): LayaModelState {
+  if (
+    value === 'installing' ||
+    value === 'downloading' ||
+    value === 'ready' ||
+    value === 'failed' ||
+    value === 'removed'
+  )
+    return value;
+  throw new Error('the model state is closed');
+}
+
+function layaModelFailureCode(value: unknown, name: string): LayaModelFailureCode | null {
+  if (value === null || value === undefined) return null;
+  if ((LAYA_MODEL_FAILURE_CODES as readonly string[]).includes(value as string)) return value as LayaModelFailureCode;
+  throw new Error(`${name} is closed`);
+}
+
+/**
+ * The model-state repository is intentionally not an enablement mechanism.  Callers hold an immediate transaction;
+ * the pointer is re-read in that same transaction directly before the write so a pre-claim or disabled lifecycle
+ * cannot leave a model row behind.
+ */
+export class LayaModelRepository {
+  readonly #database: DatabaseSync;
+
+  constructor(database: DatabaseSync) {
+    this.#database = database;
+  }
+
+  write(input: WriteLayaModelRecord): LayaModelRecord {
+    const pointer = this.#database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+      .get(JUDGE_KINDS[1]) as { version: number } | undefined;
+    if (pointer === undefined)
+      throw new Error('the active Laya judge-kind pointer is required before model state changes');
+    const record: LayaModelRecord = {
+      manifestId: layaModelText(input.manifestId, 'the model manifest id'),
+      state: layaModelState(input.state),
+      bytesVerified: layaModelInteger(input.bytesVerified, 'the verified model bytes'),
+      verifiedAt:
+        input.verifiedAt === undefined || input.verifiedAt === null
+          ? null
+          : layaModelInteger(input.verifiedAt, 'the model verification time'),
+      failureCode: layaModelFailureCode(input.failureCode, 'the model failure code'),
+      updatedAt: layaModelInteger(input.now, 'the model update time'),
+    };
+    const enabled = this.#database
+      .prepare(
+        `SELECT versions.document
+         FROM active_versions AS active
+         JOIN judge_kind_versions AS versions
+           ON versions.kind = active.object_id AND versions.version = active.version
+         WHERE active.kind = 'judge-kind' AND active.object_id = ? AND versions.revoked_at IS NULL`,
+      )
+      .get(JUDGE_KINDS[1]) as { document: string } | undefined;
+    let enabledManifestId: string | undefined;
+    try {
+      const document = JSON.parse(enabled?.document ?? 'null') as { manifest?: { manifestId?: unknown } };
+      const manifestId = document.manifest?.manifestId;
+      if (typeof manifestId === 'string' && manifestId.length > 0) enabledManifestId = manifestId;
+    } catch {
+      // The closed error below deliberately does not reflect corrupted document bytes.
+    }
+    if (enabledManifestId === undefined) throw new Error('the active Laya judge-kind pointer has no reviewed manifest');
+    if (record.manifestId !== enabledManifestId)
+      throw new Error('the model manifest must match the active Laya judge-kind pointer');
+    this.#database
+      .prepare(
+        `INSERT INTO laya_models
+          (manifest_id, state, bytes_verified, verified_at, failure_code, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(manifest_id) DO UPDATE SET
+           state = excluded.state,
+           bytes_verified = excluded.bytes_verified,
+           verified_at = excluded.verified_at,
+           failure_code = excluded.failure_code,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        record.manifestId,
+        record.state,
+        record.bytesVerified,
+        record.verifiedAt,
+        record.failureCode,
+        record.updatedAt,
+      );
+    return record;
+  }
+
+  get(manifestId: string): LayaModelRecord | null {
+    const row = this.#database
+      .prepare(
+        `SELECT manifest_id, state, bytes_verified, verified_at, failure_code, updated_at
+         FROM laya_models WHERE manifest_id = ?`,
+      )
+      .get(layaModelText(manifestId, 'the model manifest id')) as
+      | {
+          manifest_id: unknown;
+          state: unknown;
+          bytes_verified: unknown;
+          verified_at: unknown;
+          failure_code: unknown;
+          updated_at: unknown;
+        }
+      | undefined;
+    if (row === undefined) return null;
+    return {
+      manifestId: layaModelText(row.manifest_id, 'stored model manifest id'),
+      state: layaModelState(row.state),
+      bytesVerified: layaModelInteger(row.bytes_verified, 'stored verified model bytes'),
+      verifiedAt: row.verified_at === null ? null : layaModelInteger(row.verified_at, 'stored verification time'),
+      failureCode: layaModelFailureCode(row.failure_code, 'stored model failure code'),
+      updatedAt: layaModelInteger(row.updated_at, 'stored model update time'),
+    };
+  }
 }
 
 /** Typed D-owned state records keep provider cursors and raw identities out of untyped store calls. */

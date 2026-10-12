@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "task": 1,
+  "owners": [{ "id": "task-1" }],
+  "section5": [
+    {
+      "id": "e2-laya-reviewed-enablement",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input"
+    },
+    {
+      "id": "e2-laya-model-pointer",
+      "owner": "task-1",
+      "test": "E2 laya enablement: the normal approved activation creates the only pointer before a model row"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d8-1418-model-state",
+      "owner": "task-1",
+      "test": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer"
+    },
+    {
+      "id": "d11-reviewed-enablement-and-preview",
+      "owner": "task-1",
+      "test": "E2 contract: preview is complete, reviewed, and content-free"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [{ "path": "task-1.json", "owner": "task-1" }],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-laya-exact-reviewed-assets",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "testPattern": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "before": "if (canonicalJson(reviewed) !== canonicalJson(expected))",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-laya-caller-path",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "testPattern": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "before": "if (manifestPath !== undefined || modelPath !== undefined || template !== undefined)",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-laya-preview-after-approval",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: preview is complete, reviewed, and content-free",
+      "testPattern": "E2 contract: preview is complete, reviewed, and content-free",
+      "before": "...reviewed.facts,",
+      "after": "...reviewed.facts.filter((fact) => fact !== 'Download after approval.'),"
+    },
+    {
+      "id": "e2-laya-provider-concurrency",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: Laya provider concurrency greater than one is refused",
+      "testPattern": "E2 contract: Laya provider concurrency greater than one is refused",
+      "before": "if (canonical.provider === JUDGE_KINDS[1] && canonical.concurrency > 1)",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-laya-model-pointer-before-claim",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/store/records.ts",
+      "testFile": "packages/events-daemon/test/laya-enablements.test.ts",
+      "testName": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "testPattern": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "before": "if (pointer === undefined)\n      throw new Error('the active Laya judge-kind pointer is required before model state changes');",
+      "after": "if (false)\n      throw new Error('the active Laya judge-kind pointer is required before model state changes');"
+    },
+    {
+      "id": "e2-laya-model-status-no-path",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-enablements.test.ts",
+      "testName": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "testPattern": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "before": "['manifestId', 'state', 'bytesVerified', 'verifiedAt', 'failureCode', 'updatedAt'],",
+      "after": "['manifestId', 'state', 'bytesVerified', 'verifiedAt', 'failureCode', 'updatedAt', 'modelPath'],"
+    },
+    {
+      "id": "e2-laya-required-preview-limitations",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: preview refuses a reviewed asset missing either D11 limitation",
+      "testPattern": "E2 contract: preview refuses a reviewed asset missing either D11 limitation",
+      "before": "if (!REQUIRED_PREVIEW_LIMITATIONS.every((fact) => reviewed.limitations.includes(fact)))",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-laya-model-active-manifest",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/store/records.ts",
+      "testFile": "packages/events-daemon/test/laya-enablements.test.ts",
+      "testName": "E2 laya model state: rejects a manifest not named by the active Laya pointer",
+      "testPattern": "E2 laya model state: rejects a manifest not named by the active Laya pointer",
+      "before": "if (record.manifestId !== enabledManifestId)",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-laya-sandbox-probe-executes",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: macOS availability runs the content-free sandbox boundary before preparation",
+      "testPattern": "E2 contract: macOS availability runs the content-free sandbox boundary before preparation",
+      "before": "return result.status === 0 && result.signal === null && result.error === undefined;",
+      "after": "return true;"
+    },
+    {
+      "id": "e2-laya-disclosures-embedded",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      disclosures: disclosures(assets.disclosures, complete, parsedManifest),",
+      "after": "      ...{},"
+    },
+    {
+      "id": "e2-laya-injected-bytes-strict",
+      "kind": "production",
+      "owner": "task-1",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-enablements.test.ts",
+      "testName": "E2 laya enablement: invalid injected reviewed bytes refuse before any intent or model row",
+      "testPattern": "E2 laya enablement: invalid injected reviewed bytes refuse before any intent or model row",
+      "before": "if (canonicalManifestSource(parsedManifest) !== manifestSource)",
+      "after": "if (false)"
+    }
+  ]
+}

@@ -40,6 +40,7 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
   });
   assert.deepEqual(manifest.files, [
     'dist',
+    'laya-enablement-disclosures.json',
     'laya-manifest.json',
     'laya-runtime.json',
     'README.md',

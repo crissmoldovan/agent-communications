@@ -26,6 +26,7 @@
   },
   "files": [
     "dist",
+    "laya-enablement-disclosures.json",
     "laya-manifest.json",
     "laya-runtime.json",
     "README.md",

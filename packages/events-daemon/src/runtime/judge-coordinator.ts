@@ -30,6 +30,22 @@ export interface JudgeInput {
   readonly classification: MappedClassification;
 }
 
+/** The sole coordinator-owned request envelope shape a future local adapter may receive. */
+export interface JudgeExecutionRequest {
+  readonly state: string;
+  readonly questionName: string;
+  readonly instructions: string;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+}
+
+/** The bounded answer shape adapters return to the existing coordinator settlement path. */
+export interface JudgeAnswer {
+  readonly value: number;
+  readonly valueLabel: 'probability' | 'uncalibrated-score';
+  readonly actualInputTokens: number;
+}
+
 export interface JudgeCoordinatorOptions {
   readonly store: EventDatabase;
   readonly taint: EventTaintRecorder;

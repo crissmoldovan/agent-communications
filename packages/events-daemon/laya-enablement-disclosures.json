@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "runtimeLicences": ["MIT"],
+  "workerMemory": "roughly 2 GB worker memory.",
+  "facts": {
+    "englishCpu": "English-only, 512-token context, CPU-only execution.",
+    "macosBoundary": "macOS-only sandbox-exec boundary denies every network operation, including loopback TCP and pathname Unix-domain sockets.",
+    "linuxUnavailable": "Linux unavailable: its current boundary does not block pathname Unix-domain sockets.",
+    "windowsUnavailable": "Windows unavailable: an AppContainer native launcher is not included.",
+    "downloadAfterApproval": "Download after approval.",
+    "oneAtATime": "One-at-a-time execution."
+  },
+  "limitations": {
+    "sandboxDeprecation": "sandbox-exec is deprecated; if it is unavailable or its boundary self-test fails, Laya is unavailable.",
+    "englishAccuracy": "Accuracy in languages other than English is not established."
+  }
+}

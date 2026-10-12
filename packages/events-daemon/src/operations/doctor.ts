@@ -1,6 +1,13 @@
 import { EventControlClient } from '../control/client.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import type { JudgeKind } from '../domain/lifecycle.ts';
+import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
+
+/**
+ * Reserved content-free doctor projection for the later Laya-specific doctor schema. It deliberately does not amend
+ * pinned doctor-v1; Task 6 supplies its lifecycle-backed value and Task 11 owns presentation wiring.
+ */
+export type LayaDoctorStatus = LayaModelStatus;
 
 /** The checked binding for contracts/doctor-v1.schema.json. No free-form values cross this operation boundary. */
 export type DoctorSource = 'gmail' | 'slack' | 'resend' | 'whatsapp';

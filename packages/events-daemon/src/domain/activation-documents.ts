@@ -24,6 +24,7 @@ import {
   canonicalJudge,
   canonicalJudgeBudget,
   canonicalJudgeKindEnablement,
+  type LayaEnablementInputs,
 } from './judges.ts';
 import { EventDomainError } from './lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
@@ -116,6 +117,9 @@ export type ActivationDocumentV1 =
       readonly switchGeneration: number;
       ruleVersions: readonly { readonly ruleId: string; readonly ruleVersion: number }[];
     };
+
+/** Synthetic fixtures can replace only reviewed Laya asset bytes in an otherwise production path. */
+export interface ActivationDocumentCanonicalisationOptions extends LayaEnablementInputs {}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -333,7 +337,10 @@ function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kin
 }
 
 /** Validates exactly one v1 activation document and normalises only D2's unordered enable-all list. */
-export function normaliseActivationDocument(value: unknown): ActivationDocumentV1 {
+export function normaliseActivationDocument(
+  value: unknown,
+  options: ActivationDocumentCanonicalisationOptions = {},
+): ActivationDocumentV1 {
   const document = cloneJsonRecord(value, 'an activation document');
   if (document.documentVersion !== 1) return fail('an activation document has documentVersion 1');
   if (Object.hasOwn(document, 'versions')) return fail('activation-document versions are derived, never supplied');
@@ -346,7 +353,7 @@ export function normaliseActivationDocument(value: unknown): ActivationDocumentV
       return {
         documentVersion: 1,
         kind: 'judge-kind',
-        enablement: canonicalJudgeKindEnablement(document.enablement),
+        enablement: canonicalJudgeKindEnablement(document.enablement, options),
       };
     case 'enable-all':
       return canonicalEnableAll(document);
@@ -356,13 +363,19 @@ export function normaliseActivationDocument(value: unknown): ActivationDocumentV
 }
 
 /** Core's recursively key-sorted canonical JSON for a complete v1 activation document. */
-export function canonicalActivationDocument(document: ActivationDocumentV1): string {
-  return canonicalJson(normaliseActivationDocument(document));
+export function canonicalActivationDocument(
+  document: ActivationDocumentV1,
+  options: ActivationDocumentCanonicalisationOptions = {},
+): string {
+  return canonicalJson(normaliseActivationDocument(document, options));
 }
 
 /** The lowercase SHA-256 disclosure digest of one canonical activation document. */
-export function activationDocumentDigest(document: ActivationDocumentV1): string {
-  return sha256Hex(canonicalActivationDocument(document));
+export function activationDocumentDigest(
+  document: ActivationDocumentV1,
+  options: ActivationDocumentCanonicalisationOptions = {},
+): string {
+  return sha256Hex(canonicalActivationDocument(document, options));
 }
 
 function compareVersions(left: DisclosureVersion, right: DisclosureVersion): number {
@@ -404,8 +417,12 @@ function derivedVersions(document: ActivationDocumentV1): DisclosureVersion[] {
 }
 
 /** Derives, rather than accepts, the exact core standing-disclosure binding for an activation intent. */
-export function disclosureBindingFor(activationIntentId: string, input: ActivationDocumentV1): DisclosureBinding {
-  const document = normaliseActivationDocument(input);
+export function disclosureBindingFor(
+  activationIntentId: string,
+  input: ActivationDocumentV1,
+  options: ActivationDocumentCanonicalisationOptions = {},
+): DisclosureBinding {
+  const document = normaliseActivationDocument(input, options);
   const versions = derivedVersions(document).sort(compareVersions);
   for (let index = 1; index < versions.length; index += 1) {
     if (compareVersions(versions[index - 1] as DisclosureVersion, versions[index] as DisclosureVersion) === 0) {

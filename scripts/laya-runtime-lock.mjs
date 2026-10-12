@@ -689,7 +689,9 @@ export function assertDaemonRuntimeBoundary(manifest) {
   }
   if (
     !Array.isArray(record.files) ||
-    !['laya-manifest.json', 'laya-runtime.json'].every((file) => record.files.includes(file))
+    !['laya-enablement-disclosures.json', 'laya-manifest.json', 'laya-runtime.json'].every((file) =>
+      record.files.includes(file),
+    )
   ) {
     throw new RuntimeLockError('RUNTIME_DAEMON');
   }

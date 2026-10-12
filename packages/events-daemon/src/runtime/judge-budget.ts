@@ -4,6 +4,7 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { CanonicalJudgeBudgetDocument, CanonicalJudgeDocument, JudgeBudgetLimits } from '../domain/judges.ts';
 import { canonicalJudge, JUDGE_BUDGET_ID } from '../domain/judges.ts';
+import { JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { JudgeWorkScope } from '../store/records.ts';
@@ -305,6 +306,10 @@ function ruleAuthority(database: DatabaseSync, scope: SourceJudgeWork, judge: Ca
 function providerLimit(document: CanonicalJudgeBudgetDocument, provider: string): JudgeBudgetLimits {
   const found = document.providers.find((entry) => entry.provider === provider);
   if (found === undefined) refusal('PROVIDER_BUDGET_UNCONFIGURED', 'the judge provider has no approved budget ceiling');
+  // The canonical document rejects this too.  Recheck beside the live budget use so a damaged persisted document
+  // can never turn the E2 worker supervisor into a multi-request path.
+  if (provider === JUDGE_KINDS[1] && found.concurrency > 1)
+    refusal('PROVIDER_BUDGET_UNCONFIGURED', 'the Laya provider budget must remain one-at-a-time');
   return found;
 }
 

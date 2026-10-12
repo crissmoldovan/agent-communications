@@ -11,6 +11,7 @@ import {
   type TargetDocument,
 } from './activation-documents.ts';
 import {
+  assertLayaJudgeKindAvailable,
   type CanonicalJudgeBudgetDocument,
   type CanonicalJudgeDocument,
   type CanonicalJudgeKindEnablementDocument,
@@ -18,8 +19,9 @@ import {
   canonicalJudgeBudget,
   canonicalJudgeKindEnablement,
   judgeKindDefinition,
+  type LayaEnablementInputs,
 } from './judges.ts';
-import { assertJudgeKindEnabled, EventDomainError, isJudgeKind } from './lifecycle.ts';
+import { assertJudgeKindEnabled, EventDomainError, isJudgeKind, JUDGE_KINDS } from './lifecycle.ts';
 
 export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';
 
@@ -44,9 +46,11 @@ function documentRecord(value: unknown): Record<string, unknown> {
 /** SQLite repository for D2's immutable, initially inert version rows. */
 export class ImmutableVersions {
   readonly #database: DatabaseSync;
+  readonly #layaInputs: LayaEnablementInputs;
 
-  constructor(database: DatabaseSync) {
+  constructor(database: DatabaseSync, options: LayaEnablementInputs = {}) {
     this.#database = database;
+    this.#layaInputs = options;
   }
 
   createRule(input: unknown): PendingVersion {
@@ -128,13 +132,11 @@ export class ImmutableVersions {
   }
 
   prepareJudgeKindDocument(input: unknown): CanonicalJudgeKindEnablementDocument {
-    return canonicalJudgeKindEnablement(input);
+    return canonicalJudgeKindEnablement(input, this.#layaInputs);
   }
 
   /** The sole digest-verifying loader for an immutable kind enablement document. */
   loadJudgeKind(kind: string, version: number): CanonicalJudgeKindEnablementDocument {
-    if (isJudgeKind(kind) && judgeKindDefinition(kind).availability === 'unavailable')
-      throw new EventDomainError('E2_REQUIRED', 'laya is unavailable until E2');
     const row = this.#database
       .prepare('SELECT document, digest FROM judge_kind_versions WHERE kind = ? AND version = ? AND revoked_at IS NULL')
       .get(kind, version) as { document: string; digest: string } | undefined;
@@ -142,7 +144,7 @@ export class ImmutableVersions {
       throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested judge kind version does not exist');
     let enablement: CanonicalJudgeKindEnablementDocument;
     try {
-      enablement = canonicalJudgeKindEnablement(JSON.parse(row.document));
+      enablement = canonicalJudgeKindEnablement(JSON.parse(row.document), this.#layaInputs);
     } catch {
       throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge kind document is invalid');
     }
@@ -153,6 +155,16 @@ export class ImmutableVersions {
 
   /** Loads one exact immutable kind enablement document, never inferring a default enabled state. */
   prepareJudgeKind(kind: string, version: number): Extract<ActivationDocumentV1, { kind: 'judge-kind' }> {
+    // Retain Phase E's unavailable-kind fence for every registry slot that has not been concretely replaced.  E2's
+    // Laya entry is available here, then its own strict shipped-asset validator refuses before an intent when the
+    // release lock is blocked or the platform boundary is unavailable.
+    if (isJudgeKind(kind) && judgeKindDefinition(kind).availability === 'unavailable') {
+      if (kind !== JUDGE_KINDS[1] || judgeKindDefinition(kind).implementation === undefined)
+        throw new EventDomainError('E2_REQUIRED', 'the judge kind requires its next phase implementation');
+      // Until Task 10 replaces the shipped placeholder lock, production refuses before even reading a pending
+      // document. Tests replace only strict-reviewed fixture bytes; a caller cannot inject a ready definition.
+      assertLayaJudgeKindAvailable(this.#layaInputs);
+    }
     const enablement = this.loadJudgeKind(kind, version);
     return {
       documentVersion: 1,

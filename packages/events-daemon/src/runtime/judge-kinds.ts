@@ -10,8 +10,8 @@ function available(kind: string): JudgeKind {
   if (!(JUDGE_KINDS as readonly string[]).includes(kind))
     throw new CommsError('BAD_DATA', 'the judge kind is not recognised');
   const definition = JUDGE_KIND_DEFINITIONS.find((entry) => entry.kind === kind);
-  if (definition?.availability !== 'available')
-    throw new EventDomainError('E2_REQUIRED', 'laya is unavailable until E2');
+  if (definition?.availability !== 'available' && definition?.implementation === undefined)
+    throw new EventDomainError('E2_REQUIRED', 'the judge kind is unavailable');
   return kind as JudgeKind;
 }
 

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import type { JudgeTransportHooks } from '../src/runtime/judge-transport.ts';
+import { copyShippedPackageAssets } from './support/shipped-assets.ts';
 import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 
 assertLoopbackSeal();
@@ -1290,6 +1291,7 @@ async function expectTransportMutationToFail(mutation: TransportMutation): Promi
   await rm(root, { recursive: true, force: true });
   try {
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
+    await copyShippedPackageAssets(packageRoot, root);
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
     await rewriteCopiedCrossPackageImports(root);
     const target = join(root, 'src', mutation.file);
