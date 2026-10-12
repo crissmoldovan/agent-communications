@@ -20,6 +20,10 @@ Delivery retry, drop or hold controls, subscriber management, named event-secret
 test/resume/replay controls, judges, and B3 doctor extensions are not present. The B2 runtime never sends mail or
 messages through the channel packages.
 
+Every socket and server the owner holds — webhook connections, the control socket and its server, the SSE listener and
+its streams — keeps an error listener for its whole life, so a peer that resets a connection ends that connection,
+never the owner.
+
 Phase D puts the four local sources — Gmail, Slack, Resend and WhatsApp — behind that one owner. Slack scans history
 and thread replies, and its reply barrier holds progress until both are covered. Resend resolves received mail through
 its detail operation and observes sent-mail status; its text is Unicode-validated and bounded, and all its event reads
