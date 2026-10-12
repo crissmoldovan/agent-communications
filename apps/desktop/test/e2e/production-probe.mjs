@@ -96,10 +96,15 @@ try {
         resolve('exited');
       });
     }),
-    new Promise((resolve) => setTimeout(() => resolve('timeout'), 15_000)),
+    // A hang guard, not a speed bound: a cold release build on a hosted macOS runner needs longer than a laptop.
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 120_000)),
   ]);
   child.kill();
-  assert.equal(done, 'reported', `both webviews must report; outcome=${done}; stderr=${stderr.slice(0, 500)}`);
+  assert.equal(
+    done,
+    'reported',
+    `both webviews must report; outcome=${done}; reported=[${[...reports.keys()].sort().join(',')}]; stderr=${stderr.slice(0, 500)}`,
+  );
   assert.deepEqual([...reports.keys()].sort(), ['secrets', 'settings']);
   for (const [label, { windows, counters, complete, ipc, origin, attacks }] of reports) {
     assert.equal(windows, 2, `${label} created an extra window`);

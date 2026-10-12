@@ -98,7 +98,8 @@ export async function runControlFlow() {
     child.stderr.resume();
     const report = await new Promise((resolveReport, reject) => {
       let output = '';
-      const timeout = setTimeout(() => reject(new Error('packaged full-production report deadline')), 30000);
+      // A hang guard, not a speed bound: hosted runners start a cold release build slowly.
+      const timeout = setTimeout(() => reject(new Error('packaged full-production report deadline')), 120_000);
       const fail = () => {
         clearTimeout(timeout);
         reject(new Error('packaged full-production process unavailable'));

@@ -110,7 +110,7 @@
         {
           "name": "Unix Task-4 production mutation and Node/Rust control gates",
           "if": "runner.os != 'Windows'",
-          "run": "set -euo pipefail\ncargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --bin control-probe\nexport DESKTOP_CONTROL_PROBE_BIN=\"$PWD/apps/desktop/src-tauri/target/debug/control-probe\"\nexport DESKTOP_REQUIRE_CONTROL_PROBE=1\nnode --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test packages/events-daemon/test/control-server-compat.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-4"
+          "run": "set -euo pipefail\ncargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --example control-probe\nexport DESKTOP_CONTROL_PROBE_BIN=\"$PWD/apps/desktop/src-tauri/target/debug/examples/control-probe\"\nexport DESKTOP_REQUIRE_CONTROL_PROBE=1\nnode --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test packages/events-daemon/test/control-server-compat.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-4"
         },
         {
           "name": "Windows public pre-read filesystem trap mutation gate",

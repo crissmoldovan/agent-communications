@@ -43,7 +43,7 @@ try {
           `production webview capability probe timed out (${(output.match(/:capabilities,/gu) ?? []).length}/3 reports)`,
         ),
       );
-    }, 15000);
+    }, 120_000); // a hang guard, not a speed bound: hosted runners start a cold release build slowly
     const interval = setInterval(() => {
       if ((output.match(/:capabilities,/gu) ?? []).length === 3) {
         clearTimeout(timeout);
