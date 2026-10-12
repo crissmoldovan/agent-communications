@@ -10,7 +10,11 @@ if (globalThis[Symbol.for('agentcomms.events.loopback-seal.preloaded.v1')] !== t
 }
 
 const { status } = await import('@agentcomms/events-daemon');
-assert.deepEqual(await status(), { owner: 'not-running' });
+// B1-G: the event service refuses Windows. There the library and the CLI must say so; everything else runs below.
+const windows = process.platform === 'win32';
+const refusesWindows = /does not run on Windows/;
+if (windows) await assert.rejects(() => status(), refusesWindows);
+else assert.deepEqual(await status(), { owner: 'not-running' });
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events-daemon')));
 const cli = join(dist, 'cli.mjs');
 // `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
@@ -19,12 +23,17 @@ const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help']
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-const result = execFileSync(process.execPath, ['--import', sealUrl, cli, '--json', 'status'], {
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
 assert.match(help, /Usage: agent-events/);
-assert.equal(result, '{"owner":"not-running"}\n');
+const statusArgs = ['--import', sealUrl, cli, '--json', 'status'];
+if (windows)
+  assert.throws(
+    () => execFileSync(process.execPath, statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+    (error) => refusesWindows.test(`${error.stderr ?? ''}${error.stdout ?? ''}${error.message}`),
+  );
+else {
+  const result = execFileSync(process.execPath, statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(result, '{"owner":"not-running"}\n');
+}
 
 function startMcp(command, args, env) {
   const child = spawn(process.execPath, ['--import', sealUrl, command, ...args], {
