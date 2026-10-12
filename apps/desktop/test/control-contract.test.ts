@@ -101,8 +101,9 @@ test('control-contract: built app manifest registers exactly the settings comman
 
   // This is the compiled desktop artifact, not build.rs text: a handler omission must not be hidden by a matching
   // source declaration. Tauri retains the registered commands as native invoke names in the executable.
-  const binary = join(target, 'debug', 'agentcomms-desktop');
-  const nativeNames = spawnSync('strings', [binary], { encoding: 'utf8' });
-  assert.equal(nativeNames.status, 0, `cannot inspect built desktop command registration: ${nativeNames.stderr}`);
-  for (const command of commands) assert.ok(nativeNames.stdout.includes(command));
+  // Its bytes are read directly: GNU `strings` prints more than spawnSync buffers for a debug build, and Windows has none.
+  const binary = join(target, 'debug', process.platform === 'win32' ? 'agentcomms-desktop.exe' : 'agentcomms-desktop');
+  const executable = await readFile(binary);
+  for (const command of commands)
+    assert.ok(executable.includes(Buffer.from(command)), `${command} is registered in the built executable`);
 });

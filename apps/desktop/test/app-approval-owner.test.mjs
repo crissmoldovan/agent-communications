@@ -7,6 +7,8 @@ import { test } from 'node:test';
 import { emptyConfig } from '../../../packages/core/src/config.ts';
 import { EventControlClient } from '../../../packages/events-daemon/src/control/client.ts';
 import { startEventOwner } from '../../../packages/events-daemon/src/runtime/owner.ts';
+import { openEventDatabase } from '../../../packages/events-daemon/src/store/database.ts';
+import { selectEventSecretStore } from '../../../packages/events-daemon/src/store/event-secrets.ts';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { NATIVE_SKIP } from './helpers/native-lane.mjs';
 
@@ -102,6 +104,10 @@ test('app approval: compiled Rust command views and approves through the sealed 
     };
     await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`, { mode: 0o600 });
     try {
+      // The file store, as the daemon's own real-owner proofs use: a Linux runner has no keyring service.
+      const selected = await openEventDatabase({ stateDir });
+      await selectEventSecretStore(selected.database, 'file');
+      selected.close();
       owner = await startEventOwner({
         stateDir,
         configDir,

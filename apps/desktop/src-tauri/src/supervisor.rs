@@ -636,6 +636,9 @@ impl DesktopSupervisor {
                         ))
                     }
                     Err(error) if error.code == "NOT_FOUND" => true,
+                    // A poll can connect just as the owner closes its listener and lose its reply; keep polling
+                    // until the endpoint is gone or the deadline passes.
+                    Err(error) if error.code == "CONTROL_IO" => false,
                     Err(error) => return Err(error),
                 };
                 let child_gone = {

@@ -89,7 +89,8 @@ function visit(folder) {
     if (entry.isDirectory()) visit(path);
     else if (/\.test\.(?:mjs|ts|tsx)$/.test(entry.name)) {
       const source = readFileSync(path, 'utf8');
-      const testPath = relative(root, path);
+      // The manifest names files with `/` on every system; Windows' relative() would give `\`.
+      const testPath = relative(root, path).split(sep).join('/');
       if (testPath.startsWith('apps/desktop/test/') || managedTestFiles.has(testPath)) {
         collectNamedTests(testPath, source);
       }
@@ -216,7 +217,7 @@ function scanMutationMarkers() {
       if (entry.isDirectory()) {
         walkFixture(path, files);
       } else if (entry.isFile()) {
-        files.push(relative(root, path));
+        files.push(relative(root, path).split(sep).join('/'));
       }
     }
   }

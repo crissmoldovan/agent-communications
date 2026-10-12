@@ -1,6 +1,8 @@
+use agentcomms_desktop::commands::control::{execute_control, ControlInput};
+// Only the Unix-only settings test below uses these.
+#[cfg(unix)]
 use agentcomms_desktop::{
-    commands::control::{execute_control, save_preferences, ControlInput},
-    preferences::PreferenceStore,
+    commands::control::save_preferences, preferences::PreferenceStore,
     supervisor::DesktopSupervisor,
 };
 use serde_json::json;
