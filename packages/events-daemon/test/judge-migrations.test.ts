@@ -761,8 +761,11 @@ test('E2 mutation: omitting the account/source scope index is caught by the inde
     applyMigrations(database, judgeMigrationsWithMutation('omit-source-scope-index'));
     assert.throws(
       () =>
-        assert.ok(indexNames(database, 'judge_budget_reservations').includes('judge_budget_reservations_source_scope')),
-      /judge_budget_reservations_source_scope/u,
+        assert.ok(
+          indexNames(database, 'judge_budget_reservations').includes('judge_budget_reservations_source_scope'),
+          'judge_budget_reservations_source_scope is present',
+        ),
+      /judge_budget_reservations_source_scope is present/u,
     );
   } finally {
     database.close();
