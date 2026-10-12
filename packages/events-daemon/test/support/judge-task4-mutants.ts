@@ -273,7 +273,7 @@ export async function expectJudgeTask4MutationToFail(mutation: JudgeTask4Mutatio
     await rewriteImports(root);
     const args = [
       '--import',
-      join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
       '--experimental-strip-types',
       '--disable-warning=ExperimentalWarning',
       '--test',

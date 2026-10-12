@@ -151,7 +151,7 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
       command: process.execPath,
       args: [
         '--import',
-        join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
+        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',
