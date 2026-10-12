@@ -242,7 +242,7 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
     );
     const result = await runStrictMutationChild({
       command: process.execPath,
-      args: ['--import', observer, ...args],
+      args: ['--import', pathToFileURL(observer).href, ...args],
       cwd: root,
       env: environment,
     });
