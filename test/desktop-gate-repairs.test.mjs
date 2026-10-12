@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 import { test } from 'node:test';
 
 const read = async (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+
+// desktop-mutation: desktop-vite-evidence-after-rewrites
+test('desktop repair: Vite evidence is recorded after every other plugin has rewritten its chunks', async () => {
+  const { bundleGraphPlugin } = await import('../apps/desktop/scripts/bundle-content-graph.mjs');
+  const plugin = bundleGraphPlugin();
+  // Vite rewrites dynamic-import preload lists in its own generateBundle: evidence recorded earlier binds bytes that
+  // are never written, and the final inventory check refuses every build that has a dynamic import.
+  assert.equal(plugin.enforce, 'post');
+  assert.equal(plugin.generateBundle.order, 'post');
+  assert.equal(typeof plugin.generateBundle.handler, 'function');
+});
 
 // desktop-mutation: desktop-embedded-vite-content
 test('desktop repair: embedded Vite assets are classified before packaging', async () => {
@@ -11,7 +23,7 @@ test('desktop repair: embedded Vite assets are classified before packaging', asy
   );
   const emit = (bytes) => {
     let emitted;
-    bundleGraphPlugin().generateBundle.call(
+    bundleGraphPlugin().generateBundle.handler.call(
       {
         getModuleIds: () => ['synthetic-module'],
         getModuleInfo: () => ({ importedIds: [], dynamicallyImportedIds: [] }),
@@ -201,7 +213,9 @@ test('desktop repair: artifact binding is digest exact and universal metadata co
 test('desktop repair: Task 7 mutants isolate target frontend home and evidence', async () => {
   const { isolatedPaths } = await import('../apps/desktop/test/mutations/policy.mjs');
   const paths = isolatedPaths('/synthetic/mutation-copy');
-  for (const path of Object.values(paths)) assert.ok(path.startsWith('/synthetic/mutation-copy/'));
+  // The paths come from path.join, so the prefix does too: `\` on Windows.
+  const copy = join('/synthetic/mutation-copy');
+  for (const path of Object.values(paths)) assert.ok(path.startsWith(`${copy}${sep}`), path);
   const runner = await read('apps/desktop/test/mutations/run.mjs');
   assert.match(runner, /isolatedPaths\(temp\)/);
   assert.doesNotMatch(runner, /symlink\(join\(root, 'apps\/desktop\/dist'/);

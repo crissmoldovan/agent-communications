@@ -49,9 +49,36 @@ fn main() {
         format!("pub const APP_COMMANDS: &[&str] = &{commands:?};\n"),
     )
     .expect("command declaration inventory");
-    tauri_build::try_build(
-        tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(commands)),
-    )
-    .expect("desktop command manifest is valid");
+    // The no-egress probe's own commands are not app commands: a release build must not grant them. Only a build with
+    // the `no-egress-probe` feature compiles in their permission (permissions/probe) and the capability that grants it
+    // to both windows (capabilities/probe); every other build reads the top-level capabilities alone.
+    let probe = std::env::var_os("CARGO_FEATURE_NO_EGRESS_PROBE").is_some();
+    println!("cargo:rerun-if-changed=capabilities");
+    println!("cargo:rerun-if-changed=permissions/probe");
+    let mut app_manifest = tauri_build::AppManifest::new().commands(commands);
+    if probe {
+        app_manifest = app_manifest.permissions_path_pattern("./permissions/probe/*.toml");
+    }
+    let mut attributes = tauri_build::Attributes::new()
+        .app_manifest(app_manifest)
+        .capabilities_path_pattern(if probe {
+            "./capabilities/**/*.json"
+        } else {
+            "./capabilities/*.json"
+        });
+    // Tauri embeds its Windows application manifest (Common Controls v6) in the app binary only, but the mock-runtime
+    // tests link the same controls: without it a test executable cannot start (STATUS_ENTRYPOINT_NOT_FOUND). The same
+    // manifest (windows-app-manifest.xml, tauri-build's own) is embedded in every binary of the package instead.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    }
+    tauri_build::try_build(attributes).expect("desktop command manifest is valid");
 }

@@ -2349,6 +2349,23 @@
         "replace": "CARGO_TARGET_DIR: join(root, 'apps/desktop/src-tauri/target'),"
       },
       "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-vite-evidence-after-rewrites",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: Vite evidence is recorded after every other plugin has rewritten its chunks"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "      order: 'post',",
+        "replace": "      order: 'pre',"
+      },
+      "platforms": ["darwin", "linux", "win32"]
     }
   ]
 }

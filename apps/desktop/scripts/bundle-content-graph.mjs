@@ -141,22 +141,27 @@ export function bundleGraphPlugin() {
   return {
     name: 'desktop-content-provenance',
     enforce: 'post',
-    generateBundle(_options, bundle) {
-      const modules = [...this.getModuleIds()].map((id) => {
-        const info = this.getModuleInfo(id);
-        const portable = (value) =>
-          value.replaceAll('\\', '/').replaceAll(resolve(desktop, '../..').replaceAll('\\', '/'), '<workspace>');
-        return { id: portable(id), imports: [...info.importedIds, ...info.dynamicallyImportedIds].map(portable) };
-      });
-      const assets = Object.values(bundle).map((entry) => ({
-        path: entry.fileName,
-        ...inspectContent(Buffer.from(entry.type === 'chunk' ? entry.code : entry.source)),
-      }));
-      this.emitFile({
-        type: 'asset',
-        fileName: 'desktop-build-graph.json',
-        source: JSON.stringify({ buildId: process.env.DESKTOP_BUILD_ID, modules, assets }),
-      });
+    // Vite rewrites each chunk's dynamic-import preload list in its own generateBundle; recording before that would
+    // bind hashes of bytes that are never written. `order: 'post'` runs this after every other plugin's handler.
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        const modules = [...this.getModuleIds()].map((id) => {
+          const info = this.getModuleInfo(id);
+          const portable = (value) =>
+            value.replaceAll('\\', '/').replaceAll(resolve(desktop, '../..').replaceAll('\\', '/'), '<workspace>');
+          return { id: portable(id), imports: [...info.importedIds, ...info.dynamicallyImportedIds].map(portable) };
+        });
+        const assets = Object.values(bundle).map((entry) => ({
+          path: entry.fileName,
+          ...inspectContent(Buffer.from(entry.type === 'chunk' ? entry.code : entry.source)),
+        }));
+        this.emitFile({
+          type: 'asset',
+          fileName: 'desktop-build-graph.json',
+          source: JSON.stringify({ buildId: process.env.DESKTOP_BUILD_ID, modules, assets }),
+        });
+      },
     },
   };
 }

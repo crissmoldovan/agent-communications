@@ -1,0 +1,6 @@
+{
+  "identifier": "egress-probe",
+  "description": "Probe builds only (feature no-egress-probe): the egress probe reports from both windows and from the capability probe's synthetic third label, which is granted nothing else. build.rs compiles this directory in only when that feature is on.",
+  "windows": ["settings", "secrets", "synthetic-third"],
+  "permissions": ["allow-egress-probe"]
+}

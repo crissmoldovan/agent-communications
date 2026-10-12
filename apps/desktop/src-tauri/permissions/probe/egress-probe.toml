@@ -1,0 +1,12 @@
+# Probe builds only (feature `no-egress-probe`): build.rs loads this file only when that feature is on, so a release
+# build defines no such permission.
+[[permission]]
+identifier = "allow-egress-probe"
+description = "The webview egress probe's own commands: ping, port, capability mode, full-flow fixture and report."
+commands.allow = [
+  "desktop_probe_ping",
+  "desktop_probe_port",
+  "desktop_probe_capability_mode",
+  "desktop_probe_full_fixture",
+  "desktop_probe_report",
+]

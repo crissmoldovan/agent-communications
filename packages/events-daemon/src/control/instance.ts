@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { EventPaths } from '../runtime/paths.ts';
 
@@ -56,8 +56,17 @@ export async function readInstance(paths: EventPaths): Promise<EventInstanceReco
 }
 
 export async function writeInstance(paths: EventPaths, record: EventInstanceRecord): Promise<void> {
-  await writeFile(paths.instance, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(paths.instance, 0o600);
+  // A reader polling for readiness must never see a truncated or half-written record, so it is written beside the
+  // record and renamed over it, which replaces it in one step.
+  const staged = `${paths.instance}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    await writeFile(staged, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await chmod(staged, 0o600);
+    await rename(staged, paths.instance);
+  } catch (error) {
+    await rm(staged, { force: true });
+    throw error;
+  }
 }
 
 export async function removeInstance(paths: EventPaths, instanceId: string): Promise<void> {

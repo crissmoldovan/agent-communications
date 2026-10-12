@@ -95,14 +95,22 @@ export async function runControlFlow() {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.stderr.resume();
+    // The app's own words are the only diagnosis a failed packaged run has; keep a bounded tail of each stream.
+    let stderrTail = '';
+    child.stderr.setEncoding('utf8').on('data', (part) => {
+      stderrTail = (stderrTail + part).slice(-4000);
+    });
     const report = await new Promise((resolveReport, reject) => {
       let output = '';
+      const diagnosis = () => `\nstdout: ${output.slice(-2000)}\nstderr: ${stderrTail}`;
       // A hang guard, not a speed bound: hosted runners start a cold release build slowly.
-      const timeout = setTimeout(() => reject(new Error('packaged full-production report deadline')), 120_000);
+      const timeout = setTimeout(
+        () => reject(new Error(`packaged full-production report deadline${diagnosis()}`)),
+        120_000,
+      );
       const fail = () => {
         clearTimeout(timeout);
-        reject(new Error('packaged full-production process unavailable'));
+        reject(new Error(`packaged full-production process unavailable${diagnosis()}`));
       };
       child.once('error', fail);
       child.once('exit', fail);
