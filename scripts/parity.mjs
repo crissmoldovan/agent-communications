@@ -716,6 +716,8 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
       for (const row of unchecked) console.log(`  - ${row.id}`);
     }
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    // On Windows a file a just-exited child still held can make removal fail for a moment (EBUSY/ENOTEMPTY/EPERM);
+    // `rm` retries those itself when asked.
+    await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
