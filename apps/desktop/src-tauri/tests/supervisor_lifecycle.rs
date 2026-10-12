@@ -24,6 +24,8 @@ struct FakeRuntime {
     block_status: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
     block_stop: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
     stop_ack_without_exit: AtomicBool,
+    stop_reply_lost_after_stop: AtomicBool,
+    delayed_status_checks: AtomicUsize,
 }
 
 impl FakeRuntime {
@@ -39,6 +41,8 @@ impl FakeRuntime {
             block_status: Mutex::new(None),
             block_stop: Mutex::new(None),
             stop_ack_without_exit: AtomicBool::new(false),
+            stop_reply_lost_after_stop: AtomicBool::new(false),
+            delayed_status_checks: AtomicUsize::new(0),
         })
     }
     fn absent() -> Arc<Self> {
@@ -85,6 +89,15 @@ impl DaemonRuntime for FakeRuntime {
             entered.wait();
             release.wait();
         }
+        if self
+            .delayed_status_checks
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ControlError::new("NOT_FOUND", "owner is not ready"));
+        }
         self.current
             .lock()
             .unwrap()
@@ -116,6 +129,9 @@ impl DaemonRuntime for FakeRuntime {
         }
         if !self.stop_ack_without_exit.load(Ordering::SeqCst) {
             *self.current.lock().unwrap() = None;
+        }
+        if self.stop_reply_lost_after_stop.load(Ordering::SeqCst) {
+            return Err(ControlError::new("CONTROL_IO", "reply connection closed"));
         }
         Ok(())
     }
@@ -291,6 +307,47 @@ fn spawned_pid_must_match_authenticated_instance_and_child_is_cleaned() {
     assert_eq!(supervisor.status().state, SupervisorState::Idle);
 }
 
+// desktop-rust-mutation: desktop-supervisor-start-readiness | cargo --test supervisor_lifecycle | spawned_owner_waits_for_authenticated_readiness_beyond_short_delay
+#[test]
+fn spawned_owner_waits_for_authenticated_readiness_beyond_short_delay() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let selected = profile(&root, "slow-owner");
+    let store = PreferenceStore::new(root.join("private/desktop.json"));
+    let runtime = FakeRuntime::absent();
+    *runtime.spawned_identity.lock().unwrap() = Some(identity(42));
+    // The initial probe plus 64 post-spawn probes take longer than the former three-second allowance.
+    runtime.delayed_status_checks.store(65, Ordering::SeqCst);
+    let supervisor = DesktopSupervisor::with_runtime(runtime);
+
+    let started = supervisor
+        .start_selected(&store, 0, selected, false)
+        .expect("the authenticated spawned owner becomes ready before the deliberate deadline");
+
+    assert_eq!(started.state, SupervisorState::Running);
+    assert_eq!(started.pid, Some(42));
+}
+
+#[test]
+fn spawned_owner_exit_before_readiness_is_distinct_from_not_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let selected = profile(&root, "exiting-owner");
+    let store = PreferenceStore::new(root.join("private/desktop.json"));
+    let runtime = FakeRuntime::absent();
+    // The spawned child is already reaped, while no owner ever publishes an instance/status endpoint.
+    runtime.child_terminated.store(true, Ordering::SeqCst);
+    let supervisor = DesktopSupervisor::with_runtime(runtime);
+
+    assert_eq!(
+        supervisor
+            .start_selected(&store, 0, selected, false)
+            .unwrap_err()
+            .code,
+        "DAEMON_EXITED"
+    );
+}
+
 #[test]
 fn failed_child_cleanup_blocks_tray_quit_and_new_start() {
     let temp = tempfile::tempdir().unwrap();
@@ -431,6 +488,29 @@ fn acknowledged_stop_does_not_finish_until_owner_exits() {
     *runtime.current.lock().unwrap() = None;
     rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
     worker.join().unwrap();
+}
+
+// desktop-rust-mutation: desktop-supervisor-stop-lost-reply | cargo --test supervisor_lifecycle | stop_accepts_a_lost_reply_only_after_the_exact_owner_is_gone
+#[test]
+fn stop_accepts_a_lost_reply_only_after_the_exact_owner_is_gone() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let selected = profile(&root, "reply-lost");
+    let store = PreferenceStore::new(root.join("private/desktop.json"));
+    let runtime = FakeRuntime::attached(identity(101));
+    runtime
+        .stop_reply_lost_after_stop
+        .store(true, Ordering::SeqCst);
+    let supervisor = DesktopSupervisor::with_runtime(runtime);
+    supervisor
+        .start_selected(&store, 0, selected, false)
+        .unwrap();
+
+    let stopped = supervisor
+        .stop_daemon(&store)
+        .expect("a closed stop reply is success after exact-owner disappearance");
+
+    assert_eq!(stopped.state, SupervisorState::Idle);
 }
 
 // desktop-rust-mutation: desktop-autostart-no-spawn | cargo --test supervisor_lifecycle | login_startup_never_calls_runtime_spawn

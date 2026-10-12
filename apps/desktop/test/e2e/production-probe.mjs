@@ -12,6 +12,10 @@ assertLoopbackSeal();
 const args = process.argv.slice(2).filter((argument) => argument !== '--');
 assert.equal(args[0], '--case');
 const probeCase = args[1];
+if (probeCase === 'capabilities') {
+  await import('./capability-probe.mjs');
+  process.exit(0);
+}
 assert.ok(['no-egress', 'navigation', 'download', 'custom-protocol', 'new-window'].includes(probeCase));
 const desktop = new URL('../../', import.meta.url);
 const bundles = ['--bundles', process.platform === 'darwin' ? 'app' : process.platform === 'win32' ? 'nsis' : 'deb'];

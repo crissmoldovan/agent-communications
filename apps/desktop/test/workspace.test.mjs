@@ -76,7 +76,16 @@ test('desktop labelled capability files are present and Git-visible', async () =
     assert.deepEqual(
       capability.permissions,
       label === 'secrets'
-        ? []
+        ? [
+            'allow-desktop-target-secret-create',
+            'allow-desktop-target-secret-rotate',
+            'allow-desktop-target-url-set',
+            'allow-desktop-subscriber-token-create',
+            'allow-desktop-subscriber-token-rotate',
+            'allow-desktop-judge-key-set',
+            'allow-desktop-judge-key-rotate',
+            'allow-desktop-secrets-migrate',
+          ]
         : [
             'allow-desktop-control',
             'allow-desktop-approve',

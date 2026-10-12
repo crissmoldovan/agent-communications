@@ -1,6 +1,19 @@
 # Agent Communications desktop
 
-This private workspace app is the Phase C Tauri v2 shell. It currently shows inert Settings and Secrets windows, with no daemon or provider connection and no custom commands. The two entry documents are separate. Later Phase C tasks add their capabilities and security policy.
+This private workspace app is the Phase C Tauri v2 shell. Settings controls a separately installed local daemon;
+the isolated Secrets window owns the eight human-only D2 operations. The two entry documents and native command
+capabilities are separate. Secrets has no general control, approval, clipboard, filesystem, HTTP, or opener grant.
+
+On Unix, secret operations require a daemon spawned by this desktop process. Rust generates an in-memory
+32-byte key and transfers it once through an inherited pipe, never through arguments, environment material or
+a file. Each operation needs a fresh nonce and HMAC bound to its authenticated session and exact operation.
+Attaching to an existing daemon does not grant secret authority: use the terminal, or explicitly start a new
+daemon through Settings. Windows continues to refuse daemon control before reading the profile.
+
+Generated signing secrets and subscriber tokens are shown once. Hidden URL and judge-key entries are never
+echoed; URLs return only a fingerprint. Submit, blur, close and rejected navigation clear secret-window state.
+No secret input or reveal is persisted in preferences. The core audit envelope is unchanged; its D2 projection
+is validated before app completion, with no secret-derived fields permitted in the underlying audit.
 
 Run `pnpm --filter @agentcomms/desktop build`, `typecheck`, and `test` after installing the workspace dependencies. Native Tauri builds require the platform toolchain; the Cargo lockfile is checked in.
 
@@ -16,10 +29,10 @@ identifies 37 upstream crate archives whose licence grants need to be obtained a
 ## Before installing
 
 This unsigned prerelease is for the owner and a few named colleagues. It requires a separate daemon installation
-and a running, compatible local event daemon; the desktop does not bundle, install or start that daemon.
+and a compatible local event daemon; the desktop does not bundle or install that daemon. Starting it requires
+an explicit Settings action.
 The event library and daemon remain held from npm release. Obtain the checked daemon build from the maintainer;
-do not interpret a desktop tag as lifting those holds. The current shell has inert Settings and Secrets windows;
-daemon attachment arrives in the later Phase C tasks.
+do not interpret a desktop tag as lifting those holds. An attached daemon remains terminal-only for secret operations.
 
 Download the artifact and `SHA256SUMS` from the same `desktop-v<version>` prerelease. Before opening or installing,
 compute its SHA-256 and compare the complete hexadecimal result with the line for that exact filename in

@@ -8,7 +8,11 @@
       "testName": "desktop is a private workspace member outside package publishing",
       "production": "apps/desktop/package.json",
       "import": "../package.json",
-      "mutation": { "file": "apps/desktop/package.json", "find": "\"private\": true", "replace": "\"private\": false" }
+      "mutation": {
+        "file": "apps/desktop/package.json",
+        "find": "\"private\": true",
+        "replace": "\"private\": false"
+      }
     },
     {
       "id": "desktop-capability-settings-tracked",
@@ -43,7 +47,11 @@
       "testName": "desktop dependency graph is pinned by the workspace lockfile",
       "production": "pnpm-lock.yaml",
       "import": "../../../pnpm-lock.yaml",
-      "mutation": { "file": "pnpm-lock.yaml", "find": "  apps/desktop:\n", "replace": "  apps/desktop-missing:\n" }
+      "mutation": {
+        "file": "pnpm-lock.yaml",
+        "find": "  apps/desktop:\n",
+        "replace": "  apps/desktop-missing:\n"
+      }
     },
     {
       "id": "desktop-csp-configured-default-src",
@@ -169,7 +177,11 @@
       "testName": "desktop-csp-exact secrets default-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "default-src 'none'", "replace": "default-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "default-src 'none'",
+        "replace": "default-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-script-src",
@@ -178,7 +190,11 @@
       "testName": "desktop-csp-exact secrets script-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "script-src 'self'", "replace": "script-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "script-src 'self'",
+        "replace": "script-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-style-src",
@@ -187,7 +203,11 @@
       "testName": "desktop-csp-exact secrets style-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "style-src 'self'", "replace": "style-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "style-src 'self'",
+        "replace": "style-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-img-src",
@@ -196,7 +216,11 @@
       "testName": "desktop-csp-exact secrets img-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "img-src 'none'", "replace": "img-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "img-src 'none'",
+        "replace": "img-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-connect-src",
@@ -218,7 +242,11 @@
       "testName": "desktop-csp-exact secrets frame-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "frame-src 'none'", "replace": "frame-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "frame-src 'none'",
+        "replace": "frame-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-object-src",
@@ -227,7 +255,11 @@
       "testName": "desktop-csp-exact secrets object-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "object-src 'none'", "replace": "object-src *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "object-src 'none'",
+        "replace": "object-src *"
+      }
     },
     {
       "id": "desktop-csp-secrets-form-action",
@@ -236,7 +268,11 @@
       "testName": "desktop-csp-exact secrets form-action",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "form-action 'none'", "replace": "form-action *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "form-action 'none'",
+        "replace": "form-action *"
+      }
     },
     {
       "id": "desktop-csp-secrets-base-uri",
@@ -245,7 +281,11 @@
       "testName": "desktop-csp-exact secrets base-uri",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": { "file": "apps/desktop/secrets.html", "find": "base-uri 'none'", "replace": "base-uri *" }
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "base-uri 'none'",
+        "replace": "base-uri *"
+      }
     },
     {
       "id": "desktop-csp-asset-modification",
@@ -336,7 +376,11 @@
       "testName": "desktop-custom-protocol-denial",
       "production": "apps/desktop/src-tauri/src/security.rs",
       "import": "../../src-tauri/src/security.rs",
-      "mutation": { "file": "apps/desktop/src-tauri/src/security.rs", "find": "_ => false,", "replace": "_ => true," }
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/security.rs",
+        "find": "_ => false,",
+        "replace": "_ => true,"
+      }
     },
     {
       "id": "desktop-http-opener-capability",
@@ -360,8 +404,8 @@
       "import": "../src-tauri/src/lib.rs",
       "mutation": {
         "file": "apps/desktop/src-tauri/src/lib.rs",
-        "find": "\"secrets.html\"",
-        "replace": "\"settings.html\""
+        "find": "WebviewWindowBuilder::new(app, \"secrets\", WebviewUrl::App(\"secrets.html\".into()))",
+        "replace": "WebviewWindowBuilder::new(app, \"secrets\", WebviewUrl::App(\"settings.html\".into()))"
       }
     },
     {
@@ -424,7 +468,11 @@
       "testName": "desktop-tag-isolation",
       "production": ".github/workflows/desktop-release.yml",
       "import": "../.github/workflows/desktop-release.yml",
-      "mutation": { "file": ".github/workflows/desktop-release.yml", "find": "\"desktop-v*\"", "replace": "\"v*\"" }
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "\"desktop-v*\"",
+        "replace": "\"v*\""
+      }
     },
     {
       "id": "desktop-matrix-completeness",
@@ -563,7 +611,11 @@
       "testName": "desktop-launch-docs",
       "production": "apps/desktop/RELEASE_NOTES.md",
       "import": "../RELEASE_NOTES.md",
-      "mutation": { "file": "apps/desktop/RELEASE_NOTES.md", "find": "**Open Anyway**", "replace": "**Open**" }
+      "mutation": {
+        "file": "apps/desktop/RELEASE_NOTES.md",
+        "find": "**Open Anyway**",
+        "replace": "**Open**"
+      }
     },
     {
       "id": "desktop-windows-probe-launcher",
@@ -1420,6 +1472,528 @@
         "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
         "find": "NonSecretOperation::Approve | NonSecretOperation::ApprovalView",
         "replace": "NonSecretOperation::ApprovalView"
+      }
+    },
+    {
+      "id": "desktop-secret-capability",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: native command manifest grants exactly eight families"
+      },
+      "production": "apps/desktop/src-tauri/capabilities/settings.json",
+      "import": "../src-tauri/capabilities/settings.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/capabilities/settings.json",
+        "find": "\"permissions\": [",
+        "replace": "\"permissions\": [\"allow-desktop-judge-key-set\","
+      }
+    },
+    {
+      "id": "desktop-secret-app-manifest",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: application command declarations include all secret families"
+      },
+      "production": "apps/desktop/src-tauri/build.rs",
+      "import": "../src-tauri/build.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/build.rs",
+        "find": "        \"desktop_target_secret_create\",\n",
+        "replace": ""
+      }
+    },
+    {
+      "id": "desktop-secret-raw-command-probe",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: raw command invocation respects all three native labels"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/secrets.rs",
+      "import": "../src-tauri/src/commands/secrets.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
+        "find": "            $crate::commands::secrets::desktop_judge_key_set,\n",
+        "replace": ""
+      }
+    },
+    {
+      "id": "desktop-secret-raw-command-probe-non-secret",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: production secret registration refuses a non-secret command"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/secrets.rs",
+      "import": "../src-tauri/src/commands/secrets.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
+        "find": "            $crate::commands::secrets::desktop_judge_key_set,\n",
+        "replace": "            $crate::commands::secrets::desktop_judge_key_set,\n            $crate::commands::supervision::desktop_open_secrets,\n"
+      }
+    },
+    {
+      "id": "desktop-secret-forged-window-label",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: a forged window label cannot produce a native capability"
+      },
+      "production": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
+      "import": "../src-tauri/src/control/secret_window_capability.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
+        "find": "if window.label() != \"secrets\" {",
+        "replace": "if false {"
+      }
+    },
+    {
+      "id": "desktop-secret-pipe",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: spawned pipe key matches Node and closes its descriptor"
+      },
+      "production": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
+      "import": "../src-tauri/src/control/secret_window_capability.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
+        "find": ".env(\"AGENTCOMMS_DESKTOP_CAPABILITY_FD\", \"3\")",
+        "replace": ".env(\"AGENTCOMMS_DESKTOP_CAPABILITY_FD\", \"4\")"
+      }
+    },
+    {
+      "id": "desktop-secret-no-echo",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-no-echo: hidden operations cannot return a reveal or extra fields"
+      },
+      "production": "apps/desktop/src-tauri/src/control/types.rs",
+      "import": "../src-tauri/src/control/types.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/types.rs",
+        "find": "(kind != expected && kind != \"unavailable\")",
+        "replace": "(false && kind != expected && kind != \"unavailable\")"
+      }
+    },
+    {
+      "id": "desktop-secret-native-close-race",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-close-race: native lifecycle clears pending response generations"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/secrets.rs",
+      "import": "../src-tauri/src/commands/secrets.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
+        "find": "self.0.load(Ordering::SeqCst) == epoch",
+        "replace": "self.0.load(Ordering::SeqCst) >= epoch"
+      }
+    },
+    {
+      "id": "desktop-secret-generic-dispatch",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-boundary: generic dispatch cannot reach any secret operation"
+      },
+      "production": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+      "import": "../src-tauri/src/control/b3_contract.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+        "find": "return Err(ControlError::new(\n                \"APP_SECRET_CAPABILITY_UNAVAILABLE\",\n                \"secret operations require a separate capability\",\n            ));",
+        "replace": "return Self::parse(serde_json::json!({\"operation\":\"status\",\"args\":{}}));"
+      }
+    },
+    {
+      "id": "desktop-secret-app-result",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner accepts a matching session operation and MAC once"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+        "find": "return { kind: 'RevealOnce', material };",
+        "replace": "return { kind: 'Acknowledgement' };"
+      }
+    },
+    {
+      "id": "desktop-secret-trace",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-trace: real owner leaves hidden and generated material off every non-secret durable and reply surface"
+      },
+      "production": "packages/events-daemon/src/runtime/owner.ts",
+      "import": "../../../packages/events-daemon/src/runtime/owner.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/owner.ts",
+        "find": "const result = await handleTerminalSecretOperation(options.ports.secrets, request);",
+        "replace": "console.log(request.args.hidden);\n          const result = await handleTerminalSecretOperation(options.ports.secrets, request);"
+      }
+    },
+    {
+      "id": "desktop-secret-attached-label",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: an attached owner never trusts a window label"
+      },
+      "production": "packages/events-daemon/src/runtime/owner.ts",
+      "import": "../../../packages/events-daemon/src/runtime/owner.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/owner.ts",
+        "find": "request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized",
+        "replace": "request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized && request.origin !== 'secrets'"
+      }
+    },
+    {
+      "id": "desktop-secret-missing-hmac",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner refuses missing proof"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "if (typeof proof !== 'object' || proof === null) return false;",
+        "replace": "if (typeof proof !== 'object' || proof === null) return true;"
+      }
+    },
+    {
+      "id": "desktop-secret-forged-hmac",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner refuses forged proof"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "return timingSafeEqual(expected, received);",
+        "replace": "return true;"
+      }
+    },
+    {
+      "id": "desktop-secret-failed-proof-consumption",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner consumes a nonce before every failed proof validation"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "    const pending = this.#nonces.get(candidateNonce);\n    this.#nonces.delete(candidateNonce);",
+        "replace": "    const pending = this.#nonces.get(candidateNonce);\n    // consumption removed"
+      }
+    },
+    {
+      "id": "desktop-secret-capability-replay",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner refuses replay proof"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "    this.#nonces.delete(candidateNonce);\n    if (typeof proof",
+        "replace": "    // consumption removed\n    if (typeof proof"
+      }
+    },
+    {
+      "id": "desktop-secret-cross-session",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner refuses cross-session proof"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "if (pending.session !== session || pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + operation + nonce)",
+        "replace": "if (pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(pending.session + operation + nonce)"
+      }
+    },
+    {
+      "id": "desktop-secret-cross-operation",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-capability: real owner refuses cross-operation proof"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
+        "find": "if (pending.session !== session || pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + operation + nonce)",
+        "replace": "if (pending.session !== session) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + pending.operation + nonce)"
+      }
+    },
+    {
+      "id": "desktop-secret-close-race",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-window.test.tsx",
+        "name": "secret-window: submit clears entry and every lifecycle race discards a late reveal"
+      },
+      "production": "apps/desktop/src/secret-form-state.ts",
+      "import": "../src/secret-form-state.ts",
+      "mutation": {
+        "file": "apps/desktop/src/secret-form-state.ts",
+        "find": "if (epoch === this.#epoch) {",
+        "replace": "if (true) {"
+      }
+    },
+    {
+      "id": "desktop-secret-hidden-form",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-window.test.tsx",
+        "name": "secret-window: hidden forms are isolated and never rehydrate or echo failed entry"
+      },
+      "production": "apps/desktop/src/secrets-app.tsx",
+      "import": "../src/secrets-app.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/secrets-app.tsx",
+        "find": "type=\"password\"",
+        "replace": "type=\"text\""
+      }
+    },
+    {
+      "id": "desktop-secret-control-trace",
+      "group": "task-6-owner",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-trace.test.mjs",
+        "name": "secret-trace: compiled native commands carry hidden bytes only through the sealed real owner secret path"
+      },
+      "production": "apps/desktop/src-tauri/src/control/client.rs",
+      "import": "../src-tauri/src/control/client.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/client.rs",
+        "find": "super::types::SecretResult::checked(operation, reply.data)",
+        "replace": "Ok(super::types::SecretResult::Acknowledgement)"
+      }
+    },
+    {
+      "id": "desktop-secret-audit-host",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-audit-shape.test.mjs",
+        "name": "secret-audit-shape: every authoritative operation excludes host"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+        "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
+        "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'host']);"
+      }
+    },
+    {
+      "id": "desktop-secret-audit-fingerprint",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-audit-shape.test.mjs",
+        "name": "secret-audit-shape: every authoritative operation excludes fingerprint"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+        "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
+        "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'fingerprint']);"
+      }
+    },
+    {
+      "id": "desktop-secret-audit-reference",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-audit-shape.test.mjs",
+        "name": "secret-audit-shape: every authoritative operation excludes secretReference"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-secret-result.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
+        "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
+        "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'secretReference']);"
+      }
+    },
+    {
+      "id": "desktop-secret-key-argv",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-pipe.test.mjs",
+        "name": "secret-capability: key intake refuses argv material"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+        "find": "if (descriptor === undefined) return undefined;",
+        "replace": "if (descriptor === undefined) return process.argv.includes('--desktop-capability-key') ? Buffer.alloc(32) : undefined;"
+      }
+    },
+    {
+      "id": "desktop-secret-key-env",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-pipe.test.mjs",
+        "name": "secret-capability: key intake refuses env material"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+        "find": "if (descriptor === undefined) return undefined;",
+        "replace": "if (descriptor === undefined) return env.AGENTCOMMS_DESKTOP_CAPABILITY_KEY ? Buffer.alloc(32) : undefined;"
+      }
+    },
+    {
+      "id": "desktop-secret-key-file",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-pipe.test.mjs",
+        "name": "secret-capability: key intake refuses file material"
+      },
+      "production": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "import": "../../../packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
+        "find": "if (descriptor === undefined) return undefined;",
+        "replace": "if (descriptor === undefined) return env.AGENTCOMMS_DESKTOP_CAPABILITY_FILE ? Buffer.alloc(32) : undefined;"
+      }
+    },
+    {
+      "id": "desktop-secret-session-close",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-capability.test.mjs",
+        "name": "secret-close-race: owner discards unused authority when the native secret session closes"
+      },
+      "production": "packages/events-daemon/src/runtime/owner.ts",
+      "import": "../../../packages/events-daemon/src/runtime/owner.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/runtime/owner.ts",
+        "find": "onSessionClosed: (session) => desktopAuthority?.cancel(session),",
+        "replace": "onSessionClosed: () => undefined,"
+      }
+    },
+    {
+      "id": "desktop-secret-native-stream-close",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-native.test.mjs",
+        "name": "secret-close-race: native lifecycle closes the in-flight secret connection"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/secrets.rs",
+      "import": "../src-tauri/src/commands/secrets.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
+        "find": "let _ = stream.shutdown(std::net::Shutdown::Both);",
+        "replace": "let _ = stream;"
+      }
+    },
+    {
+      "id": "desktop-secret-ipc-fallback",
+      "group": "task-6",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/secret-ipc-fallback.test.mjs",
+        "name": "secret-window: pinned Tauri fallback preserves only the live hidden IPC payload"
+      },
+      "production": "apps/desktop/src/secret-form-state.ts",
+      "import": "../src/secret-form-state.ts",
+      "mutation": {
+        "file": "apps/desktop/src/secret-form-state.ts",
+        "find": "const pending = invoke(command, { input });",
+        "replace": "const pending = invoke(command, { input });\n      delete input.hidden;"
+      }
+    },
+    {
+      "id": "desktop-supervisor-start-readiness",
+      "group": "task-6",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "spawned_owner_waits_for_authenticated_readiness_beyond_short_delay"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-start-readiness: spawned owners wait for a bounded authenticated readiness signal"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "const START_READINESS_DEADLINE: Duration = Duration::from_secs(15);",
+        "replace": "const START_READINESS_DEADLINE: Duration = Duration::from_secs(3);"
+      }
+    },
+    {
+      "id": "desktop-supervisor-stop-lost-reply",
+      "group": "task-6",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "stop_accepts_a_lost_reply_only_after_the_exact_owner_is_gone"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-stop-lost-reply: a lost stop reply is confirmed by exact-owner disappearance"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "Err(error) if error.code == \"NOT_FOUND\" || error.code == \"CONTROL_IO\" => {}",
+        "replace": "Err(error) if error.code == \"NOT_FOUND\" => {}"
       }
     }
   ]

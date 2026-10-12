@@ -78,6 +78,8 @@ import {
 } from './b3-target-test-control.ts';
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
+import { DESKTOP_SECRET_UNAVAILABLE, DesktopSecretAuthority } from './desktop-secret-capability.ts';
+import { desktopSecretResult, projectDesktopSecretAudit } from './desktop-secret-result.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
@@ -99,6 +101,9 @@ import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
+
+// Only handleControl can mark this one object after verifying the current authenticated session's MAC.
+const desktopSecretRequests = new WeakSet<object>();
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
 
@@ -168,6 +173,8 @@ export interface EventOwnerOptions {
   readonly startControlServer?: ((options: ControlServerOptions) => Promise<RunningControlServer>) | undefined;
   /** Task 1 seam: later B3 requests are owned here, not by a second CLI/MCP path. */
   readonly b3OwnerService?: B3OwnerService | undefined;
+  /** Internal spawn seam. `run` obtains these bytes only from its inherited capability pipe. */
+  readonly desktopCapabilityKey?: Uint8Array | undefined;
 }
 
 /**
@@ -395,11 +402,11 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
   return {
     async handle(request: B3OwnerRequest): Promise<unknown> {
       if (isB3SecretOperation(request.operation)) {
-        // C has not supplied its non-forgeable secret-window capability.  The control hello's client name is only a
-        // caller assertion, so every value except the terminal origin is refused before parsing secret-shaped args or
-        // touching the Task 2 secret control.
+        // A control hello's client name is only a caller assertion. App requests require the private one-request
+        // witness installed only after the authenticated session's nonce and MAC are consumed below.
         const receipt = secretAuditReceipt(request);
-        if (request.origin !== B3_SECRET_TERMINAL_ORIGIN) {
+        const desktopAuthorized = desktopSecretRequests.delete(request);
+        if (request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized) {
           await appendSecretAudit(options.audit, {
             ...receipt,
             outcome: 'refused',
@@ -412,7 +419,11 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
         }
         try {
           const result = await handleTerminalSecretOperation(options.ports.secrets, request);
-          await appendSecretAudit(options.audit, { ...receipt, outcome: 'ok' });
+          const audit = await appendSecretAudit(options.audit, { ...receipt, outcome: 'ok' });
+          if (desktopAuthorized) {
+            projectDesktopSecretAudit(audit);
+            return desktopSecretResult(request.operation, result);
+          }
           return result;
         } catch (error) {
           await appendSecretAudit(options.audit, { ...receipt, outcome: 'failed' });
@@ -459,9 +470,9 @@ async function appendSecretAudit(
     reason?: 'APP_SECRET_CAPABILITY_UNAVAILABLE' | undefined;
     ids?: Readonly<Record<string, string>> | undefined;
   }>,
-): Promise<void> {
+): Promise<Awaited<ReturnType<AuditLog['append']>> | undefined> {
   if (audit === undefined) return;
-  await audit.append({
+  return audit.append({
     inboxId: '',
     operation: `events.${receipt.operation}`,
     outcome: receipt.outcome,
@@ -1212,6 +1223,8 @@ async function startOwnerWithLock(
     });
   };
   const token = randomBytes(32).toString('hex');
+  const desktopAuthority =
+    options.desktopCapabilityKey === undefined ? undefined : new DesktopSecretAuthority(options.desktopCapabilityKey);
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
   let stopped = false;
@@ -1238,6 +1251,7 @@ async function startOwnerWithLock(
         await scheduler.stop();
         await control?.close();
       } finally {
+        desktopAuthority?.close();
         database.close();
         await removeInstance(paths, instance.instanceId);
         await rm(paths.controlToken, { force: true });
@@ -1257,6 +1271,11 @@ async function startOwnerWithLock(
     control = await (options.startControlServer ?? startControlServer)({
       endpoint: instance.endpoint,
       token,
+      onSessionClosed: (session) => desktopAuthority?.cancel(session),
+      // Stop is authoritative only after its reply is flushed: closing this server destroys its sockets.
+      onResponseFlushed: async (request) => {
+        if (request.operation === OWNER_CONTROL_WIRES.stop) await owner.stop();
+      },
       handle: async (request) =>
         handleControl(
           owner,
@@ -1269,6 +1288,7 @@ async function startOwnerWithLock(
           request,
           ownerB3Service,
           doctorReport,
+          desktopAuthority,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1313,13 +1333,28 @@ async function handleControl(
   request: AuthenticatedControlRequest,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
+  desktopAuthority?: DesktopSecretAuthority,
 ): Promise<unknown> {
+  if (request.operation === 'desktopSecretNonce') {
+    if (request.args.cancel === true) {
+      desktopAuthority?.cancel(request.session);
+      return { cleared: true };
+    }
+    return desktopAuthority?.issue(request.session, request.args.operation) ?? DESKTOP_SECRET_UNAVAILABLE;
+  }
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
     try {
-      return await b3OwnerService.handle({ operation: request.operation, args: request.args, origin: request.origin });
+      const owned = { operation: request.operation, args: request.args, origin: request.origin };
+      if (
+        isB3SecretOperation(request.operation) &&
+        desktopAuthority?.consume(request.session, request.operation, request.args.capability)
+      ) {
+        desktopSecretRequests.add(owned);
+      }
+      return await b3OwnerService.handle(owned);
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.
       if (error instanceof EventDomainError)
@@ -1331,9 +1366,6 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.status:
       return owner.status();
     case OWNER_CONTROL_WIRES.stop:
-      setTimeout(() => {
-        void owner.stop();
-      }, 0);
       return { stopping: true };
     case OWNER_CONTROL_WIRES.pause:
       return lifecycle.pause();

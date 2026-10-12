@@ -35,6 +35,52 @@ function requestElement(element: HTMLElement, event: 'load' | 'error'): Promise<
 
 export async function runEgressProbe(_entry: 'settings' | 'secrets'): Promise<void> {
   const bridge = api();
+  const capabilityLabel = await bridge.invoke<string | null>('desktop_probe_capability_mode');
+  if (capabilityLabel) {
+    const commands = [
+      'desktop_target_secret_create',
+      'desktop_target_secret_rotate',
+      'desktop_target_url_set',
+      'desktop_subscriber_token_create',
+      'desktop_subscriber_token_rotate',
+      'desktop_judge_key_set',
+      'desktop_judge_key_rotate',
+      'desktop_secrets_migrate',
+    ];
+    let allowed = 0;
+    let denied = 0;
+    let excluded = 0;
+    for (const command of commands) {
+      try {
+        const result = await bridge.invoke<{ kind: string; code: string }>(command, {
+          input: { id: 'synthetic', version: 1 },
+        });
+        if (result.kind === 'unavailable' && result.code === 'APP_SECRET_CAPABILITY_UNAVAILABLE') allowed += 1;
+      } catch (error) {
+        if (capabilityLabel === 'secrets' && error === 'WINDOWS_CONTROL_UNAVAILABLE') allowed += 1;
+        else denied += 1;
+      }
+    }
+    if (capabilityLabel === 'secrets') {
+      for (const command of ['desktop_control', 'desktop_approve']) {
+        try {
+          const input =
+            command === 'desktop_control'
+              ? { request: { operation: 'status', args: {} } }
+              : { approvalId: 'synthetic', digest: '0'.repeat(64) };
+          await bridge.invoke(command, { input });
+        } catch (error) {
+          if (
+            typeof error === 'string' &&
+            (error === 'WINDOW_NOT_AUTHORIZED' || /not allowed|not permitted/i.test(error))
+          )
+            excluded += 1;
+        }
+      }
+    }
+    await bridge.invoke('desktop_probe_report', { report: `capabilities,${allowed},${denied},${excluded}` });
+    return;
+  }
   const results = new Map<string, boolean>(attacks.map((attack) => [attack, false]));
   const ipc = (await bridge.invoke<string>('desktop_probe_ping')) === 'pong';
   const port = await bridge.invoke<number>('desktop_probe_port');

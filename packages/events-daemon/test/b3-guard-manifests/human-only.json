@@ -117,7 +117,7 @@
       "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
       "test": "packages/events-daemon/test/b3-secret-origin.test.ts",
       "mutation": {
-        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN)",
+        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized)",
         "to": "if (false)"
       },
       "mutationTest": "B3 secret owner rejects every caller-selected app/window origin before the secret control and accepts only interactive-terminal",

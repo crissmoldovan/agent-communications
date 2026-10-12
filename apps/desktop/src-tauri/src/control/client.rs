@@ -30,6 +30,22 @@ pub struct DesktopControlClient {
     profile: DaemonProfile,
     client_name: &'static str,
 }
+
+#[cfg(unix)]
+pub struct SecretExchange<'a> {
+    pub capability: &'a super::secret_window_capability::SecretWindowCapability,
+    pub key: &'a super::secret_window_capability::DesktopCapabilityKey,
+    pub operation: super::secret_window_capability::SecretOperation,
+    pub args: Value,
+    pub lifecycle: &'a crate::commands::secrets::SecretLifecycle,
+    pub epoch: u64,
+}
+#[cfg(unix)]
+impl Drop for SecretExchange<'_> {
+    fn drop(&mut self) {
+        super::types::clear_secret_json(&mut self.args);
+    }
+}
 impl DesktopControlClient {
     pub fn new(profile: DaemonProfile) -> Self {
         Self::with_client_name(profile, "desktop")
@@ -90,6 +106,28 @@ impl DesktopControlClient {
         operation: NonSecretControlRequest,
         versions: &[u32],
         expected: Option<&InstanceIdentity>,
+    ) -> Result<AuthenticatedReply, ControlError> {
+        self.exchange_checked(Some(operation), versions, expected, None)
+    }
+
+    #[cfg(unix)]
+    pub fn request_secret(
+        &self,
+        expected: &InstanceIdentity,
+        secret: SecretExchange<'_>,
+    ) -> Result<super::types::SecretResult, ControlError> {
+        let operation = secret.operation;
+        let reply = self.exchange_checked(None, &SUPPORTED, Some(expected), Some(secret))?;
+        super::types::SecretResult::checked(operation, reply.data)
+    }
+
+    #[cfg(unix)]
+    fn exchange_checked(
+        &self,
+        operation: Option<NonSecretControlRequest>,
+        versions: &[u32],
+        expected: Option<&InstanceIdentity>,
+        secret: Option<SecretExchange<'_>>,
     ) -> Result<AuthenticatedReply, ControlError> {
         use super::frame::{decode_frame, encode_frame, select_version, MAX_FRAME_BYTES};
         use super::types::{remote_code, ControlReply};
@@ -199,7 +237,7 @@ impl DesktopControlClient {
             Ok(())
         }
         fn exchange(stream: &mut UnixStream, value: &Value) -> Result<Value, ControlError> {
-            let frame = encode_frame(value)?;
+            let frame = zeroize::Zeroizing::new(encode_frame(value)?);
             stream
                 .write_all(&frame)
                 .map_err(|_| ControlError::new("CONTROL_IO", "cannot send control frame"))?;
@@ -214,7 +252,7 @@ impl DesktopControlClient {
                     "remote frame exceeds limit",
                 ));
             }
-            let mut frame = Vec::with_capacity(length + 4);
+            let mut frame = zeroize::Zeroizing::new(Vec::with_capacity(length + 4));
             frame.extend_from_slice(&prefix);
             frame.resize(length + 4, 0);
             stream
@@ -244,6 +282,10 @@ impl DesktopControlClient {
         stream
             .set_write_timeout(Some(Duration::from_secs(2)))
             .map_err(|_| ControlError::new("CONTROL_IO", "cannot set write timeout"))?;
+        let _secret_pending = secret
+            .as_ref()
+            .map(|secret| secret.lifecycle.watch(secret.epoch, &stream))
+            .transpose()?;
         let hello = exchange(
             &mut stream,
             &json!({"hello":{"supportedVersions":versions,"token":token,"client":{"name":self.client_name}}}),
@@ -273,20 +315,62 @@ impl DesktopControlClient {
             std::process::id(),
             NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
-        let reply = exchange(
-            &mut stream,
-            &json!({"version":version,"requestId":request_id,"session":session,"operation":operation.operation(),"args":match &operation { NonSecretControlRequest::B3(request) => request.args(), _ => json!({}) }}),
-        )?;
-        let reply: ControlReply = serde_json::from_value(reply)
+        let reply = if let Some(mut secret) = secret {
+            let nonce_id = format!("{request_id}-nonce");
+            let issued: ControlReply = serde_json::from_value(exchange(&mut stream, &json!({
+                "version":version,"requestId":nonce_id,"session":session,"operation":"desktopSecretNonce",
+                "args":{"operation":secret.operation.wire()}
+            }))?).map_err(|_| ControlError::new("SECRET_CAPABILITY", "invalid nonce response"))?;
+            let issued = issued.data_for(&nonce_id)?;
+            if issued.get("kind").and_then(Value::as_str) == Some("unavailable") {
+                return Ok(AuthenticatedReply {
+                    data: issued,
+                    identity,
+                });
+            }
+            let nonce = issued
+                .get("nonce")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ControlError::new("SECRET_CAPABILITY", "missing nonce"))?;
+            if !secret.lifecycle.current(secret.epoch) {
+                let _ = exchange(
+                    &mut stream,
+                    &json!({"version":version,"requestId":format!("{request_id}-cancel"),"session":session,"operation":"desktopSecretNonce","args":{"cancel":true}}),
+                );
+                return Err(ControlError::new("SECRET_CLEARED", "secret window changed"));
+            }
+            let proof =
+                secret
+                    .capability
+                    .proof(secret.key, &session, secret.operation.wire(), nonce)?;
+            secret.args["capability"] = serde_json::to_value(proof)
+                .map_err(|_| ControlError::new("SECRET_CAPABILITY", "invalid capability"))?;
+            let mut request = json!({"version":version,"requestId":request_id,"session":session,"operation":secret.operation.wire(),"args":std::mem::take(&mut secret.args)});
+            let result = exchange(&mut stream, &request);
+            super::types::clear_secret_json(&mut request);
+            result?
+        } else {
+            let operation = operation
+                .ok_or_else(|| ControlError::new("CONTROL_REQUEST", "missing operation"))?;
+            exchange(
+                &mut stream,
+                &json!({"version":version,"requestId":request_id,"session":session,"operation":operation.operation(),"args":match &operation { NonSecretControlRequest::B3(request) => request.args(), _ => json!({}) }}),
+            )?
+        };
+        let reply = super::types::SecretJson(reply);
+        let reply = ControlReply::deserialize(&reply.0)
             .map_err(|_| ControlError::new("MALFORMED_FRAME", "invalid operation reply"))?;
-        let data = reply.data_for(&request_id)?;
+        let mut data = super::types::SecretJson(reply.data_for(&request_id)?);
         if read_instance(&paths)? != record {
             return Err(ControlError::new(
                 "CONTROL_OWNER_CHANGED",
                 "owner changed after reply",
             ));
         }
-        Ok(AuthenticatedReply { data, identity })
+        Ok(AuthenticatedReply {
+            data: std::mem::take(&mut data.0),
+            identity,
+        })
     }
 }
 

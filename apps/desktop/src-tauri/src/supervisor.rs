@@ -19,6 +19,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+const START_READINESS_DEADLINE: Duration = Duration::from_secs(15);
+#[cfg(unix)]
+const SUPERVISION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[cfg(unix)]
 pub use crate::control::types::InstanceIdentity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -48,6 +53,11 @@ pub struct AuthenticatedStatus {
 
 #[cfg(unix)]
 pub trait DaemonProcess: Send {
+    fn capability_key(
+        &self,
+    ) -> Option<Arc<crate::control::secret_window_capability::DesktopCapabilityKey>> {
+        None
+    }
     fn id(&self) -> u32;
     fn try_wait(&mut self) -> Result<bool, ControlError>;
     fn terminate_and_wait(&mut self) -> Result<(), ControlError>;
@@ -170,6 +180,63 @@ impl Drop for StartGuard<'_> {
 }
 
 impl DesktopSupervisor {
+    #[cfg(unix)]
+    pub fn secret_request(
+        &self,
+        capability: &crate::control::secret_window_capability::SecretWindowCapability,
+        operation: crate::control::secret_window_capability::SecretOperation,
+        args: serde_json::Value,
+        lifecycle: &crate::commands::secrets::SecretLifecycle,
+        epoch: u64,
+    ) -> Result<crate::control::types::SecretResult, ControlError> {
+        let mut args = crate::control::types::SecretJson(args);
+        let (profile, identity, key) = {
+            let ledger = self
+                .ledger
+                .lock()
+                .map_err(|_| ControlError::new("CONTROL_UNAVAILABLE", "supervisor unavailable"))?;
+            let Some(owner) = ledger
+                .owner
+                .as_ref()
+                .filter(|owner| !owner.attached && ledger.state == SupervisorState::Running)
+            else {
+                return Ok(crate::control::types::SecretResult::unavailable());
+            };
+            let Some(key) = owner
+                .child
+                .as_ref()
+                .and_then(|child| child.capability_key())
+            else {
+                return Ok(crate::control::types::SecretResult::unavailable());
+            };
+            (owner.profile.clone(), owner.identity.clone(), key)
+        };
+        let result = DesktopControlClient::with_client_name(profile, "desktop-secrets")
+            .request_secret(
+                &identity,
+                crate::control::client::SecretExchange {
+                    capability,
+                    key: &key,
+                    operation,
+                    args: std::mem::take(&mut args.0),
+                    lifecycle,
+                    epoch,
+                },
+            )?;
+        let ledger = self
+            .ledger
+            .lock()
+            .map_err(|_| ControlError::new("CONTROL_UNAVAILABLE", "supervisor unavailable"))?;
+        if ledger
+            .owner
+            .as_ref()
+            .is_none_or(|owner| owner.identity != identity)
+            || !lifecycle.current(epoch)
+        {
+            return Err(ControlError::new("SECRET_CLEARED", "secret window changed"));
+        }
+        Ok(result)
+    }
     #[cfg(unix)]
     pub fn with_runtime(runtime: Arc<dyn DaemonRuntime>) -> Self {
         Self {
@@ -298,23 +365,29 @@ impl DesktopSupervisor {
             guard.child = Some(self.runtime.spawn(&profile)?);
             self.ensure_start_epoch(epoch)?;
         }
-        let deadline = Instant::now() + Duration::from_secs(3);
+        // `status` is the readiness signal, not a sleep: the real runtime reads the exact
+        // instance record and completes an authenticated status round-trip to its endpoint.
+        let deadline = Instant::now() + START_READINESS_DEADLINE;
         let ready = loop {
             self.ensure_start_epoch(epoch)?;
             match self.runtime.status(&profile) {
                 Ok(status) => break status,
-                Err(error) if error.code == "NOT_FOUND" && Instant::now() < deadline => {
-                    if guard
-                        .child
-                        .as_mut()
-                        .is_some_and(|child| child.try_wait().unwrap_or(false))
-                    {
+                Err(error) if error.code == "NOT_FOUND" => {
+                    if let Some(child) = guard.child.as_mut() {
+                        if child.try_wait()? {
+                            return Err(ControlError::new(
+                                "DAEMON_EXITED",
+                                "spawned daemon exited before ready",
+                            ));
+                        }
+                    }
+                    if Instant::now() >= deadline {
                         return Err(ControlError::new(
-                            "DAEMON_EXITED",
-                            "spawned daemon exited before ready",
+                            "DAEMON_START_TIMEOUT",
+                            "spawned daemon did not become ready before deadline",
                         ));
                     }
-                    std::thread::sleep(Duration::from_millis(50));
+                    std::thread::sleep(SUPERVISION_POLL_INTERVAL);
                 }
                 Err(error) => return Err(error),
             }
@@ -532,7 +605,9 @@ impl DesktopSupervisor {
             }
             match self.runtime.stop(&bound.profile, &bound.identity) {
                 Ok(()) => {}
-                Err(error) if error.code == "NOT_FOUND" => {}
+                // A Stop request can have reached the owner just before it closes the socket.
+                // The authenticated status/child checks below, not the reply, decide its outcome.
+                Err(error) if error.code == "NOT_FOUND" || error.code == "CONTROL_IO" => {}
                 Err(error) => return Err(error),
             }
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -582,7 +657,7 @@ impl DesktopSupervisor {
                         "daemon did not finish stopping",
                     ));
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(SUPERVISION_POLL_INTERVAL);
             }
         })();
         if result.is_err() {
@@ -758,7 +833,10 @@ impl DaemonRuntime for RealDaemonRuntime {
 
     fn spawn(&self, profile: &DaemonProfile) -> Result<Box<dyn DaemonProcess>, ControlError> {
         profile.paths()?;
-        let child = Command::new(&profile.executable)
+        let key =
+            Arc::new(crate::control::secret_window_capability::DesktopCapabilityKey::generate()?);
+        let mut command = Command::new(&profile.executable);
+        command
             .arg("--state-dir")
             .arg(&profile.state_dir)
             .arg("--config-dir")
@@ -766,20 +844,25 @@ impl DaemonRuntime for RealDaemonRuntime {
             .arg("run")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| {
-                ControlError::new("DAEMON_SPAWN", "cannot start exact daemon executable")
-            })?;
-        Ok(Box::new(RealDaemonProcess(child)))
+            .stderr(Stdio::null());
+        let child = key.spawn(&mut command)?;
+        Ok(Box::new(RealDaemonProcess(child, key)))
     }
 }
 
 #[cfg(unix)]
-struct RealDaemonProcess(Child);
+struct RealDaemonProcess(
+    Child,
+    Arc<crate::control::secret_window_capability::DesktopCapabilityKey>,
+);
 
 #[cfg(unix)]
 impl DaemonProcess for RealDaemonProcess {
+    fn capability_key(
+        &self,
+    ) -> Option<Arc<crate::control::secret_window_capability::DesktopCapabilityKey>> {
+        Some(self.1.clone())
+    }
     fn id(&self) -> u32 {
         self.0.id()
     }

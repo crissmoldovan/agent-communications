@@ -212,7 +212,10 @@ test('desktop-handler-order', async () => {
     'security installation must precede the first webview build',
   );
   assert.match(lib, /\.on_navigation\(\|url\| security::allow_window_navigation\("settings", url\)\)/);
-  assert.match(lib, /\.on_navigation\(\|url\| security::allow_window_navigation\("secrets", url\)\)/);
+  assert.match(
+    lib,
+    /\.on_navigation\(move \|url\| \{\s*let allowed = security::allow_window_navigation\("secrets", url\);/,
+  );
 });
 
 // desktop-mutation: desktop-http-opener-capability
@@ -236,7 +239,16 @@ test('desktop-http-opener-capability', async () => {
             'allow-desktop-quit-daemon',
             'allow-desktop-open-secrets',
           ]
-        : [],
+        : [
+            'allow-desktop-target-secret-create',
+            'allow-desktop-target-secret-rotate',
+            'allow-desktop-target-url-set',
+            'allow-desktop-subscriber-token-create',
+            'allow-desktop-subscriber-token-rotate',
+            'allow-desktop-judge-key-set',
+            'allow-desktop-judge-key-rotate',
+            'allow-desktop-secrets-migrate',
+          ],
     );
   }
   const cargo = await readFile(cargoUrl, 'utf8');
@@ -259,7 +271,7 @@ test('desktop-window-labels', async () => {
   assert.match(lib, /"settings"/);
   assert.match(lib, /"secrets"/);
   assert.match(lib, /"settings\.html"/);
-  assert.match(lib, /"secrets\.html"/);
+  assert.match(lib, /WebviewWindowBuilder::new\(app, "secrets", WebviewUrl::App\("secrets\.html"\.into\(\)\)\)/);
 });
 
 // desktop-mutation: desktop-tray-lifecycle

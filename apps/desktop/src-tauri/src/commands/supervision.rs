@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use tauri::{Manager, State, WebviewWindow};
 
 pub struct DesktopService {
+    pub secrets: super::secrets::SecretLifecycle,
     pub store: PreferenceStore,
     pub supervisor: DesktopSupervisor,
     pub control: std::sync::Mutex<super::control::ControlState>,
@@ -20,6 +21,7 @@ pub struct DesktopService {
 impl DesktopService {
     pub fn new(preferences_path: PathBuf) -> Self {
         Self {
+            secrets: super::secrets::SecretLifecycle::default(),
             store: PreferenceStore::new(preferences_path),
             supervisor: DesktopSupervisor::default(),
             control: std::sync::Mutex::default(),

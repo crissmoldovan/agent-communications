@@ -82,7 +82,16 @@ test('control-contract: built app manifest registers exactly the settings comman
     assert.deepEqual(acl['__app-acl__'].permissions[permission]?.commands.allow, [command]);
     assert.ok(capabilities.settings.permissions.includes(permission));
   }
-  assert.deepEqual(capabilities.secrets.permissions, []);
+  assert.deepEqual(capabilities.secrets.permissions, [
+    'allow-desktop-target-secret-create',
+    'allow-desktop-target-secret-rotate',
+    'allow-desktop-target-url-set',
+    'allow-desktop-subscriber-token-create',
+    'allow-desktop-subscriber-token-rotate',
+    'allow-desktop-judge-key-set',
+    'allow-desktop-judge-key-rotate',
+    'allow-desktop-secrets-migrate',
+  ]);
   assert.deepEqual(capabilities.settings.windows, ['settings']);
 
   // This is the compiled desktop artifact, not build.rs text: a handler omission must not be hidden by a matching

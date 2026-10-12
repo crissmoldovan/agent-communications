@@ -24,6 +24,13 @@ export interface ControlServerOptions {
    */
   readonly verifyEndpoint: () => Promise<void>;
   readonly supportedVersions?: readonly number[];
+  /** Internal connection lifecycle notification; does not change session authentication semantics. */
+  readonly onSessionClosed?: ((session: string) => void) | undefined;
+  /**
+   * Invoked only after a successful operation reply has flushed to the local socket. The owner uses this for Stop so
+   * it cannot tear down the socket before the requester receives its acknowledgement.
+   */
+  readonly onResponseFlushed?: ((request: AuthenticatedControlRequest) => Promise<void> | void) | undefined;
 }
 
 export interface RunningControlServer {
@@ -42,11 +49,16 @@ export async function startControlServer(options: ControlServerOptions): Promise
   });
   installErrorSink(server);
   await listen(server, options.endpoint);
+  let closing: Promise<void> | undefined;
   return {
-    async close(): Promise<void> {
-      sessions.close();
-      for (const socket of sockets) socket.destroy();
-      await close(server);
+    close(): Promise<void> {
+      // Stop's teardown and the owner's own shutdown may both close; the second call waits for the first.
+      closing ??= (async () => {
+        sessions.close();
+        for (const socket of sockets) socket.destroy();
+        await close(server);
+      })();
+      return closing;
     },
   };
 }
@@ -63,13 +75,16 @@ async function serve(
   try {
     await options.verifyEndpoint();
   } catch {
-    write(socket, controlFailure('AUTH_REQUIRED', 'local control endpoint is not private to this user'));
+    writeBestEffort(socket, controlFailure('AUTH_REQUIRED', 'local control endpoint is not private to this user'));
     socket.end();
     return;
   }
 
   const frames = new ControlFrameReader();
   let session: ReturnType<ControlSessions['create']> | null = null;
+  socket.once('close', () => {
+    if (session) options.onSessionClosed?.(session.id);
+  });
   let ended = false;
   let pending = Promise.resolve();
   socket.resume();
@@ -79,7 +94,7 @@ async function serve(
     try {
       messages = frames.push(chunk);
     } catch (error) {
-      write(
+      writeBestEffort(
         socket,
         controlFailure('FRAME_TOO_LARGE', error instanceof Error ? error.message : 'invalid local control frame'),
       );
@@ -90,7 +105,7 @@ async function serve(
     for (const message of messages) pending = pending.then(() => handleMessage(message));
     void pending.catch(() => {
       if (!ended) {
-        write(socket, controlFailure('MALFORMED_FRAME', 'local control request is malformed'));
+        writeBestEffort(socket, controlFailure('MALFORMED_FRAME', 'local control request is malformed'));
         ended = true;
         socket.end();
       }
@@ -101,58 +116,67 @@ async function serve(
     if (ended) return;
     if (!session) {
       if (!isControlHello(message)) {
-        write(socket, controlFailure('AUTH_REQUIRED', 'local control hello is required'));
+        writeBestEffort(socket, controlFailure('AUTH_REQUIRED', 'local control hello is required'));
         ended = true;
         socket.end();
         return;
       }
       if (!matchesControlToken(options.token, message.hello.token)) {
-        write(socket, controlFailure('AUTH_REQUIRED', 'local control token is not accepted'));
+        writeBestEffort(socket, controlFailure('AUTH_REQUIRED', 'local control token is not accepted'));
         ended = true;
         socket.end();
         return;
       }
       const negotiated = negotiateVersion(message.hello.supportedVersions, options.versions);
       if (!negotiated.ok) {
-        write(socket, controlFailure('PROTOCOL_UNSUPPORTED', 'no local control protocol version overlaps'));
+        writeBestEffort(socket, controlFailure('PROTOCOL_UNSUPPORTED', 'no local control protocol version overlaps'));
         ended = true;
         socket.end();
         return;
       }
       session = options.sessions.create(negotiated.version, message.hello.client.name);
-      write(socket, { ok: true, version: session.version, session: session.id });
+      writeBestEffort(socket, { ok: true, version: session.version, session: session.id });
       return;
     }
     if (!isControlRequest(message)) {
-      write(socket, controlFailure('MALFORMED_FRAME', 'local control request is malformed'));
+      writeBestEffort(socket, controlFailure('MALFORMED_FRAME', 'local control request is malformed'));
       ended = true;
       socket.end();
       return;
     }
     const active = options.sessions.get(message.session, message.version);
     if (!active) {
-      write(socket, {
+      writeBestEffort(socket, {
         ...controlFailure('AUTH_REQUIRED', 'local control session is required'),
         requestId: message.requestId,
       });
       return;
     }
     if (active.requestIds.has(message.requestId)) {
-      write(socket, {
+      writeBestEffort(socket, {
         ...controlFailure('DUPLICATE_REQUEST_ID', 'local control request id was already used'),
         requestId: message.requestId,
       });
       return;
     }
     active.requestIds.add(message.requestId);
+    const request: AuthenticatedControlRequest = {
+      ...message,
+      origin: active.clientName,
+    };
     try {
-      write(socket, {
+      await write(socket, {
         ok: true,
         requestId: message.requestId,
-        data: await options.handle({ ...message, origin: active.clientName }),
+        data: await options.handle(request),
       });
+      try {
+        await options.onResponseFlushed?.(request);
+      } catch {
+        socket.destroy();
+      }
     } catch (error) {
-      write(socket, { ok: false, requestId: message.requestId, error: operationError(error) });
+      writeBestEffort(socket, { ok: false, requestId: message.requestId, error: operationError(error) });
     }
   }
 }
@@ -174,8 +198,20 @@ function operationError(error: unknown): ControlError {
   return { code: 'UNEXPECTED', message: 'the local event operation failed', retryable: false };
 }
 
-function write(socket: Socket, value: unknown): void {
-  socket.write(encodeControlFrame(value));
+function write(socket: Socket, value: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      socket.write(encodeControlFrame(value), (error) =>
+        error === null || error === undefined ? resolve() : reject(error),
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function writeBestEffort(socket: Socket, value: unknown): void {
+  void write(socket, value).catch(() => undefined);
 }
 
 function listen(server: Server, endpoint: string): Promise<void> {

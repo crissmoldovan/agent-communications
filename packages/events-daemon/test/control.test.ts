@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { requestControl } from '../src/control/client.ts';
+import { startControlServer } from '../src/control/server.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 type ProtocolModule = typeof import('../src/control/protocol.ts');
@@ -115,4 +117,56 @@ test('CTRL-B1: a request cannot run before an authenticated hello', async () => 
     /if \(!session\) \{[\s\S]*?if \(!isControlHello\(message\)\) \{[\s\S]*?controlFailure\('AUTH_REQUIRED'/,
     'the server must reject a request before it creates a session from hello',
   );
+});
+
+test('CTRL-B1: the control server flushes a successful stop reply before notifying owner teardown', async () => {
+  const source = await readFile(new URL('../src/control/server.ts', import.meta.url), 'utf8');
+  assert.match(
+    source,
+    /await write\(socket, \{[\s\S]*?data: await options\.handle\(request\)[\s\S]*?\}\);[\s\S]*?await options\.onResponseFlushed\?\.\(request\);/u,
+    'owner teardown must be notified only after the success frame write has completed',
+  );
+});
+
+test('CTRL-B1: stop teardown runs only after its success reply is flushed', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  const stateDir = await shortTempDir('aev-control-stop-flush-');
+  const endpoint = join(stateDir, 'control.sock');
+  const token = 'a'.repeat(64);
+  const record = {
+    instanceId: '0'.repeat(32),
+    pid: process.pid,
+    processStart: 'test',
+    endpoint,
+    tokenFingerprint: '0'.repeat(64),
+  };
+  let flushedStop = false;
+  let control: Awaited<ReturnType<typeof startControlServer>> | undefined;
+  try {
+    try {
+      control = await startControlServer({
+        endpoint,
+        token,
+        verifyEndpoint: async () => undefined,
+        handle: async () => ({ stopping: true }),
+        onResponseFlushed: async (request) => {
+          if (request.operation !== 'stop') return;
+          flushedStop = true;
+          await control?.close();
+        },
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+        t.skip('sandbox does not permit the Unix socket needed for the stop-flush proof');
+        return;
+      }
+      throw error;
+    }
+    assert.deepEqual(await requestControl(record, token, 'control-stop-flush-test', 'stop', {}), { stopping: true });
+    assert.equal(flushedStop, true, 'teardown sees the response only after its successful frame was written');
+  } finally {
+    await control?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });

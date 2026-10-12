@@ -1,4 +1,5 @@
 use tauri::{App, Url};
+include!(concat!(env!("OUT_DIR"), "/app_commands.rs"));
 
 #[cfg(feature = "no-egress-probe")]
 mod probe {

@@ -5,8 +5,10 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const SUPPORTED: [u32; 1] = [1];
 
 pub fn encode_frame(value: &Value) -> Result<Vec<u8>, ControlError> {
-    let json = serde_json::to_vec(value)
-        .map_err(|_| ControlError::new("MALFORMED_FRAME", "cannot encode frame"))?;
+    let json = zeroize::Zeroizing::new(
+        serde_json::to_vec(value)
+            .map_err(|_| ControlError::new("MALFORMED_FRAME", "cannot encode frame"))?,
+    );
     if json.len() > MAX_FRAME_BYTES {
         return Err(ControlError::new(
             "FRAME_TOO_LARGE",

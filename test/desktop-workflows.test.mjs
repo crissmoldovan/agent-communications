@@ -88,6 +88,7 @@ test('desktop-workflow-matrix', async () => {
     'cargo clippy --all-targets --all-features -- -D warnings',
     'cargo test --all-targets --all-features',
     'pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress',
+    'pnpm --filter @agentcomms/desktop test:e2e -- --case capabilities',
     'pnpm --filter @agentcomms/desktop tauri:build --no-sign',
   ])
     assert.ok(source.includes(command), `missing ${command}`);
@@ -104,8 +105,11 @@ test('desktop-workflow-matrix', async () => {
   );
   assert.equal(windowsControl?.if, "runner.os == 'Windows'");
   assert.match(windowsControl.run, /mutations\/run\.mjs --case desktop-windows-pre-read-refusal/);
+  const unixSecrets = job.steps.find((step) => step.name === 'Unix Task-6 production mutations');
+  assert.equal(unixSecrets?.if, "runner.os != 'Windows'");
+  assert.match(unixSecrets.run, /mutations\/run\.mjs --group task-6/);
   for (const step of job.steps.filter((step) => step.run)) {
-    if (step !== unixControl && step !== windowsControl && !/apt-get/.test(step.run))
+    if (step !== unixControl && step !== windowsControl && step !== unixSecrets && !/apt-get/.test(step.run))
       assert.equal(step.if, undefined, `${step.name} must run on every OS`);
     assert.equal(step['continue-on-error'], undefined);
   }
@@ -244,7 +248,7 @@ test('desktop-no-signing-secret', async () => {
   assert.equal(config.bundle.windows.certificateThumbprint, null);
   assert.deepEqual(config.bundle.resources, ['../THIRD_PARTY_LICENSES']);
   assert.deepEqual(config.bundle.targets, ['app', 'nsis', 'deb']);
-  assert.match(manifest.scripts.test, /release-notes\.test\.mjs/);
+  assert.match(manifest.scripts.test, /release-notes\.test\.mjs|"test\/\*\.test\.mjs"/);
   const source = runs(release.jobs.bundle);
   assert.doesNotMatch(source, /tauri:build -- /, 'pnpm would forward the separator to Cargo');
   assert.match(source, /universal-apple-darwin --bundles app/);

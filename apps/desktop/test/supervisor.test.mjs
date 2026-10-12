@@ -37,3 +37,17 @@ test('supervisor-exact-identity: stop cannot clear a different child', async () 
   const text = (await source()).replace(/\s+/g, ' ');
   assert.match(text, /ledger\.owner\.as_ref\(\)\.map\(\|owner\| &owner\.identity\) != expected/);
 });
+
+// desktop-mutation: desktop-supervisor-start-readiness
+test('supervisor-start-readiness: spawned owners wait for a bounded authenticated readiness signal', async () => {
+  const text = await source();
+  assert.match(text, /const START_READINESS_DEADLINE: Duration = Duration::from_secs\(15\)/);
+  assert.match(text, /"DAEMON_START_TIMEOUT"/);
+});
+
+// desktop-mutation: desktop-supervisor-stop-lost-reply
+test('supervisor-stop-lost-reply: a lost stop reply is confirmed by exact-owner disappearance', async () => {
+  const text = (await source()).replace(/\s+/g, ' ');
+  assert.match(text, /error\.code == "NOT_FOUND" \|\| error\.code == "CONTROL_IO"/);
+  assert.match(text, /if endpoint_gone && child_gone/);
+});

@@ -25,7 +25,7 @@ if (selected.length === 0) {
   process.stderr.write('Usage: run.mjs --case <id> | --group <group> | --all\n');
   process.exitCode = 1;
 } else {
-  const sharedTaskFour = selected.every((item) => item.group === 'task-4' || item.group === 'task-5');
+  const sharedTaskFour = selected.every((item) => ['task-4', 'task-5', 'task-6', 'task-6-owner'].includes(item.group));
   const sharedTemp = sharedTaskFour ? await mkdtemp(join(tmpdir(), 'desktop-mutation-')) : null;
   let sharedPrepared = false;
   for (const item of selected) {
@@ -60,7 +60,7 @@ if (selected.length === 0) {
       const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
       const childEnv = { ...process.env, NODE_OPTIONS: '', GIT_DIR: gitDir, GIT_WORK_TREE: temp };
       delete childEnv.DESKTOP_PROBE_BINARY;
-      if (item.group === 'task-5') {
+      if (['task-5', 'task-6', 'task-6-owner'].includes(item.group)) {
         const kind = process.platform === 'win32' ? 'junction' : 'dir';
         for (const dependencyRoot of ['', 'apps/desktop', 'packages/events-daemon']) {
           try {
@@ -71,6 +71,7 @@ if (selected.length === 0) {
         }
         childEnv.npm_config_verify_deps_before_run = 'false';
         childEnv.pnpm_config_verify_deps_before_run = 'false';
+        if (item.group.startsWith('task-6')) childEnv.CARGO_TARGET_DIR = join(root, 'apps/desktop/src-tauri/target');
       }
       // The copy excludes target/, so a packaged probe would rebuild every dependency for the baseline and again for
       // the mutant. They share one dedicated cache instead: not the checkout's own target/, which keeps its real build.
@@ -88,12 +89,14 @@ if (selected.length === 0) {
         if (key.startsWith('NODE_TEST')) delete childEnv[key];
       }
       const testArgs = [
-        ...(item.group === 'task-5'
+        ...(['task-5', 'task-6', 'task-6-owner'].includes(item.group)
           ? [
               '--import',
               './apps/desktop/test/helpers/tsx-register.mjs',
               '--import',
               './test/helpers/loopback-seal-preload.mjs',
+              '--experimental-strip-types',
+              '--disable-warning=ExperimentalWarning',
             ]
           : []),
         ...(declared.kind === 'node' && declared.file.endsWith('.test.mjs') && item.production.endsWith('.ts')

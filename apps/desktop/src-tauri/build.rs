@@ -27,16 +27,31 @@ fn main() {
         generated.stdout,
     )
     .expect("desktop-b3-wire-contract: cannot save generated DTOs");
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
-            "desktop_control",
-            "desktop_approve",
-            "desktop_preferences",
-            "desktop_supervision_status",
-            "desktop_start_daemon",
-            "desktop_quit_daemon",
-            "desktop_open_secrets",
-        ]),
-    ))
+    let commands = &[
+        "desktop_control",
+        "desktop_approve",
+        "desktop_preferences",
+        "desktop_supervision_status",
+        "desktop_start_daemon",
+        "desktop_quit_daemon",
+        "desktop_open_secrets",
+        "desktop_target_secret_create",
+        "desktop_target_secret_rotate",
+        "desktop_target_url_set",
+        "desktop_subscriber_token_create",
+        "desktop_subscriber_token_rotate",
+        "desktop_judge_key_set",
+        "desktop_judge_key_rotate",
+        "desktop_secrets_migrate",
+    ];
+    std::fs::write(
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("app_commands.rs"),
+        format!("pub const APP_COMMANDS: &[&str] = &{commands:?};\n"),
+    )
+    .expect("command declaration inventory");
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(commands)),
+    )
     .expect("desktop command manifest is valid");
 }

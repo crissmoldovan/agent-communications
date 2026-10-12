@@ -163,7 +163,7 @@
       "test": "packages/events-daemon/test/b3-consumer-contract.test.ts",
       "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/**"],
       "mutation": {
-        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN) {",
+        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized) {",
         "to": "if (false) {"
       },
       "mutationTest": "B3 data-only consumer vectors drive real owner results and retain the C/E boundary",
