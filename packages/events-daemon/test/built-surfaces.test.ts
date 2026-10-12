@@ -174,7 +174,9 @@ test('PAR-B3: the production reference generator rejects a fixture copy with a r
       (error: unknown) => {
         const failed = error as { readonly code?: number; readonly stderr?: string };
         assert.equal(failed.code, 1);
-        assert.match(failed.stderr ?? '', /out of date: docs\/reference\/events-daemon-cli\.md/u);
+        // The generator names the file with the platform's separator; on Windows a temporary root under a short
+        // 8.3 name (RUNNER~1) cannot be made relative, so the path may arrive absolute.
+        assert.match(failed.stderr ?? '', /out of date: (?:.*[\\/])?docs[\\/]reference[\\/]events-daemon-cli\.md/u);
         return true;
       },
       'the generated-reference command cannot be deleted without the generator detecting drift',
