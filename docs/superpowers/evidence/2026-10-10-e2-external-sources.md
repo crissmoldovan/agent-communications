@@ -161,10 +161,44 @@ Not pinned by the source, so Task 9 pins it: the Python, torch and transformers 
 environment, recorded here when the gate first runs. The report-excluding candidate-subject digest is computed by
 Task 9's verifier from the candidate's assets and source, as the plan says.
 
+## Task 4 — HTTP redirects and ranges (RFC 9110) and Hugging Face downloads
+
+Fetched by the coordinator on 2026-10-12. Signed CDN paths and query strings are short-lived credentials and are not
+recorded; only their hosts are.
+
+### rfc9110-redirect-range
+
+- id: `rfc9110-redirect-range`
+- url: `https://www.rfc-editor.org/rfc/rfc9110.txt`
+- fetchedAt: `2026-10-12T18:33:46Z` (response SHA-256 `21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a`, 502941 bytes)
+- immutable: RFC 9110 (STD 97, June 2022); a published RFC's text does not change
+- fact: `§15.4.8: on a 307 a user agent MUST NOT change the request method if it redirects automatically; §15.4.3/§15.4.2: 302 and 301 may historically change POST to GET (GET is unaffected); §10.2.2: Location is a URI reference and may be relative; §14.2 Range and §14.1 range units ("bytes"); §14.4: Content-Range = range-unit SP (incl-range "/" (complete-length / "*") / "*/" complete-length), and a 206 or 416 carries it; §15.3.7: a client MUST inspect a 206 response's Content-Range to learn what part is enclosed and whether more requests are needed, and a server may send fewer bytes than asked; §15.5.17: 416 Range Not Satisfiable; §13.1.5: If-Range makes a server ignore Range unless the validator matches; §7.2: a user agent sends Host (or :authority).`
+- reviewer: `coordinator`
+
+### hf-laya-onnx-resolve-lfs
+
+- id: `hf-laya-onnx-resolve-lfs`
+- url: `https://huggingface.co/receptron/laya-onnx/resolve/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya.onnx.data`
+- fetchedAt: `2026-10-12T18:33:46Z` (headers only; one 16-byte ranged read; no model download)
+- immutable: `68f27dfe5a27a54fb2b1fefc432f43f972e90868`
+- fact: `HEAD at the hub answers 302 with Location on host us.aws.cdn.hf.co (a signed, short-lived URL), x-repo-commit 68f27dfe5a27a54fb2b1fefc432f43f972e90868, x-linked-size 1685258240 and x-linked-etag "487746363a8da57bcadb4345352997d22a0fb90d70aa22c6856668d023242aba" (the manifest's size and SHA-256), accept-ranges bytes. At the CDN target a GET with Range: bytes=0-15 answers 206 with content-range "bytes 0-15/1685258240", content-length 16 and accept-ranges bytes; a HEAD without Range answers 200 with content-length 1685258240. The CDN's own etag ("b06b05a0a887610c53a917603bb6986d8018400a2ec99158ac1cc944b55a24ed") is not the file's SHA-256.`
+- reviewer: `coordinator`
+
+What Task 4 relies on: the hub redirects a large file to a CDN host the source does not pin (observed `us.aws.cdn.hf.co`),
+so integrity comes only from the manifest's SHA-256 over the bytes received, never from a host, an etag or a header;
+resumption uses `Range` and checks each 206's `Content-Range` against the requested range and the manifest size.
+
+### hf-laya-onnx-resolve-small
+
+- id: `hf-laya-onnx-resolve-small`
+- url: `https://huggingface.co/receptron/laya-onnx/resolve/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json`
+- fetchedAt: `2026-10-12T18:33:46Z`
+- immutable: `68f27dfe5a27a54fb2b1fefc432f43f972e90868`
+- fact: `a non-LFS file answers 307 with a relative Location on the same host (/api/resolve-cache/models/receptron/laya-onnx/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json plus a query), then 200 with 369 bytes whose SHA-256 is 5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561 (the manifest's value).`
+- reviewer: `coordinator`
+
 ## Not yet recorded (blocks the named task)
 
-- Task 4: RFC 9110 redirect, `Range`/`Content-Range` and request-header facts, and the Hugging Face download/API
-  behaviour for the manifest's files.
 - Task 7: macOS `sandbox-exec` availability, deprecation and profile semantics; the owner-run real-mac proof.
 - Task 8: the `@receptron/laya` package's load, request-rendering, output-parsing and token-counting source, from its
   SRI-verified bytes.
