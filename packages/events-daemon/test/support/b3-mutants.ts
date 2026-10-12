@@ -133,7 +133,7 @@ async function copyClosure(
   await visit(resolve(root, entry));
 }
 
-function repositoryRelative(input: string, entry: MutationEntry): string {
+function repositoryRelative(input: string, entry: Pick<MutationEntry, 'case'>): string {
   if (input.startsWith('/') || input.split(/[\\/]/u).includes('..'))
     throw new Error(`${entry.case}: overlay input must be a repository-relative glob: ${input}`);
   return input.split(/[\\/]/u).join('/');
