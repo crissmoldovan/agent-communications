@@ -4,6 +4,7 @@
     "approvalId": "approval-1",
     "digest": "digest-1",
     "preview": { "documentVersion": 1, "kind": "enable-all", "switchGeneration": 1, "ruleVersions": [] },
+    "pendingTargetSelectors": [],
     "challenge": { "approvalId": "approval-1", "digest": "digest-1", "challenge": "challenge-1", "expiresAt": 301000 }
   },
   "expected": {
