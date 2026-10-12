@@ -102,6 +102,59 @@ test('desktop repair: embedded Vite assets are classified before packaging', asy
   );
 });
 
+// Bundle gate: ../apps/desktop/scripts/bundle-content-graph.mjs
+// desktop-mutation: desktop-exact-tauri-metadata
+test('desktop repair: only exact, non-executable Tauri metadata may carry a launcher', async () => {
+  const { auditBundle, inspectContent } = await import('../apps/desktop/scripts/bundle-content-graph.mjs');
+  const evidence = (file) => ({
+    version: 1,
+    platform: 'linux',
+    files: [file],
+    graph: {
+      cargo: [{ name: 'safe', dependencies: [] }],
+      pnpm: [{ name: 'safe', dependencies: [] }],
+      vite: [{ id: 'safe', imports: [] }],
+      viteAssets: [{ path: 'safe.txt', ...inspectContent(Buffer.from('synthetic safe frontend')) }],
+      tauri: { resources: ['../THIRD_PARTY_LICENSES'] },
+    },
+  });
+  const metadata = (path, text, executable = false) => ({
+    path,
+    ...inspectContent(Buffer.from(text)),
+    executable,
+    type: executable ? 'executable' : 'data',
+    provenance: 'tauri-metadata',
+  });
+
+  assert.doesNotThrow(() =>
+    auditBundle(evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop'))),
+  );
+  assert.throws(
+    () => auditBundle(evidence(metadata('usr/share/applications/helper.desktop', 'Exec=agentcomms-desktop'))),
+    /metadata path/,
+  );
+  assert.throws(
+    () => auditBundle(evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=node'))),
+    /metadata launcher/,
+  );
+  assert.throws(
+    () =>
+      auditBundle(
+        evidence(
+          metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop; agent-events'),
+        ),
+      ),
+    /metadata launcher/,
+  );
+  assert.throws(
+    () =>
+      auditBundle(
+        evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop', true)),
+      ),
+    /metadata executable/,
+  );
+});
+
 // Workflow under test: ../.github/workflows/desktop.yml
 // desktop-mutation: desktop-native-display-safe
 test('desktop repair: native webviews always have a Linux display', async () => {

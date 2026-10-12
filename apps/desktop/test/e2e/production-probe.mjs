@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { assertLoopbackSeal } from '../../../../test/helpers/loopback-seal-preload.mjs';
 import { startLoopbackTrap } from './loopback-trap.mjs';
+import { preparePackagedPayload } from './packaged-payload.mjs';
 import { parseProbeReport } from './probe-report.mjs';
 
 assertLoopbackSeal();
@@ -23,31 +23,8 @@ if (probeCase === 'capabilities') {
 }
 assert.ok(['no-egress', 'navigation', 'download', 'custom-protocol', 'new-window'].includes(probeCase));
 const desktop = new URL('../../', import.meta.url);
-const bundles = ['--bundles', process.platform === 'darwin' ? 'app' : process.platform === 'win32' ? 'nsis' : 'deb'];
-if (!process.env.DESKTOP_PROBE_BINARY) {
-  const build = spawnSync(
-    'pnpm',
-    ['exec', 'tauri', 'build', '--features', 'no-egress-probe', '--no-sign', ...bundles],
-    {
-      cwd: desktop,
-      env: { ...process.env, VITE_NO_EGRESS_PROBE: '1', CARGO_NET_OFFLINE: 'true' },
-      stdio: 'inherit',
-      // A cold release build of the whole dependency graph, as in a fresh mutation cache, takes several minutes.
-      timeout: 1_200_000,
-    },
-  );
-  assert.equal(build.status, 0, 'test-feature release bundle build failed');
-}
-// Cargo, and the Tauri bundler with it, writes under CARGO_TARGET_DIR when it is set.
-const targetDir = process.env.CARGO_TARGET_DIR
-  ? pathToFileURL(`${resolve(process.env.CARGO_TARGET_DIR)}/`)
-  : new URL('src-tauri/target/', desktop);
-const expected =
-  process.platform === 'darwin'
-    ? 'release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop'
-    : `release/agentcomms-desktop${process.platform === 'win32' ? '.exe' : ''}`;
-const binary = process.env.DESKTOP_PROBE_BINARY ?? fileURLToPath(new URL(expected, targetDir));
-assert.ok(existsSync(binary), `probe binary missing: ${binary}`);
+const payload = await preparePackagedPayload();
+const binary = payload.binary;
 
 const trap = await startLoopbackTrap();
 // The app runs under a throwaway home and temporary directory: a download the guard refuses, or one a mutant lets
@@ -150,4 +127,5 @@ try {
 } finally {
   await trap.close();
   rmSync(home, { recursive: true, force: true });
+  await payload.cleanup();
 }

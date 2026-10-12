@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { transformWithEsbuild } from 'vite';
 
 export async function resolve(specifier, context, next) {
@@ -17,7 +18,7 @@ export async function resolve(specifier, context, next) {
 export async function load(url, context, next) {
   if (!url.includes('/apps/desktop/') || !/\.tsx?$/u.test(url)) return next(url, context);
   const source = await readFile(new URL(url), 'utf8');
-  const compiled = await transformWithEsbuild(source, new URL(url).pathname, {
+  const compiled = await transformWithEsbuild(source, fileURLToPath(url), {
     loader: url.endsWith('.tsx') ? 'tsx' : 'ts',
     target: 'es2022',
     jsx: 'automatic',

@@ -34,9 +34,15 @@ test('desktop-release-hold: desktop evidence cannot lift npm holds or change rel
   assert.ok(releasing.includes('full-production'));
   const workflow = JSON.parse(await read('../.github/workflows/desktop.yml'));
   const steps = workflow.jobs.verify.steps;
-  const full = steps.find((step) => step.name === 'Full production evidence');
-  assert.ok(full, 'missing three-platform full-production workflow gate');
+  const full = steps.find((step) => step.name === 'Bundled actual webview probes against shipped payload');
+  assert.ok(full, 'missing three-platform shipped-payload full-production workflow gate');
   assert.match(full.run, /test:e2e -- --case full-production/);
+  assert.match(full.run, /DESKTOP_BUNDLE_AUDIT=probe node apps\/desktop\/scripts\/bundle-content-graph\.mjs/);
+  const ordinary = steps.find((step) => step.name === 'Unsigned production bundle');
+  assert.match(
+    ordinary?.run ?? '',
+    /DESKTOP_BUNDLE_AUDIT=ordinary node apps\/desktop\/scripts\/bundle-content-graph\.mjs/,
+  );
   const mutations = steps.find((step) => step.name === 'Complete desktop mutation gate');
   assert.match(mutations?.run ?? '', /mutations\/run\.mjs --all/);
   assert.equal(mutations.if, undefined);

@@ -1,30 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
 import { assertLoopbackSeal } from '../../../../test/helpers/loopback-seal-preload.mjs';
+import { preparePackagedPayload } from './packaged-payload.mjs';
 
 assertLoopbackSeal();
 
-if (!process.env.DESKTOP_PROBE_BINARY) {
-  const build = spawnSync(
-    'pnpm',
-    ['exec', 'tauri', 'build', '--features', 'no-egress-probe', '--no-sign', '--no-bundle'],
-    {
-      cwd: new URL('../../', import.meta.url),
-      env: { ...process.env, VITE_NO_EGRESS_PROBE: '1', CARGO_NET_OFFLINE: 'true' },
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    },
-  );
-  assert.equal(build.status, 0, 'production capability probe build failed');
-}
-const target = process.env.CARGO_TARGET_DIR
-  ? pathToFileURL(`${resolve(process.env.CARGO_TARGET_DIR)}/`)
-  : new URL('../../src-tauri/target/', import.meta.url);
-const binary =
-  process.env.DESKTOP_PROBE_BINARY ??
-  fileURLToPath(new URL(`release/agentcomms-desktop${process.platform === 'win32' ? '.exe' : ''}`, target));
+const payload = await preparePackagedPayload();
+const binary = payload.binary;
 const child = spawn(binary, [], {
   env: { ...process.env, DESKTOP_PROBE_CAPABILITIES: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -72,4 +54,5 @@ try {
   process.stdout.write('desktop-probe-capabilities: OK\n');
 } finally {
   child.kill();
+  await payload.cleanup();
 }

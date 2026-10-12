@@ -19,6 +19,57 @@
       "platforms": ["darwin", "linux", "win32"]
     },
     {
+      "id": "desktop-exact-tauri-metadata",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: only exact, non-executable Tauri metadata may carry a launcher"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "const expected = expectedMetadataLaunchers(platform, file.path);",
+        "replace": "const expected = file.launcherLines ?? [];"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-shipped-probe-payload",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-workflows.test.mjs",
+        "name": "desktop-shipped-probe-payload"
+      },
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "dpkg-deb -x \\\"${debs[0]}\\\" \\\"$probe_root\\\"",
+        "replace": "true"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-ordinary-bundle-audit",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-workflows.test.mjs",
+        "name": "desktop-ordinary-bundle-audit"
+      },
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "DESKTOP_BUNDLE_AUDIT=ordinary node apps/desktop/scripts/bundle-content-graph.mjs",
+        "replace": "true"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
       "id": "desktop-production-path",
       "group": "task-7",
       "test": {

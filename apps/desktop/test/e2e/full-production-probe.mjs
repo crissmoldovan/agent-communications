@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { preparePackagedPayload } from './packaged-payload.mjs';
 
 const root = new URL('../../../../', import.meta.url);
 const desktop = new URL('../../', import.meta.url);
@@ -16,7 +17,7 @@ export async function auditPhaseSeams() {
   assert.equal(phaseSeam(), null);
 }
 
-export async function runControlFlow() {
+export async function runControlFlow({ binary: suppliedBinary } = {}) {
   const { controlVectors, startDaemonControlPeer } = await import('./fixtures/daemon-control-peer.mjs');
   const { noEgressSentinel } = await import('./fixtures/no-egress-sentinel.mjs');
   // Fail precisely before an expensive build if this environment cannot run the required local trap.
@@ -24,43 +25,8 @@ export async function runControlFlow() {
   await preflight.close();
   const vectors = await controlVectors();
   const operations = [...new Set(vectors.map((row) => row.request.operation))].sort();
-  const target = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('src-tauri/target/', desktop)));
-  const bundleKind = process.platform === 'darwin' ? 'app' : process.platform === 'win32' ? 'nsis' : 'deb';
-  if (!process.env.DESKTOP_PROBE_BINARY) {
-    const built = spawnSync(
-      process.execPath,
-      [
-        fileURLToPath(new URL('../../scripts/bundle-with-evidence.mjs', import.meta.url)),
-        '--',
-        'pnpm',
-        '--filter',
-        '@agentcomms/desktop',
-        'tauri:build',
-        '--features',
-        'no-egress-probe',
-        '--no-sign',
-        '--bundles',
-        bundleKind,
-      ],
-      {
-        cwd: desktop,
-        env: { ...process.env, VITE_NO_EGRESS_PROBE: '1', CARGO_NET_OFFLINE: 'true' },
-        encoding: 'utf8',
-        timeout: 1_200_000,
-        maxBuffer: 4 * 1024 * 1024,
-        shell: process.platform === 'win32',
-      },
-    );
-    assert.equal(built.status, 0, `packaged flow build unavailable: ${built.error?.code ?? built.stderr.slice(-1200)}`);
-  }
-  const binary =
-    process.env.DESKTOP_PROBE_BINARY ??
-    resolve(
-      target,
-      process.platform === 'darwin'
-        ? 'release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop'
-        : `release/agentcomms-desktop${process.platform === 'win32' ? '.exe' : ''}`,
-    );
+  const payload = suppliedBinary ? { binary: suppliedBinary, cleanup: async () => {} } : await preparePackagedPayload();
+  const binary = payload.binary;
   const { mkdtemp, rm, chmod, realpath } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -143,6 +109,7 @@ export async function runControlFlow() {
     await peer?.close();
     await trap?.close();
     await rm(home, { recursive: true, force: true });
+    await payload.cleanup();
   }
 }
 
@@ -155,72 +122,69 @@ export async function runFullProduction() {
     new URL('full-production.json', folder),
     `${JSON.stringify({ version: 1, platform: process.platform, complete: false, stage: 'control' })}\n`,
   );
-  await auditPhaseSeams();
-  const evidence = await runControlFlow();
-  const probeBinary =
-    process.env.DESKTOP_PROBE_BINARY ??
-    resolve(
-      process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('src-tauri/target/', desktop)),
-      process.platform === 'darwin'
-        ? 'release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop'
-        : `release/agentcomms-desktop${process.platform === 'win32' ? '.exe' : ''}`,
+  const payload = await preparePackagedPayload();
+  try {
+    await auditPhaseSeams();
+    const evidence = await runControlFlow({ binary: payload.binary });
+    await writeFile(
+      new URL('full-production.json', folder),
+      `${JSON.stringify({ version: 1, platform: process.platform, complete: false, stage: 'webviews', ...evidence })}\n`,
     );
-  await writeFile(
-    new URL('full-production.json', folder),
-    `${JSON.stringify({ version: 1, platform: process.platform, complete: false, stage: 'webviews', ...evidence })}\n`,
-  );
-  // Run the existing task-owned production proofs as one integration gate; never reimplement their authority model.
-  for (const probe of ['no-egress', 'capabilities']) {
-    const result = spawnSync(
+    // Run the existing task-owned production proofs as one integration gate; never reimplement their authority model.
+    for (const probe of ['no-egress', 'capabilities']) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          new URL('test/helpers/loopback-seal-preload.mjs', root).href,
+          new URL('./production-probe.mjs', import.meta.url).href,
+          '--case',
+          probe,
+        ],
+        {
+          cwd: desktop,
+          env: { ...process.env, DESKTOP_PROBE_BINARY: payload.binary },
+          stdio: 'inherit',
+          timeout: 1_200_000,
+        },
+      );
+      assert.equal(result.status, 0, `${probe} production gate failed`);
+    }
+    const ownedProofs = [
+      'app-approval-owner.test.mjs',
+      'approval-renderer.test.tsx',
+      'secret-trace.test.mjs',
+      'secret-window.test.tsx',
+      'screen-request.test.tsx',
+      'purge-ui-orphans.test.tsx',
+      'supervision-lifecycle.test.mjs',
+      'screen-contract.test.tsx',
+      'control-contract.test.ts',
+    ];
+    const owners = spawnSync(
       process.execPath,
       [
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
         '--import',
-        fileURLToPath(new URL('test/helpers/loopback-seal-preload.mjs', root)),
-        fileURLToPath(new URL('./production-probe.mjs', import.meta.url)),
-        '--case',
-        probe,
+        new URL('test/helpers/loopback-seal-preload.mjs', root).href,
+        '--import',
+        new URL('../helpers/tsx-register.mjs', import.meta.url).href,
+        '--test',
+        '--test-reporter=tap',
+        ...ownedProofs.map((file) => new URL(`../${file}`, import.meta.url).href),
       ],
-      {
-        cwd: desktop,
-        env: { ...process.env, DESKTOP_PROBE_BINARY: probeBinary },
-        stdio: 'inherit',
-        timeout: 1_200_000,
-      },
+      { cwd: root, env: { ...process.env, AGENTCOMMS_DESKTOP_NATIVE: '1' }, stdio: 'inherit', timeout: 1_200_000 },
     );
-    assert.equal(result.status, 0, `${probe} production gate failed`);
+    assert.equal(owners.status, 0, 'task-owned integrated production proofs failed');
+    const { buildEvidence, auditBundle } = await import('../../scripts/bundle-content-graph.mjs');
+    const bundle = await buildEvidence();
+    auditBundle(bundle);
+    await writeFile(
+      new URL('full-production.json', folder),
+      `${JSON.stringify({ version: 1, platform: process.platform, complete: true, ...evidence, bundle }, null, 2)}\n`,
+    );
+  } finally {
+    await payload.cleanup();
   }
-  const ownedProofs = [
-    'app-approval-owner.test.mjs',
-    'approval-renderer.test.tsx',
-    'secret-trace.test.mjs',
-    'secret-window.test.tsx',
-    'screen-request.test.tsx',
-    'purge-ui-orphans.test.tsx',
-    'supervision-lifecycle.test.mjs',
-    'screen-contract.test.tsx',
-    'control-contract.test.ts',
-  ];
-  const owners = spawnSync(
-    process.execPath,
-    [
-      '--experimental-strip-types',
-      '--disable-warning=ExperimentalWarning',
-      '--import',
-      fileURLToPath(new URL('test/helpers/loopback-seal-preload.mjs', root)),
-      '--import',
-      fileURLToPath(new URL('../helpers/tsx-register.mjs', import.meta.url)),
-      '--test',
-      '--test-reporter=tap',
-      ...ownedProofs.map((file) => fileURLToPath(new URL(`../${file}`, import.meta.url))),
-    ],
-    { cwd: root, env: { ...process.env, AGENTCOMMS_DESKTOP_NATIVE: '1' }, stdio: 'inherit', timeout: 1_200_000 },
-  );
-  assert.equal(owners.status, 0, 'task-owned integrated production proofs failed');
-  const { buildEvidence, auditBundle } = await import('../../scripts/bundle-content-graph.mjs');
-  const bundle = await buildEvidence();
-  auditBundle(bundle);
-  await writeFile(
-    new URL('full-production.json', folder),
-    `${JSON.stringify({ version: 1, platform: process.platform, complete: true, ...evidence, bundle }, null, 2)}\n`,
-  );
 }

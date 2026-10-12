@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const nativeLibUrl = new URL('../../src-tauri/src/lib.rs', import.meta.url);
 const nativeSecurityUrl = new URL('../../src-tauri/src/security.rs', import.meta.url);
 const probeSourceUrl = new URL('../../src/egress-probe.ts', import.meta.url);
-const preload = fileURLToPath(new URL('../../../../test/helpers/loopback-seal-preload.mjs', import.meta.url));
+const preload = new URL('../../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).href;
 const script = fileURLToPath(new URL('./production-probe.mjs', import.meta.url));
 
 async function runCase(name) {

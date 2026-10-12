@@ -14,6 +14,33 @@ const forbidden =
 // module specifiers and native runtime signatures remain forbidden; graph edges use the stricter rule above.
 const forbiddenBytes = new RegExp(`["']node:[a-z0-9_/-]+["']|${forbidden.source.replace(/^node:\|/, '')}`, 'gi');
 
+// These are the only metadata files Tauri writes for this application's unsigned v1 payloads. Metadata is not a
+// general escape hatch: its path, non-executable mode and launcher declaration are all part of the bundle allowlist.
+const METADATA_LAUNCHERS = Object.freeze({
+  darwin: Object.freeze({ 'Contents/Info.plist': Object.freeze(['CFBundleExecutable=agentcomms-desktop']) }),
+  linux: Object.freeze({
+    'usr/share/applications/agentcomms-desktop.desktop': Object.freeze(['Exec=agentcomms-desktop']),
+  }),
+  win32: Object.freeze({}),
+});
+
+function normalizedBundlePath(path) {
+  return path.replaceAll('\\', '/');
+}
+
+function expectedMetadataLaunchers(platform, path) {
+  return METADATA_LAUNCHERS[platform]?.[normalizedBundlePath(path)];
+}
+
+function launcherLines(bytes) {
+  const text = bytes.toString('utf8');
+  const lines = [];
+  for (const match of text.matchAll(/^\s*(Exec|TryExec)\s*=\s*([^\r\n]*)$/gmu)) lines.push(`${match[1]}=${match[2]}`);
+  for (const match of text.matchAll(/<key>CFBundleExecutable<\/key>\s*<string>([^<]*)<\/string>/gmu))
+    lines.push(`CFBundleExecutable=${match[1]}`);
+  return lines;
+}
+
 // ONNX has no magic header. Recognize protobuf ModelProto metadata (IR, GraphProto and opsets),
 // including varint and length-delimited fields, without trusting the extension or producer name.
 function onnxMetadata(bytes) {
@@ -74,7 +101,13 @@ export function inspectContent(bytes) {
       }
     }
   }
-  return { sha256: digest(bytes), size: bytes.length, type: 'data', contentMarkers };
+  return {
+    sha256: digest(bytes),
+    size: bytes.length,
+    type: 'data',
+    contentMarkers,
+    launcherLines: launcherLines(bytes),
+  };
 }
 
 export function cargoPlatforms(target) {
@@ -168,6 +201,8 @@ export function bundleGraphPlugin() {
 
 export function auditBundle(evidence) {
   assert.equal(evidence.version, 1);
+  const platform = evidence.platform ?? process.platform;
+  assert.ok(Object.hasOwn(METADATA_LAUNCHERS, platform), `unsupported bundle platform: ${platform}`);
   assert.ok(evidence.files.length, 'empty bundle evidence');
   assert.ok(
     evidence.graph.cargo.length && evidence.graph.pnpm.length && evidence.graph.vite.length,
@@ -185,10 +220,14 @@ export function auditBundle(evidence) {
       !forbidden.test(`${file.type} ${(file.contentMarkers ?? []).join(' ')}`),
       `forbidden bundle content: ${file.path}`,
     );
-    assert.ok(
-      !file.executable || ['tauri-executable', 'tauri-metadata'].includes(file.provenance),
-      `undeclared executable: ${file.path}`,
-    );
+    if (file.provenance === 'tauri-metadata') {
+      const expected = expectedMetadataLaunchers(platform, file.path);
+      assert.ok(expected, `undeclared bundle metadata path: ${file.path}`);
+      assert.equal(file.executable, false, `metadata executable: ${file.path}`);
+      assert.equal(file.type, 'data', `metadata executable type: ${file.path}`);
+      assert.deepEqual(file.launcherLines ?? [], expected, `metadata launcher: ${file.path}`);
+    }
+    assert.ok(!file.executable || file.provenance === 'tauri-executable', `undeclared executable: ${file.path}`);
   }
   for (const node of evidence.graph.vite)
     assert.ok(!forbidden.test(JSON.stringify(node)), 'forbidden Vite dependency edge');
@@ -330,18 +369,20 @@ export async function buildEvidence() {
           bytes.subarray(0, 2).toString() === 'MZ' ||
           bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
         const base = basename(name);
+        const metadataLaunchers = expectedMetadataLaunchers(process.platform, name);
         const provenance = /^agentcomms-desktop(?:\.exe)?$/.test(base)
           ? 'tauri-executable'
           : base === 'THIRD_PARTY_LICENSES' && digest(bytes) === licenseHash
             ? 'declared-license'
-            : /^(?:Info\.plist|PkgInfo|CodeResources|.*\.desktop)$/.test(base)
+            : metadataLaunchers
               ? 'tauri-metadata'
               : iconHashes.has(digest(bytes))
                 ? 'tauri-icon'
                 : vite.assets.some((asset) => asset.sha256 === digest(bytes))
                   ? 'vite-asset'
                   : 'undeclared';
-        const contentMarkers = provenance === 'declared-license' ? [] : inspectContent(bytes).contentMarkers;
+        const inspected = inspectContent(bytes);
+        const contentMarkers = provenance === 'declared-license' ? [] : inspected.contentMarkers;
         files.push({
           path: name,
           sha256: digest(bytes),
@@ -350,12 +391,14 @@ export async function buildEvidence() {
           type: executable ? 'executable' : 'data',
           provenance,
           contentMarkers,
+          launcherLines: inspected.launcherLines,
         });
       }
     }
     await walk(folder);
     return {
       version: 1,
+      platform: process.platform,
       files,
       graph: { cargo, pnpm, vite: vite.modules, viteAssets: vite.assets, tauri: config.bundle },
       lockDigests: {

@@ -113,7 +113,7 @@
         },
         {
           "name": "Audit exact release payload and unchanged npm holds",
-          "run": "set -euo pipefail\nnode --test test/desktop-release-hold.test.mjs\ncase \"$RUNNER_OS\" in\n  macOS) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/universal-apple-darwin\"; export DESKTOP_BUNDLE_PLATFORM=universal-apple-darwin ;;\n  Windows) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc\"; export DESKTOP_BUNDLE_PLATFORM=x86_64-pc-windows-msvc ;;\n  *) exit 1 ;;\nesac\nnode apps/desktop/scripts/bundle-content-graph.mjs"
+          "run": "set -euo pipefail\nnode --test test/desktop-release-hold.test.mjs\ncase \"$RUNNER_OS\" in\n  macOS) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/universal-apple-darwin\"; export DESKTOP_BUNDLE_PLATFORM=universal-apple-darwin ;;\n  Windows) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc\"; export DESKTOP_BUNDLE_PLATFORM=x86_64-pc-windows-msvc ;;\n  *) exit 1 ;;\nesac\nDESKTOP_BUNDLE_AUDIT=release node apps/desktop/scripts/bundle-content-graph.mjs"
         },
         {
           "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",

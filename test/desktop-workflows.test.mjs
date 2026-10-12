@@ -162,7 +162,7 @@ test('desktop-workflow-matrix', async () => {
 test('desktop-windows-probe-launcher', async () => {
   const workflow = await readWorkflow(normalUrl);
   const steps = workflow.jobs.verify.steps;
-  const index = steps.findIndex((step) => step.name === 'Bundled actual webview no-egress probe');
+  const index = steps.findIndex((step) => step.name === 'Bundled actual webview probes against shipped payload');
   const source = steps[index].run;
   assert.equal(steps[index].if, undefined, 'the outer build and absolute launcher apply on every OS');
   const build =
@@ -171,20 +171,79 @@ test('desktop-windows-probe-launcher', async () => {
   assert.match(source, /VITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true/);
   for (const branch of [
     'macOS) bundle=app; probe="apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop" ;;',
-    'Windows) bundle=nsis; probe="apps/desktop/src-tauri/target/release/agentcomms-desktop.exe" ;;',
-    'Linux) bundle=deb; probe="apps/desktop/src-tauri/target/release/agentcomms-desktop" ;;',
+    'Windows)\n    bundle=nsis',
+    'Linux)\n    bundle=deb',
   ])
     assert.ok(source.includes(branch), 'select the packaged executable for every platform');
-  assert.ok(source.includes(`probe_binary=$(node -p 'require("node:path").resolve(process.argv[1])' "$probe")`));
-  const passThrough = 'export DESKTOP_PROBE_BINARY="$probe_binary"';
-  assert.ok(source.includes(passThrough), 'the harness must receive the native absolute path and skip nested pnpm');
+  assert.match(source, /"\$\{installers\[0\]\}" \/S "\/D=\$install_root"/);
+  assert.match(source, /dpkg-deb -x "\$\{debs\[0\]\}" "\$probe_root"/);
+  assert.doesNotMatch(source, /target\/release\/agentcomms-desktop/);
+  const passThrough = 'export DESKTOP_PROBE_BINARY="$probe"';
+  assert.ok(source.includes(passThrough), 'the harness must receive the shipped payload path and skip nested pnpm');
   assert.ok(source.indexOf(build) < source.indexOf(passThrough));
   assert.ok(source.indexOf(passThrough) < source.indexOf('test:e2e'));
   assert.match(source, /xvfb-run -a pnpm --filter @agentcomms\/desktop test:e2e -- --case no-egress/);
+  assert.match(source, /test:e2e -- --case capabilities/);
+  assert.match(source, /test:e2e -- --case full-production/);
   assert.ok(
     steps.slice(index + 1).some((step) => step.run?.includes('tauri:build --no-sign --bundles "$bundle"')),
     'a distinct later command must rebuild the ordinary production bundle',
   );
+});
+
+// desktop-mutation: desktop-shipped-probe-payload
+test('desktop-shipped-probe-payload', async () => {
+  const workflow = await readWorkflow(normalUrl);
+  const source = workflow.jobs.verify.steps.find(
+    (step) => step.name === 'Bundled actual webview probes against shipped payload',
+  )?.run;
+  assert.ok(source, 'missing shipped-payload webview probe step');
+  assert.match(
+    source,
+    /macOS\) bundle=app; probe="apps\/desktop\/src-tauri\/target\/release\/bundle\/macos\/Agent Communications\.app\/Contents\/MacOS\/agentcomms-desktop" ;;/,
+  );
+  assert.match(source, /debs=\(apps\/desktop\/src-tauri\/target\/release\/bundle\/deb\/\*\.deb\)/);
+  assert.match(source, /dpkg-deb -x "\$\{debs\[0\]\}" "\$probe_root"/);
+  assert.match(source, /probe="\$probe_root\/usr\/bin\/agentcomms-desktop"/);
+  assert.match(source, /installers=\(apps\/desktop\/src-tauri\/target\/release\/bundle\/nsis\/\*\.exe\)/);
+  assert.match(source, /"\$\{installers\[0\]\}" \/S "\/D=\$install_root"/);
+  assert.match(source, /probe="\$probe_root\/agentcomms-desktop\.exe"/);
+  assert.match(source, /uninstaller="\$probe_root\/uninstall\.exe"/);
+  assert.match(source, /"\$uninstaller" \/S/);
+  assert.match(source, /test -x "\$probe"/);
+  assert.match(source, /export DESKTOP_PROBE_BINARY="\$probe"/);
+  for (const probe of ['no-egress', 'capabilities', 'full-production'])
+    assert.match(source, new RegExp(`test:e2e -- --case ${probe}`));
+  assert.doesNotMatch(source, /target\/release\/agentcomms-desktop/);
+  assert.doesNotMatch(source, /--no-bundle/);
+  for (const script of ['production-probe.mjs', 'capability-probe.mjs', 'full-production-probe.mjs']) {
+    const probe = await readFile(new URL(`../apps/desktop/test/e2e/${script}`, import.meta.url), 'utf8');
+    assert.match(probe, /preparePackagedPayload/);
+    assert.doesNotMatch(probe, /--no-bundle/);
+    assert.doesNotMatch(probe, /release\/agentcomms-desktop/);
+  }
+});
+
+// desktop-mutation: desktop-ordinary-bundle-audit
+test('desktop-ordinary-bundle-audit', async () => {
+  const workflow = await readWorkflow(normalUrl);
+  const steps = workflow.jobs.verify.steps;
+  for (const [name, role] of [
+    ['Initial unsigned bundle for content proof', 'initial'],
+    ['Bundled actual webview probes against shipped payload', 'probe'],
+    ['Unsigned production bundle', 'ordinary'],
+  ]) {
+    const source = steps.find((step) => step.name === name)?.run;
+    assert.ok(source, `missing ${name}`);
+    const audit = `DESKTOP_BUNDLE_AUDIT=${role} node apps/desktop/scripts/bundle-content-graph.mjs`;
+    assert.ok(source.includes(audit), `${name} must audit its own bundle`);
+    assert.ok(source.indexOf('tauri:build') < source.indexOf(audit), `${name} must audit after building`);
+  }
+  const release = await readWorkflow(releaseUrl);
+  const source = runs(release.jobs.bundle);
+  const audit = 'DESKTOP_BUNDLE_AUDIT=release node apps/desktop/scripts/bundle-content-graph.mjs';
+  assert.ok(source.includes(audit), 'release payload must use the same bundle audit');
+  assert.ok(source.indexOf('tauri:build') < source.indexOf(audit), 'release must audit after packaging');
 });
 
 // desktop-mutation: desktop-workflow-public-registry
