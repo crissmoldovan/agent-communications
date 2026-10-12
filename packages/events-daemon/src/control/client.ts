@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import { CommsError, ERROR_REGISTRY, type ErrorCode, resolvePaths } from '@agentcomms/core';
+import { installErrorSink } from '../network/error-sink.ts';
 import { type EventPaths, eventPaths } from '../runtime/paths.ts';
 import {
   assertControlSupported,
@@ -103,6 +104,7 @@ async function readToken(paths: EventPaths, record: EventInstanceRecord): Promis
 function connect(endpoint: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(endpoint);
+    installErrorSink(socket);
     socket.once('connect', () => {
       socket.off('error', reject);
       resolve(socket);

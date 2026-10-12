@@ -1,5 +1,6 @@
 import { createServer, type Server, type Socket } from 'node:net';
 import { isCommsError } from '@agentcomms/core';
+import { installErrorSink } from '../network/error-sink.ts';
 import {
   type AuthenticatedControlRequest,
   CONTROL_PROTOCOL_VERSIONS,
@@ -34,10 +35,12 @@ export async function startControlServer(options: ControlServerOptions): Promise
   const sockets = new Set<Socket>();
   const versions = options.supportedVersions ?? CONTROL_PROTOCOL_VERSIONS;
   const server = createServer((socket) => {
+    installErrorSink(socket);
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
     void serve(socket, { ...options, sessions, versions });
   });
+  installErrorSink(server);
   await listen(server, options.endpoint);
   return {
     async close(): Promise<void> {

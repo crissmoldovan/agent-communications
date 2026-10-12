@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import tls from 'node:tls';
@@ -6,6 +7,7 @@ import { canonicalJson, sha256Hex } from '@agentcomms/core';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { startLoopbackReceiver, startLoopbackTlsReceiver } from './support/loopback-receiver.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { withoutUncaughtSocketException, withSocketTestTimeout } from './support/socket-error-sink.ts';
 import { createLoopbackTestTls } from './support/test-tls.ts';
 
 assertLoopbackSeal();
@@ -158,6 +160,55 @@ function respondingSocket() {
   };
   return { socket, state };
 }
+
+function seamSocket() {
+  const state = { destroyed: 0 };
+  const socket = new EventEmitter() as EventEmitter & {
+    write(bytes: Uint8Array): boolean;
+    destroy(): void;
+  };
+  socket.write = (_bytes: Uint8Array) => {
+    queueMicrotask(() => socket.emit('data', Buffer.from('HTTP/1.1 204 No Content\r\n\r\n')));
+    return true;
+  };
+  socket.destroy = () => {
+    state.destroyed += 1;
+  };
+  return { socket, state };
+}
+
+test('B2-T6: seam-provided TCP and TLS sockets survive reset after their connect and handshake listeners settle', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture('https://receiver.test:44444/seam-error-sink');
+  const tcp = seamSocket();
+  const tlsSocket = seamSocket();
+  try {
+    assert.deepEqual(
+      await withoutUncaughtSocketException('a seam-provided socket error must have a permanent listener', () =>
+        withSocketTestTimeout(
+          setup
+            .dispatcher({
+              tcpConnect: async () => tcp.socket as never,
+              tlsConnect: async () => tlsSocket.socket as never,
+              beforeGate: async (phase: 'dns' | 'tcp' | 'tls' | 'write') => {
+                if (phase !== 'write') return;
+                queueMicrotask(() => tcp.socket.emit('error', new Error('synthetic TCP peer reset')));
+                queueMicrotask(() => tlsSocket.socket.emit('error', new Error('synthetic TLS peer reset')));
+              },
+            })
+            .dispatch('delivery-webhook'),
+          'the seam-provided webhook dispatch to settle',
+        ),
+      ),
+      { state: 'issued', deliveryId: 'delivery-webhook' },
+    );
+    assert.ok(tlsSocket.state.destroyed >= 1, 'the completed attempt closes its TLS resource');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
 
 test('P1: WhatsApp webhook bytes are written only under the live-list fence', { skip: WINDOWS_SKIP }, async (t) => {
   await t.test('a list acquisition that removes the account rechecks before it writes webhook bytes', async () => {

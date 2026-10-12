@@ -18,6 +18,9 @@ interface MutationEntry {
 // Importing this parity test loads registry tooling at module evaluation time; that tooling deliberately walks every
 // package manifest even when the selected named case itself only asserts an activation detail.
 const REGISTRY_PARITY_TEST = 'packages/events-daemon/test/b3-cli-mcp-parity.test.ts';
+// A hang guard, not a speed bound: a loaded machine runs some B3 cases (the registry-parity one walks the whole
+// repository) for well over thirty seconds.
+const MUTATION_CHILD_TIMEOUT_MS = 300_000;
 
 function isEntry(value: unknown): value is MutationEntry {
   if (typeof value !== 'object' || value === null) return false;
@@ -262,18 +265,31 @@ interface MutationOptions {
 }
 
 function run(argv: readonly string[], options: { readonly cwd: string; readonly env: NodeJS.ProcessEnv }) {
-  return new Promise<{ readonly status: number | null; readonly output: string }>((resolveRun, reject) => {
-    const child = spawn(process.execPath, argv, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    child.stdout.on('data', (chunk) => (output += String(chunk)));
-    child.stderr.on('data', (chunk) => (output += String(chunk)));
-    child.once('error', reject);
-    child.once('close', (status) => resolveRun({ status, output }));
-  });
+  return new Promise<{ readonly status: number | null; readonly output: string; readonly timedOut: boolean }>(
+    (resolveRun, reject) => {
+      const child = spawn(process.execPath, argv, {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let output = '';
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, MUTATION_CHILD_TIMEOUT_MS);
+      child.stdout.on('data', (chunk) => (output += String(chunk)));
+      child.stderr.on('data', (chunk) => (output += String(chunk)));
+      child.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once('close', (status) => {
+        clearTimeout(timer);
+        resolveRun({ status, output, timedOut });
+      });
+    },
+  );
 }
 
 function namedTapFailure(output: string, name: string): boolean {
@@ -347,6 +363,7 @@ export async function runB3Mutation({
   readonly baseline: {
     readonly status: number | null;
     readonly output: string;
+    readonly timedOut: boolean;
     readonly completeRepositorySnapshot: boolean;
   };
 }> {
@@ -376,6 +393,10 @@ export async function runB3Mutation({
       ...(await run(commandForNamedTest(overlay, raw), { cwd: overlay, env })),
       completeRepositorySnapshot,
     };
+    if (baseline.timedOut)
+      throw new Error(
+        `${raw.case}: unmutated named test timed out after ${MUTATION_CHILD_TIMEOUT_MS} ms and was killed\n${baseline.output.slice(-2000)}`,
+      );
     if (/\bEPERM\b/.test(baseline.output))
       throw new Error(`${raw.case}: unmutated named test is blocked by EPERM and cannot count as mutation evidence`);
     if (
@@ -410,6 +431,10 @@ export async function runB3Mutation({
       }),
       { cwd: overlay, env },
     );
+    if (result.timedOut)
+      throw new Error(
+        `${raw.case}: mutated named test timed out after ${MUTATION_CHILD_TIMEOUT_MS} ms and was killed\n${result.output.slice(-2000)}`,
+      );
     if (
       !result.output
         .split(/\r?\n/)

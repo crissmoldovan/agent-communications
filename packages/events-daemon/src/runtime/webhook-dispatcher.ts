@@ -7,6 +7,7 @@ import {
   canonicalWebhookTarget,
   type WebhookTargetDocument,
 } from '../domain/webhook-target.ts';
+import { installErrorSink } from '../network/error-sink.ts';
 import {
   addressSetDigest,
   connectPinnedTcp,
@@ -249,6 +250,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
       deadline,
       (late) => late.destroy(),
     );
+    installErrorSink(tcp);
     this.#testFailpoint?.('after-tcp', claim);
     let socket: net.Socket | tls.TLSSocket = tcp;
     if (connection.useTls) {
@@ -266,6 +268,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         socket = await beforeDeadline(this.#tlsConnect({ socket: tcp, ...connection.tls }), deadline, (late) =>
           late.destroy(),
         );
+        installErrorSink(socket);
       } catch (error) {
         tcp.destroy();
         throw error;

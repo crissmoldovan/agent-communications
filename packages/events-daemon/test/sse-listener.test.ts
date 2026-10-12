@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
+import { createConnection } from 'node:net';
 import { test } from 'node:test';
 import { canonicalJson, sha256Hex } from '@agentcomms/core';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import {
+  waitForSocketClose,
+  withoutUncaughtSocketException,
+  withSocketTestTimeout,
+} from './support/socket-error-sink.ts';
 import { requestSse } from './support/sse-client.ts';
 
 assertLoopbackSeal();
@@ -87,6 +93,54 @@ async function fixture() {
   });
   return { stateDir, store, server };
 }
+
+test('B2-T9: an SSE connection reset after stream admission simply closes', { skip: WINDOWS_SKIP }, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>>;
+  try {
+    setup = await withSocketTestTimeout(fixture(), 'the SSE listener fixture to start');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip(
+        'EPERM: the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it',
+      );
+      return;
+    }
+    throw error;
+  }
+  let client: ReturnType<typeof createConnection> | undefined;
+  try {
+    await withoutUncaughtSocketException('the accepted SSE socket must have a permanent error listener', async () => {
+      client = createConnection({ host: '127.0.0.1', port: PORT });
+      client.on('error', () => undefined);
+      await withSocketTestTimeout(
+        new Promise<void>((resolve, reject) => {
+          client?.once('connect', resolve);
+          client?.once('error', reject);
+        }),
+        'the SSE reset-test client to connect',
+      );
+      const receivedHeaders = new Promise<void>((resolve) => {
+        let received = '';
+        client?.on('data', (chunk: Buffer) => {
+          received += chunk.toString('latin1');
+          if (received.includes('\r\n\r\n')) resolve();
+        });
+      });
+      client.write(
+        `GET /v1/streams/${subscriber.subscriberId} HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\nAuthorization: Bearer listener-token\r\n\r\n`,
+      );
+      await withSocketTestTimeout(receivedHeaders, 'the SSE stream to admit the reset-test client');
+      const closed = waitForSocketClose(client);
+      client.resetAndDestroy();
+      await withSocketTestTimeout(closed, 'the reset-test SSE client socket to close');
+    });
+  } finally {
+    client?.destroy();
+    await withSocketTestTimeout(setup.server.close(), 'the SSE listener to close after the reset-test socket closes');
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
 
 test('B2-T9: loopback SSE listener rejects an invalid route, Host, query, cookie or bearer before stream registration', {
   skip: WINDOWS_SKIP,
