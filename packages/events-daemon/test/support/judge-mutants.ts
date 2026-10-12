@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface JudgeMutation {
@@ -210,7 +211,7 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
     const args = [
       '--import',
-      join(root, 'test/helpers/loopback-seal-preload.mjs'),
+      pathToFileURL(join(root, 'test/helpers/loopback-seal-preload.mjs')).href,
       '--experimental-strip-types',
       '--disable-warning=ExperimentalWarning',
       '--test',
