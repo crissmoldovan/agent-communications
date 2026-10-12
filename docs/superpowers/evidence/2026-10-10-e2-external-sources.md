@@ -197,9 +197,29 @@ resumption uses `Range` and checks each 206's `Content-Range` against the reques
 - fact: `a non-LFS file answers 307 with a relative Location on the same host (/api/resolve-cache/models/receptron/laya-onnx/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json plus a query), then 200 with 369 bytes whose SHA-256 is 5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561 (the manifest's value).`
 - reviewer: `coordinator`
 
+## Task 7 — macOS `sandbox-exec`
+
+### sandbox-exec-man-page
+
+- id: `sandbox-exec-man-page`
+- url: `https://keith.github.io/xcode-man-pages/sandbox-exec.1.html`
+- fetchedAt: `2026-10-12T18:38:00Z` (response SHA-256 `cc532507f33f6ad1d3f196f4f20cf383d33fc49823b9b9acae763d1193264008`, 3877 bytes)
+- immutable: the page reproduces Apple's SANDBOX-EXEC(1), dated March 9, 2017
+- fact: `sandbox-exec is DEPRECATED (Apple directs app developers to the App Sandbox); it enters a sandbox using a profile given by -f profile-file, -n profile-name or -p profile-string (-D key=value sets a profile parameter) and then executes command with its arguments. The page documents only invocation, not the profile language.`
+- reviewer: `coordinator`
+
+Observed on the coordinator's machine on 2026-10-12: macOS 14.5 (23F79) ships `/usr/bin/sandbox-exec`. Because the profile
+language is undocumented, Task 7 relies on no claimed profile semantics: its same-child self-test must prove the
+boundary (TCP, UDP, fetch and pathname Unix-domain sockets denied while the pipes work) before a worker loads anything,
+and any failure makes Laya unavailable.
+
+The owner-controlled, content-free real-mac gate result (E2-9) is produced by Task 10's protected gate on a release
+candidate that contains Task 7, so it is recorded here when that gate first runs; until then the shipped lock keeps Laya
+unavailable and no release can offer it.
+
 ## Not yet recorded (blocks the named task)
 
-- Task 7: macOS `sandbox-exec` availability, deprecation and profile semantics; the owner-run real-mac proof.
+- Task 10 (gate): the owner-controlled real-mac boundary gate result for the release candidate, when it first runs.
 - Task 8: the `@receptron/laya` package's load, request-rendering, output-parsing and token-counting source, from its
   SRI-verified bytes.
 - Task 9: the locked reference environment's Python, torch and transformers versions, when the gate first runs (the
