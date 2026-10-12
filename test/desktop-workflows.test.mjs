@@ -175,7 +175,7 @@ test('desktop-windows-probe-launcher', async () => {
     'Linux)\n    bundle=deb',
   ])
     assert.ok(source.includes(branch), 'select the packaged executable for every platform');
-  assert.match(source, /"\$\{installers\[0\]\}" \/S "\/D=\$install_root"/);
+  assert.match(source, /7z x -y "-o\$\(cygpath -w "\$probe_root"\)" "\$\(cygpath -w "\$\{installers\[0\]\}"\)"/);
   assert.match(source, /dpkg-deb -x "\$\{debs\[0\]\}" "\$probe_root"/);
   assert.doesNotMatch(source, /target\/release\/agentcomms-desktop/);
   const passThrough = 'export DESKTOP_PROBE_BINARY="$probe"';
@@ -207,10 +207,10 @@ test('desktop-shipped-probe-payload', async () => {
   assert.match(source, /dpkg-deb -x "\$\{debs\[0\]\}" "\$probe_root"/);
   assert.match(source, /probe="\$probe_root\/usr\/bin\/agentcomms-desktop"/);
   assert.match(source, /installers=\(apps\/desktop\/src-tauri\/target\/release\/bundle\/nsis\/\*\.exe\)/);
-  assert.match(source, /"\$\{installers\[0\]\}" \/S "\/D=\$install_root"/);
+  assert.match(source, /7z x -y "-o\$\(cygpath -w "\$probe_root"\)" "\$\(cygpath -w "\$\{installers\[0\]\}"\)"/);
   assert.match(source, /probe="\$probe_root\/agentcomms-desktop\.exe"/);
-  assert.match(source, /uninstaller="\$probe_root\/uninstall\.exe"/);
-  assert.match(source, /"\$uninstaller" \/S/);
+  // A silent install hung on the hosted runner: the payload is extracted, never installed.
+  assert.doesNotMatch(source, /\/S "\/D=/);
   assert.match(source, /test -x "\$probe"/);
   assert.match(source, /export DESKTOP_PROBE_BINARY="\$probe"/);
   for (const probe of ['no-egress', 'capabilities', 'full-production'])

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { release, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertLoopbackSeal } from '../../../../test/helpers/loopback-seal-preload.mjs';
 import { startLoopbackTrap } from './loopback-trap.mjs';
@@ -116,7 +116,10 @@ try {
     else {
       assert.ok(customBlocked > 0, `${label} custom protocol guard was not exercised`);
       assert.ok(navigationBlocked > 0, `${label} navigation guard was not exercised`);
-      assert.ok(downloadBlocked > 0, `${label} download guard was not exercised`);
+      assert.ok(
+        downloadBlocked > 0,
+        `${label} download guard was not exercised; counters=${counters.join(',')}; os=${process.platform} ${release()}`,
+      );
       assert.ok(popupBlocked > 0, `${label} popup guard was not exercised`);
     }
   }
