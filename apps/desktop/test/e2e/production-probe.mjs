@@ -12,6 +12,11 @@ assertLoopbackSeal();
 const args = process.argv.slice(2).filter((argument) => argument !== '--');
 assert.equal(args[0], '--case');
 const probeCase = args[1];
+if (probeCase === 'full-production') {
+  const { runFullProduction } = await import('./full-production-probe.mjs');
+  await runFullProduction();
+  process.exit(0);
+}
 if (probeCase === 'capabilities') {
   await import('./capability-probe.mjs');
   process.exit(0);

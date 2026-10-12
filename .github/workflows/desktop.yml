@@ -9,7 +9,10 @@
         "pnpm-workspace.yaml",
         "package.json",
         "test/**",
-        "scripts/verify-desktop-mutations.mjs"
+        "scripts/verify-desktop-mutations.mjs",
+        "packages/events/package.json",
+        "packages/events-daemon/package.json",
+        "scripts/packages.mjs"
       ]
     },
     "pull_request": {
@@ -20,7 +23,10 @@
         "pnpm-workspace.yaml",
         "package.json",
         "test/**",
-        "scripts/verify-desktop-mutations.mjs"
+        "scripts/verify-desktop-mutations.mjs",
+        "packages/events/package.json",
+        "packages/events-daemon/package.json",
+        "scripts/packages.mjs"
       ]
     },
     "workflow_call": {}
@@ -94,8 +100,12 @@
           "run": "cargo fmt --all -- --check\ncargo clippy --all-targets --all-features -- -D warnings\ncargo test --all-targets --all-features"
         },
         {
+          "name": "Initial unsigned bundle for content proof",
+          "run": "case \"$RUNNER_OS\" in\n  macOS) bundle=app ;;\n  Windows) bundle=nsis ;;\n  Linux) bundle=deb ;;\n  *) exit 1 ;;\nesac\nnode apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --no-sign --bundles \"$bundle\""
+        },
+        {
           "name": "Native desktop proofs (Cargo)",
-          "run": "pnpm --filter @agentcomms/desktop test:native"
+          "run": "set -euo pipefail\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:native\nelse\n  pnpm --filter @agentcomms/desktop test:native\nfi"
         },
         {
           "name": "Unix Task-4 production mutation and Node/Rust control gates",
@@ -109,7 +119,7 @@
         },
         {
           "name": "Bundled actual webview no-egress probe",
-          "run": "set -euo pipefail\ncase \"$RUNNER_OS\" in\n  macOS) bundle=app; probe=\"apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop\" ;;\n  Windows) bundle=nsis; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop.exe\" ;;\n  Linux) bundle=deb; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop\" ;;\n  *) exit 1 ;;\nesac\nVITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true pnpm --filter @agentcomms/desktop tauri:build --features no-egress-probe --no-sign --bundles \"$bundle\"\nprobe_binary=$(node -p 'require(\"node:path\").resolve(process.argv[1])' \"$probe\")\nexport DESKTOP_PROBE_BINARY=\"$probe_binary\"\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nelse\n  pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nfi"
+          "run": "set -euo pipefail\ncase \"$RUNNER_OS\" in\n  macOS) bundle=app; probe=\"apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop\" ;;\n  Windows) bundle=nsis; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop.exe\" ;;\n  Linux) bundle=deb; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop\" ;;\n  *) exit 1 ;;\nesac\nVITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true node apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --features no-egress-probe --no-sign --bundles \"$bundle\"\nprobe_binary=$(node -p 'require(\"node:path\").resolve(process.argv[1])' \"$probe\")\nexport DESKTOP_PROBE_BINARY=\"$probe_binary\"\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nelse\n  pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nfi"
         },
         {
           "name": "Actual webview secret capability probe (all operating systems)",
@@ -121,8 +131,27 @@
           "run": "node apps/desktop/test/mutations/run.mjs --group task-6"
         },
         {
+          "name": "Full production evidence",
+          "run": "set -euo pipefail\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:e2e -- --case full-production\nelse\n  pnpm --filter @agentcomms/desktop test:e2e -- --case full-production\nfi"
+        },
+        {
           "name": "Unsigned production bundle",
-          "run": "case \"$RUNNER_OS\" in\n  macOS) bundle=app ;;\n  Windows) bundle=nsis ;;\n  Linux) bundle=deb ;;\n  *) exit 1 ;;\nesac\npnpm --filter @agentcomms/desktop tauri:build --no-sign --bundles \"$bundle\""
+          "run": "case \"$RUNNER_OS\" in\n  macOS) bundle=app ;;\n  Windows) bundle=nsis ;;\n  Linux) bundle=deb ;;\n  *) exit 1 ;;\nesac\nnode apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --no-sign --bundles \"$bundle\""
+        },
+        {
+          "name": "Complete desktop mutation gate",
+          "run": "set -euo pipefail\nnode --test --test-reporter=tap test/desktop-workflows.test.mjs test/desktop-release-hold.test.mjs test/desktop-gate-repairs.test.mjs\nnode scripts/verify-desktop-mutations.mjs\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a node apps/desktop/test/mutations/run.mjs --all\nelse\n  node apps/desktop/test/mutations/run.mjs --all\nfi"
+        },
+        {
+          "name": "Synthetic failure evidence",
+          "if": "failure()",
+          "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+          "with": {
+            "name": "synthetic-evidence-${{ matrix.os }}",
+            "path": "apps/desktop/test/evidence/*.json",
+            "if-no-files-found": "ignore",
+            "retention-days": 3
+          }
         }
       ]
     }

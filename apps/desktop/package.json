@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=tap --import ../../test/helpers/loopback-seal-preload.mjs --import ./test/helpers/tsx-register.mjs \"test/*.test.mjs\" \"test/*.test.ts\" \"test/*.test.tsx\"",
     "test:native": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=tap --import ../../test/helpers/loopback-seal-preload.mjs --import ./test/helpers/tsx-register.mjs --import ./test/helpers/native-lane-on.mjs \"test/*.test.mjs\" \"test/*.test.ts\" \"test/*.test.tsx\"",
-    "test:e2e": "node --import ../../test/helpers/loopback-seal-preload.mjs test/e2e/production-probe.mjs",
+    "test:e2e": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ../../test/helpers/loopback-seal-preload.mjs --import ./test/helpers/tsx-register.mjs test/e2e/production-probe.mjs",
     "tauri:build": "tauri build"
   },
   "dependencies": {

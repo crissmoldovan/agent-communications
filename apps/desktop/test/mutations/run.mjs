@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applicable, isolatedPaths } from './policy.mjs';
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url));
 const rawArgs = process.argv.slice(2);
@@ -25,10 +26,18 @@ if (selected.length === 0) {
   process.stderr.write('Usage: run.mjs --case <id> | --group <group> | --all\n');
   process.exitCode = 1;
 } else {
-  const sharedTaskFour = selected.every((item) => ['task-4', 'task-5', 'task-6', 'task-6-owner'].includes(item.group));
+  const sharedTaskFour = selected.every((item) =>
+    ['task-4', 'task-5', 'task-6', 'task-6-owner', 'task-7'].includes(item.group),
+  );
   const sharedTemp = sharedTaskFour ? await mkdtemp(join(tmpdir(), 'desktop-mutation-')) : null;
   let sharedPrepared = false;
   for (const item of selected) {
+    if (!applicable(item, process.platform)) {
+      process.stdout.write(
+        `mutation ${item.id}: not applicable on ${process.platform}; not killed (${item.platformReason})\n`,
+      );
+      continue;
+    }
     const temp = sharedTemp ?? (await mkdtemp(join(tmpdir(), 'desktop-mutation-')));
     let target;
     let original;
@@ -67,8 +76,8 @@ if (selected.length === 0) {
       };
       delete childEnv.DESKTOP_PROBE_BINARY;
       // A Cargo build runs build.rs, which generates the B3 DTOs with the daemon's Node dependencies, so every Cargo
-      // case needs them as much as the task-5/6 Node cases do.
-      if (['task-5', 'task-6', 'task-6-owner'].includes(item.group) || declared.kind === 'cargo') {
+      // case needs them as much as the task-5/6/7 Node cases do.
+      if (['task-5', 'task-6', 'task-6-owner', 'task-7'].includes(item.group) || declared.kind === 'cargo') {
         const kind = process.platform === 'win32' ? 'junction' : 'dir';
         for (const dependencyRoot of ['', 'apps/desktop', 'packages/events-daemon']) {
           try {
@@ -80,10 +89,29 @@ if (selected.length === 0) {
         childEnv.npm_config_verify_deps_before_run = 'false';
         childEnv.pnpm_config_verify_deps_before_run = 'false';
         if (item.group.startsWith('task-6')) childEnv.CARGO_TARGET_DIR = join(root, 'apps/desktop/src-tauri/target');
+        if (item.group === 'task-7') {
+          const isolation = isolatedPaths(temp);
+          await mkdir(isolation.home, { recursive: true });
+          await mkdir(isolation.evidence, { recursive: true });
+          Object.assign(childEnv, {
+            HOME: isolation.home,
+            USERPROFILE: isolation.home,
+            APPDATA: isolation.home,
+            LOCALAPPDATA: isolation.home,
+            XDG_CONFIG_HOME: isolation.home,
+            XDG_DATA_HOME: isolation.home,
+            // Toolchain and locked registry are read-only inputs, not mutable app state.
+            CARGO_HOME: process.env.CARGO_HOME ?? join(process.env.HOME, '.cargo'),
+            RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(process.env.HOME, '.rustup'),
+            CARGO_TARGET_DIR: isolation.target,
+            DESKTOP_DIST_DIR: isolation.dist,
+            DESKTOP_EVIDENCE_DIR: isolation.evidence,
+          });
+        }
       }
       // The copy excludes target/, so a packaged probe would rebuild every dependency for the baseline and again for
       // the mutant. They share one dedicated cache instead: not the checkout's own target/, which keeps its real build.
-      if (declared.kind === 'node' && declared.file.includes('/e2e/')) {
+      if (item.group !== 'task-7' && declared.kind === 'node' && declared.file.includes('/e2e/')) {
         const kind = process.platform === 'win32' ? 'junction' : 'dir';
         await symlink(join(root, 'node_modules'), join(temp, 'node_modules'), kind);
         await symlink(join(root, 'apps/desktop/node_modules'), join(temp, 'apps/desktop/node_modules'), kind);
@@ -97,7 +125,7 @@ if (selected.length === 0) {
         if (key.startsWith('NODE_TEST')) delete childEnv[key];
       }
       const testArgs = [
-        ...(['task-5', 'task-6', 'task-6-owner'].includes(item.group)
+        ...(['task-5', 'task-6', 'task-6-owner', 'task-7'].includes(item.group)
           ? [
               '--import',
               './apps/desktop/test/helpers/tsx-register.mjs',
@@ -129,7 +157,7 @@ if (selected.length === 0) {
       if (item.group === 'task-4' && item.production.endsWith('.rs') && !cargoArgs) {
         throw new Error(`${item.id}: Task-4 Rust mutation requires a compiled behavioral test`);
       }
-      if (cargoArgs)
+      if (cargoArgs && item.group !== 'task-7')
         childEnv.CARGO_TARGET_DIR = join(
           root,
           item.group === 'task-5' ? 'apps/desktop/src-tauri/target' : 'apps/desktop/src-tauri/target/desktop-mutations',

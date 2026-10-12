@@ -5,10 +5,16 @@ This file is the exact checked-in source for the GitHub prerelease notes.
 ## Before installing
 
 This unsigned prerelease is for the owner and a few named colleagues. It requires a separate daemon installation
-and a running, compatible local event daemon; the desktop does not bundle, install or start that daemon.
+and a compatible local event daemon; the desktop does not bundle or install that daemon. Starting it requires
+an explicit Settings action.
 The event library and daemon remain held from npm release. Obtain the checked daemon build from the maintainer;
-do not interpret a desktop tag as lifting those holds. The current shell has inert Settings and Secrets windows;
-daemon attachment arrives in the later Phase C tasks.
+do not interpret a desktop tag as lifting those holds. An attached daemon remains terminal-only for secret operations.
+Unix Settings can attach to or explicitly start the selected profile; login only opens the app. Windows daemon
+control refuses before reading a profile. Only Secrets may submit the eight human-only operations, and only to a
+daemon spawned by this desktop process. Secret material is never persisted in app preferences or test evidence.
+
+Phase E holds and Judges are unavailable/empty as declared by the daemon. Laya remains `E2_REQUIRED`: no runtime,
+model, worker, download or activation pointer is created by the app. These display seams do not implement E/E2.
 
 Download the artifact and `SHA256SUMS` from the same `desktop-v<version>` prerelease. Before opening or installing,
 compute its SHA-256 and compare the complete hexadecimal result with the line for that exact filename in
@@ -51,4 +57,3 @@ a store listing or an auto-update, first requires an Apple Developer ID signatur
 bundle, and sign Windows with a code-signing certificate. Those future credentials belong only in a protected
 release environment. The current workflows contain no signing credentials and can publish only a prerelease,
 never mark it latest.
-

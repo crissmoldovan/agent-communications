@@ -25,6 +25,30 @@ Rust formatting, warning-denied clippy, Rust tests, the bundled actual-webview n
 Linux uses WebKitGTK 4.1, build-essential, curl, wget, file, libxdo, OpenSSL, librsvg, Ayatana AppIndicator, patchelf
 and Xvfb development/runtime packages as listed in `.github/workflows/desktop.yml`; it uploads nothing.
 Release notes are maintained in [RELEASE_NOTES.md](RELEASE_NOTES.md); third-party licence texts travel in the bundle.
+The `full-production` probe combines production adapter/native B3 frames with the actual webview egress and
+capability probes. Its synthetic journal records only operation names, counts and artifact digests. The bundle
+gate records packaged file hashes, executable/type metadata and Cargo/pnpm/Vite/Tauri provenance; renamed Node,
+daemon, ONNX, worker or model payloads and Node builtin edges fail the gate. It requires an actual release bundle.
+Run `pnpm --filter @agentcomms/desktop test:e2e -- --case full-production` under the loopback seal (and Xvfb on Linux).
+
+The CI native lane also uses Xvfb on Linux. Mutation cases declare their platform applicability; Unix-only owner
+proofs are explicitly reported as **not applicable, not killed** on Windows, whose refusal proof still runs. Task 7
+mutants build into their temporary copy with isolated frontend output, preferences, home and evidence.
+
+For an auditable local package, wrap the ordinary build command:
+`node apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --no-sign --bundles app`.
+The wrapper creates a fresh build identity and a digest-bound `release/desktop-artifact-evidence.json` accompaniment.
+The audit reads that same-build Vite graph, not the current checkout's dist, and rejects changed or unbound artifacts.
+Vite classifies complete frontend asset bytes before embedding; the wrapper rechecks the final output inventory,
+digests and classifications. The bound audit rejects model/runtime payloads even when Tauri compresses them inside
+the native executable. Evidence contains safe metadata, not asset payload bytes.
+Universal macOS evidence resolves both aarch64 and x86_64 Cargo graphs. Unexpected helper executables remain a
+release blocker; the content allowlist is not an exception mechanism.
+The release workflow calls the same three-platform workflow before packaging. Local success alone is not matrix evidence.
+
+The pre-E display accepts daemon-provided unavailable/empty holds and Judges state. Pre-E2 model state remains
+`E2_REQUIRED`, with its explicit reason. No future operation, network call, model, worker or activation pointer is
+implemented in this phase. A future progress DTO must pass the versioned daemon contract before it can render.
 `THIRD_PARTY_LICENSES` was generated offline from `pnpm-lock.yaml`, installed runtime dependencies and peers,
 and every registry crate in `src-tauri/Cargo.lock`, with source/version/licence provenance. Its missing-text section
 identifies 37 upstream crate archives whose licence grants need to be obtained and reviewed before distribution.

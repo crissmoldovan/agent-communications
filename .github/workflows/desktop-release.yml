@@ -104,12 +104,16 @@
         {
           "name": "macOS universal ad-hoc bundle",
           "if": "runner.os == 'macOS'",
-          "run": "rustup target add aarch64-apple-darwin x86_64-apple-darwin\npnpm --filter @agentcomms/desktop tauri:build --target universal-apple-darwin --bundles app\nmkdir -p release-assets\nditto -c -k --sequesterRsrc --keepParent \"apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Agent Communications.app\" release-assets/desktop-macos-universal.app.zip"
+          "run": "rustup target add aarch64-apple-darwin x86_64-apple-darwin\nnode apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --target universal-apple-darwin --bundles app\nmkdir -p release-assets\nditto -c -k --sequesterRsrc --keepParent \"apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Agent Communications.app\" release-assets/desktop-macos-universal.app.zip"
         },
         {
           "name": "Windows unsigned x64 NSIS installer",
           "if": "runner.os == 'Windows'",
-          "run": "rustup target add x86_64-pc-windows-msvc\npnpm --filter @agentcomms/desktop tauri:build --target x86_64-pc-windows-msvc --bundles nsis --no-sign\nmkdir -p release-assets\ninstallers=(apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe)\ntest \"${#installers[@]}\" -eq 1\ncp \"${installers[0]}\" release-assets/desktop-windows-x64-setup.exe"
+          "run": "rustup target add x86_64-pc-windows-msvc\nnode apps/desktop/scripts/bundle-with-evidence.mjs -- pnpm --filter @agentcomms/desktop tauri:build --target x86_64-pc-windows-msvc --bundles nsis --no-sign\nmkdir -p release-assets\ninstallers=(apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe)\ntest \"${#installers[@]}\" -eq 1\ncp \"${installers[0]}\" release-assets/desktop-windows-x64-setup.exe"
+        },
+        {
+          "name": "Audit exact release payload and unchanged npm holds",
+          "run": "set -euo pipefail\nnode --test test/desktop-release-hold.test.mjs\ncase \"$RUNNER_OS\" in\n  macOS) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/universal-apple-darwin\"; export DESKTOP_BUNDLE_PLATFORM=universal-apple-darwin ;;\n  Windows) export CARGO_TARGET_DIR=\"$PWD/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc\"; export DESKTOP_BUNDLE_PLATFORM=x86_64-pc-windows-msvc ;;\n  *) exit 1 ;;\nesac\nnode apps/desktop/scripts/bundle-content-graph.mjs"
         },
         {
           "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",

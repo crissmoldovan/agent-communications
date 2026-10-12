@@ -28,8 +28,21 @@ fn desktop_probe_port() -> u16 {
 #[cfg(feature = "no-egress-probe")]
 #[tauri::command]
 fn desktop_probe_capability_mode(window: tauri::WebviewWindow) -> Option<String> {
+    if std::env::var_os("DESKTOP_PROBE_FULL_FIXTURE").is_some() {
+        return Some("full-production".into());
+    }
     (std::env::var("DESKTOP_PROBE_CAPABILITIES").as_deref() == Ok("1"))
         .then(|| window.label().to_owned())
+}
+
+#[cfg(feature = "no-egress-probe")]
+#[tauri::command]
+fn desktop_probe_full_fixture() -> Result<serde_json::Value, String> {
+    let path = std::env::var("DESKTOP_PROBE_FULL_FIXTURE").map_err(|_| "PROBE_FIXTURE")?;
+    let bytes = std::fs::read(path).map_err(|_| "PROBE_FIXTURE")?;
+    let document: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "PROBE_FIXTURE")?;
+    Ok(document["requests"].clone())
 }
 
 #[cfg(feature = "no-egress-probe")]
@@ -101,6 +114,7 @@ pub fn run() {
         desktop_probe_ping,
         desktop_probe_port,
         desktop_probe_capability_mode,
+        desktop_probe_full_fixture,
         desktop_probe_report
     ));
     builder
@@ -112,6 +126,31 @@ pub fn run() {
                 .app_local_data_dir()?
                 .join("preferences")
                 .join("desktop.json");
+            #[cfg(feature = "no-egress-probe")]
+            let preferences_path = if let Ok(fixture) = std::env::var("DESKTOP_PROBE_FULL_FIXTURE")
+            {
+                let fixture = std::path::PathBuf::from(fixture);
+                let path = fixture
+                    .parent()
+                    .ok_or("PROBE_FIXTURE")?
+                    .join("preferences/desktop.json");
+                #[cfg(unix)]
+                {
+                    let document: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&fixture)?)?;
+                    let profile = serde_json::from_value(document["profile"].clone())?;
+                    let store = preferences::PreferenceStore::new(path.clone());
+                    let value = preferences::DesktopPreferences {
+                        daemon_profile: Some(profile),
+                        revision: 1,
+                        ..Default::default()
+                    };
+                    store.save_if_revision(&value, 0)?;
+                }
+                path
+            } else {
+                preferences_path
+            };
             app.manage(commands::supervision::DesktopService::new(preferences_path));
             WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
                 .title("Settings")

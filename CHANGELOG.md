@@ -5,6 +5,12 @@ together under one version.
 
 ## Unreleased
 
+Desktop integration checks now join the production B3 adapter/native boundary, separate-window capability and
+no-egress probes, bundle-content/dependency evidence and npm release-hold checks. The pre-E/E2 UI displays the
+daemon's explicit unavailable reasons without installing a runtime, model or worker. First-launch release notes
+now describe explicit Unix profile attachment/start and the Windows control refusal. No CLI/MCP surface, npm
+release behavior, package version or event-package hold changes.
+
 The desktop now has macOS, Windows and Linux CI build and actual-webview checks. Desktop tags produce only
 unsigned prereleases for the owner and named colleagues: an ad-hoc-signed universal macOS app and an unsigned
 Windows x64 installer, with SHA-256 checksums and first-launch instructions. A separate compatible daemon is

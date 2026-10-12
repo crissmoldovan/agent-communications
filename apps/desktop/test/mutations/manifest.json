@@ -2,6 +2,109 @@
   "version": 1,
   "cases": [
     {
+      "id": "desktop-embedded-vite-content",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: embedded Vite assets are classified before packaging"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "auditViteAssets(evidence.graph.viteAssets);",
+        "replace": "void evidence.graph.viteAssets;"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-production-path",
+      "group": "task-7",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/full-flow.test.mjs",
+        "name": "full-flow: production adapter drives the compiled native boundary"
+      },
+      "production": "apps/desktop/src/production-flow-probe.tsx",
+      "import": "../src/production-flow-probe.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/production-flow-probe.tsx",
+        "find": "result = await model.control(operation, args);",
+        "replace": "result = (await invoke<{ result: Awaited<ReturnType<ControlModel['control']>> }>('desktop_control', { input: { request: { operation, args }, selection: null } })).result;"
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
+    },
+    {
+      "id": "desktop-e2-seam-reason",
+      "group": "task-7",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/full-flow.test.mjs",
+        "name": "full-flow: E and E2 states retain explicit unavailable reasons"
+      },
+      "production": "apps/desktop/src/screens/phase-seams.ts",
+      "import": "../src/screens/phase-seams.ts",
+      "mutation": {
+        "file": "apps/desktop/src/screens/phase-seams.ts",
+        "find": "return 'Laya is unavailable until Phase E2. No runtime, model, download or worker is started.';",
+        "replace": "return '';"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-bundle-content-dependency-graph",
+      "group": "task-7",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/bundle-content-graph.test.mjs",
+        "name": "bundle-content-graph: content and provenance reject renamed forbidden payloads"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "for (const node of evidence.graph.vite)\n    assert.ok(!forbidden.test(JSON.stringify(node)), 'forbidden Vite dependency edge');",
+        "replace": "for (const node of evidence.graph.vite) void node;"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-release-hold",
+      "group": "task-7",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-release-hold.test.mjs",
+        "name": "desktop-release-hold: desktop evidence cannot lift npm holds or change release selection"
+      },
+      "production": "packages/events-daemon/package.json",
+      "import": "../packages/events-daemon/package.json",
+      "mutation": {
+        "file": "packages/events-daemon/package.json",
+        "find": ",\n  \"agentcommsRelease\": {\n    \"hold\": \"Held until the owner elects to release the first daemon consumer, alongside @agentcomms/events.\"\n  }",
+        "replace": ""
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-mutation-completeness",
+      "group": "task-7",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/full-flow.test.mjs",
+        "name": "full-flow: every required named mutation remains executable"
+      },
+      "production": "apps/desktop/test/mutations/manifest.json",
+      "import": "./mutations/manifest.json",
+      "mutation": {
+        "file": "apps/desktop/test/mutations/manifest.json",
+        "find": "\"id\": \"desktop-production-path\"",
+        "replace": "\"id\": \"desktop-production-path-skipped\""
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
       "id": "desktop-workspace-private",
       "group": "task-1",
       "test": "apps/desktop/test/workspace.test.mjs",
@@ -12,7 +115,8 @@
         "file": "apps/desktop/package.json",
         "find": "\"private\": true",
         "replace": "\"private\": false"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-capability-settings-tracked",
@@ -25,7 +129,8 @@
         "file": ".gitignore",
         "find": "!apps/desktop/src-tauri/capabilities/settings.json",
         "replace": "# settings capability unignore removed"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-root-verification",
@@ -38,7 +143,8 @@
         "file": "package.json",
         "find": "    \"build\": \"pnpm -r --filter \\\"./packages/**\\\" --filter \\\"./apps/**\\\" run build\",",
         "replace": "    \"build\": \"pnpm -r --filter \\\"./packages/**\\\" run build\","
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-lockfile-importer",
@@ -51,7 +157,8 @@
         "file": "pnpm-lock.yaml",
         "find": "  apps/desktop:\n",
         "replace": "  apps/desktop-missing:\n"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-default-src",
@@ -64,7 +171,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "default-src 'self'",
         "replace": "default-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-script-src",
@@ -77,7 +185,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "script-src 'self'",
         "replace": "script-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-style-src",
@@ -90,7 +199,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "style-src 'self'",
         "replace": "style-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-img-src",
@@ -103,7 +213,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "img-src 'self' data:",
         "replace": "img-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-connect-src",
@@ -116,7 +227,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "connect-src ipc: http://ipc.localhost",
         "replace": "connect-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-frame-src",
@@ -129,7 +241,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "frame-src 'none'",
         "replace": "frame-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-object-src",
@@ -142,7 +255,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "object-src 'none'",
         "replace": "object-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-form-action",
@@ -155,7 +269,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "form-action 'none'",
         "replace": "form-action *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-configured-base-uri",
@@ -168,7 +283,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "base-uri 'none'",
         "replace": "base-uri *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-default-src",
@@ -181,7 +297,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "default-src 'none'",
         "replace": "default-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-script-src",
@@ -194,7 +311,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "script-src 'self'",
         "replace": "script-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-style-src",
@@ -207,7 +325,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "style-src 'self'",
         "replace": "style-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-img-src",
@@ -220,7 +339,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "img-src 'none'",
         "replace": "img-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-connect-src",
@@ -233,7 +353,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "connect-src ipc: http://ipc.localhost",
         "replace": "connect-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-frame-src",
@@ -246,7 +367,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "frame-src 'none'",
         "replace": "frame-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-object-src",
@@ -259,7 +381,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "object-src 'none'",
         "replace": "object-src *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-form-action",
@@ -272,7 +395,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "form-action 'none'",
         "replace": "form-action *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-secrets-base-uri",
@@ -285,7 +409,8 @@
         "file": "apps/desktop/secrets.html",
         "find": "base-uri 'none'",
         "replace": "base-uri *"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-asset-modification",
@@ -298,7 +423,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "\"dangerousDisableAssetCspModification\": false",
         "replace": "\"dangerousDisableAssetCspModification\": true"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-csp-null",
@@ -311,7 +437,8 @@
         "file": "apps/desktop/src-tauri/tauri.conf.json",
         "find": "\"csp\": \"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'\"",
         "replace": "\"csp\": null"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-handler-order",
@@ -324,7 +451,8 @@
         "file": "apps/desktop/src-tauri/src/lib.rs",
         "find": "security::install_security_before_windows(app)?;\n            tray::install_tray(app)?;",
         "replace": "tray::install_tray(app)?;\n            security::install_security_before_windows(app)?;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-navigation-denial",
@@ -338,7 +466,8 @@
         "file": "apps/desktop/src-tauri/src/lib.rs",
         "find": ".on_navigation(|url| security::allow_window_navigation(\"settings\", url))",
         "replace": ".on_navigation(|_| true)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-download-denial",
@@ -352,7 +481,8 @@
         "file": "apps/desktop/src-tauri/src/lib.rs",
         "find": ".on_download(|_, _| security::deny_download(\"settings\"))",
         "replace": ".on_download(|_, _| true)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-new-window-denial",
@@ -366,7 +496,8 @@
         "file": "apps/desktop/src-tauri/src/lib.rs",
         "find": ".on_new_window(|_, _| security::deny_new_window(\"settings\"))",
         "replace": ".on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-custom-protocol-denial",
@@ -380,7 +511,8 @@
         "file": "apps/desktop/src-tauri/src/security.rs",
         "find": "_ => false,",
         "replace": "_ => true,"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-http-opener-capability",
@@ -393,7 +525,8 @@
         "file": "apps/desktop/src-tauri/capabilities/settings.json",
         "find": "\"allow-desktop-control\"",
         "replace": "\"allow-desktop-control\", \"http:default\", \"opener:default\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-window-labels",
@@ -406,7 +539,8 @@
         "file": "apps/desktop/src-tauri/src/lib.rs",
         "find": "WebviewWindowBuilder::new(app, \"secrets\", WebviewUrl::App(\"secrets.html\".into()))",
         "replace": "WebviewWindowBuilder::new(app, \"secrets\", WebviewUrl::App(\"settings.html\".into()))"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-tray-lifecycle",
@@ -419,7 +553,8 @@
         "file": "apps/desktop/src-tauri/src/tray.rs",
         "find": "\"show\" => {",
         "replace": "\"show-disabled\" => {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-probe-attack-completeness",
@@ -433,7 +568,8 @@
         "file": "apps/desktop/src/egress-probe.ts",
         "find": "attempted('fetch', () => fetch",
         "replace": "// attempted('fetch', () => fetch"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-probe-report-fields",
@@ -446,7 +582,8 @@
         "file": "apps/desktop/test/e2e/probe-report.mjs",
         "find": "const entries = value.split(',');",
         "replace": "const entries = value.split('|');"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-root-mutation-structural-only",
@@ -459,7 +596,8 @@
         "file": "scripts/verify-desktop-mutations.mjs",
         "find": "if (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);",
         "replace": "spawnSync(process.execPath, ['apps/desktop/test/mutations/run.mjs', '--all'], { cwd: root });\\nif (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-tag-isolation",
@@ -472,7 +610,8 @@
         "file": ".github/workflows/desktop-release.yml",
         "find": "\"desktop-v*\"",
         "replace": "\"v*\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-matrix-completeness",
@@ -485,7 +624,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "\"windows-latest\",\n            \"ubuntu-latest\"",
         "replace": "\"windows-latest\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-workflow-public-registry",
@@ -498,7 +638,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "pnpm config get registry",
         "replace": "pnpm config get ignored-registry"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-workflow-no-registry-token",
@@ -511,7 +652,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
         "replace": "\"NODE_AUTH_TOKEN\": \"${{ secrets.REGISTRY_TOKEN }}\", \"npm_config_registry\": \"https://registry.npmjs.org/\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-workflow-no-private-registry",
@@ -524,7 +666,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
         "replace": "\"npm_config_registry\": \"https://private.registry.example.test/\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-workflow-no-registry-auth",
@@ -537,7 +680,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
         "replace": "\"npm_config_registry\": \"https://user:pass@registry.npmjs.org/\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-prerelease-only",
@@ -550,7 +694,8 @@
         "file": ".github/workflows/desktop-release.yml",
         "find": "--prerelease --latest=false --verify-tag",
         "replace": "--latest=false --verify-tag"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-no-signing-secret",
@@ -563,7 +708,8 @@
         "file": ".github/workflows/desktop-release.yml",
         "find": "\"GH_TOKEN\": \"${{ github.token }}\"",
         "replace": "\"GH_TOKEN\": \"${{ github.token }}\", \"APPLE_CERTIFICATE\": \"${{ secrets.APPLE_CERTIFICATE }}\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-actions-pinned",
@@ -576,7 +722,8 @@
         "file": ".github/workflows/desktop-release.yml",
         "find": "\"uses\": \"actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131\"",
         "replace": "\"uses\": \"actions/download-artifact@v7\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-hash-asset",
@@ -589,7 +736,8 @@
         "file": ".github/workflows/desktop-release.yml",
         "find": "files.map((file) =>",
         "replace": "files.slice(0, 1).map((file) =>"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-no-linux-upload",
@@ -602,7 +750,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "\"steps\": [",
         "replace": "\"steps\": [{ \"uses\": \"actions/upload-artifact@v6\", \"if\": \"runner.os == 'Linux'\", \"with\": { \"name\": \"linux\", \"path\": \"apps/desktop/src-tauri/target/release/bundle/deb/*\" } },"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-launch-docs",
@@ -615,7 +764,8 @@
         "file": "apps/desktop/RELEASE_NOTES.md",
         "find": "**Open Anyway**",
         "replace": "**Open**"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-windows-probe-launcher",
@@ -628,7 +778,8 @@
         "file": ".github/workflows/desktop.yml",
         "find": "export DESKTOP_PROBE_BINARY=",
         "replace": "export DESKTOP_PROBE_UNUSED="
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-frame-bounds",
@@ -649,7 +800,8 @@
         "file": "apps/desktop/src-tauri/src/control/frame.rs",
         "find": "if length > MAX_FRAME_BYTES {",
         "replace": "if false {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-no-overlap",
@@ -670,7 +822,8 @@
         "file": "apps/desktop/src-tauri/src/control/frame.rs",
         "find": ".filter(|v| server.contains(v))",
         "replace": ".filter(|_| true)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-token-redaction",
@@ -691,7 +844,8 @@
         "file": "apps/desktop/src-tauri/src/control/types.rs",
         "find": "write!(f, \"{}\", self.code)",
         "replace": "write!(f, \"{}\", self.message)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-endpoint-proof",
@@ -712,7 +866,9 @@
         "file": "apps/desktop/src-tauri/src/control/client.rs",
         "find": "verify_endpoint(&paths, &record)?;\n        let token = read_token(&paths, &record.token_fingerprint)?;",
         "replace": "let token = read_token(&paths, &record.token_fingerprint)?;"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-windows-pre-read-refusal",
@@ -733,7 +889,8 @@
         "file": "apps/desktop/src-tauri/src/control/client.rs",
         "find": "Err(ControlError::windows_unavailable())",
         "replace": "let _ = std::fs::read(_profile.state_dir.join(\"events/control.token\"));\n        Err(ControlError::windows_unavailable())"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-daemon-profile-drift",
@@ -754,7 +911,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "Command::new(&profile.executable)",
         "replace": "Command::new(\"agent-events\")"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-preferences-private",
@@ -775,7 +934,9 @@
         "file": "apps/desktop/src-tauri/src/preferences.rs",
         "find": "metadata.mode() & 0o777 != 0o600\n    {",
         "replace": "false\n    {"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-preferences-symlink-reparse",
@@ -796,7 +957,9 @@
         "file": "apps/desktop/src-tauri/src/preferences.rs",
         "find": "let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;",
         "replace": "let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-preferences-atomic-recovery",
@@ -817,7 +980,9 @@
         "file": "apps/desktop/src-tauri/src/preferences.rs",
         "find": "let preferences: DesktopPreferences = serde_json::from_slice(&bytes)\n            .map_err(|_| ControlError::new(\"PREFERENCES_TORN\", \"preferences are incomplete\"))?;",
         "replace": "let preferences: DesktopPreferences = serde_json::from_slice(&bytes).unwrap_or(DesktopPreferences { revision: 1, ..DesktopPreferences::default() });"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-autostart-no-spawn",
@@ -838,7 +1003,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "pub fn startup(&self) -> SupervisorStatus {\n        self.status()\n    }",
         "replace": "pub fn startup(&self) -> SupervisorStatus {\n        let _ = self.runtime.spawn(&DaemonProfile { executable: \"/dev/null/agent-events\".into(), state_dir: \"/dev/null\".into(), config_dir: \"/dev/null\".into() });\n        self.status()\n    }"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-preferences-race",
@@ -859,7 +1026,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "let current = store.load()?;\n        if current.revision != expected_revision {\n            return Err(ControlError::new(\n                \"PREFERENCES_CHANGED\",\n                \"profile changed while starting\",\n            ));\n        }\n        let mut ledger = self.ledger.lock().expect(\"supervisor ledger\");\n        if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Starting\n            || ledger.reservation.as_ref().is_none_or(|pending| {\n                pending.profile != profile || pending.expected_revision != expected_revision\n            })\n        {\n            return Err(ControlError::new(\n                \"SUPERVISOR_STALE\",\n                \"start reservation changed\",\n            ));\n        }\n        // This is the final commit point. Holding the supervisor ledger prevents Quit from\n        // superseding the selected epoch between the check and the atomic preference write.\n        if let Err(error) = store.save_if_revision(&preferences, expected_revision) {\n            drop(ledger);\n            return Err(error);\n        }",
         "replace": "let _current = store.load()?;\n        let mut ledger = self.ledger.lock().expect(\"supervisor ledger\");\n        if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Starting\n            || ledger.reservation.as_ref().is_none_or(|pending| {\n                pending.profile != profile || pending.expected_revision != expected_revision\n            })\n        {\n            return Err(ControlError::new(\n                \"SUPERVISOR_STALE\",\n                \"start reservation changed\",\n            ));\n        }"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-supervisor-late-spawn",
@@ -880,7 +1049,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "let initial = self.runtime.status(&profile);",
         "replace": "store.save_if_revision(&preferences, expected_revision)?;\n        let initial = self.runtime.status(&profile);"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-supervisor-cancel-handoff",
@@ -901,7 +1072,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "else if ledger.state == SupervisorState::Starting {",
         "replace": "else if matches!(ledger.state, SupervisorState::Starting | SupervisorState::Cancelling) {"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-supervisor-stop-race",
@@ -922,7 +1095,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Stopping\n            || ledger.owner.as_ref().map(|owner| &owner.identity) != expected",
         "replace": "if ledger.state != SupervisorState::Stopping\n            || ledger.owner.as_ref().map(|owner| &owner.identity) != expected"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-control-stale-reply",
@@ -943,7 +1118,8 @@
         "file": "apps/desktop/src-tauri/src/control/types.rs",
         "find": "if request_id != expected {",
         "replace": "if false {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-preferences-lock",
@@ -964,7 +1140,9 @@
         "file": "apps/desktop/src-tauri/src/preferences.rs",
         "find": "if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {",
         "replace": "if false {"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-supervisor-exact-identity",
@@ -985,7 +1163,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "Ok(status) if status.identity == bound.identity => {}",
         "replace": "Ok(_) => {}"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-ui-command-surface",
@@ -1001,7 +1181,8 @@
         "file": "apps/desktop/src/supervision.ts",
         "find": "'desktop_start_daemon'",
         "replace": "'desktop_start_other'"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-ui-stale-reply",
@@ -1017,7 +1198,8 @@
         "file": "apps/desktop/src/supervision.ts",
         "find": "return request.requestEpoch === this.#requestEpoch && request.lifecycleEpoch === this.#lifecycleEpoch;",
         "replace": "return true;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-mutation-marker-global-scan",
@@ -1033,7 +1215,8 @@
         "file": "scripts/verify-desktop-mutations.mjs",
         "find": "scanMutationMarkers();",
         "replace": "// scanMutationMarkers();"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-b3-wire-contract",
@@ -1049,7 +1232,8 @@
         "file": "apps/desktop/scripts/b3-contract.mjs",
         "find": "for (const vector of vectors) assert.ok(validate(vector), `${vector.name}: ${JSON.stringify(validate.errors)}`);",
         "replace": "for (const vector of vectors) void validate(vector);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-control-command-manifest",
@@ -1065,7 +1249,8 @@
         "file": "apps/desktop/src-tauri/build.rs",
         "find": ".expect(\"desktop command manifest is valid\");",
         "replace": ".expect(\"desktop command manifest is valid\");\n    panic!(\"desktop command manifest omitted\");"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-mutation-runner-single-test-count",
@@ -1081,7 +1266,8 @@
         "file": "apps/desktop/test/mutations/run.mjs",
         "find": "oneMatch(output, /^# tests 1$/gm) &&",
         "replace": "true &&"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-mutation-runner-declared-name",
@@ -1097,7 +1283,8 @@
         "file": "apps/desktop/test/mutations/run.mjs",
         "find": "if (baseline.status !== 0 || baseline.error || !baselineOne) {",
         "replace": "if (baseline.status !== 0 || baseline.error || false) {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-b3-terminal-fixture",
@@ -1113,7 +1300,8 @@
         "file": "packages/events-daemon/src/cli/program.ts",
         "find": "return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);",
         "replace": "return 'drifted terminal preview';"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-approval-renderer",
@@ -1129,7 +1317,8 @@
         "file": "apps/desktop/src/screens/approvals.tsx",
         "find": "<p>{result?.approval?.challenge}</p>",
         "replace": "<p />"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-preview-links",
@@ -1145,7 +1334,8 @@
         "file": "apps/desktop/src/screens/shared.tsx",
         "find": "<pre>{segment.text}</pre>",
         "replace": "<a href={segment.text}>{segment.text}</a>"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-screen-contract-completeness",
@@ -1161,7 +1351,8 @@
         "file": "apps/desktop/src/screens/overview.tsx",
         "find": "<DataItem id=\"source-lag\" title=\"Source lag\" props={props} paths={['/sources']} />",
         "replace": "{/* source lag omitted */}"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-id-scope",
@@ -1177,7 +1368,8 @@
         "file": "apps/desktop/src/control-model.ts",
         "find": "return actual === expected;",
         "replace": "return true;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-nested-document-scope",
@@ -1198,7 +1390,8 @@
         "file": "apps/desktop/src-tauri/src/commands/control.rs",
         "find": "|| !input.request.result_matches_request_scope(&value)",
         "replace": "|| false"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-superseded-destructive-invalidation",
@@ -1214,7 +1407,8 @@
         "file": "apps/desktop/src/control-model.ts",
         "find": "if (!current && !invalidating.has(operation)) return null;",
         "replace": "if (!current) return null;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-purge-ui-orphans",
@@ -1230,7 +1424,8 @@
         "file": "apps/desktop/src/control-model.ts",
         "find": "if (invalidating.has(operation)) {",
         "replace": "if (false) {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-no-secret-generic-dispatch",
@@ -1251,7 +1446,8 @@
         "file": "apps/desktop/scripts/b3-contract.mjs",
         "find": "const operations = registry.filter((operation) => !secret.includes(operation));",
         "replace": "const operations = registry.filter((operation) => !secret.includes(operation) || operation === 'targetSecretCreate');"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-approval-authoritative-preview",
@@ -1272,7 +1468,8 @@
         "file": "apps/desktop/src-tauri/src/commands/approval.rs",
         "find": "if reply[\"digest\"] != input.digest || reply[\"challenge\"][\"digest\"] != input.digest {",
         "replace": "if false {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-approval-fresh-view",
@@ -1293,7 +1490,8 @@
         "file": "apps/desktop/src-tauri/src/commands/approval.rs",
         "find": "self.clear(); // consume this challenge before the daemon sees its answer",
         "replace": "// challenge replay guard removed"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-preview-controls",
@@ -1314,7 +1512,8 @@
         "file": "apps/desktop/src-tauri/src/preview.rs",
         "find": ".filter(|c| !dangerous(*c))",
         "replace": ".filter(|_| true)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-untrusted-result-raw-forward",
@@ -1335,7 +1534,8 @@
         "file": "apps/desktop/src-tauri/src/untrusted_result.rs",
         "find": "let clean = neutralise(text).replace('<', \"&lt;\").replace('>', \"&gt;\");",
         "replace": "let clean = text.to_owned();"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-untrusted-result-bounds",
@@ -1356,7 +1556,8 @@
         "file": "apps/desktop/src-tauri/src/untrusted_result.rs",
         "find": "let (text, text_cut) = safe_text(text, MAX_SEGMENT_BYTES.min(*budget));",
         "replace": "let (text, text_cut) = (text.to_owned(), false);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-settings-autostart-no-spawn",
@@ -1377,7 +1578,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "pub fn startup(&self) -> SupervisorStatus {\n        self.status()\n    }",
         "replace": "pub fn startup(&self) -> SupervisorStatus {\n        let _ = self.runtime.spawn(&DaemonProfile { executable: \"/dev/null/agent-events\".into(), state_dir: \"/dev/null\".into(), config_dir: \"/dev/null\".into() });\n        self.status()\n    }"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-b3-stale-rust-type",
@@ -1398,7 +1601,8 @@
         "file": "apps/desktop/scripts/b3-contract.mjs",
         "find": "integer: 'i64'",
         "replace": "integer: 'String'"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-screen-current-request",
@@ -1414,7 +1618,8 @@
         "file": "apps/desktop/src/control-model.ts",
         "find": "epoch === this.#epoch && this.#requests.get(operation) === requestId",
         "replace": "epoch === this.#epoch"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-screen-contract-seams",
@@ -1430,7 +1635,8 @@
         "file": "apps/desktop/src/screens/shared.tsx",
         "find": "data-contract-seam={code}",
         "replace": "data-contract-seam=\"READY\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-schema-scope-native",
@@ -1451,7 +1657,8 @@
         "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
         "find": "args.get(*field)\n                .is_some_and(|expected| result.get(*field) != Some(expected))",
         "replace": "args.get(*field).is_some_and(|_expected| false)"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-generic-approve-refusal",
@@ -1472,7 +1679,8 @@
         "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
         "find": "NonSecretOperation::Approve | NonSecretOperation::ApprovalView",
         "replace": "NonSecretOperation::ApprovalView"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-capability",
@@ -1488,7 +1696,8 @@
         "file": "apps/desktop/src-tauri/capabilities/settings.json",
         "find": "\"permissions\": [",
         "replace": "\"permissions\": [\"allow-desktop-judge-key-set\","
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-app-manifest",
@@ -1504,7 +1713,8 @@
         "file": "apps/desktop/src-tauri/build.rs",
         "find": "        \"desktop_target_secret_create\",\n",
         "replace": ""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-raw-command-probe",
@@ -1520,7 +1730,8 @@
         "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
         "find": "            $crate::commands::secrets::desktop_judge_key_set,\n",
         "replace": ""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-raw-command-probe-non-secret",
@@ -1536,7 +1747,8 @@
         "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
         "find": "            $crate::commands::secrets::desktop_judge_key_set,\n",
         "replace": "            $crate::commands::secrets::desktop_judge_key_set,\n            $crate::commands::supervision::desktop_open_secrets,\n"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-forged-window-label",
@@ -1552,7 +1764,8 @@
         "file": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
         "find": "if window.label() != \"secrets\" {",
         "replace": "if false {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-pipe",
@@ -1568,7 +1781,9 @@
         "file": "apps/desktop/src-tauri/src/control/secret_window_capability.rs",
         "find": ".env(\"AGENTCOMMS_DESKTOP_CAPABILITY_FD\", \"3\")",
         "replace": ".env(\"AGENTCOMMS_DESKTOP_CAPABILITY_FD\", \"4\")"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-no-echo",
@@ -1584,7 +1799,8 @@
         "file": "apps/desktop/src-tauri/src/control/types.rs",
         "find": "(kind != expected && kind != \"unavailable\")",
         "replace": "(false && kind != expected && kind != \"unavailable\")"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-native-close-race",
@@ -1600,7 +1816,8 @@
         "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
         "find": "self.0.load(Ordering::SeqCst) == epoch",
         "replace": "self.0.load(Ordering::SeqCst) >= epoch"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-generic-dispatch",
@@ -1616,7 +1833,8 @@
         "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
         "find": "return Err(ControlError::new(\n                \"APP_SECRET_CAPABILITY_UNAVAILABLE\",\n                \"secret operations require a separate capability\",\n            ));",
         "replace": "return Self::parse(serde_json::json!({\"operation\":\"status\",\"args\":{}}));"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-app-result",
@@ -1632,7 +1850,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
         "find": "return { kind: 'RevealOnce', material };",
         "replace": "return { kind: 'Acknowledgement' };"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-trace",
@@ -1648,7 +1868,9 @@
         "file": "packages/events-daemon/src/runtime/owner.ts",
         "find": "const result = await handleTerminalSecretOperation(options.ports.secrets, request);",
         "replace": "console.log(request.args.hidden);\n          const result = await handleTerminalSecretOperation(options.ports.secrets, request);"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-attached-label",
@@ -1664,7 +1886,9 @@
         "file": "packages/events-daemon/src/runtime/owner.ts",
         "find": "request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized",
         "replace": "request.origin !== B3_SECRET_TERMINAL_ORIGIN && !desktopAuthorized && request.origin !== 'secrets'"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-missing-hmac",
@@ -1680,7 +1904,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "if (typeof proof !== 'object' || proof === null) return false;",
         "replace": "if (typeof proof !== 'object' || proof === null) return true;"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-forged-hmac",
@@ -1696,7 +1922,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "return timingSafeEqual(expected, received);",
         "replace": "return true;"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-failed-proof-consumption",
@@ -1712,7 +1940,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "    const pending = this.#nonces.get(candidateNonce);\n    this.#nonces.delete(candidateNonce);",
         "replace": "    const pending = this.#nonces.get(candidateNonce);\n    // consumption removed"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-capability-replay",
@@ -1728,7 +1958,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "    this.#nonces.delete(candidateNonce);\n    if (typeof proof",
         "replace": "    // consumption removed\n    if (typeof proof"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-cross-session",
@@ -1744,7 +1976,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "if (pending.session !== session || pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + operation + nonce)",
         "replace": "if (pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(pending.session + operation + nonce)"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-cross-operation",
@@ -1760,7 +1994,9 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-capability.ts",
         "find": "if (pending.session !== session || pending.operation !== operation) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + operation + nonce)",
         "replace": "if (pending.session !== session) return false;\n    const expected = createHmac('sha256', this.#key)\n      .update(session + pending.operation + nonce)"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-close-race",
@@ -1776,7 +2012,8 @@
         "file": "apps/desktop/src/secret-form-state.ts",
         "find": "if (epoch === this.#epoch) {",
         "replace": "if (true) {"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-hidden-form",
@@ -1792,7 +2029,8 @@
         "file": "apps/desktop/src/secrets-app.tsx",
         "find": "type=\"password\"",
         "replace": "type=\"text\""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-control-trace",
@@ -1808,7 +2046,9 @@
         "file": "apps/desktop/src-tauri/src/control/client.rs",
         "find": "super::types::SecretResult::checked(operation, reply.data)",
         "replace": "Ok(super::types::SecretResult::Acknowledgement)"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-audit-host",
@@ -1824,7 +2064,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
         "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
         "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'host']);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-audit-fingerprint",
@@ -1840,7 +2081,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
         "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
         "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'fingerprint']);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-audit-reference",
@@ -1856,7 +2098,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-secret-result.ts",
         "find": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason']);",
         "replace": "keys(row, ['at', 'inboxId', 'operation', 'outcome', 'ids', 'reason', 'secretReference']);"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-key-argv",
@@ -1872,7 +2115,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
         "find": "if (descriptor === undefined) return undefined;",
         "replace": "if (descriptor === undefined) return process.argv.includes('--desktop-capability-key') ? Buffer.alloc(32) : undefined;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-key-env",
@@ -1888,7 +2132,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
         "find": "if (descriptor === undefined) return undefined;",
         "replace": "if (descriptor === undefined) return env.AGENTCOMMS_DESKTOP_CAPABILITY_KEY ? Buffer.alloc(32) : undefined;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-key-file",
@@ -1904,7 +2149,8 @@
         "file": "packages/events-daemon/src/runtime/desktop-capability-pipe.ts",
         "find": "if (descriptor === undefined) return undefined;",
         "replace": "if (descriptor === undefined) return env.AGENTCOMMS_DESKTOP_CAPABILITY_FILE ? Buffer.alloc(32) : undefined;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-secret-session-close",
@@ -1920,7 +2166,9 @@
         "file": "packages/events-daemon/src/runtime/owner.ts",
         "find": "onSessionClosed: (session) => desktopAuthority?.cancel(session),",
         "replace": "onSessionClosed: () => undefined,"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-native-stream-close",
@@ -1936,7 +2184,9 @@
         "file": "apps/desktop/src-tauri/src/commands/secrets.rs",
         "find": "let _ = stream.shutdown(std::net::Shutdown::Both);",
         "replace": "let _ = stream;"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-secret-ipc-fallback",
@@ -1952,7 +2202,8 @@
         "file": "apps/desktop/src/secret-form-state.ts",
         "find": "const pending = invoke(command, { input });",
         "replace": "const pending = invoke(command, { input });\n      delete input.hidden;"
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
     },
     {
       "id": "desktop-supervisor-start-readiness",
@@ -1973,7 +2224,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "const START_READINESS_DEADLINE: Duration = Duration::from_secs(15);",
         "replace": "const START_READINESS_DEADLINE: Duration = Duration::from_secs(3);"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-supervisor-stop-lost-reply",
@@ -1994,7 +2247,9 @@
         "file": "apps/desktop/src-tauri/src/supervisor.rs",
         "find": "Err(error) if error.code == \"NOT_FOUND\" || error.code == \"CONTROL_IO\" => {}",
         "replace": "Err(error) if error.code == \"NOT_FOUND\" => {}"
-      }
+      },
+      "platforms": ["darwin", "linux"],
+      "platformReason": "Unix owner/control proof; Windows is explicitly unavailable and this mutation is not killed there."
     },
     {
       "id": "desktop-native-lane",
@@ -2007,7 +2262,93 @@
         "file": "apps/desktop/package.json",
         "find": " --import ./test/helpers/native-lane-on.mjs",
         "replace": ""
-      }
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-native-display-safe",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: native webviews always have a Linux display"
+      },
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "xvfb-run -a pnpm --filter @agentcomms/desktop test:native",
+        "replace": "pnpm --filter @agentcomms/desktop test:native"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-mutation-platform-applicability",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: platform applicability never counts a refusal as a kill"
+      },
+      "production": "apps/desktop/test/mutations/policy.mjs",
+      "import": "../apps/desktop/test/mutations/policy.mjs",
+      "mutation": {
+        "file": "apps/desktop/test/mutations/policy.mjs",
+        "find": "return item.platforms.includes(platform);",
+        "replace": "return true;"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-resolved-runtime-edge-exclusion",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: forbidden bytes and all resolved dependency edges are checked"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "!forbidden.test(JSON.stringify(node)) &&",
+        "replace": "true &&"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-artifact-digest-binding",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: artifact binding is digest exact and universal metadata covers both targets"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "assert.deepEqual(binding.artifacts, artifacts, 'packaged artifact digest mismatch');",
+        "replace": "void artifacts;"
+      },
+      "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-mutation-build-isolation",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: Task 7 mutants isolate target frontend home and evidence"
+      },
+      "production": "apps/desktop/test/mutations/run.mjs",
+      "import": "../apps/desktop/test/mutations/run.mjs",
+      "mutation": {
+        "file": "apps/desktop/test/mutations/run.mjs",
+        "find": "CARGO_TARGET_DIR: isolation.target,",
+        "replace": "CARGO_TARGET_DIR: join(root, 'apps/desktop/src-tauri/target'),"
+      },
+      "platforms": ["darwin", "linux", "win32"]
     }
   ]
 }

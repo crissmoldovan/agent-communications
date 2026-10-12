@@ -36,6 +36,11 @@ function requestElement(element: HTMLElement, event: 'load' | 'error'): Promise<
 export async function runEgressProbe(_entry: 'settings' | 'secrets'): Promise<void> {
   const bridge = api();
   const capabilityLabel = await bridge.invoke<string | null>('desktop_probe_capability_mode');
+  if (capabilityLabel === 'full-production') {
+    const { runProductionFlow } = await import('./production-flow-probe');
+    await runProductionFlow(bridge.invoke.bind(bridge), _entry);
+    return;
+  }
   if (capabilityLabel) {
     const commands = [
       'desktop_target_secret_create',

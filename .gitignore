@@ -21,6 +21,7 @@ tokens/
 .mutants/
 .pnpm-store/
 apps/desktop/src-tauri/target/
+apps/desktop/test/evidence/
 apps/desktop/src-tauri/gen/
 !apps/desktop/src-tauri/capabilities/settings.json
 

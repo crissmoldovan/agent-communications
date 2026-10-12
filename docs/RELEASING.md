@@ -1,5 +1,17 @@
 # Releasing
 
+The desktop `full-production` gate runs the production adapter/native control path, actual webview egress and
+capability probes, packaged-content manifest and resolved Cargo/pnpm/Vite/Tauri graph on all three desktop OS legs.
+The desktop release workflow calls that same matrix before packaging. Failure evidence contains only synthetic
+operation journals and artifact hashes, never raw control frames or secret bytes. Desktop tags do not lift either
+event-package hold; the existing npm release process and dependency order below still govern their first release.
+
+Desktop builds in these workflows run through `apps/desktop/scripts/bundle-with-evidence.mjs`. Its fresh Vite build
+identity and exact packaged-file digests produce the artifact accompaniment used by the audit; a current loose
+`dist` directory cannot substitute for it. Universal macOS audits resolve both target graphs. Mutation applicability
+is declared per case: Windows runs all applicable cases plus its explicit refusal proof, and Unix-only exclusions
+are reported as not applicable, never as killed. Linux native-webview invocations run under Xvfb.
+
 What a release takes, in the order it takes it, with the reasoning attached so a future release does not have to
 rediscover it.
 

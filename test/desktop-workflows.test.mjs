@@ -96,9 +96,9 @@ test('desktop-workflow-matrix', async () => {
   // Native proofs compile against the crates the Rust gates fetched, so they come after them, on every OS.
   const stepIndex = (name) => job.steps.findIndex((step) => step.name === name);
   assert.ok(stepIndex('Rust gates') >= 0 && stepIndex('Native desktop proofs (Cargo)') > stepIndex('Rust gates'));
-  assert.equal(
+  assert.match(
     job.steps[stepIndex('Native desktop proofs (Cargo)')].run,
-    'pnpm --filter @agentcomms/desktop test:native',
+    /if \[ "\$RUNNER_OS" = Linux \]; then\n {2}xvfb-run -a pnpm --filter @agentcomms\/desktop test:native\nelse\n {2}pnpm --filter @agentcomms\/desktop test:native\nfi/,
   );
   const unixControl = job.steps.find(
     (step) => step.name === 'Unix Task-4 production mutation and Node/Rust control gates',
@@ -309,7 +309,12 @@ test('desktop-hash-asset', async () => {
 // desktop-mutation: desktop-no-linux-upload
 test('desktop-no-linux-upload', async () => {
   const normal = await readWorkflow(normalUrl);
-  assert.doesNotMatch(JSON.stringify(normal), /upload-artifact|gh release/);
+  assert.doesNotMatch(JSON.stringify(normal), /gh release/);
+  const evidenceUploads = normal.jobs.verify.steps.filter((step) => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(evidenceUploads.length, 1);
+  assert.equal(evidenceUploads[0].if, 'failure()');
+  assert.equal(evidenceUploads[0].with.path, 'apps/desktop/test/evidence/*.json');
+  assert.match(evidenceUploads[0].with.name, /^synthetic-evidence-/);
   const release = await readWorkflow(releaseUrl);
   assert.deepEqual(release.jobs.bundle.strategy.matrix.os, ['macos-latest', 'windows-latest']);
   for (const [id, job] of Object.entries(release.jobs)) {
