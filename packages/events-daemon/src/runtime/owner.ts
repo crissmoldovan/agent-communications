@@ -81,6 +81,7 @@ import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
+import { recoverJudgeWork } from './judge-recovery.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -1140,6 +1141,18 @@ async function startOwnerWithLock(
     config: core.config,
     taint: core.taint,
     gmailSourceFor,
+    hostedJudgeKeyFor: async ({ judgeId, judgeVersion }) => {
+      const row = database.database
+        .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+        .get(judgeId, judgeVersion) as { digest: string } | undefined;
+      if (row === undefined) return null;
+      const generations = await eventSecrets.readLiveGenerations({
+        owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+        purpose: 'judge-key',
+        cipher,
+      });
+      return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+    },
     sourceWorkFor: async (scope) => {
       await runSourceOwnerWork(
         {
@@ -1155,6 +1168,18 @@ async function startOwnerWithLock(
           whatsappEventOperations,
           whatsappVisibilityFence: whatsappComposition.visibilityFence,
           now,
+          hostedJudgeKeyFor: async ({ judgeId, judgeVersion }) => {
+            const row = database.database
+              .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+              .get(judgeId, judgeVersion) as { digest: string } | undefined;
+            if (row === undefined) return null;
+            const generations = await eventSecrets.readLiveGenerations({
+              owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+              purpose: 'judge-key',
+              cipher,
+            });
+            return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+          },
         },
         scope,
       );
@@ -1255,6 +1280,15 @@ async function startOwnerWithLock(
   started.owner = true;
   try {
     await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());
+    // Task 7 is the first production ledger caller, after the E-owned B3 gate.  A fresh all-disabled installation
+    // stays inert: there can be no legitimate outstanding judge work before any kind becomes active.
+    const hasActiveJudgeKind =
+      (
+        database.database.prepare("SELECT COUNT(*) AS count FROM active_versions WHERE kind = 'judge-kind'").get() as {
+          count: number;
+        }
+      ).count > 0;
+    if (hasActiveJudgeKind) database.immediate(() => recoverJudgeWork({ database: database.database, now: now() }));
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
     await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));
     await writeToken(paths, token);

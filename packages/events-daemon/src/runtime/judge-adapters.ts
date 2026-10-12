@@ -61,7 +61,16 @@ export type JudgeTransportResult =
       readonly valueLabel: 'probability' | 'uncalibrated-score';
       readonly usage: JudgeUsage;
     }
-  | { readonly kind: 'refused'; readonly code: JudgeTransportRefusalCode };
+  | {
+      readonly kind: 'refused';
+      readonly code: JudgeTransportRefusalCode;
+      /**
+       * Closed settlement signal for the coordinator. `true` proves that this attempt made no DNS lookup, TCP
+       * connection, TLS handshake, or request-byte write; `false` means a physical network action may have occurred
+       * and its reservation must be charged conservatively.
+       */
+      readonly preIo: boolean;
+    };
 
 export interface JudgeWireRequestInput {
   readonly adapter: JudgeWireAdapter;
@@ -101,7 +110,9 @@ function exactObject(value: unknown, keys: readonly string[]): value is Record<s
 }
 
 function refusal(code: JudgeTransportRefusalCode): JudgeTransportResult {
-  return { kind: 'refused', code };
+  // Response parsing is reached only after the sealed transport has written its request. Keeping standalone parser
+  // refusals conservative also makes the shared result contract total.
+  return { kind: 'refused', code, preIo: false };
 }
 
 function knownNoulUsage(value: unknown, maxOutputTokens: number): JudgeUsage | null {

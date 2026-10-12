@@ -202,6 +202,22 @@ function verifyRuleVersions(database: DatabaseSync, rule: CanonicalFullRuleDocum
   }
 }
 
+/**
+ * The transaction-only half of the disclosure fence.  A decision that already passed the asynchronous approval and
+ * configuration fence uses this after awaits to prove that its exact immutable rule, bound targets/subscribers,
+ * judge and enabled judge kind still agree with durable state before it writes an outbox row.
+ */
+export function assertStoredRuleAuthority(
+  database: DatabaseSync,
+  ruleId: string,
+  ruleVersion: number,
+): CanonicalFullRuleDocument {
+  const row = versionRow(database, ruleId, ruleVersion);
+  const rule = ruleDocument(row);
+  verifyRuleVersions(database, rule);
+  return rule;
+}
+
 function versionRow(database: DatabaseSync, ruleId: string, version: number): RuleLineageRow {
   const row = database
     .prepare(
