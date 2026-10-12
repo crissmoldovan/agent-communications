@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
 const checker = new URL('../scripts/verify-desktop-mutations.mjs', import.meta.url);
@@ -20,6 +21,6 @@ test('root desktop mutation verification is structural only', async () => {
   })) {
     assert.equal(item.execution, 'desktop-e2e', `${item.id} must be marked for desktop-only execution`);
   }
-  const result = spawnSync(process.execPath, [checker.pathname], { cwd: root, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [fileURLToPath(checker)], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 });

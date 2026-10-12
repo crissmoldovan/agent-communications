@@ -159,7 +159,7 @@ impl PreferenceStore {
     pub fn load(&self) -> Result<DesktopPreferences, ControlError> {
         #[cfg(windows)]
         {
-            return Err(ControlError::windows_unavailable());
+            Err(ControlError::windows_unavailable())
         }
         #[cfg(unix)]
         {
@@ -213,7 +213,7 @@ impl PreferenceStore {
         #[cfg(windows)]
         {
             let _ = (preferences, expected_revision);
-            return Err(ControlError::windows_unavailable());
+            Err(ControlError::windows_unavailable())
         }
         #[cfg(unix)]
         {

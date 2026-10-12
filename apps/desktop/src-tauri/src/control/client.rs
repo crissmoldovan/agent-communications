@@ -28,6 +28,8 @@ impl NonSecretControlRequest {
 
 pub struct DesktopControlClient {
     profile: DaemonProfile,
+    // Windows refuses before any session opens, so only Unix sends the name.
+    #[cfg_attr(windows, allow(dead_code))]
     client_name: &'static str,
 }
 
@@ -66,7 +68,7 @@ impl DesktopControlClient {
         #[cfg(windows)]
         {
             let _ = operation;
-            return Self::windows_pre_read_refusal(&self.profile);
+            Self::windows_pre_read_refusal(&self.profile)
         }
         #[cfg(unix)]
         {

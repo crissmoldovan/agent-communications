@@ -4,6 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
 const checker = new URL('../scripts/verify-desktop-mutations.mjs', import.meta.url);
@@ -25,7 +26,7 @@ async function copiedFixture() {
 }
 
 function verifyFixture(temp) {
-  return spawnSync(process.execPath, [checker.pathname, '--root', temp], {
+  return spawnSync(process.execPath, [fileURLToPath(checker), '--root', temp], {
     cwd: root,
     encoding: 'utf8',
   });

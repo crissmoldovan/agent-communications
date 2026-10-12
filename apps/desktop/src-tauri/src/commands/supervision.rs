@@ -67,7 +67,7 @@ pub fn desktop_supervision_status(
     #[cfg(windows)]
     {
         let _ = service;
-        return Err(ControlError::windows_unavailable().code);
+        Err(ControlError::windows_unavailable().code)
     }
     #[cfg(unix)]
     {
@@ -97,7 +97,7 @@ pub fn desktop_start_daemon(
             expected_revision,
             keep_collecting_after_quit,
         );
-        return Err(ControlError::windows_unavailable().code);
+        Err(ControlError::windows_unavailable().code)
     }
     #[cfg(unix)]
     {
@@ -125,7 +125,7 @@ pub fn desktop_quit_daemon(
     #[cfg(windows)]
     {
         let _ = service;
-        return Err(ControlError::windows_unavailable().code);
+        Err(ControlError::windows_unavailable().code)
     }
     #[cfg(unix)]
     {

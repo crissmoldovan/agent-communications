@@ -89,13 +89,23 @@ impl DaemonRuntime for FakeRuntime {
             entered.wait();
             release.wait();
         }
-        if self
-            .delayed_status_checks
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
+        // A compare-exchange loop rather than `fetch_update`, which newer toolchains deprecate under another name.
+        let mut remaining = self.delayed_status_checks.load(Ordering::SeqCst);
+        let delayed = loop {
+            let Some(next) = remaining.checked_sub(1) else {
+                break false;
+            };
+            match self.delayed_status_checks.compare_exchange(
+                remaining,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break true,
+                Err(actual) => remaining = actual,
+            }
+        };
+        if delayed {
             return Err(ControlError::new("NOT_FOUND", "owner is not ready"));
         }
         self.current
