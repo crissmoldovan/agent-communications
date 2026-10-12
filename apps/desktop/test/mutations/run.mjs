@@ -66,7 +66,9 @@ if (selected.length === 0) {
         AGENTCOMMS_DESKTOP_NATIVE: '1',
       };
       delete childEnv.DESKTOP_PROBE_BINARY;
-      if (['task-5', 'task-6', 'task-6-owner'].includes(item.group)) {
+      // A Cargo build runs build.rs, which generates the B3 DTOs with the daemon's Node dependencies, so every Cargo
+      // case needs them as much as the task-5/6 Node cases do.
+      if (['task-5', 'task-6', 'task-6-owner'].includes(item.group) || declared.kind === 'cargo') {
         const kind = process.platform === 'win32' ? 'junction' : 'dir';
         for (const dependencyRoot of ['', 'apps/desktop', 'packages/events-daemon']) {
           try {

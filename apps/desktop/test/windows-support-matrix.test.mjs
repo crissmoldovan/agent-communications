@@ -8,7 +8,7 @@ test('windows-support-pre-read-refusal: public client rejects before profile res
   const entry = text.slice(text.indexOf('pub fn request('));
   assert.match(
     entry,
-    /#\[cfg\(windows\)\]\s*\{\s*let _ = operation;\s*return Self::windows_pre_read_refusal\(&self\.profile\);\s*\}/,
+    /#\[cfg\(windows\)\]\s*\{\s*let _ = operation;\s*Self::windows_pre_read_refusal\(&self\.profile\)\s*\}/,
   );
   assert.match(
     text,
