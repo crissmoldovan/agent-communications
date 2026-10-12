@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const CLI = join(ROOT, 'packages', 'events-daemon', 'dist', 'cli.mjs');
-const PRELOAD = fileURLToPath(new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url));
+// `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
+const PRELOAD = new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).href;
 const FLOOR = [22, 16, 0];
 
 /** Whether this Node is at or above the daemon's floor (plan amendment B1-F): Node SQLite unflagged and complete. */

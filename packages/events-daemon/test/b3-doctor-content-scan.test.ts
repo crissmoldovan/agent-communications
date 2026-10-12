@@ -4,6 +4,7 @@ import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run as runEventsCli } from '../src/cli/program.ts';
@@ -78,7 +79,7 @@ async function runDoctorCli(
       process.execPath,
       [
         '--import',
-        preload,
+        pathToFileURL(preload).href,
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         entry,

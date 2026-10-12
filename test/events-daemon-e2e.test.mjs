@@ -61,7 +61,7 @@ async function runSealedB2Fixtures() {
       process.execPath,
       [
         '--import',
-        new URL('./helpers/loopback-seal-preload.mjs', import.meta.url).pathname,
+        new URL('./helpers/loopback-seal-preload.mjs', import.meta.url).href,
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',

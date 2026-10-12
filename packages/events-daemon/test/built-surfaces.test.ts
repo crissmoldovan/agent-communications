@@ -12,7 +12,7 @@ import { WINDOWS_SKIP } from './support/short-temp.ts';
 const run = promisify(execFile);
 const PACKAGE = new URL('..', import.meta.url).pathname;
 const CLI = join(PACKAGE, 'dist', 'cli.mjs');
-const PRELOAD = new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).pathname;
+const PRELOAD = new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).href;
 const ROOT = new URL('../../..', import.meta.url).pathname;
 
 /** A copied repository makes `sync-reference --check` read the mutant rather than the worktree. Installed modules are
