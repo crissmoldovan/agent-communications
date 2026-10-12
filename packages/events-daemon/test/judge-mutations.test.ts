@@ -12,6 +12,15 @@ test('E3 mutation: every prerequisite and scope mutation has exactly one named p
       'e3-b3-vector-schema-validation',
       'e3-scope-account-source',
       'e3-scope-synthetic-work',
+      'e7-deterministic-first',
+      'e7-taint-before-reserve',
+      'e7-exact-input-provenance',
+      'e7-settlement-token',
+      'e7-pause-fence',
+      'e7-full-request-estimate',
+      'e7-single-decision-owner',
+      'e7-deterministic-shared-route',
+      'e7-evaluator-writer-lease',
     ],
   );
 });

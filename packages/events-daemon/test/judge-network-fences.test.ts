@@ -8,6 +8,11 @@ assertLoopbackSeal();
 
 const { JudgeTransport } = await import('../src/runtime/judge-transport.ts');
 
+/** The sealed result is closed: every refusal states whether no physical I/O started. */
+function refused(code: string, preIo: boolean) {
+  return { kind: 'refused' as const, code, preIo };
+}
+
 function typesafeJudge() {
   return {
     judgeId: 'judge-typesafe-e6',
@@ -157,7 +162,7 @@ test('E6: literal local judges have no DNS rebinding path and every applicable f
           },
         },
       );
-      assert.deepEqual(result, { kind: 'refused', code: 'NETWORK_FENCE_REFUSED' });
+      assert.deepEqual(result, refused('NETWORK_FENCE_REFUSED', blocked !== 'write'));
       assert.equal(resolverCalls, 0, 'literal local endpoints have one resolver-free pinned address');
       assert.equal(tcpCalls, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
       assert.equal(tlsCalls, 0, 'HTTP local endpoints never start TLS');
@@ -196,7 +201,7 @@ test('E6: literal local judges have no DNS rebinding path and every applicable f
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'NETWORK_FAILURE' },
+    refused('NETWORK_FAILURE', false),
   );
   assert.equal(resolverCalls, 1);
 });
@@ -231,7 +236,7 @@ test('E6: hostname loopback is refused before DNS or TCP, never resolved as a lo
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'ADAPTER_REFERENCE_BLOCKED' },
+    refused('ADAPTER_REFERENCE_BLOCKED', true),
   );
   assert.equal(resolverCalls, 0);
   assert.equal(tcpCalls, 0);
@@ -277,7 +282,7 @@ test('E6: every hosted final gate refuses before its next physical network actio
             },
           },
         ),
-        { kind: 'refused', code: 'NETWORK_FENCE_REFUSED' },
+        refused('NETWORK_FENCE_REFUSED', blocked === 'dns'),
       );
       assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1);
       assert.equal(tcpCalls, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
@@ -326,6 +331,7 @@ test('E6: a hosted globally reachable address can never drift to a private answe
   assert.deepEqual(await transport.execute(request, allowAllTransportGates), {
     kind: 'refused',
     code: 'NETWORK_FAILURE',
+    preIo: false,
   });
   assert.equal(resolverCalls, 2);
   assert.equal(tcpCalls, 1);

@@ -81,6 +81,15 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e4-unscoped-kind-static-guard',
   'e4-primary-key-exemption',
   'e4-required-guard-rows',
+  'e7-deterministic-first',
+  'e7-taint-before-reserve',
+  'e7-exact-input-provenance',
+  'e7-settlement-token',
+  'e7-pause-fence',
+  'e7-full-request-estimate',
+  'e7-single-decision-owner',
+  'e7-deterministic-shared-route',
+  'e7-evaluator-writer-lease',
 ]);
 
 async function source(root, file) {

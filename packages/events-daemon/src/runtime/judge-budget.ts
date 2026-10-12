@@ -23,6 +23,8 @@ export type JudgeBudgetErrorCode =
   | 'NO_ACTIVE_BUDGET'
   | 'JUDGE_KIND_DISABLED'
   | 'JUDGE_AUTHORITY_CHANGED'
+  | 'JUDGE_PAUSED'
+  | 'JUDGE_WORK_OWNER_HELD'
   | 'INPUT_TOKEN_LIMIT_EXCEEDED'
   | 'JUDGE_REQUEST_TOO_LARGE'
   | 'CALLS_PER_ROLLING_HOUR_EXHAUSTED'
@@ -452,6 +454,14 @@ function readReservation(database: DatabaseSync, id: string): StoredReservation 
   );
 }
 
+function readReservationForWork(database: DatabaseSync, workId: string): StoredReservation | null {
+  return (
+    (database.prepare('SELECT * FROM judge_budget_reservations WHERE work_id = ?').get(workId) as
+      | StoredReservation
+      | undefined) ?? null
+  );
+}
+
 function reservationView(row: StoredReservation): JudgeReservation {
   const scope = sourceScope(row);
   if (scope === null) {
@@ -526,6 +536,9 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
     const limits = ruleAuthority(input.store.database, input.scope, judge);
     if (!sameCanonical(limits, input.limits))
       refusal('JUDGE_AUTHORITY_CHANGED', 'the supplied limits differ from the immutable rule authority');
+    const prior = readReservationForWork(input.store.database, input.workId);
+    if (prior?.state === 'reserved' || prior?.state === 'in-flight')
+      refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');
     assertReservationLimits(input.store.database, {
       scope: input.scope,
       budget,
@@ -535,6 +548,20 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
       now: input.now,
       adding: true,
     });
+    if (prior?.state === 'released') {
+      input.store.database
+        .prepare(
+          `UPDATE judge_budget_reservations
+           SET estimated_input_tokens = ?, actual_input_tokens = NULL, state = 'reserved', concurrency_owned = 1,
+               reserved_at = ?, in_flight_at = NULL, settled_at = NULL, released_at = NULL, switch_generation = ?
+           WHERE id = ? AND state = 'released' AND concurrency_owned = 0`,
+        )
+        .run(estimate, input.now, input.switchGeneration, prior.id);
+      const reactivated = readReservation(input.store.database, prior.id);
+      if (reactivated === null || reactivated.state !== 'reserved')
+        refusal('JUDGE_AUTHORITY_CHANGED', 'the released judge work could not be re-reserved');
+      return reservationView(reactivated);
+    }
     return insertReservation(input.store.database, { ...input, judge, budgetVersion: budget.version, estimate });
   });
 }
@@ -617,26 +644,79 @@ export function beginJudgeTransport(input: {
   });
 }
 
-function releaseReservationInTransaction(database: DatabaseSync, reservationId: string, now: number): boolean {
+/**
+ * The synchronous final transport/decision fence.  It reuses the one reservation authority reader rather than
+ * manufacturing a second reservation path, and is safe to call immediately beside each Task-6 I/O action.
+ */
+export function assertJudgeReservationInFlightInTransaction(database: DatabaseSync, reservationId: string): void {
+  const row = readReservation(database, reservationId);
+  if (row === null || row.state !== 'in-flight' || row.concurrency_owned !== 1)
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the judge reservation is no longer in flight');
+  assertReservationAuthority(database, row);
+  const scope = sourceScope(row);
+  if (scope === null) return;
+  assertSourceReservationBoundary(database, scope, row.switch_generation);
+}
+
+function assertSourceReservationBoundary(
+  database: DatabaseSync,
+  scope: SourceJudgeWork,
+  switchGeneration: number,
+): void {
+  const settings = database
+    .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
+    .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
+  if (settings?.paused === 1) refusal('JUDGE_PAUSED', 'the event switch is paused before the judge boundary');
+  if (settings?.enabled !== 1 || settings.switch_generation !== switchGeneration)
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the event switch changed before the judge boundary');
+  const revoked = database
+    .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ?')
+    .get(scope.accountId);
+  if (revoked !== undefined)
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the event account was removed before the judge boundary');
+}
+
+export function assertJudgeReservationStillInFlight(input: {
+  readonly store: EventDatabase;
+  readonly reservationId: string;
+}): void {
+  input.store.immediate(() => {
+    assertJudgeReservationInFlightInTransaction(input.store.database, input.reservationId);
+  });
+}
+
+function releaseReservationInTransaction(
+  database: DatabaseSync,
+  reservationId: string,
+  now: number,
+  mayReleaseInFlight = false,
+): boolean {
   return (
     database
       .prepare(
         `UPDATE judge_budget_reservations
          SET state = 'released', concurrency_owned = 0, released_at = ?
-         WHERE id = ? AND state = 'reserved' AND concurrency_owned = 1`,
+         WHERE id = ? AND concurrency_owned = 1
+           AND (state = 'reserved' OR (state = 'in-flight' AND ? = 1))`,
       )
-      .run(now, reservationId).changes === 1
+      .run(now, reservationId, mayReleaseInFlight ? 1 : 0).changes === 1
   );
 }
 
-/** Pre-I/O loss is free: it releases the durable reservation and can never settle an in-flight call. */
+/**
+ * Pre-I/O loss is free: a reserved call releases normally.  `beforeIo` is an intentionally narrow transport proof
+ * that lets a final fence refusal release the just-marked in-flight row too, because no DNS, TCP, TLS, or raw write
+ * was entered and therefore there is no provider work to charge.
+ */
 export function releaseJudgeWork(input: {
   readonly store: EventDatabase;
   readonly reservationId: string;
   readonly now: number;
+  /** Set only by JudgeTransport when it proved no DNS, TCP, TLS, or raw write has begun. */
+  readonly beforeIo?: true | undefined;
 }): boolean {
   return input.store.immediate(() =>
-    releaseReservationInTransaction(input.store.database, input.reservationId, input.now),
+    releaseReservationInTransaction(input.store.database, input.reservationId, input.now, input.beforeIo === true),
   );
 }
 

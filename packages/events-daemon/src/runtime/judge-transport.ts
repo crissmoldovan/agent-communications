@@ -74,6 +74,8 @@ export interface JudgeTransportHooks {
    * a promise above all, has not finished deciding and refuses the phase.
    */
   readonly finalGate: (phase: JudgeTransportPhase) => undefined;
+  /** A coordinator may serialize once for admission and pass those exact bytes to the sealed writer. */
+  readonly preparedRequest?: PreparedJudgeTransportRequest | undefined;
 }
 
 export interface JudgeTransportClock {
@@ -87,6 +89,14 @@ export interface JudgeTransportOptions {
   readonly tcpConnect?: ((options: PinnedTcpOptions) => Promise<net.Socket>) | undefined;
   readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
   readonly clock?: JudgeTransportClock | undefined;
+}
+
+export interface PreparedJudgeTransportRequest {
+  readonly adapter: 'typesafe' | 'ollama';
+  readonly endpoint: URL;
+  /** The exact protocol body lets the coordinator prove that it reserved the stricter full request. */
+  readonly body: Buffer;
+  readonly request: Buffer;
 }
 
 class DeadlineExceeded extends Error {}
@@ -103,12 +113,18 @@ function assertBeforeDeadline(deadline: number, clock: JudgeTransportClock): voi
   if (clock.now() >= deadline) throw new DeadlineExceeded();
 }
 
-function refused(code: JudgeTransportRefusalCode): JudgeTransportResult {
-  return { kind: 'refused', code };
+/** Every sealed refusal carries its conservative I/O boundary explicitly. */
+function refused(code: JudgeTransportRefusalCode, preIo: boolean): JudgeTransportResult {
+  return { kind: 'refused', code, preIo };
 }
 
 function positiveInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+/** One closed byte ceiling guards both freshly prepared and coordinator-supplied request bytes. */
+function requestWithinLimit(request: Uint8Array): boolean {
+  return request.byteLength <= JUDGE_MAX_REQUEST_BYTES;
 }
 
 function adapterFor(call: JudgeTransportCall): 'typesafe' | 'ollama' | null {
@@ -160,6 +176,44 @@ function requestBytesForEndpoint(url: URL, body: Uint8Array, headers: Readonly<R
     tls: { rejectUnauthorized: true, certificateHost: hostname },
   };
   return requestBytesForPinnedConnection(connection, 'POST', body, headers);
+}
+
+/**
+ * Produces exactly the bytes that the transport limits and writes.  The coordinator calls this before reserving so
+ * admission cannot underestimate the request line or its closed header set; execute consumes the same prepared value.
+ */
+export function prepareJudgeTransportRequest(
+  call: JudgeTransportCall,
+): PreparedJudgeTransportRequest | JudgeTransportResult {
+  const adapter = adapterFor(call);
+  if (adapter === null) return refused('ADAPTER_REFERENCE_BLOCKED', true);
+  if (!positiveInteger(call.maxInputTokens) || !positiveInteger(call.maxOutputTokens))
+    return refused('MALFORMED_RESPONSE', true);
+  let wire: ReturnType<typeof buildJudgeWireRequest>;
+  try {
+    wire = buildJudgeWireRequest({
+      adapter,
+      model: call.judge.model,
+      state: call.state,
+      questionName: call.questionName,
+      instructions: call.instructions,
+      ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey }),
+    });
+  } catch {
+    return refused('ADAPTER_REFERENCE_BLOCKED', true);
+  }
+  let endpoint: URL;
+  try {
+    endpoint =
+      call.judge.kind === 'typesafe'
+        ? new URL(TYPESAFE_ENDPOINT)
+        : validateLocalEndpoint(call.judge.endpoint, call.judge.approvedAddressSet).url;
+  } catch {
+    return refused('ADAPTER_REFERENCE_BLOCKED', true);
+  }
+  const request = requestBytesForEndpoint(endpoint, wire.body, wire.headers);
+  if (!requestWithinLimit(request)) return refused('REQUEST_TOO_LARGE', true);
+  return { adapter, endpoint, body: wire.body, request };
 }
 
 function boundedResponse(socket: net.Socket | tls.TLSSocket): Promise<Buffer> {
@@ -244,45 +298,25 @@ export class JudgeTransport {
   }
 
   async execute(call: JudgeTransportCall, hooks: JudgeTransportHooks): Promise<JudgeTransportResult> {
-    if (hooks === undefined || typeof hooks.finalGate !== 'function') return refused('NETWORK_FENCE_REFUSED');
-    const adapter = adapterFor(call);
-    if (adapter === null) return refused('ADAPTER_REFERENCE_BLOCKED');
+    if (hooks === undefined || typeof hooks.finalGate !== 'function') return refused('NETWORK_FENCE_REFUSED', true);
+    const prepared = hooks.preparedRequest ?? prepareJudgeTransportRequest(call);
+    if ('kind' in prepared) return prepared;
     if (!positiveInteger(call.maxInputTokens) || !positiveInteger(call.maxOutputTokens))
-      return refused('MALFORMED_RESPONSE');
-
-    let wire: ReturnType<typeof buildJudgeWireRequest>;
-    try {
-      wire = buildJudgeWireRequest({
-        adapter,
-        model: call.judge.model,
-        state: call.state,
-        questionName: call.questionName,
-        instructions: call.instructions,
-        ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey }),
-      });
-    } catch {
-      return refused('ADAPTER_REFERENCE_BLOCKED');
-    }
-    let endpoint: URL;
-    try {
-      if (call.judge.kind === 'typesafe') {
-        endpoint = new URL(TYPESAFE_ENDPOINT);
-      } else {
-        endpoint = validateLocalEndpoint(call.judge.endpoint, call.judge.approvedAddressSet).url;
-      }
-    } catch {
-      return refused('ADAPTER_REFERENCE_BLOCKED');
-    }
-    const request = requestBytesForEndpoint(endpoint, wire.body, wire.headers);
-    if (request.byteLength > call.maxInputTokens) return refused('INPUT_TOKEN_LIMIT_EXCEEDED');
-    if (request.byteLength > JUDGE_MAX_REQUEST_BYTES) return refused('REQUEST_TOO_LARGE');
+      return refused('MALFORMED_RESPONSE', true);
+    if (prepared.request.byteLength > call.maxInputTokens) return refused('INPUT_TOKEN_LIMIT_EXCEEDED', true);
+    if (!requestWithinLimit(prepared.request)) return refused('REQUEST_TOO_LARGE', true);
+    const { adapter, endpoint, request } = prepared;
 
     const deadline = this.#clock.now() + JUDGE_ATTEMPT_DEADLINE_MS;
     let socket: net.Socket | tls.TLSSocket | undefined;
+    let enteredIo = false;
     try {
       await this.#beforeGate(hooks, 'dns');
       this.#finalGate(hooks, 'dns');
       assertBeforeDeadline(deadline, this.#clock);
+      // A literal local endpoint reaches this preparation without DNS. Hosted judges use a hostname, so resolving it
+      // is the first physical action and any later refusal is conservatively post-I/O.
+      enteredIo = call.judge.kind === 'typesafe';
       const connection = await beforeDeadline(
         preparePinnedConnection(
           call.judge.kind === 'typesafe'
@@ -306,6 +340,7 @@ export class JudgeTransport {
       await this.#beforeGate(hooks, 'tcp');
       this.#finalGate(hooks, 'tcp');
       assertBeforeDeadline(deadline, this.#clock);
+      enteredIo = true;
       const tcp = await beforeDeadline(
         this.#tcpConnect({ host: connection.address, port: connection.port }),
         deadline,
@@ -344,10 +379,10 @@ export class JudgeTransport {
         maxOutputTokens: call.maxOutputTokens,
       });
     } catch (error) {
-      if (error instanceof DeadlineExceeded) return refused('NETWORK_DEADLINE_EXCEEDED');
-      if (error instanceof ResponseTooLarge) return refused('RESPONSE_TOO_LARGE');
-      if (error instanceof FenceRefused) return refused('NETWORK_FENCE_REFUSED');
-      return refused('NETWORK_FAILURE');
+      if (error instanceof DeadlineExceeded) return refused('NETWORK_DEADLINE_EXCEEDED', !enteredIo);
+      if (error instanceof ResponseTooLarge) return refused('RESPONSE_TOO_LARGE', !enteredIo);
+      if (error instanceof FenceRefused) return refused('NETWORK_FENCE_REFUSED', !enteredIo);
+      return refused('NETWORK_FAILURE', !enteredIo);
     } finally {
       socket?.destroy();
     }
