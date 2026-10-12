@@ -230,7 +230,9 @@ async function usageTree(surface, env) {
     if (words.length > 0) own.push(words);
   }
   if (own.length === 0)
-    throw new Error(`\`${surface.binary} --help\` has no usage table — the command tree was misread`);
+    throw new Error(
+      `\`${surface.binary} --help\` has no usage table — the command tree was misread; it printed:\n${help.slice(0, 4000)}`,
+    );
 
   const key = (path) => path.join(' ');
   const acting = new Set(own.map(key));

@@ -108,7 +108,8 @@ async function repositoryCopy(prefix, { sources = false } = {}) {
       recursive: true,
       // pnpm's per-package links are restored below. Copying their targets would make one small fixture copy every
       // installed dependency tree, while links keep package imports resolving as they do in this checkout.
-      filter: (source) => !source.endsWith('/node_modules'),
+      // `cp` hands the filter OS paths: `\node_modules` on Windows, where a `/`-only test copied the trees.
+      filter: (source) => !/[\\/]node_modules$/.test(source),
     });
     for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
