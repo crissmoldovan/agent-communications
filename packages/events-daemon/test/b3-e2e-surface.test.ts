@@ -503,7 +503,9 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
   }
 });
 
-test('B3 owner-built approval view selectors pass unchanged to pending target testing and stay refused from MCP or ordinary CLI', async () => {
+test('B3 owner-built approval view selectors pass unchanged to pending target testing and stay refused from MCP or ordinary CLI', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalFlowFixture();
   try {
     assert.deepEqual(

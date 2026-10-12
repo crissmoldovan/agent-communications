@@ -649,7 +649,9 @@ test('B3 a refused rule document never echoes a caller-supplied key in its error
   );
 });
 
-test('B3 owner composes the production delivery write fence: work is immediate and a live authority change refuses retry', async () => {
+test('B3 owner composes the production delivery write fence: work is immediate and a live authority change refuses retry', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await shortTempDir('events-b3-owner-delivery-fence-');
   const store = await openEventDatabase({ stateDir });
   try {
@@ -760,7 +762,9 @@ test('B3 production owner binds retry to its composed delivery fence after live 
   }
 });
 
-test('B3 approval view returns authoritative ready, stale, digest, and expiry variants without claiming the final approval', async () => {
+test('B3 approval view returns authoritative ready, stale, digest, and expiry variants without claiming the final approval', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await shortTempDir('events-b3-owner-approval-view-');
   const store = await openEventDatabase({ stateDir });
   try {
@@ -851,7 +855,9 @@ test('B3 approval view returns authoritative ready, stale, digest, and expiry va
   }
 });
 
-test('B3 approval view challenge reaches the production activation approve fence unchanged and refuses changed, stale, or expired approval state', async () => {
+test('B3 approval view challenge reaches the production activation approve fence unchanged and refuses changed, stale, or expired approval state', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fresh = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fresh);
@@ -913,7 +919,9 @@ test('B3 approval view challenge reaches the production activation approve fence
   }
 });
 
-test('B3 approval view reissues a fresh challenge after reporting its first expiry', async () => {
+test('B3 approval view reissues a fresh challenge after reporting its first expiry', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const first = await viewApproval(fixture);
@@ -949,7 +957,9 @@ test('B3 approval view reissues a fresh challenge after reporting its first expi
   }
 });
 
-test('B3 approval-view deadline survives an owner restart and blocks approval or recovery after five minutes', async () => {
+test('B3 approval-view deadline survives an owner restart and blocks approval or recovery after five minutes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fixture);
@@ -1006,7 +1016,9 @@ test('B3 approval-view deadline survives an owner restart and blocks approval or
   }
 });
 
-test('B3 approval challenges fail closed when their durable row is lost, while a terminal-prompt row remains valid', async () => {
+test('B3 approval challenges fail closed when their durable row is lost, while a terminal-prompt row remains valid', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const missingApprove = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(missingApprove);
@@ -1068,7 +1080,9 @@ test('B3 approval challenges fail closed when their durable row is lost, while a
   }
 });
 
-test('B3 approval view deadline is rechecked inside core claim, leaving the approval unconsumed when the clock crosses it', async () => {
+test('B3 approval view deadline is rechecked inside core claim, leaving the approval unconsumed when the clock crosses it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fixture);
@@ -1113,7 +1127,9 @@ test('B3 approval view deadline is rechecked inside core claim, leaving the appr
   }
 });
 
-test('B3 serializes one app approval against concurrent terminal and view challenge issuers', async () => {
+test('B3 serializes one app approval against concurrent terminal and view challenge issuers', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   for (const issuer of ['approve-challenge', 'approval view'] as const) {
     const fixture = await approvalViewRuntimeFixture();
     try {
@@ -1167,7 +1183,9 @@ test('B3 serializes one app approval against concurrent terminal and view challe
   }
 });
 
-test('B3 failed challenge issuance settles its sentinel so a later approval view gets a fresh challenge', async () => {
+test('B3 failed challenge issuance settles its sentinel so a later approval view gets a fresh challenge', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     fixture.failNextCoreChallengeIssue(new Error('synthetic core challenge failure'));
@@ -1204,7 +1222,9 @@ test('B3 failed challenge issuance settles its sentinel so a later approval view
   }
 });
 
-test('B3 challenge issuers preserve core’s approved state when a replacement is no longer possible', async () => {
+test('B3 challenge issuers preserve core’s approved state when a replacement is no longer possible', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fixture);
@@ -1234,7 +1254,9 @@ test('B3 challenge issuers preserve core’s approved state when a replacement i
   }
 });
 
-test('B3 recovery claims an approved activation left behind an issuing challenge sentinel exactly once', async () => {
+test('B3 recovery claims an approved activation left behind an issuing challenge sentinel exactly once', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fixture);
@@ -1268,7 +1290,9 @@ test('B3 recovery claims an approved activation left behind an issuing challenge
   }
 });
 
-test('B3 recovery completes a claimed activation left behind an issuing challenge sentinel exactly once', async () => {
+test('B3 recovery completes a claimed activation left behind an issuing challenge sentinel exactly once', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const fixture = await approvalViewRuntimeFixture();
   try {
     const view = await viewApproval(fixture);
@@ -1304,7 +1328,7 @@ test('B3 recovery completes a claimed activation left behind an issuing challeng
   }
 });
 
-test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable', async () => {
+test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable', { skip: WINDOWS_SKIP }, async () => {
   const stateDir = await shortTempDir('events-b3-owner-unavailable-');
   const store = await openEventDatabase({ stateDir });
   try {
@@ -1374,7 +1398,9 @@ test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable',
   }
 });
 
-test('B3 owner composes the reset record sealer from its cipher while the shared writer lease spans seal through commit', async () => {
+test('B3 owner composes the reset record sealer from its cipher while the shared writer lease spans seal through commit', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await shortTempDir('events-b3-owner-reset-sealer-');
   const store = await openEventDatabase({ stateDir });
   try {
