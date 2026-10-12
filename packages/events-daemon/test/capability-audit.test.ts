@@ -127,7 +127,7 @@ async function parityFixture(): Promise<{ readonly root: string; readonly parent
   const root = join(parent, 'repository');
   const skip = (source: string) =>
     !source
-      .split('/')
+      .split(/[\\/]/)
       .some((part) => part === '.git' || part === 'node_modules' || part === 'dist' || part === '.mutants');
   for (const path of ['scripts', 'packages', 'skills', 'capabilities.json', 'package.json'])
     await cp(join(ROOT, path), join(root, path), { recursive: true, filter: skip });

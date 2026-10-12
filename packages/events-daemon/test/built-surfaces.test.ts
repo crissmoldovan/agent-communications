@@ -4,16 +4,17 @@ import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 const run = promisify(execFile);
-const PACKAGE = new URL('..', import.meta.url).pathname;
+const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(PACKAGE, 'dist', 'cli.mjs');
 const PRELOAD = new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).href;
-const ROOT = new URL('../../..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 /** A copied repository makes `sync-reference --check` read the mutant rather than the worktree. Installed modules are
  * immutable test infrastructure, so only their root is linked; source, package declarations, skills, and generated
@@ -23,7 +24,7 @@ async function referenceFixture(): Promise<{ readonly root: string; readonly par
   const root = join(parent, 'repository');
   const skip = (source: string) =>
     !source
-      .split('/')
+      .split(/[\\/]/)
       .some((part) => part === '.git' || part === 'node_modules' || part === 'dist' || part === '.mutants');
   for (const path of [
     'scripts',
