@@ -171,14 +171,20 @@ async function filesBelow(directory: string): Promise<readonly string[]> {
   const files = await Promise.all(
     entries.map(async (entry) => {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) return filesBelow(path);
+      // Overlay inputs are source: never walk installed modules, build output or another runner's `.mutants` tree,
+      // which a concurrent runner may be deleting while this one scans it.
+      if (entry.isDirectory()) return SNAPSHOT_SKIPPED_DIRECTORIES.has(entry.name) ? [] : filesBelow(path);
       return entry.isFile() ? [path] : [];
     }),
   );
   return files.flat();
 }
 
-async function expandOverlayInput(root: string, input: string, entry: MutationEntry): Promise<readonly string[]> {
+export async function expandOverlayInput(
+  root: string,
+  input: string,
+  entry: Pick<MutationEntry, 'case'>,
+): Promise<readonly string[]> {
   const pattern = repositoryRelative(input, entry).split('/');
   const firstGlob = pattern.findIndex((segment) => segment.includes('*'));
   if (firstGlob < 0) return [resolve(root, ...pattern)];
