@@ -69,7 +69,7 @@ test('B3 mutation proof: a sealed owner dispatches only B3 contract operations',
   }
 });
 
-test('B3 mutation runner executes every case in every B3 guard manifest', async (t) => {
+test('B3 mutation runner executes every case in every B3 guard manifest', { skip: WINDOWS_SKIP }, async (t) => {
   const declared = await entries();
   assert.ok(declared.length > 0, 'the ledger must contain at least one production guard');
   const blocked: string[] = [];

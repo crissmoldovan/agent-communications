@@ -11,6 +11,7 @@ import { createOwnerB3ControlService } from '../src/runtime/owner.ts';
 import { EventProjectionStore } from '../src/runtime/projections.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 function tty(): EventsCliStreams {
   return {
@@ -77,7 +78,9 @@ test('B3 retained test, reset resume, and held decision reach only their named h
   }
 });
 
-test('B3 retained hostile output is neutralised in exactly one envelope on every permitted terminal rendering', async () => {
+test('B3 retained hostile output is neutralised in exactly one envelope on every permitted terminal rendering', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'aev-b3-retained-cli-'));
   const store = await openEventDatabase({ stateDir });
   const streams = tty();
