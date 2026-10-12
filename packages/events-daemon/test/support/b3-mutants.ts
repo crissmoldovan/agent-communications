@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 interface MutationEntry {
   readonly case: string;
@@ -309,9 +310,11 @@ function commandForNamedTest(
 ): readonly string[] {
   return [
     '--import',
-    join(overlay, 'test/helpers/loopback-seal-preload.mjs'),
-    ...(options.observerPath === undefined ? [] : ['--import', options.observerPath]),
-    ...(options.afterTestFailurePath === undefined ? [] : ['--import', options.afterTestFailurePath]),
+    pathToFileURL(join(overlay, 'test/helpers/loopback-seal-preload.mjs')).href,
+    ...(options.observerPath === undefined ? [] : ['--import', pathToFileURL(options.observerPath).href]),
+    ...(options.afterTestFailurePath === undefined
+      ? []
+      : ['--import', pathToFileURL(options.afterTestFailurePath).href]),
     '--experimental-strip-types',
     '--disable-warning=ExperimentalWarning',
     '--test',

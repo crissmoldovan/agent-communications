@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { ApprovalStore, CommsError, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
@@ -1397,7 +1398,7 @@ test('P1 (review round 13) mutation: omitting pending-intent accounts makes the 
         process.execPath,
         [
           '--import',
-          loopbackSealPreload,
+          pathToFileURL(loopbackSealPreload).href,
           '--test',
           '--test-name-pattern',
           '^P1 \\(review round 13\\): the scheduler cancels a pending first or replacement-new-only activation when its account is removed$',

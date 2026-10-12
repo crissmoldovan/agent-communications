@@ -13,12 +13,13 @@ const { status } = await import('@agentcomms/events-daemon');
 assert.deepEqual(await status(), { owner: 'not-running' });
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events-daemon')));
 const cli = join(dist, 'cli.mjs');
-const sealPath = fileURLToPath(new URL('./loopback-seal-preload.mjs', import.meta.url));
-const help = execFileSync(process.execPath, ['--import', sealPath, cli, '--help'], {
+// `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
+const sealUrl = new URL('./loopback-seal-preload.mjs', import.meta.url).href;
+const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help'], {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-const result = execFileSync(process.execPath, ['--import', sealPath, cli, '--json', 'status'], {
+const result = execFileSync(process.execPath, ['--import', sealUrl, cli, '--json', 'status'], {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -26,7 +27,7 @@ assert.match(help, /Usage: agent-events/);
 assert.equal(result, '{"owner":"not-running"}\n');
 
 function startMcp(command, args, env) {
-  const child = spawn(process.execPath, ['--import', sealPath, command, ...args], {
+  const child = spawn(process.execPath, ['--import', sealUrl, command, ...args], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -99,7 +100,7 @@ if (process.platform !== 'win32') {
     NO_COLOR: '1',
   };
   let stderr = '';
-  const owner = spawn(process.execPath, ['--import', sealPath, cli, '--state-dir', stateDir, 'run'], {
+  const owner = spawn(process.execPath, ['--import', sealUrl, cli, '--state-dir', stateDir, 'run'], {
     env,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -116,7 +117,7 @@ if (process.platform !== 'win32') {
       try {
         const output = execFileSync(
           process.execPath,
-          ['--import', sealPath, cli, '--state-dir', stateDir, '--json', 'status'],
+          ['--import', sealUrl, cli, '--state-dir', stateDir, '--json', 'status'],
           {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -158,7 +159,7 @@ if (process.platform !== 'win32') {
     }
     const stopped = execFileSync(
       process.execPath,
-      ['--import', sealPath, cli, '--state-dir', stateDir, '--json', 'stop'],
+      ['--import', sealUrl, cli, '--state-dir', stateDir, '--json', 'stop'],
       {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],

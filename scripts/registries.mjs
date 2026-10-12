@@ -25,7 +25,7 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  */
 const SEAL = join(ROOT, 'test/helpers/loopback-seal-preload.mjs');
 const TS_FLAGS = [
-  ...(existsSync(SEAL) ? ['--import', SEAL] : []),
+  ...(existsSync(SEAL) ? ['--import', pathToFileURL(SEAL).href] : []),
   '--experimental-strip-types',
   '--disable-warning=ExperimentalWarning',
 ];
