@@ -2417,6 +2417,23 @@
         "replace": "      order: 'pre',"
       },
       "platforms": ["darwin", "linux", "win32"]
+    },
+    {
+      "id": "desktop-nsis-installer-exact",
+      "group": "task-7-repair",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-gate-repairs.test.mjs",
+        "name": "desktop repair: Windows installer machinery passes only at its exact paths and kinds, on Windows only"
+      },
+      "production": "apps/desktop/scripts/bundle-content-graph.mjs",
+      "import": "../apps/desktop/scripts/bundle-content-graph.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/bundle-content-graph.mjs",
+        "find": "      assert.equal(platform, 'win32', `installer machinery outside a Windows installer: ${file.path}`);\n",
+        "replace": ""
+      },
+      "platforms": ["darwin", "linux", "win32"]
     }
   ]
 }

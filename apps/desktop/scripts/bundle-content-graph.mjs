@@ -25,6 +25,20 @@ const METADATA_LAUNCHERS = Object.freeze({
   win32: Object.freeze({}),
 });
 
+// The Windows release asset is an NSIS installer, and 7-Zip lists its own machinery beside the app: the plugins it
+// unpacks to a temporary $PLUGINSDIR while installing (NSISdl fetches the WebView2 bootstrapper only where WebView2 is
+// missing, Tauri's default), the wizard bitmap and the uninstaller stub. Exact paths and kinds only, on Windows only;
+// their content is scanned like every other file's, and any other file still fails closed.
+const NSIS_INSTALLER_FILES = Object.freeze({
+  '$PLUGINSDIR/modern-wizard.bmp': false,
+  '$PLUGINSDIR/nsDialogs.dll': true,
+  '$PLUGINSDIR/NSISdl.dll': true,
+  '$PLUGINSDIR/nsis_tauri_utils.dll': true,
+  '$PLUGINSDIR/StartMenu.dll': true,
+  '$PLUGINSDIR/System.dll': true,
+  'uninstall.exe': true,
+});
+
 function normalizedBundlePath(path) {
   return path.replaceAll('\\', '/');
 }
@@ -214,7 +228,9 @@ export function auditBundle(evidence) {
     assert.match(file.sha256, /^[a-f0-9]{64}$/);
     assert.ok(file.size > 0);
     assert.ok(
-      ['tauri-executable', 'tauri-metadata', 'tauri-icon', 'declared-license', 'vite-asset'].includes(file.provenance),
+      ['tauri-executable', 'tauri-metadata', 'tauri-icon', 'declared-license', 'vite-asset', 'nsis-installer'].includes(
+        file.provenance,
+      ),
       `undeclared bundle file: ${file.path}`,
     );
     assert.ok(
@@ -228,7 +244,16 @@ export function auditBundle(evidence) {
       assert.equal(file.type, 'data', `metadata executable type: ${file.path}`);
       assert.deepEqual(file.launcherLines ?? [], expected, `metadata launcher: ${file.path}`);
     }
-    assert.ok(!file.executable || file.provenance === 'tauri-executable', `undeclared executable: ${file.path}`);
+    if (file.provenance === 'nsis-installer') {
+      assert.equal(platform, 'win32', `installer machinery outside a Windows installer: ${file.path}`);
+      const executable = NSIS_INSTALLER_FILES[normalizedBundlePath(file.path)];
+      assert.ok(executable !== undefined, `undeclared installer file: ${file.path}`);
+      assert.equal(file.executable, executable, `installer file kind: ${file.path}`);
+    }
+    assert.ok(
+      !file.executable || file.provenance === 'tauri-executable' || file.provenance === 'nsis-installer',
+      `undeclared executable: ${file.path}`,
+    );
   }
   for (const node of evidence.graph.vite)
     assert.ok(!forbidden.test(JSON.stringify(node)), 'forbidden Vite dependency edge');
@@ -374,15 +399,17 @@ export async function buildEvidence() {
         const metadataLaunchers = expectedMetadataLaunchers(process.platform, name);
         const provenance = /^agentcomms-desktop(?:\.exe)?$/.test(base)
           ? 'tauri-executable'
-          : base === 'THIRD_PARTY_LICENSES' && digest(bytes) === licenseHash
-            ? 'declared-license'
-            : metadataLaunchers
-              ? 'tauri-metadata'
-              : iconHashes.has(digest(bytes))
-                ? 'tauri-icon'
-                : vite.assets.some((asset) => asset.sha256 === digest(bytes))
-                  ? 'vite-asset'
-                  : 'undeclared';
+          : process.platform === 'win32' && Object.hasOwn(NSIS_INSTALLER_FILES, normalizedBundlePath(name))
+            ? 'nsis-installer'
+            : base === 'THIRD_PARTY_LICENSES' && digest(bytes) === licenseHash
+              ? 'declared-license'
+              : metadataLaunchers
+                ? 'tauri-metadata'
+                : iconHashes.has(digest(bytes))
+                  ? 'tauri-icon'
+                  : vite.assets.some((asset) => asset.sha256 === digest(bytes))
+                    ? 'vite-asset'
+                    : 'undeclared';
         const inspected = inspectContent(bytes);
         const contentMarkers = provenance === 'declared-license' ? [] : inspected.contentMarkers;
         files.push({

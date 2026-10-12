@@ -155,6 +155,46 @@ test('desktop repair: only exact, non-executable Tauri metadata may carry a laun
   );
 });
 
+// Bundle gate: ../apps/desktop/scripts/bundle-content-graph.mjs
+// desktop-mutation: desktop-nsis-installer-exact
+test('desktop repair: Windows installer machinery passes only at its exact paths and kinds, on Windows only', async () => {
+  const { auditBundle, inspectContent } = await import('../apps/desktop/scripts/bundle-content-graph.mjs');
+  const evidence = (platform, file) => ({
+    version: 1,
+    platform,
+    files: [file],
+    graph: {
+      cargo: [{ name: 'safe', dependencies: [] }],
+      pnpm: [{ name: 'safe', dependencies: [] }],
+      vite: [{ id: 'safe', imports: [] }],
+      viteAssets: [{ path: 'safe.txt', ...inspectContent(Buffer.from('synthetic safe frontend')) }],
+      tauri: { resources: ['../THIRD_PARTY_LICENSES'] },
+    },
+  });
+  const installer = (path, executable) => ({
+    path,
+    ...inspectContent(Buffer.from('synthetic installer machinery')),
+    executable,
+    type: executable ? 'executable' : 'data',
+    provenance: 'nsis-installer',
+  });
+  assert.doesNotThrow(() => auditBundle(evidence('win32', installer('$PLUGINSDIR/System.dll', true))));
+  assert.doesNotThrow(() => auditBundle(evidence('win32', installer('uninstall.exe', true))));
+  assert.doesNotThrow(() => auditBundle(evidence('win32', installer('$PLUGINSDIR/modern-wizard.bmp', false))));
+  assert.throws(
+    () => auditBundle(evidence('win32', installer('$PLUGINSDIR/helper.dll', true))),
+    /undeclared installer file/,
+  );
+  assert.throws(
+    () => auditBundle(evidence('win32', installer('$PLUGINSDIR/modern-wizard.bmp', true))),
+    /installer file kind/,
+  );
+  assert.throws(
+    () => auditBundle(evidence('linux', installer('uninstall.exe', true))),
+    /installer machinery outside a Windows installer/,
+  );
+});
+
 // Workflow under test: ../.github/workflows/desktop.yml
 // desktop-mutation: desktop-native-display-safe
 test('desktop repair: native webviews always have a Linux display', async () => {

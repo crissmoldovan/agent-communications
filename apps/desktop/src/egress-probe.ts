@@ -166,11 +166,12 @@ export async function runEgressProbe(_entry: 'settings' | 'secrets'): Promise<vo
   attempted('custom', () => {
     window.location.assign('desktop-probe://synthetic.test/blocked');
   });
-  await new Promise((resolve) => window.setTimeout(resolve, 300));
+  // The native guards answer asynchronously; a hosted runner needs longer than a laptop before the counters move.
+  await new Promise((resolve) => window.setTimeout(resolve, 2_000));
   attempted('navigation', () => {
     window.location.assign(`${url}/navigation`);
   });
-  await new Promise((resolve) => window.setTimeout(resolve, 400));
+  await new Promise((resolve) => window.setTimeout(resolve, 3_000));
   const complete = attacks.every((attack) => results.get(attack));
   const sameOrigin =
     window.location.origin === (window.location.protocol === 'tauri:' ? 'tauri://localhost' : 'http://tauri.localhost');
