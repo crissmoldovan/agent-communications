@@ -57,6 +57,10 @@ export interface EventSchedulerOptions {
   readonly config: Pick<ConfigStore, 'load'>;
   readonly taint: TaintStore;
   readonly gmailSourceFor: (accountId: string) => Promise<GmailEventSource>;
+  /** Owner-provided B3 secret reader, called only if an approved Gmail rule reaches a TypeSafe judge boundary. */
+  readonly hostedJudgeKeyFor?:
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | undefined;
   /** Owner-built, read-only source work. Gmail keeps its existing worker; every other source enters through this seam. */
   readonly sourceWorkFor?:
     | ((scope: SourceScope) => Promise<Readonly<{ retryAfterMs?: number | undefined }> | undefined>)
@@ -85,6 +89,7 @@ export class EventScheduler {
   readonly #config: Pick<ConfigStore, 'load'>;
   readonly #taint: TaintStore;
   readonly #gmailSourceFor: EventSchedulerOptions['gmailSourceFor'];
+  readonly #hostedJudgeKeyFor: EventSchedulerOptions['hostedJudgeKeyFor'];
   readonly #sourceWorkFor: EventSchedulerOptions['sourceWorkFor'];
   readonly #mailboxLock: MailboxLock;
   readonly #sourceRegistry: LocalEventSourceRegistry;
@@ -110,6 +115,7 @@ export class EventScheduler {
     this.#config = options.config;
     this.#taint = options.taint;
     this.#gmailSourceFor = options.gmailSourceFor;
+    this.#hostedJudgeKeyFor = options.hostedJudgeKeyFor;
     this.#sourceWorkFor = options.sourceWorkFor;
     this.#mailboxLock = options.mailboxLock;
     this.#sourceRegistry = options.sourceRegistry ?? gmailOnlySourceRegistry();
@@ -432,6 +438,7 @@ export class EventScheduler {
           );
         },
       },
+      ...(this.#hostedJudgeKeyFor === undefined ? {} : { hostedJudgeKeyFor: this.#hostedJudgeKeyFor }),
     });
     const fence = async (rule: GmailSourceRule): Promise<void> => {
       await assertDisclosable({

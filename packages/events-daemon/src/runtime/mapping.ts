@@ -21,6 +21,13 @@ export interface RejectedProjection {
   readonly rejected: 'MAPPING_PATH_MISSING' | 'MAPPING_LIMIT_EXCEEDED';
 }
 
+/** The mandatory deterministic gate, deliberately usable without constructing a mapping or judge envelope. */
+export function matchesRuleCondition(rule: CanonicalFullRuleDocument, event: Record<string, unknown>): boolean {
+  const found = catalogueEntry(rule.event.type, rule.event.version);
+  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored rule event definition is unavailable');
+  return evaluateCondition(found.value as never, rule.condition, event as never);
+}
+
 /** The two refusals that depend on the event, not the stored rule; the frozen events API names them by code only. */
 function eventRejection(error: unknown): RejectedProjection['rejected'] | null {
   if (!(error instanceof Error) || error.name !== 'EventsError') return null;
@@ -40,7 +47,7 @@ export function evaluateRuleProjection(
   const found = catalogueEntry(rule.event.type, rule.event.version);
   if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored rule event definition is unavailable');
   const definition = found.value;
-  if (!evaluateCondition(definition as never, rule.condition, event as never)) return null;
+  if (!matchesRuleCondition(rule, event)) return null;
   const compiled = compileMapping(definition as never, rule.mapping);
   if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored rule mapping is unavailable');
   let mapped: MappedValue;

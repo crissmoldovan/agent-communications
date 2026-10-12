@@ -55,6 +55,82 @@ export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
     testName:
       'E3 scope: static guards reject hollow manifests, missing runners, unsealed network tests and test-local models',
   },
+  {
+    id: 'e7-deterministic-first',
+    source: 'packages/events-daemon/src/runtime/evaluate.ts',
+    before: 'if (!matchesRuleCondition(rule, projection.event)) {',
+    after: 'if (false) {',
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: deterministic false creates no judge provenance, taint, reservation, or request bytes',
+  },
+  {
+    id: 'e7-taint-before-reserve',
+    source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
+    before: 'await this.#taint.record({',
+    after: 'await ({ record: async () => undefined } as EventTaintRecorder).record({',
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: a failed taint flush emits zero judge bytes and leaves no reservation',
+  },
+  {
+    id: 'e7-exact-input-provenance',
+    source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
+    before: 'value: { $path: pointer }',
+    after: "value: { $path: '/subject' }",
+    test: 'packages/events-daemon/test/judge-taint.test.ts',
+    testName:
+      'E7 taint: exact judge input preserves copied scalar, parent and subtree provenance while constants inherit none',
+  },
+  {
+    id: 'e7-settlement-token',
+    source: 'packages/events-daemon/src/runtime/evaluate.ts',
+    before: 'actualInputTokens: judged.actualInputTokens,',
+    after: 'actualInputTokens: 0,',
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName:
+      'E7: evaluator taints exact judge input, reserves, uses sealed transport, and atomically commits a matched decision',
+  },
+  {
+    id: 'e7-pause-fence',
+    source: 'packages/events-daemon/src/runtime/judge-budget.ts',
+    before:
+      "if (settings?.paused === 1) refusal('JUDGE_PAUSED', 'the event switch is paused before the judge boundary');",
+    after:
+      "if (false && settings?.paused === 1) refusal('JUDGE_PAUSED', 'the event switch is paused before the judge boundary');",
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: pause fences reserved judge I/O and completed-response decision writes',
+  },
+  {
+    id: 'e7-full-request-estimate',
+    source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
+    before: 'finalEnvelope: prepared.request,',
+    after: 'finalEnvelope: prepared.body,',
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: admission reserves the full HTTP request before transport can refuse it',
+  },
+  {
+    id: 'e7-single-decision-owner',
+    source: 'packages/events-daemon/src/runtime/judge-budget.ts',
+    before: "if (prior?.state === 'reserved' || prior?.state === 'in-flight')",
+    after: "if (false && (prior?.state === 'reserved' || prior?.state === 'in-flight'))",
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: a concurrent evaluation leaves a live judge work item to its one decision owner',
+  },
+  {
+    id: 'e7-deterministic-shared-route',
+    source: 'packages/events-daemon/src/runtime/decisions.ts',
+    before: 'if (input.settlement !== undefined && input.disclosure !== undefined) {',
+    after: 'if (input.disclosure !== undefined) {',
+    test: 'packages/events-daemon/test/evaluation.test.ts',
+    testName: 'EVAL-B1: one deterministic projection maps to exact CloudEvent bytes and one dry-run delivery',
+  },
+  {
+    id: 'e7-evaluator-writer-lease',
+    source: 'packages/events-daemon/src/runtime/evaluate.ts',
+    before: 'return this.#writerQuiescer === undefined ? work() : withEventWriterLease(this.#writerQuiescer, work);',
+    after: 'return work();',
+    test: 'packages/events-daemon/test/b3-writer-quiescer.test.ts',
+    testName: 'B3 writer inventory is exact and every discovered cipher or secret-store path is leased',
+  },
 ];
 
 const packageRoot = join(import.meta.dirname, '..', '..');
@@ -108,6 +184,10 @@ async function copyMutationClosure(root: string): Promise<void> {
     cp(
       join(repositoryRoot, 'scripts', 'verify-events-phase-e-tests.mjs'),
       join(root, 'scripts', 'verify-events-phase-e-tests.mjs'),
+    ),
+    cp(
+      join(repositoryRoot, 'scripts', 'verify-b3-writer-inventory.mjs'),
+      join(root, 'scripts', 'verify-b3-writer-inventory.mjs'),
     ),
     cp(join(repositoryRoot, 'test', 'helpers'), join(root, 'test', 'helpers'), { recursive: true }),
   ]);

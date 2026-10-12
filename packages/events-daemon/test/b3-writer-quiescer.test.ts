@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { SecretStore } from '@agentcomms/core';
+import { EventEvaluator } from '../src/runtime/evaluate.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { WriterQuiescer, withEventWriterLease } from '../src/runtime/writer-quiescer.ts';
@@ -43,6 +44,11 @@ class MemorySecretStore implements SecretStore {
 }
 
 test('B3 writer inventory is exact and every discovered cipher or secret-store path is leased', async () => {
+  assert.equal(
+    typeof EventEvaluator,
+    'function',
+    'the production evaluator writer must be in this strict guard closure',
+  );
   const moduleUrl = new URL('../../../scripts/verify-b3-writer-inventory.mjs', import.meta.url).href;
   const { verifyB3WriterInventory } = (await import(moduleUrl)) as {
     verifyB3WriterInventory(input: { readonly root: string }): Promise<readonly string[]>;

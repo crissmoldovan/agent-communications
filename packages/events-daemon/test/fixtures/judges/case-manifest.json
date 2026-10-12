@@ -78,7 +78,16 @@
     { "id": "e4-tightening-rule-version" },
     { "id": "e4-unscoped-kind-static-guard" },
     { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" }
+    { "id": "e4-required-guard-rows" },
+    { "id": "e7-deterministic-first" },
+    { "id": "e7-taint-before-reserve" },
+    { "id": "e7-exact-input-provenance" },
+    { "id": "e7-settlement-token" },
+    { "id": "e7-pause-fence" },
+    { "id": "e7-full-request-estimate" },
+    { "id": "e7-single-decision-owner" },
+    { "id": "e7-deterministic-shared-route" },
+    { "id": "e7-evaluator-writer-lease" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -158,7 +167,16 @@
     { "id": "e4-tightening-rule-version" },
     { "id": "e4-unscoped-kind-static-guard" },
     { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" }
+    { "id": "e4-required-guard-rows" },
+    { "id": "e7-deterministic-first" },
+    { "id": "e7-taint-before-reserve" },
+    { "id": "e7-exact-input-provenance" },
+    { "id": "e7-settlement-token" },
+    { "id": "e7-pause-fence" },
+    { "id": "e7-full-request-estimate" },
+    { "id": "e7-single-decision-owner" },
+    { "id": "e7-deterministic-shared-route" },
+    { "id": "e7-evaluator-writer-lease" }
   ],
   "cases": [
     {
@@ -1081,6 +1099,114 @@
         "test": "E4 verifier: the primary-key exemption permits one bound equality and rejects broadening clauses"
       },
       "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e7-deterministic-first",
+      "task": "E7",
+      "coverage": ["e7-deterministic-first"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-deterministic-first",
+        "test": "E7: deterministic false creates no judge provenance, taint, reservation, or request bytes"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-taint-before-reserve",
+      "task": "E7",
+      "coverage": ["e7-taint-before-reserve"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-taint-before-reserve",
+        "test": "E7: a failed taint flush emits zero judge bytes and leaves no reservation"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-exact-input-provenance",
+      "task": "E7",
+      "coverage": ["e7-exact-input-provenance"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-taint.test.ts",
+      "mutation": {
+        "id": "e7-exact-input-provenance",
+        "test": "E7 taint: exact judge input preserves copied scalar, parent and subtree provenance while constants inherit none"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-settlement-token",
+      "task": "E7",
+      "coverage": ["e7-settlement-token"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-settlement-token",
+        "test": "E7: evaluator taints exact judge input, reserves, uses sealed transport, and atomically commits a matched decision"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-pause-fence",
+      "task": "E7",
+      "coverage": ["e7-pause-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-pause-fence",
+        "test": "E7: pause fences reserved judge I/O and completed-response decision writes"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-full-request-estimate",
+      "task": "E7",
+      "coverage": ["e7-full-request-estimate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-full-request-estimate",
+        "test": "E7: admission reserves the full HTTP request before transport can refuse it"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-single-decision-owner",
+      "task": "E7",
+      "coverage": ["e7-single-decision-owner"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e7-single-decision-owner",
+        "test": "E7: a concurrent evaluation leaves a live judge work item to its one decision owner"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-deterministic-shared-route",
+      "task": "E7",
+      "coverage": ["e7-deterministic-shared-route"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/evaluation.test.ts",
+      "mutation": {
+        "id": "e7-deterministic-shared-route",
+        "test": "EVAL-B1: one deterministic projection maps to exact CloudEvent bytes and one dry-run delivery"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e7-evaluator-writer-lease",
+      "task": "E7",
+      "coverage": ["e7-evaluator-writer-lease"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/b3-writer-quiescer.test.ts",
+      "mutation": {
+        "id": "e7-evaluator-writer-lease",
+        "test": "B3 writer inventory is exact and every discovered cipher or secret-store path is leased"
+      },
+      "strictRunner": "judge-mutants"
     },
     {
       "id": "e4-required-guard-rows",

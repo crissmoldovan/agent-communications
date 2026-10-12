@@ -12,6 +12,11 @@ assertLoopbackSeal();
 const { JudgeTransport, buildJudgeWireRequest, parseJudgeResponse } = await import('../src/runtime/judge-transport.ts');
 const { JUDGE_ADAPTER_REFERENCES } = await import('../src/runtime/judge-adapters.ts');
 
+/** The sealed result is closed: every refusal states whether no physical I/O started. */
+function refused(code: string, preIo: boolean) {
+  return { kind: 'refused' as const, code, preIo };
+}
+
 interface SystemOneVector {
   readonly model: string;
   readonly state: string;
@@ -208,6 +213,7 @@ test('E6: response parsing returns only bounded scores and usage metadata', () =
       {
         kind: 'refused',
         code: response.includes('"output_tokens":4') ? 'OUTPUT_TOKEN_LIMIT_EXCEEDED' : 'MALFORMED_RESPONSE',
+        preIo: false,
       },
     );
   }
@@ -236,7 +242,7 @@ test('E6: response parsing returns only bounded scores and usage metadata', () =
       response: Buffer.from('{"scores":[0.25]}'),
       maxOutputTokens: 64,
     }),
-    { kind: 'refused', code: 'MALFORMED_RESPONSE' },
+    refused('MALFORMED_RESPONSE', false),
   );
   for (const scorePointer of ['', '/scores/*', '/score,/other']) {
     assert.deepEqual(
@@ -247,7 +253,7 @@ test('E6: response parsing returns only bounded scores and usage metadata', () =
         response: Buffer.from(scorePointer === '' ? '0.25' : '{"score":0.25,"scores":[0.25],"other":0.75}'),
         maxOutputTokens: 64,
       }),
-      { kind: 'refused', code: 'MALFORMED_RESPONSE' },
+      refused('MALFORMED_RESPONSE', false),
     );
   }
 });
@@ -276,7 +282,7 @@ test('E6: malformed UTF-8 anywhere in a Noul answer is fail-closed', () => {
         response,
         maxOutputTokens: 3,
       }),
-      { kind: 'refused', code: 'MALFORMED_RESPONSE' },
+      refused('MALFORMED_RESPONSE', false),
     );
   }
 });
@@ -318,6 +324,7 @@ test('E6: execute requires a final gate in both its type and runtime boundary', 
   assert.deepEqual(await executeWithoutGate.call(transport, call), {
     kind: 'refused',
     code: 'NETWORK_FENCE_REFUSED',
+    preIo: true,
   });
   assert.equal(resolverCalls, 0);
   assert.equal(tcpCalls, 0);
@@ -346,7 +353,7 @@ test('E6: missing dated generic-json-score vectors refuse before DNS and request
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'ADAPTER_REFERENCE_BLOCKED' },
+    refused('ADAPTER_REFERENCE_BLOCKED', true),
   );
   assert.equal(resolverCalls, 0);
 
@@ -354,15 +361,15 @@ test('E6: missing dated generic-json-score vectors refuse before DNS and request
     await transport.execute(
       {
         judge: localJudge(),
-        state: 'x'.repeat(65_537),
+        state: 'x'.repeat(1_024),
         questionName: 'judge',
         instructions: fixture.vectors.ollama.instructions,
-        maxInputTokens: 65_536,
+        maxInputTokens: 1,
         maxOutputTokens: 64,
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'INPUT_TOKEN_LIMIT_EXCEEDED' },
+    refused('INPUT_TOKEN_LIMIT_EXCEEDED', true),
   );
   assert.equal(resolverCalls, 0);
 
@@ -378,7 +385,7 @@ test('E6: missing dated generic-json-score vectors refuse before DNS and request
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'REQUEST_TOO_LARGE' },
+    refused('REQUEST_TOO_LARGE', true),
   );
   assert.equal(resolverCalls, 0);
 
@@ -394,7 +401,7 @@ test('E6: missing dated generic-json-score vectors refuse before DNS and request
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'REQUEST_TOO_LARGE' },
+    refused('REQUEST_TOO_LARGE', true),
   );
   assert.equal(resolverCalls, 0, 'raw framing counts before a resolver can run');
 });
@@ -427,7 +434,7 @@ test('E6-M: TypeSafe refuses an unapproved document model instead of substitutin
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'ADAPTER_REFERENCE_BLOCKED' },
+    refused('ADAPTER_REFERENCE_BLOCKED', true),
   );
   assert.equal(resolverCalls, 0);
   assert.equal(tcpCalls, 0);
@@ -523,7 +530,7 @@ test('E6-A: TypeSafe refuses every non-global resolver answer before TCP', async
           },
           allowAllTransportGates,
         ),
-        { kind: 'refused', code: 'NETWORK_FAILURE' },
+        refused('NETWORK_FAILURE', false),
       );
       assert.equal(resolverCalls, 1);
       assert.equal(tcpCalls, 0);
@@ -553,7 +560,7 @@ test('E6-A: TypeSafe refuses a mixed public and private resolver set before TCP'
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'NETWORK_FAILURE' },
+    refused('NETWORK_FAILURE', false),
   );
   assert.equal(tcpCalls, 0);
 });
@@ -632,7 +639,7 @@ test('E6: a 3xx is refused after exactly one raw request and never followed', as
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'NETWORK_FAILURE' },
+    refused('NETWORK_FAILURE', false),
   );
   assert.equal(peer.writes.length, 1);
 });
@@ -661,7 +668,7 @@ test('E6: streaming response cap destroys the socket before parsing oversized pe
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'RESPONSE_TOO_LARGE' },
+    refused('RESPONSE_TOO_LARGE', false),
   );
   assert.equal(destroyed, true);
 });
@@ -710,7 +717,7 @@ test('E6: bounded parsers reject oversized and concatenated JSON, and the transp
       response: Buffer.alloc(65_537, 32),
       maxOutputTokens: 64,
     }),
-    { kind: 'refused', code: 'RESPONSE_TOO_LARGE' },
+    refused('RESPONSE_TOO_LARGE', false),
   );
   assert.deepEqual(
     parseJudgeResponse({
@@ -720,7 +727,7 @@ test('E6: bounded parsers reject oversized and concatenated JSON, and the transp
       response: Buffer.from(`${fixture.vectors.typesafe.response}${fixture.vectors.typesafe.response}`),
       maxOutputTokens: 64,
     }),
-    { kind: 'refused', code: 'MALFORMED_RESPONSE' },
+    refused('MALFORMED_RESPONSE', false),
   );
   const source = await readFile(new URL('../src/runtime/judge-transport.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\bfetch\s*\(|node:(?:http|https)|\b(?:http|https)\.request|\bproxy\b/iu);
@@ -756,7 +763,7 @@ test('E6: a phase that exceeds the fixed all-phase deadline produces no request 
       },
       allowAllTransportGates,
     ),
-    { kind: 'refused', code: 'NETWORK_DEADLINE_EXCEEDED' },
+    refused('NETWORK_DEADLINE_EXCEEDED', false),
   );
   assert.deepEqual(peer.writes, []);
   assert.equal(scheduledMilliseconds, 20_000);
@@ -814,7 +821,7 @@ test('E6: a final gate that has not finished deciding refuses its phase before a
             )
           : undefined) as unknown as JudgeTransportHooks['finalGate'],
     });
-    assert.deepEqual(result, { kind: 'refused', code: 'NETWORK_FENCE_REFUSED' }, `${blocked} is refused`);
+    assert.deepEqual(result, refused('NETWORK_FENCE_REFUSED', blocked === 'dns'), `${blocked} is refused`);
     assert.equal(settled, false, 'the transport did not wait for the pending gate and act on it');
     assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1);
     assert.equal(counts.tcp, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
@@ -832,7 +839,7 @@ test('E6: a final gate that reaches the all-phase deadline lets no later phase o
         if (phase === blocked) now = 20_000;
       },
     });
-    assert.deepEqual(result, { kind: 'refused', code: 'NETWORK_DEADLINE_EXCEEDED' }, `${blocked} times out`);
+    assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'), `${blocked} times out`);
     assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1);
     assert.equal(counts.tcp, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
     assert.equal(counts.tls, blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1);
@@ -887,7 +894,7 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
             finalGate() {},
           },
         ),
-        { kind: 'refused', code: 'NETWORK_DEADLINE_EXCEEDED' },
+        refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'),
       );
       assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1);
       assert.equal(tcpCalls, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
@@ -927,7 +934,7 @@ test('E6: a deadline reached while receiving a response is not accepted as an an
     },
     { finalGate() {} },
   );
-  assert.deepEqual(result, { kind: 'refused', code: 'NETWORK_DEADLINE_EXCEEDED' });
+  assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', false));
   assert.equal(peer.writes.length, 1);
 });
 
@@ -979,8 +986,8 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-request-cap',
     file: 'runtime/judge-transport.ts',
-    before: "if (request.byteLength > JUDGE_MAX_REQUEST_BYTES) return refused('REQUEST_TOO_LARGE');",
-    after: "if (false) return refused('REQUEST_TOO_LARGE');",
+    before: 'return request.byteLength <= JUDGE_MAX_REQUEST_BYTES;',
+    after: 'return true;',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: missing dated generic-json-score vectors refuse before DNS and request-cap refusal does too',
   },

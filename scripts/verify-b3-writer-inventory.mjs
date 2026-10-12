@@ -14,6 +14,7 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/scheduler.ts',
   'packages/events-daemon/src/runtime/source-owner-work.ts',
   'packages/events-daemon/src/runtime/projections.ts',
+  'packages/events-daemon/src/runtime/evaluate.ts',
   'packages/events-daemon/src/runtime/decisions.ts',
   'packages/events-daemon/src/runtime/deliveries.ts',
   'packages/events-daemon/src/runtime/dispatcher.ts',
@@ -117,6 +118,16 @@ export async function verifyB3WriterInventory({ root = ROOT, inventory = undefin
     const text = await readFile(join(root, scheduler), 'utf8').catch(() => '');
     if (!/const work = withEventWriterLease\(this\.#writerQuiescer, \(\) => this\.#tick\(\)\)\.finally/.test(text))
       problems.push(`${scheduler}: timer-started writer does not acquire the shared lease before #tick`);
+  }
+  const evaluator = 'packages/events-daemon/src/runtime/evaluate.ts';
+  if ((files ?? []).includes(evaluator) || (files === undefined && listed.has(evaluator))) {
+    const text = await readFile(join(root, evaluator), 'utf8').catch(() => '');
+    if (
+      !/return this\.#writerQuiescer === undefined \? work\(\) : withEventWriterLease\(this\.#writerQuiescer, work\);/.test(
+        text,
+      )
+    )
+      problems.push(`${evaluator}: evaluator admission and evaluation writes do not hold the shared lease`);
   }
   if (inventory === undefined) {
     const owner = await readFile(join(root, 'packages/events-daemon/src/runtime/owner.ts'), 'utf8').catch(() => '');

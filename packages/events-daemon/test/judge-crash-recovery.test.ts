@@ -242,6 +242,7 @@ test('E5 crash: owner startup does not issue a judge-ledger statement before the
     setup = await fixture();
     reserve(setup, 'owner-recovery');
     beginJudgeTransport({ store: setup.store, reservationId: 'owner-recovery', now: NOW });
+    setup.store.database.prepare("DELETE FROM active_versions WHERE kind = 'judge-kind'").run();
     setup.store.close();
     phase = 'owner-start';
     try {
@@ -285,5 +286,45 @@ test('E5 crash: owner startup does not issue a judge-ledger statement before the
       /* owner/restart may have closed it */
     }
     if (setup !== undefined) await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('E7 owner: startup recovers in-flight judge work only after an active kind exists', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
+  try {
+    reserve(setup, 'owner-e7-recovery');
+    beginJudgeTransport({ store: setup.store, reservationId: 'owner-e7-recovery', now: NOW });
+    setup.store.close();
+    try {
+      owner = await startEventOwner({ stateDir: setup.root, tickMs: 60_000, now: () => NOW + 1 });
+    } catch (error) {
+      if (!(error instanceof Error) || !/EPERM/u.test(error.message)) throw error;
+    }
+    const reopened = await openEventDatabase({ stateDir: setup.root });
+    try {
+      const reservation = reopened.database
+        .prepare("SELECT state, concurrency_owned FROM judge_budget_reservations WHERE id = 'owner-e7-recovery'")
+        .get() as { state: string; concurrency_owned: number };
+      assert.equal(reservation.state, 'settled');
+      assert.equal(reservation.concurrency_owned, 0);
+      const decision = reopened.database
+        .prepare("SELECT outcome, metadata_state FROM decisions WHERE id = 'judge:owner-e7-recovery'")
+        .get() as { outcome: string; metadata_state: string };
+      assert.equal(decision.outcome, 'no-match');
+      assert.equal(decision.metadata_state, 'judge-io-unknown');
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await owner?.stop();
+    try {
+      setup.store.close();
+    } catch {
+      /* owner start closes the reopened database only */
+    }
+    await rm(setup.root, { recursive: true, force: true });
   }
 });

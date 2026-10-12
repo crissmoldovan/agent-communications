@@ -31,18 +31,7 @@ export const JUDGE_TASK5_MUTATIONS: readonly JudgeTask5Mutation[] = [
     source: 'src/runtime/owner.ts',
     test: 'test/judge-crash-recovery.test.ts',
     testName: 'E5 crash: owner startup does not issue a judge-ledger statement before the B3 gate',
-    changes: [
-      {
-        before: "import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';",
-        after:
-          "import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';\nimport { recoverJudgeWork } from './judge-recovery.ts';",
-      },
-      {
-        before: '    await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());',
-        after:
-          '    await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());\n    database.immediate(() => recoverJudgeWork({ database: database.database, now: now() }));',
-      },
-    ],
+    changes: [{ before: 'const hasActiveJudgeKind =', after: 'const hasActiveJudgeKind = true ||' }],
   },
   {
     id: 'e5-v1-literal-judge-kinds',

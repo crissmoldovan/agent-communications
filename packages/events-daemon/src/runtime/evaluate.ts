@@ -7,9 +7,11 @@ import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
-import { evaluateRuleProjection } from './mapping.ts';
+import { JudgeCoordinator } from './judge-coordinator.ts';
+import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
+import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 type EvaluationFenceRequest = Omit<ActiveDisclosableRequest, 'approvals' | 'config'>;
 
@@ -24,6 +26,14 @@ export interface EventEvaluatorOptions {
   readonly fence?: ((request: EvaluationFenceRequest) => Promise<DisclosureSnapshot>) | undefined;
   readonly approvals?: Pick<ApprovalStore, 'get'> | undefined;
   readonly config?: Pick<ConfigStore, 'load'> | undefined;
+  /** The production coordinator is injectable only so sealed loopback fixtures can use a real transport. */
+  readonly judgeCoordinator?: JudgeCoordinator | undefined;
+  /** Read only at the hosted judge boundary; the evaluator neither retains nor exposes this material. */
+  readonly hostedJudgeKeyFor?:
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | undefined;
+  /** The owner-wide writer lease spans projection decryption through every encrypted decision or delivery commit. */
+  readonly writerQuiescer?: WriterQuiescer | undefined;
 }
 
 interface RuleRow {
@@ -38,6 +48,11 @@ function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): Can
   return JSON.parse(row.document) as CanonicalFullRuleDocument;
 }
 
+function cipherWriterQuiescer(cipher: ProjectionCipher): WriterQuiescer | undefined {
+  const candidate = cipher as ProjectionCipher & { readonly writerQuiescer?: unknown };
+  return candidate.writerQuiescer instanceof WriterQuiescer ? candidate.writerQuiescer : undefined;
+}
+
 /** Evaluates one encrypted per-rule projection and durably completes its local outbox in one transaction. */
 export class EventEvaluator {
   readonly #store: EventDatabase;
@@ -49,6 +64,8 @@ export class EventEvaluator {
   readonly #failpoint: EventEvaluatorOptions['failpoint'];
   readonly #fence: NonNullable<EventEvaluatorOptions['fence']>;
   readonly #config: Pick<ConfigStore, 'load'> | undefined;
+  readonly #judgeCoordinator: JudgeCoordinator;
+  readonly #writerQuiescer: WriterQuiescer | undefined;
 
   constructor(options: EventEvaluatorOptions) {
     this.#store = options.store;
@@ -59,6 +76,16 @@ export class EventEvaluator {
     this.#newId = options.newId ?? (() => crypto.randomUUID());
     this.#failpoint = options.failpoint;
     this.#config = options.config;
+    this.#writerQuiescer = options.writerQuiescer ?? cipherWriterQuiescer(options.cipher);
+    this.#judgeCoordinator =
+      options.judgeCoordinator ??
+      new JudgeCoordinator({
+        store: options.store,
+        taint: options.taint,
+        now: this.#now,
+        newId: this.#newId,
+        ...(options.hostedJudgeKeyFor === undefined ? {} : { hostedApiKeyFor: options.hostedJudgeKeyFor }),
+      });
     if (options.fence) this.#fence = options.fence;
     else {
       if (!options.approvals || !options.config)
@@ -73,6 +100,18 @@ export class EventEvaluator {
   }
 
   async admit(input: {
+    readonly event: Record<string, unknown>;
+    readonly eventId: string;
+    readonly ruleId: string;
+    readonly ruleVersion: number;
+    readonly stagedAt: number;
+    readonly stageId?: string | undefined;
+    readonly whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }> | undefined;
+  }): Promise<'terminal' | 'pending'> {
+    return this.#withWriterLease(() => this.#admit(input));
+  }
+
+  async #admit(input: {
     readonly event: Record<string, unknown>;
     readonly eventId: string;
     readonly ruleId: string;
@@ -134,6 +173,14 @@ export class EventEvaluator {
   }
 
   async evaluate(input: {
+    readonly eventId: string;
+    readonly ruleId: string;
+    readonly ruleVersion: number;
+  }): Promise<'terminal' | 'pending'> {
+    return this.#withWriterLease(() => this.#evaluate(input));
+  }
+
+  async #evaluate(input: {
     readonly eventId: string;
     readonly ruleId: string;
     readonly ruleVersion: number;
@@ -204,6 +251,153 @@ export class EventEvaluator {
     }
     const projection = await this.#projections.read(row);
     const now = this.#now();
+    // This is intentionally before input-envelope construction, provenance, taint, reservation and all network I/O.
+    if (!matchesRuleCondition(rule, projection.event)) {
+      return this.#commit(() =>
+        commitDecisionOutbox(this.#store, {
+          id: this.#newId(),
+          eventId: input.eventId,
+          accountId: ingest.account_id,
+          ruleId: input.ruleId,
+          ruleVersion: input.ruleVersion,
+          outcome: 'no-match',
+          metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
+          switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+          ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+            ? {}
+            : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
+          ...(authorised === undefined
+            ? {}
+            : {
+                disclosure: {
+                  approvalId: authorised.approvalId,
+                  authorizationActivationId: authorised.authorizationActivationId,
+                },
+              }),
+          deliveries: [],
+        }),
+      );
+    }
+
+    if (rule.agentic !== undefined) {
+      const judged = await this.#judgeCoordinator.evaluate({
+        eventId: input.eventId,
+        accountId: ingest.account_id,
+        rule,
+        ruleId: input.ruleId,
+        ruleVersion: input.ruleVersion,
+        event: projection.event,
+        switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+      });
+      if (judged.kind === 'deferred' || judged.kind === 'owner-held') return 'pending';
+      // The shared Task-5 unknown-I/O closure owns its one terminal decision and projection purge.  Other closed
+      // failures (notably no budget before I/O) are completed content-free here without a second reservation path.
+      if (judged.kind === 'closed') {
+        const terminal = this.#store.database
+          .prepare('SELECT 1 AS present FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
+          .get(input.eventId, input.ruleId, input.ruleVersion);
+        if (terminal !== undefined) return 'terminal';
+        return this.#commit(() =>
+          commitDecisionOutbox(this.#store, {
+            id: this.#newId(),
+            eventId: input.eventId,
+            accountId: ingest.account_id,
+            ruleId: input.ruleId,
+            ruleVersion: input.ruleVersion,
+            outcome: 'no-match',
+            metadataExpiresAt: fixedDeadline(this.#now(), rule.retention.decisionMetadataMs),
+            switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+            ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+              ? {}
+              : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
+            ...(authorised === undefined
+              ? {}
+              : {
+                  disclosure: {
+                    approvalId: authorised.approvalId,
+                    authorizationActivationId: authorised.authorizationActivationId,
+                  },
+                }),
+            deliveries: [],
+          }),
+        );
+      }
+      if (judged.kind === 'completed') {
+        const decisionId = this.#newId();
+        const result = judged.outcome === 'matched' ? evaluateRuleProjection(rule, projection.event) : null;
+        const evaluated = result === null || 'rejected' in result ? null : result;
+        const outcome =
+          judged.outcome === 'hold'
+            ? 'hold'
+            : result === null
+              ? 'no-match'
+              : 'rejected' in result
+                ? 'mapping-rejected'
+                : 'matched';
+        const deliveries =
+          evaluated === null
+            ? []
+            : await prepareDeliveries({
+                cipher: this.#cipher,
+                definition: evaluated.definition,
+                event: projection.event,
+                rule,
+                classification: evaluated.classification,
+                installationId: this.#store.installationId,
+                createdAt: this.#now(),
+                newId: this.#newId,
+                data: evaluated.mapped.data,
+              });
+        // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
+        // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
+        if (evaluated !== null)
+          await this.#taint.record({
+            eventId: input.eventId,
+            accountId: ingest.account_id,
+            classification: evaluated.classification,
+          });
+        const encryptedMetadata = await this.#cipher.encrypt(
+          { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decisionId }] },
+          Buffer.from(JSON.stringify(judged.metadata)),
+        );
+        if (!(await this.#accountStillLive(rule.source.channel, ingest.account_id))) return 'terminal';
+        return this.#commit(() =>
+          commitDecisionOutbox(
+            this.#store,
+            {
+              id: decisionId,
+              eventId: input.eventId,
+              accountId: ingest.account_id,
+              ruleId: input.ruleId,
+              ruleVersion: input.ruleVersion,
+              outcome,
+              metadataExpiresAt: fixedDeadline(this.#now(), rule.retention.decisionMetadataMs),
+              switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+              ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+                ? {}
+                : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
+              deliveries,
+              settlement: {
+                reservationId: judged.reservationId,
+                actualInputTokens: judged.actualInputTokens,
+                settledAt: this.#now(),
+              },
+              ...(authorised === undefined
+                ? {}
+                : {
+                    disclosure: {
+                      approvalId: authorised.approvalId,
+                      authorizationActivationId: authorised.authorizationActivationId,
+                    },
+                  }),
+              encryptedMetadata,
+              ...(outcome === 'hold' ? { retainProjection: true } : {}),
+            },
+            this.#failpoint,
+          ),
+        );
+      }
+    }
     const result = evaluateRuleProjection(rule, projection.event);
     const evaluated = result === null || 'rejected' in result ? null : result;
     const outcome = result === null ? 'no-match' : 'rejected' in result ? 'mapping-rejected' : 'matched';
@@ -261,6 +455,14 @@ export class EventEvaluator {
           ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
             ? {}
             : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
+          ...(authorised === undefined
+            ? {}
+            : {
+                disclosure: {
+                  approvalId: authorised.approvalId,
+                  authorizationActivationId: authorised.authorizationActivationId,
+                },
+              }),
           deliveries,
         },
         this.#failpoint,
@@ -288,5 +490,21 @@ export class EventEvaluator {
       .get() as { switch_generation: number } | undefined;
     if (!settings) throw new CommsError('CONFIG', 'the local event switch is unavailable');
     return settings.switch_generation;
+  }
+
+  async #accountStillLive(source: CanonicalFullRuleDocument['source']['channel'], accountId: string): Promise<boolean> {
+    if (this.#config === undefined) return true;
+    try {
+      await assertLiveEventAccount(this.#config, { source, accountId });
+      return true;
+    } catch (error) {
+      if (!isRemovedAccountError(error)) throw error;
+      this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, { source, accountId }, this.#now()));
+      return false;
+    }
+  }
+
+  #withWriterLease<T>(work: () => Promise<T>): Promise<T> {
+    return this.#writerQuiescer === undefined ? work() : withEventWriterLease(this.#writerQuiescer, work);
   }
 }
