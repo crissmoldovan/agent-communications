@@ -124,7 +124,7 @@ export async function expectJudgeTask5MutationToFail(mutation: JudgeTask5Mutatio
       command: process.execPath,
       args: [
         '--import',
-        join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
+        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',

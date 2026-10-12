@@ -1302,10 +1302,11 @@ async function expectTransportMutationToFail(mutation: TransportMutation): Promi
       command: process.execPath,
       args: [
         '--import',
-        join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
+        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',
+        '--test-reporter=tap',
         '--test-name-pattern',
         exactTestName(mutation.testName),
         join(root, 'test', mutation.testFile),
