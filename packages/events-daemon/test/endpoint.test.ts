@@ -106,7 +106,9 @@ test('CTRL-B1: Windows refuses the event service, since Node cannot give a pipe 
   assert.doesNotThrow(() => assertControlSupported('darwin'));
 });
 
-test('CTRL-B1: only a 0700 socket directory of this uid, under ancestors nobody else can change, is private', async () => {
+test('CTRL-B1: only a 0700 socket directory of this uid, under ancestors nobody else can change, is private', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const check = (io: EndpointIo) => verifyPrivateSocketDirectory(PATHS, { platform: 'linux', uid: UID, io });
   await check(fakeIo());
   await check(fakeIo({ '/srv': entry('dir', 0o1777, 0) }));
@@ -151,7 +153,7 @@ test('CTRL-B1: only a 0700 socket directory of this uid, under ancestors nobody 
   ]);
 });
 
-test('CTRL-B1: a client accepts only this uid’s 0600 socket', async () => {
+test('CTRL-B1: a client accepts only this uid’s 0600 socket', { skip: WINDOWS_SKIP }, async () => {
   const check = (io: EndpointIo) => verifyControlSocket(PATHS.controlSocket, { uid: UID, io });
   await check(fakeIo());
   await assert.rejects(check(fakeIo({ [PATHS.controlSocket]: entry('socket', 0o660) })), refusal('SOCKET_MODE'));

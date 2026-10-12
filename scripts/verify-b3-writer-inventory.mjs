@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** The writer inventory is a fail-closed manifest: every cipher/secret writer names its leased entrypoint. */
 import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,7 +48,8 @@ async function filesBelow(root, directory = join(root, 'packages/events-daemon/s
         entry.isDirectory()
           ? filesBelow(root, join(directory, entry.name))
           : entry.name.endsWith('.ts')
-            ? [relative(root, join(directory, entry.name))]
+            ? // Inventory entries are repository paths with `/`; `relative` gives `\` on Windows.
+              [relative(root, join(directory, entry.name)).split(sep).join('/')]
             : [],
       ),
     )

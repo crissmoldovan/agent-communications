@@ -88,9 +88,12 @@ test('CTRL-B1: an event state file must be a private regular file, never a direc
 });
 
 test('CTRL-B1: Windows path checks refuse a reparse point and an ACL that admits another user', async () => {
+  // The fake filesystem is keyed by the paths the code builds, which use `\` on a Windows host.
+  const state = join('C:/state');
+  const events = join(state, 'events');
   const directories = new Map<string, { mode: number; reparse?: boolean }>([
-    ['C:/state', { mode: 0o700 }],
-    ['C:/state/events', { mode: 0o700 }],
+    [state, { mode: 0o700 }],
+    [events, { mode: 0o700 }],
   ]);
   const io: EventPathIo = {
     async mkdir(path) {
@@ -114,12 +117,12 @@ test('CTRL-B1: Windows path checks refuse a reparse point and an ACL that admits
       return directories.get(path)?.reparse === true;
     },
     async isCurrentUserOnly(path) {
-      return path !== 'C:/state/events';
+      return path !== events;
     },
   };
 
   await assert.rejects(
-    () => ensureEventPaths(eventPaths('C:/state'), { io, platform: 'win32' }),
+    () => ensureEventPaths(eventPaths(state), { io, platform: 'win32' }),
     (error: unknown) => {
       assert.ok(error instanceof EventPathError);
       assert.equal(error.code, 'EVENT_PATH_PERMISSIONS');
@@ -127,9 +130,9 @@ test('CTRL-B1: Windows path checks refuse a reparse point and an ACL that admits
     },
   );
 
-  directories.set('C:/state/events', { mode: 0o700, reparse: true });
+  directories.set(events, { mode: 0o700, reparse: true });
   await assert.rejects(
-    () => ensureEventPaths(eventPaths('C:/state'), { io, platform: 'win32' }),
+    () => ensureEventPaths(eventPaths(state), { io, platform: 'win32' }),
     (error: unknown) => {
       assert.ok(error instanceof EventPathError);
       assert.equal(error.code, 'EVENT_PATH_REPARSE_POINT');

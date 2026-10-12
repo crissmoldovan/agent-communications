@@ -8,8 +8,11 @@ import { startControlServer } from '../src/control/server.ts';
 import { createOwnerB3ControlService } from '../src/runtime/owner.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
-test('B3 secret owner rejects every caller-selected app/window origin before the secret control and accepts only interactive-terminal', async () => {
+test('B3 secret owner rejects every caller-selected app/window origin before the secret control and accepts only interactive-terminal', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'aev-b3-origin-'));
   const opened = await openEventDatabase({ stateDir });
   let storeCalls = 0;
@@ -58,7 +61,9 @@ test('B3 secret owner rejects every caller-selected app/window origin before the
   }
 });
 
-test('B3 same-user raw client holding the owner token may declare interactive-terminal; app/window/secrets labels remain refused', async (t) => {
+test('B3 same-user raw client holding the owner token may declare interactive-terminal; app/window/secrets labels remain refused', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), 'aev-b3-origin-raw-'));
   const opened = await openEventDatabase({ stateDir });
   const endpoint = join(stateDir, 'control.sock');
