@@ -8,6 +8,7 @@ import {
   assertApprovedAddressSet,
   parseIpLiteral,
 } from './address-policy.ts';
+import { installErrorSink } from './error-sink.ts';
 import { type AddressResolver, resolveHost, systemAddressResolver } from './resolver.ts';
 
 export interface PinnedConnection {
@@ -149,6 +150,7 @@ export function connectPinnedTcp(options: PinnedTcpOptions): Promise<net.Socket>
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: options.host, port: options.port });
     socket.once('error', reject);
+    installErrorSink(socket);
     socket.once('connect', () => {
       socket.off('error', reject);
       resolve(socket);
@@ -166,6 +168,7 @@ export function connectPinnedTls(options: PinnedTlsOptions): Promise<tls.TLSSock
       checkServerIdentity: (_name, certificate) => tls.checkServerIdentity(options.certificateHost, certificate),
     });
     socket.once('error', reject);
+    installErrorSink(socket);
     socket.once('secureConnect', () => {
       socket.off('error', reject);
       resolve(socket);

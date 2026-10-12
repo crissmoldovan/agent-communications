@@ -1,11 +1,22 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
+import tls from 'node:tls';
 import {
   addressSetDigest,
+  connectPinnedTcp,
+  connectPinnedTls,
   openPinnedConnection,
   preparePinnedConnection,
   requestBytesForPinnedConnection,
 } from '../../src/network/pinned-connection.ts';
+import { startLoopbackReceiver } from '../support/loopback-receiver.ts';
+import { WINDOWS_SKIP } from '../support/short-temp.ts';
+import {
+  waitForSocketClose,
+  withoutUncaughtSocketException,
+  withSocketTestTimeout,
+} from '../support/socket-error-sink.ts';
 
 test('NET-B2: validates the approved fingerprint before resolving and pins every vetted answer', async () => {
   let resolverCalls = 0;
@@ -118,4 +129,78 @@ test('NET-B2: refuses all-answer drift, proxy-shaped URLs, redirects, and nonlit
     /sorted/i,
   );
   assert.equal(resolverCalls, 0, 'policy shape is rejected before a DNS lookup');
+});
+
+test('NET-B2: connected pinned TCP keeps an error sink after its connect listener settles', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let peer: import('node:net').Socket | undefined;
+  let peerArrived: (() => void) | undefined;
+  const arrived = new Promise<void>((resolve) => {
+    peerArrived = resolve;
+  });
+  let receiver: Awaited<ReturnType<typeof startLoopbackReceiver>>;
+  try {
+    receiver = await withSocketTestTimeout(
+      startLoopbackReceiver((socket) => {
+        peer = socket;
+        peerArrived?.();
+      }),
+      'the pinned-TCP receiver to listen',
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip(
+        'EPERM: the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it',
+      );
+      return;
+    }
+    throw error;
+  }
+
+  let socket: import('node:net').Socket | undefined;
+  try {
+    socket = await withSocketTestTimeout(
+      connectPinnedTcp({ host: receiver.host, port: receiver.port }),
+      'the pinned TCP connection to settle',
+    );
+    await withSocketTestTimeout(arrived, 'the pinned-TCP receiver to accept its peer');
+    assert.ok(peer);
+    await withoutUncaughtSocketException('a transport error must have a permanent resource listener', async () => {
+      const closed = waitForSocketClose(socket as import('node:net').Socket);
+      peer?.resetAndDestroy();
+      await withSocketTestTimeout(closed, 'the reset pinned TCP client socket to close');
+    });
+  } finally {
+    socket?.destroy();
+    await withSocketTestTimeout(receiver.close(), 'the pinned-TCP receiver to close');
+  }
+});
+
+test('NET-B2: handshaken pinned TLS keeps an error sink after its handshake listener settles', async () => {
+  const fakeSocket = new EventEmitter();
+  const tlsModule = tls as unknown as { connect: typeof tls.connect };
+  const originalConnect = tlsModule.connect;
+  tlsModule.connect = (() => {
+    queueMicrotask(() => fakeSocket.emit('secureConnect'));
+    return fakeSocket as unknown as tls.TLSSocket;
+  }) as typeof tls.connect;
+  try {
+    assert.equal(
+      await withSocketTestTimeout(
+        connectPinnedTls({
+          socket: new EventEmitter() as unknown as import('node:net').Socket,
+          rejectUnauthorized: true,
+          certificateHost: 'receiver.example.test',
+        }),
+        'the seam-provided TLS handshake to settle',
+      ),
+      fakeSocket,
+    );
+    await withoutUncaughtSocketException('a synthetic TLS error must have a permanent resource listener', () => {
+      queueMicrotask(() => fakeSocket.emit('error', new Error('synthetic TLS peer reset')));
+    });
+  } finally {
+    tlsModule.connect = originalConnect;
+  }
 });

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import { canonicalSseSubscriber, type SseSubscriberDocument } from '../domain/sse-subscriber.ts';
+import { installErrorSink } from '../network/error-sink.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventSecretOwner, EventSecretStore } from '../store/event-secrets.ts';
 import type { EventRecordCipher } from '../store/records.ts';
@@ -142,6 +143,8 @@ class LoopbackSseServer implements SseServer {
       hasConcreteWhatsAppVisibilityFence: options.hasConcreteWhatsAppVisibilityFence,
     });
     this.#server = createServer((request, response) => void this.#handle(request, response));
+    installErrorSink(this.#server);
+    this.#server.on('connection', (socket) => installErrorSink(socket));
   }
 
   static async start(options: SseServerOptions): Promise<LoopbackSseServer> {
