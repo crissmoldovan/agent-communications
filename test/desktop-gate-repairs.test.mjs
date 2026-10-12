@@ -127,21 +127,21 @@ test('desktop repair: only exact, non-executable Tauri metadata may carry a laun
   });
 
   assert.doesNotThrow(() =>
-    auditBundle(evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop'))),
+    auditBundle(evidence(metadata('usr/share/applications/Agent Communications.desktop', 'Exec=agentcomms-desktop'))),
   );
   assert.throws(
     () => auditBundle(evidence(metadata('usr/share/applications/helper.desktop', 'Exec=agentcomms-desktop'))),
     /metadata path/,
   );
   assert.throws(
-    () => auditBundle(evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=node'))),
+    () => auditBundle(evidence(metadata('usr/share/applications/Agent Communications.desktop', 'Exec=node'))),
     /metadata launcher/,
   );
   assert.throws(
     () =>
       auditBundle(
         evidence(
-          metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop; agent-events'),
+          metadata('usr/share/applications/Agent Communications.desktop', 'Exec=agentcomms-desktop; agent-events'),
         ),
       ),
     /metadata launcher/,
@@ -149,7 +149,7 @@ test('desktop repair: only exact, non-executable Tauri metadata may carry a laun
   assert.throws(
     () =>
       auditBundle(
-        evidence(metadata('usr/share/applications/agentcomms-desktop.desktop', 'Exec=agentcomms-desktop', true)),
+        evidence(metadata('usr/share/applications/Agent Communications.desktop', 'Exec=agentcomms-desktop', true)),
       ),
     /metadata executable/,
   );

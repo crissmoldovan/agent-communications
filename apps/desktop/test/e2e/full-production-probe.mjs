@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { preparePackagedPayload } from './packaged-payload.mjs';
 
 const root = new URL('../../../../', import.meta.url);
@@ -137,7 +137,8 @@ export async function runFullProduction() {
         [
           '--import',
           new URL('test/helpers/loopback-seal-preload.mjs', root).href,
-          new URL('./production-probe.mjs', import.meta.url).href,
+          // The entry is a path: node reads a `file:` string here as a relative file name.
+          fileURLToPath(new URL('./production-probe.mjs', import.meta.url)),
           '--case',
           probe,
         ],
@@ -172,7 +173,7 @@ export async function runFullProduction() {
         new URL('../helpers/tsx-register.mjs', import.meta.url).href,
         '--test',
         '--test-reporter=tap',
-        ...ownedProofs.map((file) => new URL(`../${file}`, import.meta.url).href),
+        ...ownedProofs.map((file) => fileURLToPath(new URL(`../${file}`, import.meta.url))),
       ],
       { cwd: root, env: { ...process.env, AGENTCOMMS_DESKTOP_NATIVE: '1' }, stdio: 'inherit', timeout: 1_200_000 },
     );

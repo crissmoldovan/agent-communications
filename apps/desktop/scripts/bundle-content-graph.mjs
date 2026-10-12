@@ -19,7 +19,8 @@ const forbiddenBytes = new RegExp(`["']node:[a-z0-9_/-]+["']|${forbidden.source.
 const METADATA_LAUNCHERS = Object.freeze({
   darwin: Object.freeze({ 'Contents/Info.plist': Object.freeze(['CFBundleExecutable=agentcomms-desktop']) }),
   linux: Object.freeze({
-    'usr/share/applications/agentcomms-desktop.desktop': Object.freeze(['Exec=agentcomms-desktop']),
+    // Tauri names the desktop entry after the product name.
+    'usr/share/applications/Agent Communications.desktop': Object.freeze(['Exec=agentcomms-desktop']),
   }),
   win32: Object.freeze({}),
 });
@@ -244,11 +245,12 @@ export function auditBundle(evidence) {
 }
 
 function command(binary, args, cwd = desktop) {
+  // No shell: every caller runs an executable, and a shell would split an argument with a space in it (the NSIS
+  // installer is "Agent Communications_<version>_x64-setup.exe").
   const result = spawnSync(binary, args, {
     cwd,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
-    shell: process.platform === 'win32',
   });
   assert.equal(
     result.status,
@@ -412,6 +414,12 @@ export async function buildEvidence() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  auditBundle(await buildEvidence());
+  const evidence = await buildEvidence();
+  // The whole inventory first, so a refusal shows every file the payload holds, not only the first it refused.
+  for (const file of evidence.files)
+    process.stdout.write(
+      `bundle file: ${file.path} | ${file.provenance} | ${file.executable ? 'executable' : 'data'}\n`,
+    );
+  auditBundle(evidence);
   process.stdout.write('desktop bundle content and dependency graph: OK\n');
 }

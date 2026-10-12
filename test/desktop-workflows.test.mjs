@@ -170,7 +170,7 @@ test('desktop-windows-probe-launcher', async () => {
   assert.ok(source.includes(build), 'build the actual bundled probe in the outer workflow shell');
   assert.match(source, /VITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true/);
   for (const branch of [
-    'macOS) bundle=app; probe="apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop" ;;',
+    'macOS) bundle=app; probe="$PWD/apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop" ;;',
     'Windows)\n    bundle=nsis',
     'Linux)\n    bundle=deb',
   ])
@@ -200,7 +200,8 @@ test('desktop-shipped-probe-payload', async () => {
   assert.ok(source, 'missing shipped-payload webview probe step');
   assert.match(
     source,
-    /macOS\) bundle=app; probe="apps\/desktop\/src-tauri\/target\/release\/bundle\/macos\/Agent Communications\.app\/Contents\/MacOS\/agentcomms-desktop" ;;/,
+    // An absolute path: the payload harness refuses a relative one.
+    /macOS\) bundle=app; probe="\$PWD\/apps\/desktop\/src-tauri\/target\/release\/bundle\/macos\/Agent Communications\.app\/Contents\/MacOS\/agentcomms-desktop" ;;/,
   );
   assert.match(source, /debs=\(apps\/desktop\/src-tauri\/target\/release\/bundle\/deb\/\*\.deb\)/);
   assert.match(source, /dpkg-deb -x "\$\{debs\[0\]\}" "\$probe_root"/);
