@@ -3,8 +3,10 @@ import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
+import { fixedDeadline } from '../store/retention.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
 import type { PreparedSourceStageTerminalisation } from './expiry.ts';
+import { expireHeldDecisionsInTransaction } from './holds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import {
   purgeB2RetainedContentForRuleVersions,
@@ -551,12 +553,58 @@ export function shortenRuleRetentionDeadlines(input: {
        WHERE rule_id = ?`,
     )
     .run(child.retention.ingestMs, ruleId);
+  // Pre-E held rows lack a creation instant. Their only durable deadline proxy is the projection's staged time, so
+  // every tightening recomputes both retained bounds from there while only ever shortening the current deadline.
+  const legacyHeld = database
+    .prepare(
+      `SELECT decision.id, decision.rule_version, decision.hold_expires_at, decision.hold_bound_by, ingest.staged_at
+         FROM decisions AS decision
+         JOIN ingest ON ingest.event_id = decision.event_id
+        WHERE decision.rule_id = ?
+          AND decision.outcome = 'hold'
+          AND decision.hold_expires_at IS NOT NULL
+          AND decision.hold_created_at IS NULL`,
+    )
+    .all(ruleId) as Array<{
+    id: string;
+    hold_expires_at: number;
+    hold_bound_by: 'hold-window' | 'ingest-retention' | null;
+    staged_at: number;
+  }>;
+  for (const held of legacyHeld) {
+    const holdWindow = fixedDeadline(held.staged_at, child.retention.holdMs);
+    const ingestCap = fixedDeadline(held.staged_at, child.retention.ingestMs);
+    const deadline = Math.min(held.hold_expires_at, holdWindow, ingestCap);
+    // Ingest wins ties, including a newly equal prior deadline. If the prior deadline remains independently earlier,
+    // retain its established provenance; unlabeled pre-E rows use their historical hold-window convention.
+    const holdBoundBy =
+      ingestCap <= deadline
+        ? 'ingest-retention'
+        : holdWindow <= deadline
+          ? 'hold-window'
+          : (held.hold_bound_by ?? 'hold-window');
+    database
+      .prepare('UPDATE decisions SET hold_expires_at = ?, hold_bound_by = ? WHERE id = ?')
+      .run(deadline, holdBoundBy, held.id);
+  }
   database
     .prepare(
       `UPDATE decisions
        SET hold_expires_at = CASE
-             WHEN hold_expires_at IS NULL THEN NULL
-             ELSE MIN(hold_expires_at, (SELECT staged_at + ? FROM ingest WHERE ingest.event_id = decisions.event_id))
+             WHEN outcome != 'hold' OR hold_expires_at IS NULL OR hold_created_at IS NULL THEN hold_expires_at
+             ELSE MIN(
+               hold_expires_at,
+               hold_created_at + ?,
+               (SELECT staged_at + ? FROM ingest WHERE ingest.event_id = decisions.event_id)
+             )
+           END,
+           hold_bound_by = CASE
+             WHEN outcome != 'hold' OR hold_expires_at IS NULL OR hold_created_at IS NULL THEN hold_bound_by
+             WHEN (SELECT staged_at + ? FROM ingest WHERE ingest.event_id = decisions.event_id) <= hold_created_at + ?
+                  AND (SELECT staged_at + ? FROM ingest WHERE ingest.event_id = decisions.event_id) <= hold_expires_at
+               THEN 'ingest-retention'
+             WHEN hold_created_at + ? < hold_expires_at THEN 'hold-window'
+             ELSE hold_bound_by
            END,
            metadata_expires_at = MIN(
              metadata_expires_at,
@@ -564,7 +612,19 @@ export function shortenRuleRetentionDeadlines(input: {
            )
        WHERE rule_id = ?`,
     )
-    .run(child.retention.holdMs, child.retention.decisionMetadataMs, ruleId);
+    .run(
+      child.retention.holdMs,
+      child.retention.ingestMs,
+      child.retention.ingestMs,
+      child.retention.holdMs,
+      child.retention.ingestMs,
+      child.retention.holdMs,
+      child.retention.decisionMetadataMs,
+      ruleId,
+    );
+  // The parent transaction owns the derived pointer, so a shortened hold that is already due becomes terminal before
+  // a resolver can observe the new pointer. The helper obtains SQLite's current transaction clock itself.
+  expireHeldDecisionsInTransaction(database);
   const retainedVersions = database
     .prepare('SELECT version, document FROM rule_versions WHERE rule_id = ?')
     .all(ruleId) as unknown as StoredRuleRetention[];
@@ -656,7 +716,15 @@ export function shortenRuleRetentionDeadlines(input: {
       `SELECT projection.event_id, projection.rule_id, projection.rule_version, ingest.account_id
        FROM ingest_rules AS projection
        JOIN ingest ON ingest.event_id = projection.event_id
-       WHERE projection.rule_id = ? AND projection.decision_deadline <= ?`,
+       WHERE projection.rule_id = ? AND projection.decision_deadline <= ?
+         AND NOT EXISTS (
+           SELECT 1
+             FROM decisions AS held
+            WHERE held.event_id = projection.event_id
+              AND held.rule_id = projection.rule_id
+              AND held.rule_version = projection.rule_version
+              AND held.outcome = 'hold'
+         )`,
     )
     .all(ruleId, now) as Array<{ event_id: string; rule_id: string; rule_version: number; account_id: string }>;
   for (const projection of dueProjections) {

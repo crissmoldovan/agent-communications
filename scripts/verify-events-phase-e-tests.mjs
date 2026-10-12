@@ -49,6 +49,12 @@ const STRICT_RUNNERS = Object.freeze({
     loopCollection: 'JUDGE_TRANSPORT_MUTATIONS',
     helper: 'expectTransportMutationToFail',
   },
+  'judge-hold-mutants': {
+    test: 'packages/events-daemon/test/judge-hold-mutations.test.ts',
+    support: 'packages/events-daemon/test/support/judge-hold-mutants.ts',
+    collection: 'JUDGE_HOLD_MUTATIONS',
+    helper: 'expectJudgeHoldMutationToFail',
+  },
 });
 
 /** E owns these rows rather than allowing a mutable manifest to define which completed-task guards matter. */
@@ -90,6 +96,20 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e7-single-decision-owner',
   'e7-deterministic-shared-route',
   'e7-evaluator-writer-lease',
+  'e8-sqlite-hold-clock',
+  'e8-ingest-tie',
+  'e8-lease-recovery',
+  'e8-expiry-before-control',
+  'e8-decision-bound-token',
+  'e8-final-resolution-recheck',
+  'e8-account-purge-claim',
+  'e8-evaluator-db-clock',
+  'e8-hold-write-expiry',
+  'e8-held-whatsapp-live-fence',
+  'e8-held-whatsapp-journal-version',
+  'e8-legacy-hold-ingest-cap',
+  'e8-legacy-hold-repeated-tightening',
+  'e8-held-final-live-account-fence',
 ]);
 
 async function source(root, file) {
