@@ -14,6 +14,11 @@ export interface CurrentWhatsAppEventVisibility {
   readonly seesUnit?: ((unitKey: string) => boolean) | undefined;
 }
 
+/** The shared fence pairs the channel's file-format visibility with the exact durable journal head it applied. */
+export interface FencedWhatsAppEventVisibility extends CurrentWhatsAppEventVisibility {
+  readonly journalVersion: number;
+}
+
 export type WithCurrentWhatsAppEventVisibility = <T>(
   input: Readonly<{ accountId: string }>,
   work: (visibility: CurrentWhatsAppEventVisibility) => Promise<T> | T,
@@ -93,11 +98,11 @@ export class WhatsAppVisibilityFence {
   /** Runs `work` only after the durable journal has caught up with the live file under its lock. */
   async withCurrentVisibility<T>(
     input: Readonly<{ accountId: string }>,
-    work: (visibility: CurrentWhatsAppEventVisibility) => Promise<T> | T,
+    work: (visibility: FencedWhatsAppEventVisibility) => Promise<T> | T,
   ): Promise<T> {
     return this.#withCurrent(input, async (visibility) => {
-      this.applyCurrentVisibility(input.accountId, visibility);
-      return work(visibility);
+      const journalVersion = this.applyCurrentVisibility(input.accountId, visibility);
+      return work({ ...visibility, journalVersion });
     });
   }
 
@@ -114,6 +119,17 @@ export class WhatsAppVisibilityFence {
       if (hidden(visibility, input.whatsappMessageId)) return undefined;
       await recheck();
       return write();
+    });
+  }
+
+  /** A retained-content reader keeps this one shared live-list lock through its read and final content-free outcome. */
+  async withCurrentVisibleRead<T>(
+    input: Readonly<{ accountId: string; whatsappMessageId: string }>,
+    read: (visibility: FencedWhatsAppEventVisibility) => Promise<T> | T,
+  ): Promise<T | undefined> {
+    return this.withCurrentVisibility({ accountId: input.accountId }, (visibility) => {
+      if (hidden(visibility, input.whatsappMessageId)) return undefined;
+      return read(visibility);
     });
   }
 
@@ -146,14 +162,14 @@ export class WhatsAppVisibilityFence {
     });
   }
 
-  private applyCurrentVisibility(accountId: string, visibility: CurrentWhatsAppEventVisibility): void {
+  private applyCurrentVisibility(accountId: string, visibility: CurrentWhatsAppEventVisibility): number {
     if (!/^[0-9a-f]{64}$/u.test(visibility.digest))
       throw new CommsError('BAD_DATA', 'the WhatsApp list visibility digest is not a lowercase SHA-256 value');
-    this.#store.immediate(() => {
+    return this.#store.immediate(() => {
       const current = this.#store.database
         .prepare('SELECT version, lists_digest FROM whatsapp_visibility WHERE account_id = ?')
         .get(accountId) as { version: number; lists_digest: string } | undefined;
-      if (current?.lists_digest === visibility.digest) return;
+      if (current?.lists_digest === visibility.digest) return current.version;
       const version = (current?.version ?? 0) + 1;
       const at = this.#now();
       const changedAt = new Date(at).toISOString();
@@ -212,7 +228,7 @@ export class WhatsAppVisibilityFence {
           )
           .run(accountId, key.chatJid, key.senderJidRaw, key.stanzaId);
       }
-      if (newlyHidden.length === 0) return;
+      if (newlyHidden.length === 0) return version;
       const marks = newlyHidden.map(() => '?').join(', ');
       const affectedEvents = this.#store.database
         .prepare(
@@ -271,6 +287,7 @@ export class WhatsAppVisibilityFence {
         visibilityVersion: version,
         changedAt,
       });
+      return version;
     });
   }
 }

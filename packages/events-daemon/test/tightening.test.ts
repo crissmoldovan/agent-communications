@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
+import { sqliteTransactionNow } from '../src/runtime/holds.ts';
 import { applyDerivedTightening, shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -127,6 +128,11 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
   const stateDir = await shortTempDir('events-tightening-retention-');
   const store = await openEventDatabase({ stateDir });
   try {
+    // The held row predates E's bound columns, but its timestamps must still be compared to SQLite's authority.
+    const dbNow = store.immediate(() => sqliteTransactionNow(store.database));
+    const stagedAt = dbNow + 60_000;
+    const initialLongExpiry = stagedAt + 604_800_000;
+    const initialDryrunExpiry = stagedAt + 86_400_000;
     const versions = new ImmutableVersions(store.database);
     versions.createTarget(target);
     versions.createRule(base);
@@ -144,10 +150,10 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
       },
     };
     store.database.exec(
-      "INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at) VALUES ('stage-retention', 'gmail', 'account-1', 'mailbox', 10, 1000, X'01', 10); INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES ('stage-retention', 'rule-tightening', 1); INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-retention', 'install', 'gmail.message.received', 1, 'account-1', 'dedupe', 10, 10, 10); INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection) VALUES ('event-retention', 'rule-tightening', 1, 1000, X'01'); INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record) VALUES ('decision-retention', 'event-retention', 'account-1', 'rule-tightening', 1, 'hold', 1000, 1000, 'retained', X'01'); INSERT INTO deliveries (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record, expires_at, state, switch_generation) VALUES ('delivery-retention', 'decision-retention', 'account-1', 'rule-tightening', 1, 'target-tightening@1', 'target-tightening', 1, X'01', 604800010, 'queued', 0); INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at) VALUES ('delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'event-retention', 'account-1', X'01', 10, 86400010); INSERT INTO stream_log (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version, event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at, expires_at, switch_generation) VALUES ('stream-retention', 'delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'subscriber-retention', 1, 'event-retention', 'account-1', NULL, NULL, X'01', 10, 604800010, 0)",
+      `INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at) VALUES ('stage-retention', 'gmail', 'account-1', 'mailbox', ${stagedAt}, ${initialLongExpiry}, X'01', ${stagedAt}); INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES ('stage-retention', 'rule-tightening', 1); INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-retention', 'install', 'gmail.message.received', 1, 'account-1', 'dedupe', ${stagedAt}, ${stagedAt}, ${stagedAt}); INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection) VALUES ('event-retention', 'rule-tightening', 1, ${initialLongExpiry}, X'01'); INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record) VALUES ('decision-retention', 'event-retention', 'account-1', 'rule-tightening', 1, 'hold', ${initialLongExpiry}, ${initialLongExpiry}, 'retained', X'01'); INSERT INTO deliveries (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record, expires_at, state, switch_generation) VALUES ('delivery-retention', 'decision-retention', 'account-1', 'rule-tightening', 1, 'target-tightening@1', 'target-tightening', 1, X'01', ${initialLongExpiry}, 'queued', 0); INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at) VALUES ('delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'event-retention', 'account-1', X'01', ${stagedAt}, ${initialDryrunExpiry}); INSERT INTO stream_log (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version, event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at, expires_at, switch_generation) VALUES ('stream-retention', 'delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'subscriber-retention', 1, 'event-retention', 'account-1', NULL, NULL, X'01', ${stagedAt}, ${initialLongExpiry}, 0)`,
     );
 
-    shortenRuleRetentionDeadlines({ database: store.database, ruleId: base.ruleId, child, now: 0 });
+    shortenRuleRetentionDeadlines({ database: store.database, ruleId: base.ruleId, child, now: dbNow });
 
     assert.deepEqual(
       {
@@ -158,10 +164,16 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
           .prepare('SELECT decision_deadline FROM ingest_rules WHERE event_id = ?')
           .get('event-retention') as Record<string, unknown>),
         ...(store.database
-          .prepare('SELECT hold_expires_at, metadata_expires_at FROM decisions WHERE id = ?')
+          .prepare('SELECT hold_expires_at, hold_bound_by, metadata_expires_at FROM decisions WHERE id = ?')
           .get('decision-retention') as Record<string, unknown>),
       },
-      { stage_expires_at: 110, decision_deadline: 110, hold_expires_at: 120, metadata_expires_at: 170 },
+      {
+        stage_expires_at: stagedAt + 100,
+        decision_deadline: stagedAt + 100,
+        hold_expires_at: stagedAt + 100,
+        hold_bound_by: 'ingest-retention',
+        metadata_expires_at: stagedAt + 160,
+      },
     );
     assert.equal(
       (
@@ -169,7 +181,7 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
           expires_at: number;
         }
       ).expires_at,
-      130,
+      stagedAt + 120,
     );
     assert.equal(
       (
@@ -177,7 +189,7 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
           expires_at: number;
         }
       ).expires_at,
-      140,
+      stagedAt + 130,
     );
     assert.equal(
       (
@@ -185,7 +197,7 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
           expires_at: number;
         }
       ).expires_at,
-      150,
+      stagedAt + 140,
     );
   } finally {
     store.close();
