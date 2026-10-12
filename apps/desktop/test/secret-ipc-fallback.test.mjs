@@ -2,12 +2,18 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { SecretFormState } from '../src/secret-form-state.ts';
+import { NATIVE_SKIP } from './helpers/native-lane.mjs';
 import { tauriIpcFallback } from './helpers/tauri-ipc-fallback.mjs';
 
 assertLoopbackSeal();
 
 // desktop-mutation: desktop-secret-ipc-fallback
-test('secret-window: pinned Tauri fallback preserves only the live hidden IPC payload', async () => {
+test('secret-window: pinned Tauri fallback preserves only the live hidden IPC payload', async (t) => {
+  // It runs the pinned Tauri bridge's own scripts, read from the locked crate in Cargo's registry.
+  if (NATIVE_SKIP) {
+    t.skip(NATIVE_SKIP);
+    return;
+  }
   for (const command of ['desktop_target_url_set', 'desktop_judge_key_set', 'desktop_judge_key_rotate']) {
     for (const boundary of ['success', 'failure', 'close', 'blur', 'navigation-failure', 'submit']) {
       const bridge = await tauriIpcFallback();

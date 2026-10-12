@@ -1995,6 +1995,19 @@
         "find": "Err(error) if error.code == \"NOT_FOUND\" || error.code == \"CONTROL_IO\" => {}",
         "replace": "Err(error) if error.code == \"NOT_FOUND\" => {}"
       }
+    },
+    {
+      "id": "desktop-native-lane",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-native-lane",
+      "production": "apps/desktop/package.json",
+      "import": "../apps/desktop/package.json",
+      "mutation": {
+        "file": "apps/desktop/package.json",
+        "find": " --import ./test/helpers/native-lane-on.mjs",
+        "replace": ""
+      }
     }
   ]
 }

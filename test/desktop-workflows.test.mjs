@@ -84,6 +84,7 @@ test('desktop-workflow-matrix', async () => {
     'pnpm --filter @agentcomms/desktop build',
     'pnpm --filter @agentcomms/desktop typecheck',
     'pnpm --filter @agentcomms/desktop test',
+    'pnpm --filter @agentcomms/desktop test:native',
     'cargo fmt --all -- --check',
     'cargo clippy --all-targets --all-features -- -D warnings',
     'cargo test --all-targets --all-features',
@@ -92,6 +93,13 @@ test('desktop-workflow-matrix', async () => {
     'pnpm --filter @agentcomms/desktop tauri:build --no-sign',
   ])
     assert.ok(source.includes(command), `missing ${command}`);
+  // Native proofs compile against the crates the Rust gates fetched, so they come after them, on every OS.
+  const stepIndex = (name) => job.steps.findIndex((step) => step.name === name);
+  assert.ok(stepIndex('Rust gates') >= 0 && stepIndex('Native desktop proofs (Cargo)') > stepIndex('Rust gates'));
+  assert.equal(
+    job.steps[stepIndex('Native desktop proofs (Cargo)')].run,
+    'pnpm --filter @agentcomms/desktop test:native',
+  );
   const unixControl = job.steps.find(
     (step) => step.name === 'Unix Task-4 production mutation and Node/Rust control gates',
   );
@@ -310,4 +318,33 @@ test('desktop-no-linux-upload', async () => {
   const upload = release.jobs.bundle.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.with.path, 'release-assets/*');
   assert.equal(upload.with['if-no-files-found'], 'error');
+});
+
+// Root `pnpm verify` runs no Cargo (Phase C plan); the desktop workflow runs those proofs through `test:native`.
+// desktop-mutation: desktop-native-lane
+test('desktop-native-lane', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const scripts = JSON.parse(await readFile(new URL('../apps/desktop/package.json', import.meta.url), 'utf8')).scripts;
+  assert.doesNotMatch(scripts.test, /native-lane-on/);
+  assert.equal(
+    scripts['test:native'],
+    scripts.test.replace(
+      '--import ./test/helpers/tsx-register.mjs',
+      '--import ./test/helpers/tsx-register.mjs --import ./test/helpers/native-lane-on.mjs',
+    ),
+  );
+  const tests = new URL('../apps/desktop/test/', import.meta.url);
+  const native = [];
+  for (const name of await readdir(tests)) {
+    if (!/\.test\.(?:mjs|ts|tsx)$/.test(name)) continue;
+    const source = await readFile(new URL(name, tests), 'utf8');
+    if (!/spawn(?:Sync)?\(\s*['"]cargo['"]/.test(source) && !source.includes('tauri-ipc-fallback.mjs')) continue;
+    native.push(name);
+    assert.match(
+      source,
+      /import \{ NATIVE_SKIP \} from '\.\/helpers\/native-lane\.mjs';/,
+      `${name} must gate its Cargo proof`,
+    );
+  }
+  assert.ok(native.length >= 5, 'the Cargo-backed desktop proofs are found');
 });

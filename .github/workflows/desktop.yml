@@ -86,12 +86,16 @@
         },
         {
           "name": "Frontend gates",
-          "run": "pnpm --filter @agentcomms/desktop build\npnpm --filter @agentcomms/desktop typecheck\npnpm --filter @agentcomms/desktop test\nnode --test test/desktop-workflows.test.mjs apps/desktop/test/release-notes.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-3"
+          "run": "pnpm --filter \"./packages/**\" run build\npnpm --filter @agentcomms/desktop build\npnpm --filter @agentcomms/desktop typecheck\npnpm --filter @agentcomms/desktop test\nnode --test test/desktop-workflows.test.mjs apps/desktop/test/release-notes.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-3"
         },
         {
           "name": "Rust gates",
           "working-directory": "apps/desktop/src-tauri",
           "run": "cargo fmt --all -- --check\ncargo clippy --all-targets --all-features -- -D warnings\ncargo test --all-targets --all-features"
+        },
+        {
+          "name": "Native desktop proofs (Cargo)",
+          "run": "pnpm --filter @agentcomms/desktop test:native"
         },
         {
           "name": "Unix Task-4 production mutation and Node/Rust control gates",

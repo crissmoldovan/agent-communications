@@ -58,7 +58,13 @@ if (selected.length === 0) {
         throw new Error(`${item.id}: mutation has no executable declared test`);
       }
       const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
-      const childEnv = { ...process.env, NODE_OPTIONS: '', GIT_DIR: gitDir, GIT_WORK_TREE: temp };
+      const childEnv = {
+        ...process.env,
+        NODE_OPTIONS: '',
+        GIT_DIR: gitDir,
+        GIT_WORK_TREE: temp,
+        AGENTCOMMS_DESKTOP_NATIVE: '1',
+      };
       delete childEnv.DESKTOP_PROBE_BINARY;
       if (['task-5', 'task-6', 'task-6-owner'].includes(item.group)) {
         const kind = process.platform === 'win32' ? 'junction' : 'dir';

@@ -8,6 +8,7 @@ import { emptyConfig } from '../../../packages/core/src/config.ts';
 import { EventControlClient } from '../../../packages/events-daemon/src/control/client.ts';
 import { startEventOwner } from '../../../packages/events-daemon/src/runtime/owner.ts';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
+import { NATIVE_SKIP } from './helpers/native-lane.mjs';
 
 assertLoopbackSeal();
 
@@ -63,6 +64,14 @@ function cargo(args, env) {
 // Compiled Rust approval session under test: ../src-tauri/src/commands/approval.rs
 // desktop-mutation: desktop-approval-fresh-view
 test('app approval: compiled Rust command views and approves through the sealed real B3 owner', async (t) => {
+  if (NATIVE_SKIP) {
+    t.skip(NATIVE_SKIP);
+    return;
+  }
+  if (process.platform === 'win32') {
+    t.skip('Windows owner control is unavailable');
+    return;
+  }
   // `/tmp` is deliberately short enough for the real owner socket path on macOS. The desktop's daemon profile accepts
   // only canonical paths, so resolve its link there (`/private/tmp`) before either side sees the root.
   const fsp = await import('node:fs/promises');

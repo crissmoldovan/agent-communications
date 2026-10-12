@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { emptyConfig } from '../../../packages/core/src/config.ts';
 import { startEventOwner } from '../../../packages/events-daemon/src/runtime/owner.ts';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
+import { NATIVE_SKIP } from './helpers/native-lane.mjs';
 
 assertLoopbackSeal();
 
@@ -20,6 +21,10 @@ function diagnostics(output) {
 // Compiled wire boundary: ../src-tauri/src/control/client.rs
 // desktop-mutation: desktop-secret-control-trace
 test('secret-trace: compiled native commands carry hidden bytes only through the sealed real owner secret path', async (t) => {
+  if (NATIVE_SKIP) {
+    t.skip(NATIVE_SKIP);
+    return;
+  }
   if (process.platform === 'win32') {
     t.skip('Windows owner control is unavailable');
     return;

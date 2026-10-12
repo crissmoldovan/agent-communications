@@ -16,6 +16,9 @@ No secret input or reveal is persisted in preferences. The core audit envelope i
 is validated before app completion, with no secret-derived fields permitted in the underlying audit.
 
 Run `pnpm --filter @agentcomms/desktop build`, `typecheck`, and `test` after installing the workspace dependencies. Native Tauri builds require the platform toolchain; the Cargo lockfile is checked in.
+`test` skips the proofs that build or run Rust, so the repository's `pnpm verify` needs no Rust toolchain;
+`pnpm --filter @agentcomms/desktop test:native` runs every test with them, once the locked crates are fetched (any
+`cargo build` in `src-tauri` does that). The desktop workflow runs it on each operating system after its Rust gates.
 
 The desktop workflow checks macOS, Windows and Linux with public, frozen pnpm dependencies, frontend checks,
 Rust formatting, warning-denied clippy, Rust tests, the bundled actual-webview no-egress probe and an unsigned build.

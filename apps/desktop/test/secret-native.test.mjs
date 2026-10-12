@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
+import { NATIVE_SKIP } from './helpers/native-lane.mjs';
+
+// Every case here runs a compiled Rust test, so each one is in the native lane.
+const test = (name, fn) => nodeTest(name, { skip: NATIVE_SKIP }, fn);
 
 // Compiled production paths:
 // ../src-tauri/capabilities/settings.json

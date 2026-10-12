@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
 const manifest = new URL('./mutations/manifest.json', import.meta.url);
@@ -29,7 +30,7 @@ test('mutation runner executes exactly the declared test name', async (t) => {
   const altered = join(temp, 'manifest.json');
   await writeFile(altered, JSON.stringify(document));
 
-  const result = spawnSync(process.execPath, [runner.pathname, '--manifest', altered, '--case', item.id], {
+  const result = spawnSync(process.execPath, [fileURLToPath(runner), '--manifest', altered, '--case', item.id], {
     cwd: root,
     encoding: 'utf8',
   });

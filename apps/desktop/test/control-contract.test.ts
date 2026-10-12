@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { NATIVE_SKIP } from './helpers/native-lane.mjs';
 
 // desktop-mutation: desktop-b3-wire-contract
 test('control-contract: desktop-b3-wire-contract rejects schema and vector drift', async () => {
@@ -37,6 +38,10 @@ test('control-contract: desktop-b3-wire-contract rejects schema and vector drift
 // Build input exercised by this artifact test: ../src-tauri/build.rs
 // desktop-mutation: desktop-control-command-manifest
 test('control-contract: built app manifest registers exactly the settings commands and isolates secrets', async (t) => {
+  if (NATIVE_SKIP) {
+    t.skip(NATIVE_SKIP);
+    return;
+  }
   const desktop = new URL('../src-tauri/', import.meta.url);
   const target = await mkdtemp(join(tmpdir(), 'desktop-acl-artifact-'));
   t.after(() => rm(target, { recursive: true, force: true }));
