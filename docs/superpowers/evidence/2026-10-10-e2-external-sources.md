@@ -217,10 +217,80 @@ The owner-controlled, content-free real-mac gate result (E2-9) is produced by Ta
 candidate that contains Task 7, so it is recorded here when that gate first runs; until then the shipped lock keeps Laya
 unavailable and no release can offer it.
 
+## Task 8 — `@receptron/laya` load, rendering, output and token counting
+
+The coordinator fetched the package tarball once, checked it against the runtime lock's SRI, and read its source
+without installing, importing or running it. Every entry below is bound to the SHA-256 of the file it reads. The
+tarball: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`, 16328 bytes, SHA-256
+`cc488d1e73929a5cdd38fb1f2efa5826a56cc6e6bdaf4424b3d39ba1eb42aac4`, SRI
+`sha512-cTqQC4DEY/wDAHY44EQhbW8wlrO7mZyLVWOy512783LUq55a7nLGGu16wXVi6oi4uNRfR0cLctKcQAxdXCXQfA==` (the same as
+`npm-receptron-laya-0.1.2` and the lock), 23 files and 52526 bytes unpacked.
+
+### npm-receptron-laya-0.1.2-load
+
+- id: `npm-receptron-laya-0.1.2-load`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-12T23:05:21Z` (`package/dist/laya.js`, 6869 bytes)
+- immutable: `60d5fcd9665732df4f8827468cf369274e17e4ef78a2d35ce5efc0339eee2dc0`
+- fact: `@receptron/laya 0.1.2 dist/laya.js Laya.load(opts) uses path.resolve(opts.modelDir) when opts.modelDir is set and otherwise calls ensureBundle(opts); it reads laya_config.json, tokenizer/tokenizer.json and tokenizer/tokenizer_config.json from that directory with JSON.parse, builds new Tokenizer(tokenizerJson, tokenizerConfig) from @huggingface/tokenizers, throws unless [CLS], [SEP], [MASK] and [PAD] are tokens, and opens ort.InferenceSession.create(<modelDir>/laya.onnx, { executionProviders: opts.executionProviders ?? ["cpu"], graphOptimizationLevel: "all", ...opts.sessionOptions }), so opts.sessionOptions can override the execution providers; close() calls session.release()`
+- reviewer: `coordinator`
+
+### npm-receptron-laya-0.1.2-download
+
+- id: `npm-receptron-laya-0.1.2-download`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-12T23:05:21Z` (`package/dist/download.js`, 3573 bytes)
+- immutable: `e24e61d0769876b6dfb2d71134337c905376b56d5268de8cda8113457d6ea4f2`
+- fact: `@receptron/laya 0.1.2 dist/download.js ensureBundle(opts) fetches laya.onnx, laya.onnx.data, laya_config.json, tokenizer/tokenizer.json and tokenizer/tokenizer_config.json from https://huggingface.co/<opts.repo or receptron/laya-onnx>/resolve/<opts.revision or main>/<file> with redirect "follow", adds Authorization: Bearer <opts.token or HF_TOKEN> when either is set, and writes into opts.cacheDir or LAYA_CACHE or <XDG_CACHE_HOME or ~/.cache>/receptron-laya; the module's top level only imports node built-ins and defines constants and functions, so importing it performs no I/O`
+- reviewer: `coordinator`
+
+### npm-receptron-laya-0.1.2-render
+
+- id: `npm-receptron-laya-0.1.2-render`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-12T23:05:21Z` (`package/dist/sequence.js`, 4003 bytes)
+- immutable: `9ae537429c31e12320632c9e4f34a8fce4d0df89ae5fe897ad5a929b1ef3be0c`
+- fact: `@receptron/laya 0.1.2 dist/sequence.js buildSequence lays a question out as [CLS] "<type> question: <instructions>" [SEP], then [MASK] and the text of each option, then [SEP] <state> [SEP], after replacing every literal "[MASK]" in instructions, options and state with a space; it encodes each option as " " + text cut to 48 tokens, cuts every option to max(4, floor((head_max_len - 16) / options)) tokens when head_max_len minus the options' total is below 16, cuts the instructions to max(8, the remaining head budget) tokens, silently cuts the state (a string as is, otherwise Python-style json.dumps) to max(0, max_len - length so far - 1) tokens, cuts the whole sequence to max_len and drops markers at or beyond it; options render as "key: description" or "key" (choice), "level <i>: <text>" (score) and "false: <text>", "true: <text>" with defaults "no, the statement does not hold" and "yes, the statement holds" (noul)`
+- reviewer: `coordinator`
+
+### npm-receptron-laya-0.1.2-output
+
+- id: `npm-receptron-laya-0.1.2-output`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-12T23:05:21Z` (`package/dist/laya.js`, 6869 bytes)
+- immutable: `60d5fcd9665732df4f8827468cf369274e17e4ef78a2d35ce5efc0339eee2dc0`
+- fact: `@receptron/laya 0.1.2 dist/laya.js systemOne(state, questions) requires at least one question and throws when a question's markers do not match its options; it feeds input_ids int64 [n, L] right-padded with [PAD], attention_mask int64 [n, L], marker_pos int64 [n, K], marker_mask bool [n, K] and qtype int64 [n] (choice 0, score 1, noul 2), throws unless logits and act_probs are float32, divides each row's logits by temperature_by_options["<type>:<2, 3-5, 6-10 or 11+>"] or else temperature[qtype] or else 1, applies softmax, and answers noul as round4(p[1]), score as round4(sum of i * p[i]) and choice as the most probable option, with round4 probabilities, confidence 1 - normalized entropy and rl_agent.act_probability from act_probs; usage is input_tokens = the sum of the already-cut sequence lengths and output_tokens = 0, and model is "laya"`
+- reviewer: `coordinator`
+
+### hf-laya-onnx-config
+
+- id: `hf-laya-onnx-config`
+- url: `https://huggingface.co/receptron/laya-onnx/raw/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json`
+- fetchedAt: `2026-10-12T23:06:11Z` (369 bytes)
+- immutable: `5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561`
+- fact: `receptron/laya-onnx laya_config.json at revision 68f27dfe5a27a54fb2b1fefc432f43f972e90868 sets max_len 512, head_max_len 192, temperature [1.6369030475616455, 1.2514300346374512, 1.983399510383606] and temperature_by_options choice:3-5 1.7601518630981445, choice:6-10 1.0000158548355103, score:3-5 1.2514300346374512, noul:2 1.983399510383606, choice:11+ 0.10058280825614929, choice:2 1.9063563346862793`
+- reviewer: `coordinator`
+
+Its SHA-256 equals the one `hf-laya-onnx-tree` recorded. `tokenizer/tokenizer_config.json` (308 bytes, SHA-256
+`50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12`, also unchanged) declares `model_max_length` 8192;
+the 512-token limit comes from `max_len` above, not from the tokenizer.
+
+Consequence for the build (Task 8):
+
+- The adapter always passes `modelDir` (the verified local tree) and nothing else: no `repo`, `revision`, `token`,
+  `cacheDir`, `onProgress`, `executionProviders` or `sessionOptions`, so the CPU default stands and `ensureBundle` is
+  unreachable by construction. Task 7's closed environment carries no `HF_TOKEN`, `LAYA_CACHE` or `XDG_CACHE_HOME`, and
+  its boundary denies the network in any case.
+- `buildSequence` silently cuts instructions, options and state. The adapter therefore counts the complete, uncut
+  layout with the same tokenizer (`encode(text, { add_special_tokens: false })`) before it runs, and treats more than
+  `max_len` (512) tokens, an option over 48 tokens or a head over its budget as malformed. The package never gets to
+  cut anything.
+- Within that limit nothing is cut, so the package's `usage.input_tokens` must equal the adapter's own count; a
+  difference is malformed. The answer is passed on unchanged after the adapter checks it is a finite number in its
+  type's range (`noul` 0 to 1). The package rounds it to four places itself.
+
 ## Not yet recorded (blocks the named task)
 
 - Task 10 (gate): the owner-controlled real-mac boundary gate result for the release candidate, when it first runs.
-- Task 8: the `@receptron/laya` package's load, request-rendering, output-parsing and token-counting source, from its
-  SRI-verified bytes.
 - Task 9: the locked reference environment's Python, torch and transformers versions, when the gate first runs (the
   reference itself is `hf-laya-python-reference` above).
