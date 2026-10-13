@@ -106,10 +106,17 @@ export function purgeRemovedAccountWork(
     .run(ACTIVATION_FAILURE.ACCOUNT_REMOVED, now, accountId, source);
   const sourceEventIds = `SELECT event_id FROM ingest WHERE account_id = ? AND type GLOB ?`;
   const eventTypePattern = `${source}.*`;
+  // Retained rows outlive their ingest record, whose retention may be the shortest, so each is scoped by its own
+  // account and by the source of the exact rule version that produced it, never by a join through `ingest`. A row
+  // whose rule version is unknown counts as this source's: a removal purges what it cannot attribute.
+  const ownedBy = (table: string) => `${table}.account_id = ?
+    AND COALESCE((SELECT COALESCE(json_extract(rule.document, '$.source.channel'), 'gmail') FROM rule_versions AS rule
+                  WHERE rule.rule_id = ${table}.rule_id AND rule.version = ${table}.rule_version), ?) = ?`;
+  const owned = [accountId, source, source] as const;
   if (source === 'whatsapp') {
     // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
     // occurrence ledger when a re-check observes account removal under the list lock.
-    database.prepare(`DELETE FROM stream_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
+    database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
     database.prepare('DELETE FROM whatsapp_rule_admissions WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_heads WHERE account_id = ?').run(accountId);
@@ -127,34 +134,28 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM activation_baselines WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
-  database.prepare(`DELETE FROM dryrun_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
-  database.prepare(`DELETE FROM stream_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
+  database.prepare(`DELETE FROM dryrun_log WHERE ${ownedBy('dryrun_log')}`).run(...owned);
+  database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
   database
     .prepare(
       `UPDATE deliveries
           SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL
-        WHERE decision_id IN (
-          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
-        ) AND state = 'disclosing'`,
+        WHERE ${ownedBy('deliveries')} AND state = 'disclosing'`,
     )
-    .run(accountId, eventTypePattern);
+    .run(...owned);
   database
     .prepare(
       `UPDATE deliveries
           SET state = 'cancelled', encrypted_record = NULL, next_at = NULL
-        WHERE decision_id IN (
-          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
-        ) AND state IN ('queued', 'retryable')`,
+        WHERE ${ownedBy('deliveries')} AND state IN ('queued', 'retryable')`,
     )
-    .run(accountId, eventTypePattern);
+    .run(...owned);
   database
     .prepare(
       `UPDATE deliveries SET encrypted_record = NULL
-        WHERE decision_id IN (
-          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
-        ) AND state = 'dead-lettered'`,
+        WHERE ${ownedBy('deliveries')} AND state = 'dead-lettered'`,
     )
-    .run(accountId, eventTypePattern);
+    .run(...owned);
   // D9: the account's activation points and source resolutions go too, so a later reconnect of the same stable id can
   // never resume from a cut-over taken before the removal and backfill the mail that arrived meanwhile.
   database.prepare('DELETE FROM rule_activation_points WHERE source = ? AND account_id = ?').run(source, accountId);
@@ -168,12 +169,10 @@ export function purgeRemovedAccountWork(
     .prepare(
       `UPDATE decisions
           SET outcome = 'cancelled', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL
-        WHERE event_id IN (${sourceEventIds}) AND outcome = 'hold'`,
+        WHERE ${ownedBy('decisions')} AND outcome = 'hold'`,
     )
-    .run(accountId, eventTypePattern);
-  database
-    .prepare(`UPDATE decisions SET encrypted_record = NULL WHERE event_id IN (${sourceEventIds})`)
-    .run(accountId, eventTypePattern);
+    .run(...owned);
+  database.prepare(`UPDATE decisions SET encrypted_record = NULL WHERE ${ownedBy('decisions')}`).run(...owned);
   // Its ingest records go with its projections. One a terminal decision still names stays as that content-free
   // decision's identity (the spec keeps the delivery's cancelled or in-flight outcome), and goes when the decision does.
   database
