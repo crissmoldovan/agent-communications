@@ -1866,8 +1866,22 @@
       "mcp": "events_judge_add",
       "status": "both",
       "operation": "addJudge",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"judgeId\":\"judge-parity\",\"version\":1,\"kind\":\"local-endpoint\",\"provider\":\"ollama\",\"model\":\"parity-model\",\"endpoint\":\"http://127.0.0.1:11434/v1/systemone\",\"approvedAddressSet\":[\"127.0.0.1\"],\"promptTemplate\":\"local-noul-v1\",\"protocol\":\"noul\"}"
+      ],
+      "args": {
+        "document": {
+          "judgeId": "judge-parity",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "parity-model",
+          "endpoint": "http://127.0.0.1:11434/v1/systemone",
+          "approvedAddressSet": ["127.0.0.1"],
+          "promptTemplate": "local-noul-v1",
+          "protocol": "noul"
+        }
+      }
     },
     {
       "id": "events-daemon.judge.update",
@@ -1876,8 +1890,22 @@
       "mcp": "events_judge_update",
       "status": "both",
       "operation": "updateJudge",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"judgeId\":\"judge-parity\",\"version\":2,\"kind\":\"local-endpoint\",\"provider\":\"ollama\",\"model\":\"parity-model-v2\",\"endpoint\":\"http://127.0.0.1:11434/v1/systemone\",\"approvedAddressSet\":[\"127.0.0.1\"],\"promptTemplate\":\"local-noul-v1\",\"protocol\":\"noul\"}"
+      ],
+      "args": {
+        "document": {
+          "judgeId": "judge-parity",
+          "version": 2,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "parity-model-v2",
+          "endpoint": "http://127.0.0.1:11434/v1/systemone",
+          "approvedAddressSet": ["127.0.0.1"],
+          "promptTemplate": "local-noul-v1",
+          "protocol": "noul"
+        }
+      }
     },
     {
       "id": "events-daemon.judge.remove",
@@ -1916,8 +1944,24 @@
       "mcp": "events_budget_update",
       "status": "both",
       "operation": "updateBudget",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"budgetId\":\"judge-budget\",\"version\":1,\"global\":{\"callsPerRollingHour\":11,\"inputTokensPerRolling30Days\":1100,\"concurrency\":2},\"providers\":[{\"provider\":\"typesafe\",\"callsPerRollingHour\":7,\"inputTokensPerRolling30Days\":700,\"concurrency\":1}]}"
+      ],
+      "args": {
+        "document": {
+          "budgetId": "judge-budget",
+          "version": 1,
+          "global": { "callsPerRollingHour": 11, "inputTokensPerRolling30Days": 1100, "concurrency": 2 },
+          "providers": [
+            {
+              "provider": "typesafe",
+              "callsPerRollingHour": 7,
+              "inputTokensPerRolling30Days": 700,
+              "concurrency": 1
+            }
+          ]
+        }
+      }
     },
     {
       "id": "events-daemon.judge-kinds.list",
@@ -1934,9 +1978,9 @@
       "mcp": "events_judge_kind_enable",
       "status": "both",
       "operation": "enableJudgeKind",
-      "argv": ["basic"],
-      "args": { "kind": "basic" },
-      "expect": { "kind": "basic" }
+      "argv": ["typesafe"],
+      "args": { "kind": "typesafe" },
+      "expect": { "kind": "typesafe" }
     },
     {
       "id": "events-daemon.judge-kind.disable",
@@ -1945,9 +1989,9 @@
       "mcp": "events_judge_kind_disable",
       "status": "both",
       "operation": "disableJudgeKind",
-      "argv": ["basic"],
-      "args": { "kind": "basic" },
-      "expect": { "kind": "basic" }
+      "argv": ["typesafe"],
+      "args": { "kind": "typesafe" },
+      "expect": { "kind": "typesafe" }
     },
     {
       "id": "events-daemon.judge-model.status",

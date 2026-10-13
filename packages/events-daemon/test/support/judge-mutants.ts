@@ -14,7 +14,7 @@ export interface JudgeMutation {
   readonly killingAssertion?: string | undefined;
 }
 
-export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
+const phaseEGateMutations: readonly JudgeMutation[] = [
   {
     id: 'e3-b3-contract-version',
     source: 'packages/events-daemon/src/operations/b3-contract.ts',
@@ -149,6 +149,7 @@ export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
     after: '      const prior = null;',
     test: 'packages/events-daemon/test/b3-secrets.test.ts',
     testName: 'B3 secret slots create and rotate only exact immutable owners with content-free receipts',
+    killingAssertion: 'the expected prior secret generation is no longer current',
   },
   {
     id: 'e9-mcp-kind-enable-no-active-pointer',
@@ -363,7 +364,117 @@ export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
     testName: 'E12 final hold-resolution expiry caller commits terminal purge before reporting stale',
     killingAssertion: 'final resolution: the held decision reaches its exact terminal outcome',
   },
+  {
+    id: 'e-review-judge-input-envelope',
+    source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
+    before: `data: applyRepresentation(mapped.data, plainClassification, {
+      kind: 'enveloped',
+      envelope: (text) => wrapUntrusted(text, { field: 'judge-input' }, boundary),
+    }),`,
+    after: 'data: mapped.data,',
+    test: 'packages/events-daemon/test/judge-taint.test.ts',
+    testName:
+      'E7 taint: exact judge input preserves copied scalar, parent and subtree provenance while constants inherit none',
+    killingAssertion: 'appears only inside an untrusted-content envelope',
+  },
+  {
+    id: 'e-review-event-taint-platform',
+    source: 'packages/events-daemon/src/runtime/untrusted.ts',
+    before:
+      'input.classification.handles.map((entry) => ({ platform: input.channel, scope: entry.workspace, id: entry.id }))',
+    after: "input.classification.handles.map((entry) => ({ platform: 'gmail', scope: entry.workspace, id: entry.id }))",
+    test: 'packages/events-daemon/test/event-taint-platform.test.ts',
+    testName: 'E7 taint platform: real Slack and WhatsApp delivery commits see the channel-scoped handle first',
+    killingAssertion: 'the exact platform-scoped key exists before the outbox write',
+  },
+  {
+    id: 'e-review-kind-disable-work-closure',
+    source: 'packages/events-daemon/src/runtime/judge-kinds.ts',
+    before: '      purgeJudgeKindRuleWork(this.#store.database, enabledKind, this.#now());',
+    after: '      void enabledKind;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing',
+    killingAssertion: 'judge kind disable: the real purge caller removes the encrypted projection',
+  },
+  {
+    id: 'e-review-preio-release-commit',
+    source: 'packages/events-daemon/src/runtime/judge-budget.ts',
+    before: `      releaseReservationInTransaction(input.store.database, row.id, input.now);
+      refused = true;
+      refusalError = error;
+      return false;`,
+    after: `      releaseReservationInTransaction(input.store.database, row.id, input.now);
+      throw error;`,
+    test: 'packages/events-daemon/test/pending-rule-judge-test.test.ts',
+    testName:
+      'E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached',
+    killingAssertion: 'the pre-I/O refusal commits its reservation release and frees the concurrency slot',
+  },
+  {
+    id: 'e-review-response-owner-recovery',
+    source: 'packages/events-daemon/src/runtime/evaluate.ts',
+    before: 'recoverJudgeReservation({ store: this.#store, reservationId: judged.reservationId, now: this.#now() });',
+    after: 'void judged.reservationId;',
+    test: 'packages/events-daemon/test/judge-evaluation.test.ts',
+    testName: 'E7: pause fences reserved judge I/O and completed-response decision writes',
+    killingAssertion:
+      'pessimistic recovery closes the response content-free instead of leaving retryable owner-held work',
+  },
+  {
+    id: 'e-review-valid-mcp-kind-disable-parity',
+    source: 'packages/events-daemon/src/mcp/server.ts',
+    before: `    (args) => {
+      const kind = args.kind as string;
+      return b3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, options));
+    },`,
+    after: `    (args) => {
+      const kind = args.kind === 'typesafe' ? 'local-endpoint' : (args.kind as string);
+      return b3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, options));
+    },`,
+    test: 'packages/events-daemon/test/b3-e2e-surface.test.ts',
+    testName: 'B3 judge mutation parity: valid isolated inputs succeed through real Commander and MCP adapters',
+    killingAssertion: 'events-daemon.judge-kind.disable: mcp disables the requested valid kind',
+  },
+  {
+    id: 'e-review-b3-capability-row-removal',
+    source: 'packages/events-daemon/src/operations/b3-contract.ts',
+    before: `  both(
+    'events-daemon.judge-kind.disable',
+    'judge kind disable <kind>',
+    'events_judge_kind_disable',
+    'disableJudgeKind',
+  ),`,
+    after: '',
+    test: 'packages/events-daemon/test/judge-b3-prerequisites.test.ts',
+    testName: 'E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs',
+    killingAssertion: 'Phase E prerequisite failed: exact B3 capability inventory',
+  },
+  {
+    id: 'e-review-b3-capability-operation',
+    source: 'packages/events-daemon/src/operations/b3-contract.ts',
+    before: `  both(
+    'events-daemon.judge-kind.disable',
+    'judge kind disable <kind>',
+    'events_judge_kind_disable',
+    'disableJudgeKind',
+  ),`,
+    after: `  both(
+    'events-daemon.judge-kind.disable',
+    'judge kind disable <kind>',
+    'events_judge_kind_disable',
+    'stubbedDisableJudgeKind',
+  ),`,
+    test: 'packages/events-daemon/test/judge-b3-prerequisites.test.ts',
+    testName: 'E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs',
+    killingAssertion: 'Phase E prerequisite failed: exact B3 capability inventory',
+  },
 ];
+
+export const PHASE_E_GATE_MUTATIONS: readonly (JudgeMutation & { readonly killingAssertion: string })[] =
+  phaseEGateMutations.map((mutation): JudgeMutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
 
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
@@ -455,7 +566,13 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       exactTestName(mutation.testName),
       join(root, mutation.test),
     ];
-    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    const baseline = await runStrictMutationChild({
+      command: process.execPath,
+      args,
+      cwd: root,
+      env: environment,
+      timeoutMs: 30_000,
+    });
     if (baseline.output.includes('EPERM')) throw new Error(`${mutation.id}: baseline is blocked by EPERM`);
     if (
       baseline.code !== 0 ||
@@ -480,6 +597,7 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       args: ['--import', pathToFileURL(observer).href, ...args],
       cwd: root,
       env: environment,
+      timeoutMs: 30_000,
     });
     assert.ok(
       result.output.includes(`E3_MUTANT_LOADED:${mutation.id}`),
@@ -495,12 +613,11 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       tapSummary(result.output, 'fail', 1),
       `${mutation.id}: named test did not fail exactly once\n${result.output}`,
     );
-    if (mutation.killingAssertion !== undefined)
-      assert.equal(
-        result.output.includes(mutation.killingAssertion),
-        true,
-        `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
-      );
+    assert.equal(
+      typeof mutation.killingAssertion === 'string' && result.output.includes(mutation.killingAssertion),
+      true,
+      `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+    );
   } finally {
     await rm(mutationRoot, { recursive: true, force: true });
   }

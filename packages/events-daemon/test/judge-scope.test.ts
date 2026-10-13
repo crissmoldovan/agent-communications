@@ -351,6 +351,27 @@ test('E3 scope: a strict runner whose loop only diagnoses mutations is rejected 
   }
 });
 
+test('E3 scope: a strict copied-tree runner without an unmutated named TAP baseline is rejected', async () => {
+  const root = await manifestFixture();
+  try {
+    const supportPath = join(root, 'packages/events-daemon/test/support/judge-kind-mutants.ts');
+    const source = await readFile(supportPath, 'utf8');
+    const baseline = `    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+`;
+    assert.equal(source.includes(baseline), true, 'fixture contains the copied-tree baseline');
+    await writeFile(supportPath, source.replace(baseline, ''));
+    const problems = await verifyPhaseETestManifest({ root });
+    assert.equal(
+      problems.includes('judge-kind-mutants: strict copied-tree runner must prove one named TAP pass before mutation'),
+      true,
+      `a strict runner without its baseline must refuse: ${problems.join('; ')}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('E3 scope: static guards analyse each kind literal and each SQL statement independently', () => {
   const kindProblem = ['src/runtime/kinds.ts: judge kind literals must come from domain/lifecycle.ts'];
   assert.deepEqual(

@@ -85,6 +85,16 @@ const ALLOWED_STRING_CALLS = new Set([
   "transportRefusal.code.toLowerCase().replaceAll('_','-')",
   'transportRefusal.code.toLowerCase()',
   'JSON.stringify(durableContent)',
+  "JSON.parse(request.subarray(bodyOffset+4).toString('utf8'))",
+  "request.subarray(bodyOffset+4).toString('utf8')",
+  'JSON.parse(body.state)',
+  'String(subject)',
+  "body.state.replace(String(subject),'')",
+  "request.toString('utf8')",
+  'JSON.parse(text.slice(bodyOffset+4))',
+  'text.slice(bodyOffset+4)',
+  'values.pop()',
+  "text.replaceAll(boundary,'BOUNDARY')",
   "join(import.meta.dirname,'..','..')",
   "join(packageRoot,'..','..')",
   "join(packageRoot,'.mutants')",
@@ -147,6 +157,7 @@ const ALLOWED_HELPER_LITERAL_RUNS = new Set([
   'e11-response-fixture-pinning',
   'e11-corpus-manifest-pairing',
   'host-drift-write-fence-refusal',
+  'injection-envelope-forgery',
   'judge-adversarial-mutants',
   'JudgeAdversarialMutation',
   'JUDGE_ADVERSARIAL_MUTATIONS',
@@ -282,6 +293,7 @@ const ALLOWED_PROPERTY_STRING_READS = new Set([
   'judge.provider',
   "pathToFileURL(join(root,'test/helpers/loopback-seal-preload.mjs')).href",
   'baseline.output',
+  'body.state',
   'mutation.after',
   'mutation.before',
   'mutation.id',
@@ -298,6 +310,7 @@ const ALLOWED_PROPERTY_STRING_READS = new Set([
   'row.expected.projection',
   'row.expected.reservation',
   'row.id',
+  'row.category',
   'rule.ruleId',
   'run.destination',
   'run.durableContent',
@@ -315,11 +328,12 @@ const ALLOWED_PROPERTY_STRING_READS = new Set([
   'row.subject',
   'store.installationId',
   'stored.document',
+  "state.inputs.find((entry)=>entry.pointer==='/subject')?.value",
   'transportRefusal.code',
   'transportRefusal?.kind',
   'entry.pointer',
 ]);
-const ALLOWED_COMPUTED_STRING_READS = new Set(['match[1]', 'matches[0]?.[1]']);
+const ALLOWED_COMPUTED_STRING_READS = new Set(['match[1]', 'match?.[1]', 'matches[0]?.[1]']);
 function mayProduceString(type, seen = new Set()) {
   if (type === undefined) return true;
   if (seen.has(type)) return false;
@@ -1057,7 +1071,7 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
           assert.equal(
             ALLOWED_STRING_CALLS.has(compact),
             true,
-            `${file}: computed fixture strings must use the closed computed-string allowlist`,
+            `${file}: computed fixture strings must use the closed computed-string allowlist (${compact})`,
           );
           if (compact.startsWith('join('))
             assert.equal(

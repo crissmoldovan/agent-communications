@@ -762,7 +762,9 @@ export function beginJudgeTransport(input: {
   readonly reservationId: string;
   readonly now: number;
 }): boolean {
-  return input.store.immediate(() => {
+  let refused = false;
+  let refusalError: unknown;
+  const began = input.store.immediate(() => {
     const row = readReservation(input.store.database, input.reservationId);
     if (row === null || row.state !== 'reserved') return false;
     try {
@@ -784,7 +786,9 @@ export function beginJudgeTransport(input: {
       });
     } catch (error) {
       releaseReservationInTransaction(input.store.database, row.id, input.now);
-      throw error;
+      refused = true;
+      refusalError = error;
+      return false;
     }
     return (
       input.store.database
@@ -796,6 +800,8 @@ export function beginJudgeTransport(input: {
         .run(input.now, row.id).changes === 1
     );
   });
+  if (refused) throw refusalError;
+  return began;
 }
 
 /**

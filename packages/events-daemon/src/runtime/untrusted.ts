@@ -11,6 +11,7 @@ import {
 export interface EventTaintInput {
   readonly eventId: string;
   readonly accountId: string;
+  readonly channel: AnyEventDefinition['channel'];
   readonly classification: MappedClassification;
 }
 
@@ -61,7 +62,7 @@ export async function recordEventTaint(
   );
   for (const entry of input.classification.untrusted) collector.observeText(entry.text, 'event');
   collector.observeHandles(
-    input.classification.handles.map((entry) => ({ platform: 'gmail', scope: entry.workspace, id: entry.id })),
+    input.classification.handles.map((entry) => ({ platform: input.channel, scope: entry.workspace, id: entry.id })),
     'body',
     'event',
   );

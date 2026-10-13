@@ -11,10 +11,11 @@ export interface JudgeTask4Mutation {
   readonly testName: string;
   readonly before: string;
   readonly after: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 /** One destructive edit for each Task-4 authority or closure guard. */
-export const JUDGE_TASK4_MUTATIONS: readonly JudgeTask4Mutation[] = [
+const judgeTask4Mutations: readonly JudgeTask4Mutation[] = [
   {
     id: 'e4-no-pointer-at-prepare',
     source: 'src/runtime/activations.ts',
@@ -24,6 +25,7 @@ export const JUDGE_TASK4_MUTATIONS: readonly JudgeTask4Mutation[] = [
     before: '    const now = this.#now();',
     after:
       "    const now = this.#now();\n    if (document.kind === 'judge-budget') this.#store.database.prepare(\"INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('judge-budget', 'judge-budget', 1, NULL, 0)\").run();",
+    killingAssertion: 'the judge activation pointer changed after preparation',
   },
   {
     id: 'e4-final-pointer-drift',
@@ -53,6 +55,7 @@ export const JUDGE_TASK4_MUTATIONS: readonly JudgeTask4Mutation[] = [
     before: '    const document = this.prepareJudge(input);',
     after:
       "    const document = this.prepareJudge(input);\n    if (document.kind === 'typesafe') throw new EventDomainError('JUDGE_KIND_DISABLED', 'mutant refusal');",
+    killingAssertion: 'mutant refusal',
   },
   {
     id: 'e4-kind-disable-recovery',
@@ -169,8 +172,9 @@ export const JUDGE_TASK4_MUTATIONS: readonly JudgeTask4Mutation[] = [
     source: 'src/runtime/replacements.ts',
     test: 'test/judge-purge-closure.test.ts',
     testName: 'E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work',
-    before: '      ruleId: projection.rule_id,\n      ruleVersion: projection.rule_version,\n',
-    after: '',
+    before: '      ruleVersion: projection.rule_version,\n',
+    after: '      ruleVersion: 1,\n',
+    killingAssertion: 'retention tightening: rule A version 2 is terminalised',
   },
   {
     id: 'e4-unscoped-kind-static-guard',
@@ -198,6 +202,12 @@ export const JUDGE_TASK4_MUTATIONS: readonly JudgeTask4Mutation[] = [
     after: '',
   },
 ];
+
+export const JUDGE_TASK4_MUTATIONS: readonly (JudgeTask4Mutation & { readonly killingAssertion: string })[] =
+  judgeTask4Mutations.map((mutation): JudgeTask4Mutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
 
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
@@ -259,6 +269,11 @@ function tap(
     assert.notEqual(result.code, 0, `${mutation.id}: named test accepted its mutant\n${result.output}`);
     assert.equal(value('tests'), 1);
     assert.equal(value('fail'), 1);
+    assert.equal(
+      result.output.includes(mutation.killingAssertion ?? ''),
+      true,
+      `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+    );
   }
 }
 
@@ -268,6 +283,7 @@ export async function expectJudgeTask4MutationToFail(mutation: JudgeTask4Mutatio
   await rm(root, { recursive: true, force: true });
   try {
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
+    await cp(join(packageRoot, 'src'), join(root, 'packages', 'events-daemon', 'src'), { recursive: true });
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
     await cp(join(repositoryRoot, 'scripts'), join(root, 'scripts'), { recursive: true });
     // The copied scripts import the canonical judge-kind registry by its repository path.
@@ -286,12 +302,20 @@ export async function expectJudgeTask4MutationToFail(mutation: JudgeTask4Mutatio
     ];
     const { NODE_TEST_CONTEXT: _ignored, ...env } = process.env;
     env.PHASE_E_ORIGINAL_ROOT = repositoryRoot;
-    tap(await runStrictMutationChild({ command: process.execPath, args, cwd: root, env }), mutation, true);
+    tap(
+      await runStrictMutationChild({ command: process.execPath, args, cwd: root, env, timeoutMs: 30_000 }),
+      mutation,
+      true,
+    );
     const target = join(root, mutation.source);
     const source = await readFile(target, 'utf8');
     assert.equal(source.split(mutation.before).length - 1, 1, `${mutation.id}: source guard is not unique`);
     await writeFile(target, source.replace(mutation.before, mutation.after), 'utf8');
-    tap(await runStrictMutationChild({ command: process.execPath, args, cwd: root, env }), mutation, false);
+    tap(
+      await runStrictMutationChild({ command: process.execPath, args, cwd: root, env, timeoutMs: 30_000 }),
+      mutation,
+      false,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

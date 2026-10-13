@@ -240,6 +240,65 @@ test('E9 pending-rule judge test is terminal/app-only and binds one live pending
     }
     assert.equal(requests.length, 1, 'ordinary CLI and MCP selectors are refused before a test can attempt network');
 
+    store.database
+      .prepare("UPDATE activation_view_challenges SET origin = 'view', expires_at = ? WHERE approval_id = ?")
+      .run(NOW + 1, selector.approvalId);
+    const expiringViewAuthority = await verifyPendingRuleJudgeTestContext({
+      database: store.database,
+      selector,
+      origin: 'app-approval-screen',
+      now: () => NOW,
+      approvalView: async () => ({
+        approvalId: selector.approvalId,
+        digest,
+        challenge: selector.challenge,
+        expiresAt: NOW + 1,
+      }),
+    });
+    let deadlineReads = 0;
+    const deadlineResult = await new JudgeTestControl({
+      store,
+      now: () => (deadlineReads++ === 0 ? NOW : NOW + 1),
+      newId: () => 'pending-rule-deadline-before-gate',
+      taint: { record: async () => undefined },
+      transport: new JudgeTransport({
+        tcpConnect: async () => {
+          throw new Error('an expired view challenge must release before TCP');
+        },
+      }),
+    }).testPending(expiringViewAuthority);
+    assert.deepEqual(
+      deadlineResult,
+      {
+        kind: 'refused',
+        judgeId: judge.judgeId,
+        version: judge.version,
+        code: 'JUDGE_AUTHORITY_CHANGED',
+      },
+      'a view challenge expiring between reservation and the final pre-I/O gate is refused',
+    );
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT state, concurrency_owned FROM judge_budget_reservations WHERE id = ?')
+          .get('pending-rule-deadline-before-gate') as Record<string, unknown>),
+      },
+      { state: 'released', concurrency_owned: 0 },
+      'the pre-I/O refusal commits its reservation release and frees the concurrency slot',
+    );
+    assert.equal(
+      (
+        store.database
+          .prepare('SELECT COUNT(*) AS count FROM judge_budget_reservations WHERE concurrency_owned = 1')
+          .get() as { count: number }
+      ).count,
+      0,
+      'no synthetic judge reservation retains the only global concurrency slot after refusal',
+    );
+    store.database
+      .prepare("UPDATE activation_view_challenges SET origin = 'terminal', expires_at = NULL WHERE approval_id = ?")
+      .run(selector.approvalId);
+
     const pausedRequests: Buffer[] = [];
     let enteredTcp: (() => void) | undefined;
     const tcpEntered = new Promise<void>((resolve) => {

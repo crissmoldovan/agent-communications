@@ -452,8 +452,23 @@ test('E7: pause fences reserved judge I/O and completed-response decision writes
       );
       assert.equal(requests.length, 1, 'the response existed before the operational pause');
       assert.equal(
-        (setup.store.database.prepare('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count,
+        (
+          setup.store.database
+            .prepare('SELECT COUNT(*) AS count FROM decisions WHERE encrypted_record IS NOT NULL')
+            .get() as { count: number }
+        ).count,
         0,
+        'the refused completed response leaves no encrypted judge metadata behind',
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database.prepare('SELECT outcome, metadata_state FROM decisions').get() as Record<
+            string,
+            unknown
+          >),
+        },
+        { outcome: 'no-match', metadata_state: 'judge-io-unknown' },
+        'pessimistic recovery closes the response content-free instead of leaving retryable owner-held work',
       );
       assert.equal(
         (setup.store.database.prepare('SELECT COUNT(*) AS count FROM deliveries').get() as { count: number }).count,
@@ -461,8 +476,8 @@ test('E7: pause fences reserved judge I/O and completed-response decision writes
       );
       assert.equal(
         (setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string }).state,
-        'in-flight',
-        'a response that crossed I/O remains Task-5 recovery work rather than being released as free',
+        'settled',
+        'a response whose atomic decision is refused is pessimistically settled instead of stranding its slot',
       );
     } finally {
       setup.store.close();
@@ -708,8 +723,8 @@ test('E7: every post-I/O atomic-decision failpoint recovers one charge, one term
         assert.equal(
           (setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string })
             .state,
-          'in-flight',
-          'the failed transaction cannot erase post-I/O uncertainty',
+          'settled',
+          'the failed atomic decision pessimistically settles post-I/O uncertainty immediately',
         );
         setup.store.immediate(() => recoverJudgeWork({ database: setup.store.database, now: NOW + 1 }));
         setup.store.immediate(() => recoverJudgeWork({ database: setup.store.database, now: NOW + 2 }));

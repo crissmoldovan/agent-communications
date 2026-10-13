@@ -125,6 +125,13 @@ function respondingSocket(response: string, afterResponse?: () => void) {
 
 const allowAllTransportGates: JudgeTransportHooks = { finalGate() {} };
 
+function lastingResources(): string[] {
+  return process
+    .getActiveResourcesInfo()
+    .filter((name) => !/Req|^WriteWrap$|^ShutdownWrap$/u.test(name))
+    .sort();
+}
+
 test('E6: dated TypeSafe and Ollama vectors allow only documented request fields and headers', () => {
   assert.deepEqual(JUDGE_ADAPTER_REFERENCES.typesafe, {
     quickstart: {
@@ -501,6 +508,9 @@ test('E6-A: TypeSafe refuses every non-global resolver answer before TCP', async
     '192.0.2.1',
     '2002:a00:1::',
     '2001:0:a00:1::f7ff:fffe',
+    '2600::5efe:a00:1',
+    '2600::200:5efe:a9fe:101',
+    '2600::5efe:a9fe:a9fe',
   ]) {
     await t.test(address, async () => {
       let resolverCalls = 0;
@@ -938,6 +948,76 @@ test('E6: a deadline reached while receiving a response is not accepted as an an
   assert.equal(peer.writes.length, 1);
 });
 
+test('E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte', async () => {
+  const resourcesBefore = lastingResources();
+  for (const phase of ['tcp', 'tls'] as const) {
+    let now = 0;
+    let tcpDestroyed = 0;
+    let tlsDestroyed = 0;
+    let tlsCalls = 0;
+    let writes = 0;
+    const tcpSocket = {
+      destroy() {
+        tcpDestroyed += 1;
+      },
+    };
+    const tlsSocket = {
+      destroy() {
+        tlsDestroyed += 1;
+      },
+      write() {
+        writes += 1;
+        return true;
+      },
+    };
+    const transport = new JudgeTransport({
+      resolver: { lookup: async () => ['8.8.8.8'] },
+      tcpConnect: async () => {
+        await Promise.resolve();
+        if (phase === 'tcp') now = 20_000;
+        return tcpSocket as never;
+      },
+      tlsConnect: async () => {
+        tlsCalls += 1;
+        await Promise.resolve();
+        now = 20_000;
+        return tlsSocket as never;
+      },
+      clock: {
+        now: () => now,
+        setTimeout: () => Symbol('deadline-timer'),
+        clearTimeout() {},
+      },
+    });
+    assert.deepEqual(
+      await transport.execute(
+        {
+          judge: typesafeJudge(),
+          state: fixture.vectors.typesafe.state,
+          questionName: fixture.vectors.typesafe.questionName,
+          instructions: fixture.vectors.typesafe.instructions,
+          maxInputTokens: 512,
+          maxOutputTokens: 3,
+          hostedApiKey: { generation: 1, material: 'test-hosted-key' },
+        },
+        allowAllTransportGates,
+      ),
+      refused('NETWORK_DEADLINE_EXCEEDED', false),
+      `${phase}: an exact-deadline socket is refused`,
+    );
+    assert.equal(tcpDestroyed, 1, `${phase}: the connected TCP socket is destroyed exactly once`);
+    assert.equal(tlsDestroyed, phase === 'tls' ? 1 : 0, `${phase}: only a resolved TLS socket is destroyed`);
+    assert.equal(tlsCalls, phase === 'tls' ? 1 : 0, `${phase}: no TLS phase starts after a timed-out TCP connect`);
+    assert.equal(writes, 0, `${phase}: no request byte follows the deadline`);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the exact-deadline connect and TLS paths leave no lasting process resource',
+  );
+});
+
 interface TransportMutation {
   readonly id: string;
   readonly file: string;
@@ -945,13 +1025,14 @@ interface TransportMutation {
   readonly after: string;
   readonly testFile: string;
   readonly testName: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 const packageRoot = join(import.meta.dirname, '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const mutantsRoot = join(packageRoot, '.mutants');
 
-const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
+const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-reference-date',
     file: 'runtime/judge-adapters.ts',
@@ -1165,9 +1246,8 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-response-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `    assertBeforeDeadline(deadline, clock);
-    return result;`,
-    after: '    return result;',
+    before: '      assertBeforeDeadline(deadline, clock);',
+    after: '      void deadline;',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: a deadline reached while receiving a response is not accepted as an answer',
   },
@@ -1225,7 +1305,41 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
     testFile: 'judge-transport.test.ts',
     testName: 'E6-M: TypeSafe request bytes take the approved document model, never a transport constant',
   },
+  {
+    id: 'e-review-isatap-embedded-address',
+    file: 'network/address-policy.ts',
+    before:
+      'if (isatapInterface === 0x00005efen || isatapInterface === 0x02005efen) embedded.push(ipv4From(address.value));',
+    after: 'if (false) embedded.push(ipv4From(address.value));',
+    testFile: 'network/address-policy.test.ts',
+    testName: 'NET-B2: validates the outer and every embedded transition address',
+    killingAssertion:
+      '2600::5efe:a00:1: an approved ISATAP outer address cannot hide an unapproved embedded IPv4 address',
+  },
+  {
+    id: 'e-review-exact-deadline-socket-disposal',
+    file: 'runtime/judge-transport.ts',
+    before: `    } catch (error) {
+      try {
+        disposeLate?.(result);
+      } catch {
+        // Cleanup failure cannot turn an elapsed attempt into a usable socket or hide the deadline refusal.
+      }
+      throw error;
+    }`,
+    after: `    } catch (error) {
+      throw error;
+    }`,
+    testFile: 'judge-transport.test.ts',
+    testName: 'E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte',
+    killingAssertion: 'the connected TCP socket is destroyed exactly once',
+  },
 ];
+
+const JUDGE_TRANSPORT_MUTATIONS = transportMutations.map((mutation) => ({
+  ...mutation,
+  killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+}));
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -1283,6 +1397,26 @@ function assertExactlyOneNamedMutationFailure(
   assert.deepEqual(subtests, [mutation.testName], `${mutation.id}: a different test ran\n${result.output}`);
   const failures = [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]);
   assert.deepEqual(failures, [mutation.testName], `${mutation.id}: its named test did not fail\n${result.output}`);
+  assert.equal(
+    result.output.includes(mutation.killingAssertion ?? ''),
+    true,
+    `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+  );
+}
+
+function assertExactlyOneNamedMutationPass(
+  mutation: TransportMutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.equal(result.code, 0, `${mutation.id}: unmutated named test did not pass\n${result.output}`);
+  const summary = (name: 'tests' | 'pass' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: baseline emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: baseline ran more than one named test\n${result.output}`);
+  assert.equal(summary('pass'), 1, `${mutation.id}: baseline did not pass exactly once\n${result.output}`);
+  assert.equal(summary('fail'), 0, `${mutation.id}: baseline reported a failure\n${result.output}`);
 }
 
 async function expectTransportMutationToFail(mutation: TransportMutation): Promise<number> {
@@ -1296,23 +1430,33 @@ async function expectTransportMutationToFail(mutation: TransportMutation): Promi
     const original = await readFile(target, 'utf8');
     assert.equal(occurrences(original, mutation.before), 1, `${mutation.id} must replace one production guard`);
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
-    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const { NODE_TEST_CONTEXT: _parentContext, ...environment } = process.env;
-    const result = await runStrictMutationChild({
+    const args = [
+      '--import',
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      '--test-reporter=tap',
+      '--test-name-pattern',
+      exactTestName(mutation.testName),
+      join(root, 'test', mutation.testFile),
+    ];
+    const baseline = await runStrictMutationChild({
       command: process.execPath,
-      args: [
-        '--import',
-        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, 'test', mutation.testFile),
-      ],
+      args,
       cwd: root,
       env: environment,
+      timeoutMs: 30_000,
+    });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args,
+      cwd: root,
+      env: environment,
+      timeoutMs: 30_000,
     });
     assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;

@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { approvalView } from '../operations/approval-view.ts';
-import type { B3McpRegistrar } from '../operations/b3-contract.ts';
+import type { B3ControlOperation, B3McpRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
 import { disableAll } from '../operations/disable-all.ts';
@@ -62,6 +62,8 @@ function reply(data: unknown) {
 /** Creates the local event service's deliberately content-free MCP surface. */
 export async function createEventsMcpServer(options: EventsMcpOptions = {}): Promise<EventsMcpServer> {
   const server = new McpServer({ name: 'agent-events', version: VERSION });
+  const b3 = (operation: B3ControlOperation, args: Record<string, unknown>, throughOwner: () => Promise<unknown>) =>
+    options.b3Registrar === undefined ? throughOwner() : options.b3Registrar.owner.handle({ operation, args });
 
   server.registerTool(
     'events_status',
@@ -264,7 +266,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Add judge',
     'Creates an immutable, initially inactive judge version.',
     { document: z.unknown() },
-    (args) => addJudge(args.document, options),
+    (args) => b3('addJudge', { document: args.document }, () => addJudge(args.document, options)),
     true,
   );
   strictControlTool(
@@ -272,7 +274,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Update judge',
     'Creates an immutable replacement judge version.',
     { document: z.unknown() },
-    (args) => updateJudge(args.document, options),
+    (args) => b3('updateJudge', { document: args.document }, () => updateJudge(args.document, options)),
     true,
   );
   strictControlTool(
@@ -280,7 +282,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Remove judge',
     'Removes every live immutable version of one judge.',
     { judgeId: z.string().min(1) },
-    (args) => removeJudge(args.judgeId as string, options),
+    (args) => b3('removeJudge', { judgeId: args.judgeId }, () => removeJudge(args.judgeId as string, options)),
     true,
   );
   strictControlTool(
@@ -302,7 +304,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Update budget',
     'Creates a pending immutable global budget and prepares its approval.',
     { document: z.unknown() },
-    (args) => updateBudget(args.document, options),
+    (args) => b3('updateBudget', { document: args.document }, () => updateBudget(args.document, options)),
     true,
   );
   strictControlTool(
@@ -317,7 +319,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Enable judge kind',
     'Prepares, but never approves or claims, judge-kind enablement.',
     { kind: z.string().min(1) },
-    (args) => enableJudgeKind(args.kind as string, options),
+    (args) => b3('enableJudgeKind', { kind: args.kind }, () => enableJudgeKind(args.kind as string, options)),
     true,
   );
   strictControlTool(
@@ -325,7 +327,10 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     'Disable judge kind',
     'Immediately disables one available judge kind; Laya remains typed E2-unavailable.',
     { kind: z.string().min(1) },
-    (args) => disableJudgeKind(args.kind as string, options),
+    (args) => {
+      const kind = args.kind as string;
+      return b3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, options));
+    },
     true,
   );
   strictControlTool(

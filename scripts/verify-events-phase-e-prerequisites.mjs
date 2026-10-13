@@ -96,6 +96,29 @@ const EXCEPTIONS = [
   'events-daemon.dryrun.list',
   'events-daemon.dryrun.show',
 ];
+const SECRET_REASON =
+  'secret material must never enter model input or output; the person completes this operation at the terminal or app.';
+
+function capabilityCliRoute(signature) {
+  const words = signature.split(' ');
+  const firstArgument = words.findIndex(
+    (word) => word.startsWith('<') || word.startsWith('--') || word.startsWith('('),
+  );
+  return words.slice(0, firstArgument < 0 ? undefined : firstArgument).join(' ');
+}
+
+function compareCapabilityInventory(expected, actual, sourceName, problems) {
+  if (!Array.isArray(expected)) {
+    problems.push('E runtime exports its exact B3 capability inventory');
+    return;
+  }
+  if (!Array.isArray(actual)) {
+    problems.push(`${sourceName} has capability rows`);
+    return;
+  }
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
+    problems.push(`${sourceName} matches the exact E-owned B3 capability inventory`);
+}
 
 async function text(root, file, problems) {
   const value = await readFile(join(root, file), 'utf8').catch(() => undefined);
@@ -308,6 +331,41 @@ export async function verifyPhaseEPrerequisites({ root = ROOT } = {}) {
   );
   consume(contract, checked, previews, problems);
   const capabilities = json(capabilitiesText, 'capabilities.json is valid JSON', problems)?.capabilities;
+  const expectedCapabilities = phase?.PHASE_E_B3_CAPABILITY_INVENTORY;
+  compareCapabilityInventory(
+    expectedCapabilities,
+    contract?.B3_CAPABILITIES?.map((entry) => ({
+      id: entry.id,
+      cli: entry.cli,
+      mcp: entry.mcp,
+      operation: entry.operation,
+      status: entry.status,
+      reason: entry.reason ?? null,
+      secret: entry.secret === true,
+    })),
+    'B3_CAPABILITIES',
+    problems,
+  );
+  compareCapabilityInventory(
+    expectedCapabilities,
+    Array.isArray(capabilities) && Array.isArray(expectedCapabilities)
+      ? expectedCapabilities.map((expected) => {
+          const rows = capabilities.filter((candidate) => candidate?.id === expected.id);
+          const row = rows.length === 1 ? rows[0] : undefined;
+          return {
+            id: row?.id,
+            cli: row?.cli === capabilityCliRoute(expected.cli) ? expected.cli : row?.cli,
+            mcp: row?.mcp,
+            operation: row?.operation,
+            status: row?.status,
+            reason: row?.reason ?? null,
+            secret: row?.reason === SECRET_REASON,
+          };
+        })
+      : capabilities,
+    'capabilities.json B3 projection',
+    problems,
+  );
   if (!Array.isArray(capabilities)) problems.push('capabilities.json has capability rows');
   else
     for (const id of EXCEPTIONS) {

@@ -1,6 +1,6 @@
 import { expectJudgeMutationToFail, type JudgeMutation } from './judge-mutants.ts';
 
-export const JUDGE_HOLD_MUTATIONS: readonly JudgeMutation[] = [
+const judgeHoldMutations: readonly JudgeMutation[] = [
   {
     id: 'e8-sqlite-hold-clock',
     source: 'packages/events-daemon/src/runtime/holds.ts',
@@ -38,9 +38,10 @@ export const JUDGE_HOLD_MUTATIONS: readonly JudgeMutation[] = [
     id: 'e8-decision-bound-token',
     source: 'packages/events-daemon/src/runtime/decisions.ts',
     before: 'AND claim.claim_token = ? AND claim.lease_expires_at > ?',
-    after: 'AND 1 = 1 AND claim.lease_expires_at > ?',
+    after: 'AND ? IS NOT NULL AND claim.lease_expires_at > ?',
     test: 'packages/events-daemon/test/judge-races.test.ts',
     testName: 'E8: final hold resolution refuses a mismatched decision-bound claim token before any delivery write',
+    killingAssertion: 'a mismatched decision-bound claim token is refused before any delivery write',
   },
   {
     id: 'e8-final-resolution-recheck',
@@ -120,6 +121,12 @@ export const JUDGE_HOLD_MUTATIONS: readonly JudgeMutation[] = [
       'E8 P1: held resolution rechecks the live account after delivery encryption and taint before its final write',
   },
 ];
+
+export const JUDGE_HOLD_MUTATIONS: readonly (JudgeMutation & { readonly killingAssertion: string })[] =
+  judgeHoldMutations.map((mutation): JudgeMutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
 
 export function expectJudgeHoldMutationToFail(mutation: JudgeMutation): Promise<void> {
   return expectJudgeMutationToFail(mutation);
