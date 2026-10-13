@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { JUDGE_KINDS } from '../src/domain/lifecycle.ts';
-import { openEventDatabase } from '../src/store/database.ts';
+import { ImmutableVersions } from '../src/domain/versions.ts';
+import { beginJudgeTransport } from '../src/runtime/judge-budget.ts';
+import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { applyMigrations, EVENT_MIGRATIONS, type EventMigration } from '../src/store/migrations.ts';
 import { JUDGE_MIGRATION_FIXTURES, migrationsThrough } from './fixtures/judge-migrations.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
@@ -359,7 +361,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '19',
+        '20',
         fixture.name,
       );
       assert.deepEqual(
@@ -376,7 +378,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 19').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 20').get() as {
             count: number;
           }
         ).count,
@@ -616,7 +618,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '19',
+        '20',
       );
     } finally {
       first.close();
@@ -625,7 +627,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 19').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 20').get() as {
             count: number;
           }
         ).count,
@@ -864,6 +866,91 @@ test('E2 mutation: removing judge-test work-id uniqueness is caught by the charg
         ),
       /Missing expected exception/u,
     );
+  } finally {
+    database.close();
+  }
+});
+
+test('E9 v20: an upgraded v19 synthetic reservation with no new authority binding fails closed at its next gate', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('PRAGMA foreign_keys = ON');
+    applyMigrations(database, migrationsThrough(19));
+    const versions = new ImmutableVersions(database);
+    const judge = {
+      judgeId: 'judge-v20-upgrade',
+      version: 1,
+      kind: 'local-endpoint' as const,
+      provider: 'ollama',
+      model: 'v20-upgrade-model',
+      endpoint: 'http://127.0.0.1:11434/v1/systemone',
+      approvedAddressSet: ['127.0.0.1'],
+      promptTemplate: 'v20-upgrade',
+      protocol: 'noul' as const,
+    };
+    versions.createJudge(judge);
+    versions.createJudgeBudget({
+      budgetId: 'judge-budget',
+      version: 1,
+      global: { callsPerRollingHour: 10, inputTokensPerRolling30Days: 20_000, concurrency: 1 },
+      providers: [],
+    });
+    versions.createJudgeKind({ id: 'judge-kind:local-endpoint', kind: 'local-endpoint', version: 1 });
+    database.exec(`
+      INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+      VALUES ('judge-budget', 'judge-budget', 1, 'judge-budget@1', 1),
+             ('judge-kind', 'local-endpoint', 1, 'judge-kind:local-endpoint@1', 1);
+      INSERT INTO judge_budget_reservations
+        (id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
+         judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+         concurrency_owned, reserved_at, switch_generation)
+      VALUES
+        ('v19-synthetic-reservation', 'v19-synthetic-work', 'synthetic-test', NULL, NULL, NULL, NULL, NULL,
+         'judge-v20-upgrade', 1, 'local-endpoint', 'v19-test-work', 1, NULL, 'installation', 'reserved', 1, 1, 1, 0);
+    `);
+    applyMigrations(database);
+    assert.deepEqual(
+      {
+        ...(database
+          .prepare(
+            `SELECT test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+                  test_authority_approval_id, test_authority_challenge_hash, test_authority_challenge_origin,
+                  test_authority_challenge_expires_at
+             FROM judge_budget_reservations WHERE id = 'v19-synthetic-reservation'`,
+          )
+          .get() as object),
+      },
+      {
+        test_authority_rule_id: null,
+        test_authority_rule_version: null,
+        test_authority_activation_id: null,
+        test_authority_approval_id: null,
+        test_authority_challenge_hash: null,
+        test_authority_challenge_origin: null,
+        test_authority_challenge_expires_at: null,
+      },
+      'v20 leaves legacy synthetic work unbound so its next gate cannot mistake it for authorised work',
+    );
+    const store = {
+      database,
+      immediate<T>(work: () => T): T {
+        database.exec('BEGIN IMMEDIATE');
+        try {
+          const result = work();
+          database.exec('COMMIT');
+          return result;
+        } catch (error) {
+          database.exec('ROLLBACK');
+          throw error;
+        }
+      },
+    } as EventDatabase;
+    let networkAttempts = 0;
+    assert.throws(() => {
+      const gate = beginJudgeTransport({ store, reservationId: 'v19-synthetic-reservation', now: 2 });
+      if (gate) networkAttempts += 1;
+    }, /synthetic judge test authority is unavailable/u);
+    assert.equal(networkAttempts, 0, 'the migration-era reservation is refused before a transport attempt');
   } finally {
     database.close();
   }

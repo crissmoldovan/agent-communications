@@ -1,0 +1,441 @@
+{
+  "valid": {
+    "kind": "pending-rule-judge-test",
+    "activationId": "activation-1",
+    "ruleId": "rule-1",
+    "ruleVersion": 1,
+    "judgeId": "judge-1",
+    "judgeVersion": 1,
+    "approvalId": "approval-1",
+    "digest": "digest-1",
+    "challenge": "challenge-1"
+  },
+  "invalid": [
+    {
+      "name": "missing kind",
+      "value": {
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing activationId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing ruleId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing ruleVersion",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing judgeId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing judgeVersion",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing approvalId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing digest",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "missing challenge",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1"
+      }
+    },
+    {
+      "name": "mistyped kind",
+      "value": {
+        "kind": 1,
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped activationId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": 1,
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped ruleId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": 1,
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped ruleVersion",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": "1",
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped judgeId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": 1,
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped judgeVersion",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": "1",
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped approvalId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": 1,
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped digest",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": 1,
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "mistyped challenge",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": 1
+      }
+    },
+    {
+      "name": "extra field",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1",
+        "extra": true
+      }
+    },
+    {
+      "name": "empty kind",
+      "value": {
+        "kind": "",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty activationId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty ruleId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty judgeId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty approvalId",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty digest",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "empty challenge",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": ""
+      }
+    },
+    {
+      "name": "rule version below range",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 0,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "judge version below range",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 0,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "rule version above safe range",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 9007199254740992,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "judge version above safe range",
+      "value": {
+        "kind": "pending-rule-judge-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 9007199254740992,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    },
+    {
+      "name": "wrong kind",
+      "value": {
+        "kind": "pending-target-test",
+        "activationId": "activation-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "judgeId": "judge-1",
+        "judgeVersion": 1,
+        "approvalId": "approval-1",
+        "digest": "digest-1",
+        "challenge": "challenge-1"
+      }
+    }
+  ]
+}

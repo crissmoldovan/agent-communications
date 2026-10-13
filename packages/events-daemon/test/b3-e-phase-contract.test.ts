@@ -6,20 +6,7 @@ import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
-const E_OPERATIONS = [
-  'judgesList',
-  'addJudge',
-  'updateJudge',
-  'removeJudge',
-  'judgeTest',
-  'budgetShow',
-  'updateBudget',
-  'judgeKindsList',
-  'enableJudgeKind',
-  'disableJudgeKind',
-] as const;
-
-test('B3 E/E2 operators are content-free unavailable results with no producer state', {
+test('E9 keeps B3 v1 unavailable fixtures isolated while the live producer starts disabled and Laya stays E2', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-e-phase-');
@@ -38,13 +25,16 @@ test('B3 E/E2 operators are content-free unavailable results with no producer st
         )
         .get();
 
-      for (const operation of E_OPERATIONS) {
-        assert.deepEqual(
-          await control.handle({ operation, args: { kind: 'typesafe', document: { deliberately: 'inert' } } }),
-          { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' },
-          operation,
-        );
-      }
+      assert.deepEqual(await control.handle({ operation: 'judgesList', args: {} }), []);
+      assert.deepEqual(await control.handle({ operation: 'budgetShow', args: {} }), {
+        activeVersion: null,
+        versions: [],
+      });
+      assert.deepEqual(await control.handle({ operation: 'judgeKindsList', args: {} }), [
+        { kind: 'typesafe', state: 'disabled', version: null },
+        { kind: 'laya', state: 'unavailable', code: 'E2_REQUIRED' },
+        { kind: 'local-endpoint', state: 'disabled', version: null },
+      ]);
       for (const operation of [
         'enableJudgeKind',
         'disableJudgeKind',
@@ -58,13 +48,6 @@ test('B3 E/E2 operators are content-free unavailable results with no producer st
         );
       }
       assert.deepEqual(await control.handle({ operation: 'heldList', args: {} }), { kind: 'held-list', decisions: [] });
-      assert.deepEqual(
-        await control.handle({
-          operation: 'decideHeld',
-          args: { decisionId: 'synthetic-decision', decision: 'accept' },
-        }),
-        { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' },
-      );
       assert.deepEqual(
         store.database
           .prepare(
@@ -92,11 +75,67 @@ test('B3 pre-E judge operations return only the E_REQUIRED unavailable result', 
     const store = await openEventDatabase({ stateDir });
     try {
       const control = new B3OperatorControl({ store, ports: { quiescer: new WriterQuiescer() } });
-      assert.deepEqual(await control.handle({ operation: 'judgesList', args: {} }), {
-        kind: 'unavailable',
-        code: 'E_REQUIRED',
-        phase: 'E',
+      assert.deepEqual(await control.handle({ operation: 'judgesList', args: {} }), []);
+      assert.deepEqual(await control.handle({ operation: 'budgetShow', args: {} }), {
+        activeVersion: null,
+        versions: [],
       });
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 E/E2 operators are content-free unavailable results with no producer state', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-b3-e2-dispatch-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const control = new B3OperatorControl({ store, ports: { quiescer: new WriterQuiescer() } });
+      const before = store.database
+        .prepare(
+          `SELECT
+             (SELECT count(*) FROM judge_versions) AS judges,
+             (SELECT count(*) FROM judge_budget_versions) AS budgets,
+             (SELECT count(*) FROM judge_kind_versions) AS kinds,
+             (SELECT count(*) FROM active_versions) AS pointers,
+             (SELECT count(*) FROM activation_intents) AS approvals`,
+        )
+        .get();
+      for (const operation of ['enableJudgeKind', 'disableJudgeKind'] as const)
+        assert.deepEqual(await control.handle({ operation, args: { kind: 'laya' } }), {
+          kind: 'unavailable',
+          code: 'E2_REQUIRED',
+          phase: 'E2',
+        });
+      assert.deepEqual(await control.handle({ operation: 'judgeModelStatus', args: {} }), {
+        kind: 'unavailable',
+        code: 'E2_REQUIRED',
+        phase: 'E2',
+      });
+      assert.deepEqual(await control.handle({ operation: 'removeJudgeModel', args: {} }), {
+        kind: 'unavailable',
+        code: 'E2_REQUIRED',
+        phase: 'E2',
+      });
+      assert.deepEqual(
+        store.database
+          .prepare(
+            `SELECT
+               (SELECT count(*) FROM judge_versions) AS judges,
+               (SELECT count(*) FROM judge_budget_versions) AS budgets,
+               (SELECT count(*) FROM judge_kind_versions) AS kinds,
+               (SELECT count(*) FROM active_versions) AS pointers,
+               (SELECT count(*) FROM activation_intents) AS approvals`,
+          )
+          .get(),
+        before,
+        'the E2 dispatch seam creates neither immutable configuration nor a pointer or activation',
+      );
     } finally {
       store.close();
     }
@@ -124,18 +163,37 @@ test('B3 pre-E2 model operations return only the E2_REQUIRED unavailable result'
   }
 });
 
-test('B3 held decision remains unavailable while the held list is typed empty', { skip: WINDOWS_SKIP }, async () => {
+test('E9 held decision fails closed until the owner composes the Task 8 resolver', { skip: WINDOWS_SKIP }, async () => {
   const stateDir = await shortTempDir('aev-b3-held-decide-');
   try {
     const store = await openEventDatabase({ stateDir });
     try {
       const control = new B3OperatorControl({ store, ports: { quiescer: new WriterQuiescer() } });
-      assert.deepEqual(
-        await control.handle({
-          operation: 'decideHeld',
-          args: { decisionId: 'synthetic-decision', decision: 'accept' },
-        }),
-        { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' },
+      await assert.rejects(
+        () =>
+          control.handle({ operation: 'decideHeld', args: { decisionId: 'synthetic-decision', decision: 'accept' } }),
+        /held resolution has not been composed/u,
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 held decision remains unavailable while the held list is typed empty', { skip: WINDOWS_SKIP }, async () => {
+  const stateDir = await shortTempDir('aev-b3-held-dispatch-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const control = new B3OperatorControl({ store, ports: { quiescer: new WriterQuiescer() } });
+      assert.deepEqual(await control.handle({ operation: 'heldList', args: {} }), { kind: 'held-list', decisions: [] });
+      await assert.rejects(
+        () =>
+          control.handle({ operation: 'decideHeld', args: { decisionId: 'synthetic-decision', decision: 'accept' } }),
+        /held resolution has not been composed/u,
+        'the live operator dispatch refuses instead of invoking the legacy unavailable helper',
       );
     } finally {
       store.close();

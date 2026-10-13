@@ -3,11 +3,11 @@
   "cases": [
     {
       "case": "e-unavailable-is-content-free",
-      "operation": "judgeUnavailable",
-      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "operation": "B3OperatorControl.judgesList",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
       "mutation": {
-        "from": "return unavailableE();",
+        "from": "      case 'judgesList':\n        return this.judgesList();",
         "to": "return { kind: 'judge-document', document: { configured: true } } as never;"
       },
       "mutationTest": "B3 pre-E judge operations return only the E_REQUIRED unavailable result",
@@ -15,24 +15,24 @@
     },
     {
       "case": "e2-unavailable-is-content-free",
-      "operation": "judgeUnavailable",
-      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "operation": "B3OperatorControl.E2Unavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
       "mutation": {
-        "from": "if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return unavailableE2();",
-        "to": "if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return { kind: 'model-download', model: 'forbidden' } as never;"
+        "from": "    if (unavailable !== undefined) return unavailable;",
+        "to": "    if (unavailable !== undefined) return { kind: 'model-download', model: 'forbidden' } as never;"
       },
       "mutationTest": "B3 pre-E2 model operations return only the E2_REQUIRED unavailable result",
       "loadedMarker": "e2-unavailable-is-content-free"
     },
     {
       "case": "hold-decide-is-not-model-callable",
-      "operation": "decideHeldUnavailable",
-      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "operation": "decideHeld",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
       "mutation": {
-        "from": "return { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' };",
-        "to": "return heldListUnavailable() as never;"
+        "from": "if (this.#holdResolver === undefined)\n          throw new CommsError('CONFIG', 'held resolution has not been composed for this operator control');",
+        "to": "if (this.#holdResolver === undefined)\n          return { kind: 'held-list', decisions: [] } as never;"
       },
       "mutationTest": "B3 held decision remains unavailable while the held list is typed empty",
       "loadedMarker": "hold-decide-is-not-model-callable"
@@ -91,8 +91,8 @@
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
       "mutation": {
-        "from": "accountId: row.account_id,",
-        "to": "accountId: 'other-account',"
+        "from": "        deliveryId: row.id,\n        accountId: row.account_id,",
+        "to": "        deliveryId: row.id,\n        accountId: 'other-account',"
       },
       "mutationTest": "B3 retry delegates the account identity gate to the shared delivery write fence",
       "loadedMarker": "retry-delegates-account-identity-fence"
@@ -127,8 +127,8 @@
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
       "mutation": {
-        "from": "ruleId: row.rule_id,",
-        "to": "ruleId: 'rule-mutation',"
+        "from": "        source: sourceFromRule(row.rule_document),\n        ruleId: row.rule_id,",
+        "to": "        source: sourceFromRule(row.rule_document),\n        ruleId: 'rule-mutation',"
       },
       "mutationTest": "B3 retry delegates the authorisation lineage gate to the shared delivery write fence",
       "loadedMarker": "retry-delegates-lineage-fence"

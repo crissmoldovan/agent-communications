@@ -310,7 +310,7 @@
       "loadedMarker": "paired-mcp-rule-test-cannot-cross-wire-another-operation"
     },
     {
-      "case": "pre-e-operation-cannot-produce-state",
+      "case": "e2-unavailable-operation-cannot-produce-state",
       "operation": "judgeUnavailable",
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
@@ -318,8 +318,8 @@
         "from": "    if (unavailable !== undefined) return unavailable;",
         "to": "    if (unavailable !== undefined) {\n      this.#store.database.prepare(\"INSERT INTO target_test_charges (target_id, charged_at) VALUES ('forbidden-e-work', 0)\").run();\n      return unavailable;\n    }"
       },
-      "mutationTest": "B3 owner keeps pre-E judge controls inert and held decisions unclaimable",
-      "loadedMarker": "pre-e-operation-cannot-produce-state"
+      "mutationTest": "E9 owner exposes live judge inventories while retaining E2 and human-only boundaries",
+      "loadedMarker": "e2-unavailable-operation-cannot-produce-state"
     }
   ]
 }

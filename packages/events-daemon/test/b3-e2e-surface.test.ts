@@ -116,6 +116,66 @@ function assertProductionResponse(
   );
 }
 
+const FROZEN_E2_RESULT = { kind: 'unavailable', code: 'E2_REQUIRED', phase: 'E2' } as const;
+
+const JUDGE_SURFACE_RESULTS: Readonly<Record<string, unknown>> = {
+  'events-daemon.judges.list': [],
+  'events-daemon.budget.show': { activeVersion: null, versions: [] },
+  'events-daemon.judge-kinds.list': [
+    { kind: 'typesafe', state: 'disabled', version: null },
+    { kind: 'laya', state: 'unavailable', code: 'E2_REQUIRED' },
+    { kind: 'local-endpoint', state: 'disabled', version: null },
+  ],
+  'events-daemon.judge.test': {
+    kind: 'refused',
+    judgeId: 'judge-1',
+    version: 1,
+    code: 'JUDGE_AUTHORITY_CHANGED',
+  },
+  'events-daemon.judge-model.status': FROZEN_E2_RESULT,
+  'events-daemon.judge-model.remove': FROZEN_E2_RESULT,
+};
+
+const JUDGE_SURFACE_FAILURES: Readonly<Record<string, { readonly exit: number; readonly message: string }>> = {
+  'events-daemon.judge.add': { exit: EXIT_CODES.BAD_DATA, message: 'a judge document has a known judge kind' },
+  'events-daemon.judge.update': { exit: EXIT_CODES.BAD_DATA, message: 'a judge document has a known judge kind' },
+  'events-daemon.judge.remove': { exit: EXIT_CODES.NOT_FOUND, message: 'the judge has no live version to remove' },
+  'events-daemon.budget.update': {
+    exit: EXIT_CODES.BAD_DATA,
+    message: 'a judge budget document has exactly its canonical fields',
+  },
+  'events-daemon.judge-kind.enable': { exit: EXIT_CODES.BAD_DATA, message: 'the judge kind is not recognised' },
+  'events-daemon.judge-kind.disable': { exit: EXIT_CODES.BAD_DATA, message: 'the judge kind is not recognised' },
+};
+
+/** Every former B3 E judge/budget/kind row must prove its actual E result through both public adapters. */
+function assertExactJudgeSurfaceResponse(
+  row: Capability,
+  command: { readonly code: number; readonly stdout: string; readonly stderr: string },
+  mcpResult: unknown,
+  mcpText: string,
+  mcpIsError: unknown,
+): void {
+  const result = JUDGE_SURFACE_RESULTS[row.id];
+  if (result !== undefined) {
+    assert.equal(command.code, EXIT_CODES.OK, `${row.id} succeeds through Commander`);
+    assert.deepEqual(JSON.parse(command.stdout), result, `${row.id} has its exact Commander result`);
+    // MCP structured content is always an object: a list arrives as { result }, while its text stays the raw JSON.
+    assert.deepEqual(mcpResult, Array.isArray(result) ? { result } : result, `${row.id} has its exact MCP result`);
+    assert.notEqual(mcpIsError, true, `${row.id} is not an MCP error`);
+    assert.equal(mcpText, JSON.stringify(result), `${row.id} renders the exact MCP result`);
+    return;
+  }
+  const failure = JUDGE_SURFACE_FAILURES[row.id];
+  if (failure === undefined) return;
+  assert.equal(command.code, failure.exit, `${row.id} reaches its exact Commander refusal`);
+  assert.equal(command.stdout, '', `${row.id} prints no result through Commander`);
+  assert.equal(command.stderr, `${failure.message}\n`, `${row.id} has its exact Commander refusal`);
+  assert.equal(mcpIsError, true, `${row.id} is an MCP error`);
+  assert.equal(mcpResult, undefined, `${row.id} carries no MCP structured result`);
+  assert.equal(mcpText, failure.message, `${row.id} has its exact MCP refusal`);
+}
+
 async function startSealedOwner(stateDir: string) {
   const configDir = join(stateDir, 'config');
   await mkdir(configDir, { recursive: true });
@@ -396,10 +456,7 @@ test('B3 e2e drives every declared both control row through real Commander and M
           /tool not found|local event service is not running/u,
           `${row.id} reaches owner`,
         );
-        if (row.id.startsWith('events-daemon.judge') || row.id.startsWith('events-daemon.budget')) {
-          const rendered = JSON.stringify(reply.structuredContent);
-          assert.match(rendered, /E(?:2)?_REQUIRED/u, `${row.id} remains a typed pre-E/E2 result`);
-        }
+        assertExactJudgeSurfaceResponse(row, command, reply.structuredContent, text?.text ?? '', reply.isError);
       }
       const stale = await client.callTool({
         name: 'events_approval_view',

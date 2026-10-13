@@ -132,6 +132,44 @@ export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
     test: 'packages/events-daemon/test/b3-writer-quiescer.test.ts',
     testName: 'B3 writer inventory is exact and every discovered cipher or secret-store path is leased',
   },
+  {
+    id: 'e9-fixed-synthetic-judge-input',
+    source: 'packages/events-daemon/src/runtime/judge-test.ts',
+    before: '      state: canonicalJson(TEST_CLOUD_EVENT),',
+    after: "      state: canonicalJson({ type: 'caller-controlled' }),",
+    test: 'packages/events-daemon/test/judge-test-operation.test.ts',
+    testName:
+      'E9 judge test: the fixed synthetic input is tainted, globally reserved and sent through the sealed transport',
+  },
+  {
+    id: 'e9-judge-key-rotate-current-generation',
+    source: 'packages/events-daemon/src/runtime/b3-secret-control.ts',
+    before: "      const prior = this.#requiredCurrent(owner, 'judge-key');",
+    after: '      const prior = null;',
+    test: 'packages/events-daemon/test/b3-secrets.test.ts',
+    testName: 'B3 secret slots create and rotate only exact immutable owners with content-free receipts',
+  },
+  {
+    id: 'e9-mcp-kind-enable-no-active-pointer',
+    source: 'packages/events-daemon/src/runtime/b3-operator-control.ts',
+    before:
+      '    return new JudgeKinds({ store: this.#store, now: this.#now, activations }).prepareEnable({\n      kind: available,\n      version,\n    });',
+    after:
+      '    this.#store.database\n      .prepare(\n        "INSERT OR REPLACE INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES (?, ?, ?, NULL, ?)",\n      )\n      .run(\'judge-kind\', available, version, this.#now());\n    return new JudgeKinds({ store: this.#store, now: this.#now, activations }).prepareEnable({\n      kind: available,\n      version,\n    });',
+    test: 'packages/events-daemon/test/b3-operator-control.test.ts',
+    testName: 'E9 operator control creates immutable subscriber and judge versions while retaining the E2 model seam',
+  },
+  {
+    id: 'e9-pending-rule-judge-origin',
+    source: 'packages/events-daemon/src/runtime/owner.ts',
+    before:
+      "function pendingRuleJudgeTestOrigin(origin: string | undefined): PendingRuleJudgeTestOrigin | undefined {\n  if (origin === 'terminal-approval' || origin === 'app-approval-screen') return origin;",
+    after:
+      "function pendingRuleJudgeTestOrigin(origin: string | undefined): PendingRuleJudgeTestOrigin | undefined {\n  if (origin === 'terminal-approval' || origin === 'app-approval-screen' || origin === 'mcp') return 'terminal-approval';",
+    test: 'packages/events-daemon/test/pending-rule-judge-test.test.ts',
+    testName:
+      'E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached',
+  },
 ];
 
 const packageRoot = join(import.meta.dirname, '..', '..');

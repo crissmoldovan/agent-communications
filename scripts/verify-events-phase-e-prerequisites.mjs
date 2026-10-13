@@ -60,7 +60,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-approval-preview-v1/stale.json':
     '2fb75f3b2201c619baa8ab2fd77c2c9052b96c3030ad5ad000265b9c3db9fd37',
   'packages/events-daemon/test/b3-consumer-contract.test.ts':
-    'bcb8620688a961117244f4562d2125073e2ec84d83fc04e485459d73a473ce12',
+    '8f7228c1ac04a9a649581d80063b75b7840c2310fa3f35a052d22c185fbfce59',
 });
 const REQUIRED_VECTOR_NAMES = Object.freeze([
   'doctor-result',

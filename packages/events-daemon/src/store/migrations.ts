@@ -572,6 +572,26 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '19' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // A synthetic test is charged globally, but it is never authority-free: persist the exact active rule (or the
+    // pending-approval activation) so every post-await transport fence can prove it is still authorised.
+    version: 20,
+    name: 'event-judge-test-authority-binding-v1',
+    statements: [
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_rule_id TEXT',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_rule_version INTEGER CHECK (test_authority_rule_version > 0)',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_activation_id TEXT',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_approval_id TEXT',
+      "ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_hash TEXT CHECK (test_authority_challenge_hash IS NULL OR (length(test_authority_challenge_hash) = 64 AND test_authority_challenge_hash NOT GLOB '*[^0-9a-f]*'))",
+      "ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_origin TEXT CHECK (test_authority_challenge_origin IN ('terminal', 'view'))",
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_expires_at INTEGER',
+      `CREATE INDEX judge_budget_reservations_synthetic_authority
+        ON judge_budget_reservations(test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+          test_authority_approval_id, test_authority_challenge_hash)
+        WHERE work_scope = 'synthetic-test'`,
+      "UPDATE meta SET value = '20' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
