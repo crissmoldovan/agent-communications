@@ -114,7 +114,7 @@ test('E7 taint: exact judge input preserves copied scalar, parent and subtree pr
       state: adapterInput.state,
       questionName: 'decision',
       instructions: rule.agentic.question,
-      ...(adapter === 'typesafe' ? { hostedApiKey: 'synthetic-hosted-key' } : {}),
+      ...(adapter === 'typesafe' ? { hostedApiKey: 'test-hosted-key' } : {}),
     });
     const body = request.body.toString('utf8');
     assert.deepEqual(
