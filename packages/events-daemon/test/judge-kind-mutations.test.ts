@@ -16,7 +16,11 @@ test('E1: every prepare, claim and finalise disabled-kind guard has one exact de
   );
 });
 
-test('E1: the mutation runner rejects copied-tree import crashes and mutants whose named test passes', async () => {
+// The runner now proves each named test green in the copied tree first, and those named tests open the database, so
+// they skip on Windows (WINDOWS_SKIP): there is no baseline to prove there, as for the destructive runner below.
+test('E1: the mutation runner rejects copied-tree import crashes and mutants whose named test passes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await assert.rejects(
     expectJudgeKindMutationToFail({
       id: 'e1-self-import-crash',

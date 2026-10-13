@@ -511,11 +511,28 @@ function exactRequestBody(request: Buffer): unknown {
   return JSON.parse(request.subarray(boundary + 4).toString('utf8')) as unknown;
 }
 
+/** Each sender string reaches a judge inside one fresh untrusted-content envelope; this returns the text it wraps. */
+const ENVELOPED = /^<untrusted-content boundary="([^"]+)"[^>]*>\n([\s\S]*)\n<\/untrusted-content boundary="\1">$/u;
+
+function withUnwrappedInputs(state: unknown, description: string): unknown {
+  const parsed = state as { readonly inputs?: readonly { readonly pointer?: unknown; readonly value?: unknown }[] };
+  if (!Array.isArray(parsed.inputs)) return state;
+  return {
+    ...parsed,
+    inputs: parsed.inputs.map((input) => {
+      assert.equal(typeof input.value, 'string', `${description}: each judge input value is one string`);
+      const match = ENVELOPED.exec(input.value as string);
+      assert.ok(match, `${description}: each judge input arrives inside one untrusted-content envelope`);
+      return { ...input, value: match[2] };
+    }),
+  };
+}
+
 function assertOwnerJudgeRequest(request: Buffer, subject: string, description: string): void {
   const body = exactRequestBody(request) as { readonly state?: unknown };
   assert.equal(typeof body.state, 'string', `${description} sends one typed System One state string`);
   assert.deepEqual(
-    { ...body, state: JSON.parse(body.state as string) },
+    { ...body, state: withUnwrappedInputs(JSON.parse(body.state as string), description) },
     {
       model: 'e13-owner-model',
       questions: {
@@ -599,7 +616,7 @@ test('E13 final E2E: an active matched rule uses exact taint and budget authorit
     const body = exactRequestBody(result.requests[0] ?? Buffer.alloc(0)) as { readonly state?: unknown };
     assert.equal(typeof body.state, 'string', 'the sealed request carries the judge state as one typed string');
     assert.deepEqual(
-      { ...body, state: JSON.parse(body.state as string) },
+      { ...body, state: withUnwrappedInputs(JSON.parse(body.state as string), 'the matched component request') },
       {
         model: 'e13-synthetic-model',
         questions: {
@@ -612,14 +629,23 @@ test('E13 final E2E: an active matched rule uses exact taint and budget authorit
       },
       'the complete sealed body contains only the exact selected input and fixed judge envelope',
     );
+    // The judge input's prose is classified as it was sent, inside its envelope (D3); delivery mapping copies the
+    // plain field. Every record carries the event's channel, so a handle is tainted under its own platform.
+    const judgeInputText = result.taint[0]?.classification.untrusted[0]?.text ?? '';
+    assert.equal(
+      ENVELOPED.exec(judgeInputText)?.[2],
+      'Synthetic sender requests attention',
+      'the judge input is classified exactly as its enveloped bytes were sent',
+    );
     assert.deepEqual(
       result.taint,
       [
         {
           eventId: setup.event.id,
           accountId: ACCOUNT,
+          channel: 'gmail',
           classification: {
-            untrusted: [{ pointer: '/inputs/0/value', text: 'Synthetic sender requests attention' }],
+            untrusted: [{ pointer: '/inputs/0/value', text: judgeInputText }],
             addresses: [],
             handles: [],
           },
@@ -627,6 +653,7 @@ test('E13 final E2E: an active matched rule uses exact taint and budget authorit
         {
           eventId: setup.event.id,
           accountId: ACCOUNT,
+          channel: 'gmail',
           classification: {
             untrusted: [{ pointer: '/subject', text: 'Synthetic sender requests attention' }],
             addresses: [],
