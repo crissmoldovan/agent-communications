@@ -256,13 +256,13 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     (args) => removeSubscriber(args.subscriberId as string, options),
     true,
   );
-  strictControlTool('events_judges_list', 'List judges', 'Returns the typed Phase-E unavailable result.', {}, () =>
+  strictControlTool('events_judges_list', 'List judges', 'Lists content-free immutable judge metadata.', {}, () =>
     judgesList(options),
   );
   strictControlTool(
     'events_judge_add',
     'Add judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates an immutable, initially inactive judge version.',
     { document: z.unknown() },
     (args) => addJudge(args.document, options),
     true,
@@ -270,7 +270,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_update',
     'Update judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates an immutable replacement judge version.',
     { document: z.unknown() },
     (args) => updateJudge(args.document, options),
     true,
@@ -278,7 +278,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_remove',
     'Remove judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Removes every live immutable version of one judge.',
     { judgeId: z.string().min(1) },
     (args) => removeJudge(args.judgeId as string, options),
     true,
@@ -286,17 +286,21 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_test',
     'Test judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Tests one active exact judge version with the daemon-fixed synthetic event.',
     { judgeId: z.string().min(1), version: z.number().int().positive() },
     (args) => judgeTest(args.judgeId as string, args.version as number, options),
   );
-  strictControlTool('events_budget_show', 'Show budget', 'Returns the typed Phase-E unavailable result.', {}, () =>
-    budgetShow(options),
+  strictControlTool(
+    'events_budget_show',
+    'Show budget',
+    'Lists immutable judge budgets and the active singleton.',
+    {},
+    () => budgetShow(options),
   );
   strictControlTool(
     'events_budget_update',
     'Update budget',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates a pending immutable global budget and prepares its approval.',
     { document: z.unknown() },
     (args) => updateBudget(args.document, options),
     true,
@@ -304,14 +308,14 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_kinds_list',
     'List judge kinds',
-    'Returns the typed Phase-E unavailable result.',
+    'Lists disabled/enabled judge kinds and the typed Laya E2 seam.',
     {},
     () => judgeKindsList(options),
   );
   strictControlTool(
     'events_judge_kind_enable',
     'Enable judge kind',
-    'Returns the typed Phase-E or E2 unavailable result.',
+    'Prepares, but never approves or claims, judge-kind enablement.',
     { kind: z.string().min(1) },
     (args) => enableJudgeKind(args.kind as string, options),
     true,
@@ -319,7 +323,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_kind_disable',
     'Disable judge kind',
-    'Returns the typed Phase-E or E2 unavailable result.',
+    'Immediately disables one available judge kind; Laya remains typed E2-unavailable.',
     { kind: z.string().min(1) },
     (args) => disableJudgeKind(args.kind as string, options),
     true,
@@ -361,7 +365,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_held_list',
     'List held decisions',
-    'Returns the typed empty held-decision result; judges, which can hold an event, are not available yet.',
+    'Lists content-free held-decision metadata; only a terminal/app may resolve one.',
     {},
     () => heldList(options),
   );

@@ -4,11 +4,13 @@ import { isActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import { JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
 import {
   assertDoctorReportV1,
+  assertDoctorReportV2,
   type DoctorActivationFailureCode,
   type DoctorActivationKind,
   type DoctorDerivationEditKind,
   type DoctorLineageFailureCode,
   type DoctorReportV1,
+  type DoctorReportV2,
   type DoctorSource,
 } from '../operations/doctor.ts';
 import { phaseDSourceRegistry } from '../sources/registry.ts';
@@ -578,6 +580,72 @@ export async function projectB3Doctor(input: DoctorProjectionInput): Promise<Doc
       .sort((left, right) => preEJudgeBoundary(left).phase.localeCompare(preEJudgeBoundary(right).phase))
       .map(preEJudgeBoundary),
     whatsapp: whatsappHealth(input.database, live),
+  });
+}
+
+/** Builds the Phase-E successor beside B3's frozen pre-E doctor-v1 projection. */
+export async function projectE9Doctor(input: DoctorProjectionInput): Promise<DoctorReportV2> {
+  const report = await projectB3Doctor(input);
+  const kinds = [...JUDGE_KINDS].map((kind) => {
+    if (kind === 'laya') return { kind: 'laya' as const, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
+    const active = input.database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+      .get(kind) as { version: number } | undefined;
+    return {
+      kind,
+      state: active === undefined ? ('disabled' as const) : ('enabled' as const),
+      version: active?.version ?? null,
+    };
+  });
+  const budget = input.database
+    .prepare("SELECT version FROM active_versions WHERE kind = 'judge-budget' AND object_id = 'judge-budget'")
+    .get() as { version: number } | undefined;
+  // Doctor aggregates only after enumerating closed scope identities. That keeps the read path from turning a
+  // content-free counter into an unscoped judge-work selector: source work remains source/account-bound and a
+  // synthetic test remains exact-test-work-bound even when neither identifier is returned to the caller.
+  const reservationScopes = input.database
+    .prepare(
+      `SELECT DISTINCT work_scope, source, account_id, test_work_id
+         FROM judge_budget_reservations
+        WHERE (work_scope = 'source-owned' AND source IS NOT NULL AND account_id IS NOT NULL)
+           OR (work_scope = 'synthetic-test' AND test_work_id IS NOT NULL)`,
+    )
+    .all() as Array<{
+    work_scope: 'source-owned' | 'synthetic-test';
+    source: string | null;
+    account_id: string | null;
+    test_work_id: string | null;
+  }>;
+  const reservationCounts = new Map<'reserved' | 'in-flight' | 'settled' | 'released', number>();
+  for (const scope of reservationScopes) {
+    const rows =
+      scope.work_scope === 'source-owned'
+        ? (input.database
+            .prepare(
+              `SELECT state, count(*) AS count FROM judge_budget_reservations
+                WHERE work_scope = 'source-owned' AND source = ? AND account_id = ? GROUP BY state`,
+            )
+            .all(scope.source, scope.account_id) as Array<{ state: string; count: number }>)
+        : (input.database
+            .prepare(
+              `SELECT state, count(*) AS count FROM judge_budget_reservations
+                WHERE work_scope = 'synthetic-test' AND test_work_id = ? GROUP BY state`,
+            )
+            .all(scope.test_work_id) as Array<{ state: string; count: number }>);
+    for (const row of rows) {
+      if (row.state !== 'reserved' && row.state !== 'in-flight' && row.state !== 'settled' && row.state !== 'released')
+        continue;
+      reservationCounts.set(row.state, (reservationCounts.get(row.state) ?? 0) + row.count);
+    }
+  }
+  const reservations = [...reservationCounts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([state, count]) => ({ state, count }));
+  return assertDoctorReportV2({
+    ...report,
+    schemaVersion: 'doctor-v2',
+    judgeBoundary: [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+    judge: { kinds, budget: { activeVersion: budget?.version ?? null }, reservations },
   });
 }
 

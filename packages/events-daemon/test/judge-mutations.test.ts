@@ -21,6 +21,10 @@ test('E3 mutation: every prerequisite and scope mutation has exactly one named p
       'e7-single-decision-owner',
       'e7-deterministic-shared-route',
       'e7-evaluator-writer-lease',
+      'e9-fixed-synthetic-judge-input',
+      'e9-judge-key-rotate-current-generation',
+      'e9-mcp-kind-enable-no-active-pointer',
+      'e9-pending-rule-judge-origin',
     ],
   );
 });

@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { JudgeKind } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { purgeHeldDecisionsInTransaction } from './holds.ts';
-import { type JudgeRecoveryResult, recoverJudgeWork } from './judge-recovery.ts';
+import { type JudgeRecoveryResult, recoverJudgeWork, recoverRevokedJudgeVersions } from './judge-recovery.ts';
 
 /**
  * The sole judge participant for a caller's already-open immediate transaction. It deliberately performs no
@@ -32,6 +32,16 @@ export class JudgePurgeParticipant {
     });
     purgeHeldDecisionsInTransaction(this.#database, { scope: 'judge-kind', judgeKind });
     return result;
+  }
+
+  /** Judge removal is version-exact and delegates each durable identity to the single recovery transition. */
+  judge(input: { readonly judgeId: string; readonly versions: readonly number[] }): JudgeRecoveryResult {
+    return recoverRevokedJudgeVersions({
+      database: this.#database,
+      now: this.#now(),
+      judgeId: input.judgeId,
+      versions: input.versions,
+    });
   }
 
   account(input: { readonly source: SourceOptions['channel']; readonly accountId: string }): JudgeRecoveryResult {

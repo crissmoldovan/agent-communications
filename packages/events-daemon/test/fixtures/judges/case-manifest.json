@@ -101,7 +101,11 @@
     { "id": "e8-held-whatsapp-journal-version" },
     { "id": "e8-legacy-hold-ingest-cap" },
     { "id": "e8-legacy-hold-repeated-tightening" },
-    { "id": "e8-held-final-live-account-fence" }
+    { "id": "e8-held-final-live-account-fence" },
+    { "id": "e9-fixed-synthetic-judge-input" },
+    { "id": "e9-judge-key-rotate-current-generation" },
+    { "id": "e9-mcp-kind-enable-no-active-pointer" },
+    { "id": "e9-pending-rule-judge-origin" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -204,7 +208,11 @@
     { "id": "e8-held-whatsapp-journal-version" },
     { "id": "e8-legacy-hold-ingest-cap" },
     { "id": "e8-legacy-hold-repeated-tightening" },
-    { "id": "e8-held-final-live-account-fence" }
+    { "id": "e8-held-final-live-account-fence" },
+    { "id": "e9-fixed-synthetic-judge-input" },
+    { "id": "e9-judge-key-rotate-current-generation" },
+    { "id": "e9-mcp-kind-enable-no-active-pointer" },
+    { "id": "e9-pending-rule-judge-origin" }
   ],
   "cases": [
     {
@@ -1415,6 +1423,54 @@
         "test": "E8 P1: held resolution rechecks the live account after delivery encryption and taint before its final write"
       },
       "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input",
+      "task": "E9",
+      "coverage": ["e9-fixed-synthetic-judge-input"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-test.ts",
+      "test": "packages/events-daemon/test/judge-test-operation.test.ts",
+      "mutation": {
+        "id": "e9-fixed-synthetic-judge-input",
+        "test": "E9 judge test: the fixed synthetic input is tainted, globally reserved and sent through the sealed transport"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation",
+      "task": "E9",
+      "coverage": ["e9-judge-key-rotate-current-generation"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-secret-control.ts",
+      "test": "packages/events-daemon/test/b3-secrets.test.ts",
+      "mutation": {
+        "id": "e9-judge-key-rotate-current-generation",
+        "test": "B3 secret slots create and rotate only exact immutable owners with content-free receipts"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer",
+      "task": "E9",
+      "coverage": ["e9-mcp-kind-enable-no-active-pointer"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-operator-control.test.ts",
+      "mutation": {
+        "id": "e9-mcp-kind-enable-no-active-pointer",
+        "test": "E9 operator control creates immutable subscriber and judge versions while retaining the E2 model seam"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin",
+      "task": "E9",
+      "coverage": ["e9-pending-rule-judge-origin"],
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/pending-rule-judge-test.test.ts",
+      "mutation": {
+        "id": "e9-pending-rule-judge-origin",
+        "test": "E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached"
+      },
+      "strictRunner": "judge-mutants"
     }
   ]
 }

@@ -543,7 +543,11 @@ export class ActivationRuntime {
   }
 
   /** A narrowing revocation is allowed to win over a claimed completion, but no other pointer mutation is. */
-  async cancelForRevocation(input: { readonly ruleId?: string; readonly targetId?: string }): Promise<void> {
+  async cancelForRevocation(input: {
+    readonly ruleId?: string;
+    readonly targetId?: string;
+    readonly judgeId?: string;
+  }): Promise<void> {
     const rows = this.#store.database
       .prepare(
         "SELECT id, document FROM activation_intents WHERE status IN ('pending', 'pending-completion') ORDER BY id",
@@ -1475,24 +1479,30 @@ export class ActivationRuntime {
 
   #isRevokedBinding(
     document: ActivationDocumentV1,
-    input: { readonly ruleId?: string; readonly targetId?: string },
+    input: { readonly ruleId?: string; readonly targetId?: string; readonly judgeId?: string },
   ): boolean {
     if (document.kind === 'rule') {
       return (
         document.rule.ruleId === input.ruleId ||
-        (input.targetId !== undefined && document.rule.targets.some((target) => target.targetId === input.targetId))
+        (input.targetId !== undefined && document.rule.targets.some((target) => target.targetId === input.targetId)) ||
+        (input.judgeId !== undefined && document.rule.agentic?.judge.judgeId === input.judgeId)
       );
     }
     if (document.kind !== 'enable-all') return false;
     if (input.ruleId !== undefined) return document.ruleVersions.some((entry) => entry.ruleId === input.ruleId);
-    if (input.targetId === undefined) return false;
+    if (input.targetId === undefined && input.judgeId === undefined) return false;
     for (const entry of document.ruleVersions) {
       const row = this.#store.database
         .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
         .get(entry.ruleId, entry.ruleVersion) as { document: string } | undefined;
       if (!row) continue;
-      const rule = JSON.parse(row.document) as { targets?: Array<{ targetId?: unknown }> };
-      if (rule.targets?.some((target) => target.targetId === input.targetId)) return true;
+      const rule = JSON.parse(row.document) as {
+        targets?: Array<{ targetId?: unknown }>;
+        agentic?: { judge?: { judgeId?: unknown } };
+      };
+      if (input.targetId !== undefined && rule.targets?.some((target) => target.targetId === input.targetId))
+        return true;
+      if (input.judgeId !== undefined && rule.agentic?.judge?.judgeId === input.judgeId) return true;
     }
     return false;
   }

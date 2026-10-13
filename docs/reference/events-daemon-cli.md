@@ -44,7 +44,7 @@ Scripts should read these rather than parse output.
 | [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
 | [`doctor`](#agent-events-doctor) | report content-free lineage validation, pending source retry health, recovery and global switch health |
 | [`approval`](#agent-events-approval) | view the authoritative pending disclosure approval |
-| [`catalogue`](#agent-events-catalogue) | inspect the local event catalogue |
+| [`catalogue`](#agent-events-catalogue) | inspect the held local event catalogue |
 | [`sources`](#agent-events-sources) | inspect configured event sources |
 | [`source`](#agent-events-source) | inspect one configured event source |
 | [`rules`](#agent-events-rules) | inspect immutable local event rule versions |
@@ -53,9 +53,9 @@ Scripts should read these rather than parse output.
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
 | [`subscribers`](#agent-events-subscribers) | inspect immutable SSE subscriber versions |
 | [`subscriber`](#agent-events-subscriber) | create, update, and revoke immutable SSE subscribers |
-| [`judges`](#agent-events-judges) | inspect judge controls (judges are not available yet) |
-| [`judge`](#agent-events-judge) | judge controls, which answer that judges are not available yet |
-| [`budget`](#agent-events-budget) | judge budget controls, which answer that judges are not available yet |
+| [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
+| [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
+| [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
@@ -148,7 +148,7 @@ agent-events approval view [options] <approval-id>
 
 ### `agent-events catalogue`
 
-inspect the local event catalogue
+inspect the held local event catalogue
 
 ```
 agent-events catalogue [options] [command]
@@ -447,7 +447,7 @@ agent-events subscriber token rotate [options] <subscriber-id>
 
 ### `agent-events judges`
 
-inspect judge controls (judges are not available yet)
+inspect immutable content-free judge metadata
 
 ```
 agent-events judges [options] [command]
@@ -461,7 +461,7 @@ agent-events judges list [options]
 
 ### `agent-events judge`
 
-judge controls, which answer that judges are not available yet
+manage immutable judges and run fixed synthetic tests
 
 ```
 agent-events judge [options] [command]
@@ -497,7 +497,7 @@ agent-events judge test [options] <judge-id>
 
 ### `agent-events judge kinds`
 
-list judge kinds, which answer that judges are not available yet
+list disabled/enabled kinds and the typed Laya E2 seam
 
 ```
 agent-events judge kinds [options] [command]
@@ -511,7 +511,7 @@ agent-events judge kinds list [options]
 
 ### `agent-events judge kind`
 
-judge kind controls, which answer that judges are not available yet
+prepare enablement or immediately disable one judge kind
 
 ```
 agent-events judge kind [options] [command]
@@ -531,7 +531,7 @@ agent-events judge kind disable [options] <kind>
 
 ### `agent-events judge model`
 
-local Laya model controls, which answer that Laya is not available yet
+use typed unavailable Laya model controls until Phase E2
 
 ```
 agent-events judge model [options] [command]
@@ -579,7 +579,7 @@ agent-events judge key rotate [options] <judge-id>
 
 ### `agent-events budget`
 
-judge budget controls, which answer that judges are not available yet
+inspect or prepare the immutable global judge budget
 
 ```
 agent-events budget [options] [command]

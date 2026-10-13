@@ -1,11 +1,18 @@
 import { CommsError } from '@agentcomms/core';
 import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
+import { canonicalJudge, canonicalJudgeBudget, JUDGE_BUDGET_ID, JUDGE_KIND_DEFINITIONS } from '../domain/judges.ts';
+import { JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerRequest, B3OwnerService } from '../operations/b3-contract.ts';
 import type { EventDatabase } from '../store/database.ts';
+import type { ActivationRuntime } from './activations.ts';
 import type { B3ControlPorts } from './b3-control-ports.ts';
-import { decideHeldUnavailable, heldListUnavailable, judgeUnavailable } from './b3-judge-unavailable.ts';
+import { judgeUnavailable } from './b3-judge-unavailable.ts';
+import type { HoldResolver } from './holds.ts';
+import { JudgeKinds } from './judge-kinds.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
+import type { JudgeTestControl } from './judge-test.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
@@ -25,19 +32,46 @@ export class B3OperatorControl implements B3OwnerService {
   readonly #store: EventDatabase;
   readonly #ports: Pick<B3ControlPorts, 'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams'>;
   readonly #now: () => number;
+  readonly #activations:
+    | Pick<
+        ActivationRuntime,
+        'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+      >
+    | undefined;
+  readonly #judgeTest: Pick<JudgeTestControl, 'test'> | undefined;
+  readonly #holdResolver: Pick<HoldResolver, 'resolve'> | undefined;
 
   constructor(input: {
     readonly store: EventDatabase;
     readonly ports: Pick<B3ControlPorts, 'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams'>;
     readonly now?: (() => number) | undefined;
+    readonly activations?:
+      | Pick<
+          ActivationRuntime,
+          'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+        >
+      | undefined;
+    readonly judgeTest?: Pick<JudgeTestControl, 'test'> | undefined;
+    readonly holdResolver?: Pick<HoldResolver, 'resolve'> | undefined;
   }) {
     this.#store = input.store;
     this.#ports = input.ports;
     this.#now = input.now ?? Date.now;
+    this.#activations = input.activations;
+    this.#judgeTest = input.judgeTest;
+    this.#holdResolver = input.holdResolver;
   }
 
   async handle(request: B3OwnerRequest): Promise<unknown> {
-    const unavailable = judgeUnavailable(request.operation, request.args);
+    // B3 v1's unavailable variants remain the closed E2 seam. Phase E replaces only the available judge producer;
+    // it never makes Laya download/model operations callable early.
+    const unavailable =
+      request.operation === 'judgeModelStatus' ||
+      request.operation === 'removeJudgeModel' ||
+      ((request.operation === 'enableJudgeKind' || request.operation === 'disableJudgeKind') &&
+        request.args.kind === 'laya')
+        ? judgeUnavailable(request.operation, request.args)
+        : undefined;
     if (unavailable !== undefined) return unavailable;
     switch (request.operation) {
       case 'subscribersList':
@@ -63,13 +97,264 @@ export class B3OperatorControl implements B3OwnerService {
         return this.#ports.quiescer.withShared(async () =>
           this.dropDelivery(requiredText(request.args.deliveryId, 'delivery id')),
         );
+      case 'judgesList':
+        return this.judgesList();
+      case 'addJudge':
+      case 'updateJudge':
+        return this.#ports.quiescer.withShared(async () =>
+          this.#store.immediate(() => new ImmutableVersions(this.#store.database).createJudge(request.args.document)),
+        );
+      case 'removeJudge':
+        return this.removeJudge(requiredText(request.args.judgeId, 'judge id'));
+      case 'judgeTest':
+        if (this.#judgeTest === undefined)
+          throw new CommsError('CONFIG', 'judge test is not composed for this operator control');
+        return this.#judgeTest.test({
+          judgeId: requiredText(request.args.judgeId, 'judge id'),
+          version: requiredVersion(request.args.version, 'judge version'),
+        });
+      case 'budgetShow':
+        return this.budgetShow();
+      case 'updateBudget':
+        return this.updateBudget(request.args.document);
+      case 'judgeKindsList':
+        return this.judgeKindsList();
+      case 'enableJudgeKind':
+        return this.enableJudgeKind(requiredText(request.args.kind, 'judge kind'));
+      case 'disableJudgeKind':
+        return this.disableJudgeKind(requiredText(request.args.kind, 'judge kind'));
       case 'heldList':
-        return heldListUnavailable();
+        return this.heldList();
       case 'decideHeld':
-        return decideHeldUnavailable();
+        if (this.#holdResolver === undefined)
+          throw new CommsError('CONFIG', 'held resolution has not been composed for this operator control');
+        return this.#holdResolver.resolve({
+          decisionId: requiredText(request.args.decisionId, 'held decision id'),
+          decision: heldDecision(request.args.decision),
+        });
       default:
         throw new CommsError('USAGE', `the local B3 operator control does not implement ${request.operation}`);
     }
+  }
+
+  private requireActivations(): Pick<
+    ActivationRuntime,
+    'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction'
+  > {
+    if (this.#activations === undefined)
+      throw new CommsError('CONFIG', 'judge activation is not composed for this operator control');
+    return this.#activations;
+  }
+
+  budgetShow(): {
+    readonly activeVersion: number | null;
+    readonly versions: readonly {
+      readonly budgetId: typeof JUDGE_BUDGET_ID;
+      readonly version: number;
+      readonly global: {
+        readonly callsPerRollingHour: number;
+        readonly inputTokensPerRolling30Days: number;
+        readonly concurrency: number;
+      };
+      readonly providers: readonly {
+        readonly provider: string;
+        readonly callsPerRollingHour: number;
+        readonly inputTokensPerRolling30Days: number;
+        readonly concurrency: number;
+      }[];
+      readonly revokedAt: number | null;
+    }[];
+  } {
+    const active = new ImmutableVersions(this.#store.database).activeVersion('judge-budget', JUDGE_BUDGET_ID);
+    const versions = (
+      this.#store.database
+        .prepare('SELECT version, document, revoked_at FROM judge_budget_versions ORDER BY version')
+        .all() as Array<{ version: number; document: string; revoked_at: number | null }>
+    ).flatMap((row) => {
+      try {
+        const budget = canonicalJudgeBudget(JSON.parse(row.document));
+        return [{ ...budget, revokedAt: row.revoked_at }];
+      } catch {
+        return [];
+      }
+    });
+    return { activeVersion: active?.version ?? null, versions };
+  }
+
+  judgeKindsList(): readonly (
+    | {
+        readonly kind: 'typesafe' | 'local-endpoint';
+        readonly state: 'disabled' | 'enabled';
+        readonly version: number | null;
+      }
+    | { readonly kind: 'laya'; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
+  )[] {
+    return JUDGE_KINDS.map((kind) => {
+      const definition = JUDGE_KIND_DEFINITIONS.find((entry) => entry.kind === kind);
+      if (definition?.availability === 'unavailable')
+        return { kind: 'laya' as const, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
+      const active = new ImmutableVersions(this.#store.database).activeVersion('judge-kind', kind);
+      return {
+        kind: kind as 'typesafe' | 'local-endpoint',
+        state: active === null ? ('disabled' as const) : ('enabled' as const),
+        version: active?.version ?? null,
+      };
+    });
+  }
+
+  async updateBudget(document: unknown): Promise<unknown> {
+    const activations = this.requireActivations();
+    const pending = await this.#ports.quiescer.withShared(async () =>
+      this.#store.immediate(() => new ImmutableVersions(this.#store.database).createJudgeBudget(document)),
+    );
+    return activations.prepareJudgeBudget({ version: pending.version });
+  }
+
+  async enableJudgeKind(kind: string): Promise<unknown> {
+    const activations = this.requireActivations();
+    const available = availableJudgeKind(kind);
+    const version = this.#store.immediate(() => {
+      const latest = this.#store.database
+        .prepare('SELECT max(version) AS version FROM judge_kind_versions WHERE kind = ? AND revoked_at IS NULL')
+        .get(available) as { version: number | null };
+      if (latest.version !== null) return latest.version;
+      const document =
+        available === 'typesafe'
+          ? { id: 'judge-kind:typesafe', kind: available, version: 1, endpoint: 'https://api.typesafe.ai/v1/systemone' }
+          : { id: 'judge-kind:local-endpoint', kind: available, version: 1 };
+      return new ImmutableVersions(this.#store.database).createJudgeKind(document).version;
+    });
+    // This is deliberately preparation only. The shared activation runtime remains the sole human approval/claim and
+    // final-pointer path, so an MCP repeat cannot make a kind live.
+    return new JudgeKinds({ store: this.#store, now: this.#now, activations }).prepareEnable({
+      kind: available,
+      version,
+    });
+  }
+
+  disableJudgeKind(kind: string): unknown {
+    const activations = this.requireActivations();
+    return new JudgeKinds({ store: this.#store, now: this.#now, activations }).disable(kind);
+  }
+
+  async removeJudge(judgeId: string): Promise<{ readonly judgeId: string; readonly removed: true }> {
+    await this.#activations?.cancelForRevocation({ judgeId });
+    return this.#store.immediate(() => {
+      const rows = this.#store.database
+        .prepare('SELECT version FROM judge_versions WHERE judge_id = ? AND revoked_at IS NULL ORDER BY version')
+        .all(judgeId) as Array<{ version: number }>;
+      if (rows.length === 0) throw new CommsError('NOT_FOUND', 'the judge has no live version to remove');
+      const revokedAt = this.#now();
+      const removedVersions = new Set(rows.map((row) => row.version));
+      for (const row of rows) {
+        this.#store.database
+          .prepare('UPDATE judge_versions SET revoked_at = ? WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+          .run(revokedAt, judgeId, row.version);
+        this.#store.database
+          .prepare(
+            'INSERT OR REPLACE INTO object_revocations (kind, object_id, version, revoked_at) VALUES (?, ?, ?, ?)',
+          )
+          .run('judge', judgeId, row.version, revokedAt);
+      }
+      new JudgePurgeParticipant({ database: this.#store.database, now: () => revokedAt }).judge({
+        judgeId,
+        versions: [...removedVersions],
+      });
+      const bound = this.#store.database
+        .prepare("SELECT rule_id, version, document FROM rule_versions WHERE state IN ('active', 'superseded')")
+        .all() as Array<{ rule_id: string; version: number; document: string }>;
+      for (const rule of bound) {
+        if (!ruleReferencesJudge(rule.document, judgeId, removedVersions)) continue;
+        this.#store.database
+          .prepare(
+            `UPDATE rule_versions SET state = 'revoked', revoked_at = ?
+              WHERE rule_id = ? AND version = ? AND state IN ('active', 'superseded')`,
+          )
+          .run(revokedAt, rule.rule_id, rule.version);
+        purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], revokedAt);
+        this.#store.database
+          .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
+          .run(rule.rule_id, rule.version);
+      }
+      return { judgeId, removed: true };
+    });
+  }
+
+  /** The held listing is metadata-only; ciphertext, event projection and model response never leave the resolver. */
+  heldList(): {
+    readonly kind: 'held-list';
+    readonly decisions: readonly {
+      readonly decisionId: string;
+      readonly accountId: string;
+      readonly ruleId: string;
+      readonly ruleVersion: number;
+      readonly holdExpiresAt: number | null;
+      readonly holdBoundBy: 'hold-window' | 'ingest-retention' | null;
+    }[];
+  } {
+    const decisions = this.#store.database
+      .prepare(
+        `SELECT id, account_id, rule_id, rule_version, hold_expires_at, hold_bound_by
+           FROM decisions WHERE outcome = 'hold' ORDER BY hold_expires_at, id`,
+      )
+      .all() as Array<{
+      id: string;
+      account_id: string;
+      rule_id: string;
+      rule_version: number;
+      hold_expires_at: number | null;
+      hold_bound_by: string | null;
+    }>;
+    return {
+      kind: 'held-list',
+      decisions: decisions.flatMap((row) =>
+        row.hold_bound_by === null || row.hold_bound_by === 'hold-window' || row.hold_bound_by === 'ingest-retention'
+          ? [
+              {
+                decisionId: row.id,
+                accountId: row.account_id,
+                ruleId: row.rule_id,
+                ruleVersion: row.rule_version,
+                holdExpiresAt: row.hold_expires_at,
+                holdBoundBy: row.hold_bound_by,
+              },
+            ]
+          : [],
+      ),
+    };
+  }
+
+  /** Content-free immutable judge inventory; prompts, endpoint credentials and secret state never cross this surface. */
+  judgesList(): readonly {
+    readonly judgeId: string;
+    readonly version: number;
+    readonly kind: 'typesafe' | 'local-endpoint';
+    readonly provider: string;
+    readonly model: string;
+    readonly revokedAt: number | null;
+  }[] {
+    return (
+      this.#store.database
+        .prepare('SELECT judge_id, version, document, revoked_at FROM judge_versions ORDER BY judge_id, version')
+        .all() as Array<{ judge_id: string; version: number; document: string; revoked_at: number | null }>
+    ).flatMap((row) => {
+      try {
+        const judge = canonicalJudge(JSON.parse(row.document));
+        return [
+          {
+            judgeId: row.judge_id,
+            version: row.version,
+            kind: judge.kind,
+            provider: judge.provider,
+            model: judge.model,
+            revokedAt: row.revoked_at,
+          },
+        ];
+      } catch {
+        // A damaged immutable row must not become a permissive/free-form control result.
+        return [];
+      }
+    });
   }
 
   subscribersList(): readonly SubscriberMetadata[] {
@@ -344,6 +629,17 @@ function ruleReferencesSubscriber(document: string, subscriberId: string, versio
   }
 }
 
+function ruleReferencesJudge(document: string, judgeId: string, versions: ReadonlySet<number>): boolean {
+  try {
+    const rule = JSON.parse(document) as { agentic?: { judge?: { judgeId?: unknown; version?: unknown } } };
+    const judge = rule.agentic?.judge;
+    return judge?.judgeId === judgeId && typeof judge.version === 'number' && versions.has(judge.version);
+  } catch {
+    // A damaged live rule cannot prove that it is safe to leave active after the bound authority is revoked.
+    return true;
+  }
+}
+
 function activationIntentReferencesSubscriber(
   database: EventDatabase['database'],
   document: string,
@@ -384,6 +680,24 @@ function retryLimit(document: string): number {
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new CommsError('USAGE', `${name} is required`);
   return value;
+}
+
+function requiredVersion(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1)
+    throw new CommsError('USAGE', `${name} is a positive integer`);
+  return value as number;
+}
+
+function heldDecision(value: unknown): 'accept' | 'reject' {
+  if (value !== 'accept' && value !== 'reject') throw new CommsError('USAGE', 'held decision is accept or reject');
+  return value;
+}
+
+function availableJudgeKind(kind: string): Exclude<JudgeKind, 'laya'> {
+  if (!(JUDGE_KINDS as readonly string[]).includes(kind))
+    throw new CommsError('BAD_DATA', 'the judge kind is not recognised');
+  if (kind === 'laya') throw new CommsError('BAD_DATA', 'laya is unavailable until E2');
+  return kind as Exclude<JudgeKind, 'laya'>;
 }
 
 function voided(message: string): CommsError {
