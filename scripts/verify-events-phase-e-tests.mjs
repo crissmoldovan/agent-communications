@@ -55,6 +55,12 @@ const STRICT_RUNNERS = Object.freeze({
     collection: 'JUDGE_HOLD_MUTATIONS',
     helper: 'expectJudgeHoldMutationToFail',
   },
+  'judge-adversarial-mutants': {
+    test: 'packages/events-daemon/test/judge-adversarial-mutations.test.ts',
+    support: 'packages/events-daemon/test/support/judge-adversarial-mutants.ts',
+    collection: 'JUDGE_ADVERSARIAL_MUTATIONS',
+    helper: 'expectJudgeAdversarialMutationToFail',
+  },
 });
 
 /** E owns these rows rather than allowing a mutable manifest to define which completed-task guards matter. */
@@ -114,6 +120,17 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e9-judge-key-rotate-current-generation',
   'e9-mcp-kind-enable-no-active-pointer',
   'e9-pending-rule-judge-origin',
+  'e11-provider-match-authority',
+  'e11-envelope-provenance',
+  'e11-range-token-cap',
+  'e11-wrong-type-score',
+  'e11-host-drift-before-byte',
+  'e11-journal-exactness',
+  'e11-refusal-content-free',
+  'e11-late-hold-response',
+  'e11-corpus-integrity-allowlist',
+  'e11-response-fixture-pinning',
+  'e11-corpus-manifest-pairing',
 ]);
 
 async function source(root, file) {
