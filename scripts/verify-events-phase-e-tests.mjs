@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -72,6 +73,56 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'phase-e-b3-pending-target-origin',
   'phase-e-source-scope',
   'phase-e-synthetic-scope',
+  'e1-prepare-disabled-kind',
+  'e1-claim-before-core-disabled-kind',
+  'e1-local-claim-transaction-disabled-kind',
+  'e1-finalise-transaction-disabled-kind',
+  'e5-rolling-includes-reserved',
+  'e5-rolling-includes-in-flight',
+  'e5-concurrency-excludes-settled',
+  'e5-stable-rule-key',
+  'e5-input-max-before-io',
+  'e5-byte-estimate',
+  'e5-no-active-singleton',
+  'e5-unparsed-outcome-never-refunds',
+  'e5-omitted-result-never-defaults-completed',
+  'e5-terminal-decision-is-no-match',
+  'e5-terminal-projection-purge',
+  'e5-single-transport-entry',
+  'e5-concurrency-release',
+  'e5-double-settle',
+  'e5-owner-start-recovery',
+  'e5-v1-literal-judge-kinds',
+  'e6-reference-date',
+  'e6-header-allowlist',
+  'e6-single-line-hosted-key',
+  'e6-request-cap',
+  'e6-response-cap',
+  'e6-streaming-response-cap',
+  'e6-output-token-limit',
+  'e6-provider-match',
+  'e6-score-clamp',
+  'e6-closed-score-pointer',
+  'e6-dns-final-gate',
+  'e6-tcp-final-gate',
+  'e6-tls-final-gate',
+  'e6-write-final-gate',
+  'e6-write-gate-adjacency',
+  'e6-no-http-client',
+  'e6-no-proxy-path',
+  'e6-no-redirect',
+  'e6-literal-loopback-only',
+  'e6-attempt-deadline',
+  'e6-post-gate-deadline',
+  'e6-final-gate-deadline',
+  'e6-synchronous-final-gate',
+  'e6-response-deadline',
+  'e6-fatal-utf8',
+  'e6-a-accept-non-global',
+  'e6-a-skip-embedded-addresses',
+  'e6-a-allow-global-only-non-typesafe',
+  'e6-m-accept-alias',
+  'e6-m-substitute-constant-model',
   'e4-no-pointer-at-prepare',
   'e4-final-pointer-drift',
   'e4-claim-pointer-drift',
@@ -131,6 +182,222 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e11-corpus-integrity-allowlist',
   'e11-response-fixture-pinning',
   'e11-corpus-manifest-pairing',
+  'e12-target-remove-purge',
+  'e12-subscriber-remove-purge',
+  'e12-judge-remove-purge',
+  'e12-account-remove-readd-purge',
+  'e12-whatsapp-hide-purge',
+  'e12-rule-disable-purge',
+  'e12-disable-all-purge',
+  'e12-account-rule-revoke',
+  'e12-derived-parent-revoke',
+  'e12-audit-matrix',
+  'e12-static-network-path',
+  'e12-purge-caller-registry',
+  'e12-corpus-dependency-closure',
+  'e12-held-purge-race',
+  'e12-hold-claim-expiry-call',
+  'e12-hold-api-expiry-call',
+  'e12-hold-resolution-expiry-call',
+]);
+
+const auditRows = (category, rows) => rows.map(([id, owner]) => Object.freeze({ category, id, owner }));
+
+/** Task 12's immutable audit inventory. Cases are the matrix rows; each owner already has one strict mutation. */
+export const PHASE_E_AUDIT_MATRIX = Object.freeze([
+  ...auditRows('await-write', [
+    ['activation-approval-claim-to-pointer', 'e4-final-pointer-drift'],
+    ['secret-store-to-key-completion', 'e9-judge-key-rotate-current-generation'],
+    ['decrypt-evaluate-to-reservation', 'e7-settlement-token'],
+    ['taint-flush-to-reservation', 'e7-taint-before-reserve'],
+    ['authority-read-to-in-flight', 'e6-write-final-gate'],
+    ['dns-gate-to-lookup', 'e6-dns-final-gate'],
+    ['tcp-gate-to-connect', 'e6-tcp-final-gate'],
+    ['tls-gate-to-handshake', 'e6-tls-final-gate'],
+    ['write-gate-to-request-byte', 'e6-write-final-gate'],
+    ['response-parser-to-settlement', 'e7-pause-fence'],
+    ['hold-decrypt-map-encrypt-to-resolution', 'e8-final-resolution-recheck'],
+    ['recovery-config-load-to-cleanup', 'e5-owner-start-recovery'],
+    ['purge-preparation-to-purge', 'e8-held-whatsapp-journal-version'],
+    ['approval-view-to-synthetic-judge-call', 'e9-pending-rule-judge-origin'],
+  ]),
+  ...auditRows('external-identity', [
+    ['source', 'e3-scope-account-source'],
+    ['account-id', 'e3-scope-account-source'],
+    ['event-id', 'e4-expiry-rule-version'],
+    ['rule-id', 'e5-stable-rule-key'],
+    ['rule-version', 'e4-tightening-rule-version'],
+    ['judge-id', 'e9-fixed-synthetic-judge-input'],
+    ['judge-version', 'e9-judge-key-rotate-current-generation'],
+    ['budget-id', 'e4-budget-digest-live-reservation'],
+    ['budget-version', 'e4-budget-digest-finalise'],
+    ['provider-id', 'e5-stable-rule-key'],
+    ['installation-key', 'e5-rolling-includes-reserved'],
+    ['decision-id', 'e8-decision-bound-token'],
+    ['reservation-id', 'e5-double-settle'],
+    ['target-id', 'e12-target-remove-purge'],
+    ['target-version', 'e12-target-remove-purge'],
+    ['subscriber-id', 'e12-subscriber-remove-purge'],
+    ['subscriber-version', 'e12-subscriber-remove-purge'],
+    ['test-work-id', 'e3-scope-synthetic-work'],
+    ['judge-kind', 'e4-kind-disable-recovery'],
+    ['approval-id', 'e4-budget-digest-claim'],
+    ['authorization-activation-id', 'e7-settlement-token'],
+    ['switch-generation', 'e7-pause-fence'],
+    ['visibility-version', 'e8-held-whatsapp-journal-version'],
+    ['claim-token', 'e8-decision-bound-token'],
+  ]),
+  ...auditRows('alias', [
+    ['account-remove-readd', 'e12-account-remove-readd-purge'],
+    ['same-looking-cross-source-id', 'e3-scope-account-source'],
+    ['stable-rule-id-across-version', 'e5-stable-rule-key'],
+    ['unique-work-id', 'e5-double-settle'],
+    ['provider-from-embedded-judge', 'e5-stable-rule-key'],
+    ['active-pointer-to-immutable-version', 'e4-final-pointer-drift'],
+    ['stable-row-id-after-alias-resolution', 'e8-decision-bound-token'],
+  ]),
+  ...auditRows('scope-variant', [
+    ['work-source-owned', 'e3-scope-account-source'],
+    ['work-synthetic-test', 'e3-scope-synthetic-work'],
+    ['selector-all', 'e5-owner-start-recovery'],
+    ['selector-judge-kind', 'e4-kind-disable-recovery'],
+    ['selector-source-account', 'e12-account-remove-readd-purge'],
+    ['selector-source-event', 'e12-whatsapp-hide-purge'],
+    ['selector-source-event-rule', 'e4-expiry-rule-version'],
+    ['selector-rule', 'e4-tightening-rule-version'],
+    ['selector-synthetic-test', 'e9-fixed-synthetic-judge-input'],
+  ]),
+  ...auditRows('purge-caller', [
+    ['kind-disable', 'e4-kind-disable-recovery'],
+    ['judge-remove', 'e12-judge-remove-purge'],
+    ['rule-disable-revoke', 'e12-rule-disable-purge'],
+    ['target-remove', 'e12-target-remove-purge'],
+    ['subscriber-remove', 'e12-subscriber-remove-purge'],
+    ['disable-all', 'e12-disable-all-purge'],
+    ['account-remove', 'e12-account-remove-readd-purge'],
+    ['account-single-rule-revoke', 'e12-account-rule-revoke'],
+    ['whatsapp-hide', 'e12-whatsapp-hide-purge'],
+    ['projection-expiry', 'e4-expiry-rule-version'],
+    ['ingest-expiry', 'e4-expiry-rule-version'],
+    ['hold-expiry', 'e8-expiry-before-control'],
+    ['hold-claim-expiry', 'e12-hold-claim-expiry-call'],
+    ['hold-api-expiry', 'e12-hold-api-expiry-call'],
+    ['hold-resolution-expiry', 'e12-hold-resolution-expiry-call'],
+    ['expiry-held-sweep', 'e8-expiry-before-control'],
+    ['retention-tightening', 'e4-tightening-rule-version'],
+    ['tightening-held-sweep', 'e8-legacy-hold-repeated-tightening'],
+    ['retained-projection-shortening', 'e4-tightening-rule-version'],
+    ['derived-parent-revoke', 'e12-derived-parent-revoke'],
+  ]),
+  ...auditRows('section-5', [
+    ['b3-hard-gate-and-unavailable-contract', 'e3-b3-prerequisite-gate'],
+    ['judge-test-no-unapproved-network', 'e9-fixed-synthetic-judge-input'],
+    ['durable-accounting-and-recovery', 'e5-unparsed-outcome-never-refunds'],
+    ['sealed-vectors-and-answer-bounds', 'e6-header-allowlist'],
+    ['one-terminal-decision', 'e7-single-decision-owner'],
+    ['kinds-off-disable-and-late-result', 'e4-kind-disable-recovery'],
+    ['activation-digest-and-wrong-kind-claims', 'e4-budget-digest-claim'],
+    ['hold-retention-and-expiry', 'e8-expiry-before-control'],
+    ['parity-and-human-only-surfaces', 'e9-pending-rule-judge-origin'],
+  ]),
+  ...auditRows('corpus-case', [
+    ['provider-match-is-not-authority', 'e11-journal-exactness'],
+    ['provider-match-low-score-refusal', 'e11-provider-match-authority'],
+    ['exact-input-envelope-injection', 'e11-envelope-provenance'],
+    ['exact-input-control-unicode', 'e11-envelope-provenance'],
+    ['exact-input-provenance', 'e11-envelope-provenance'],
+    ['truncated-json-refusal', 'e11-range-token-cap'],
+    ['multiple-json-refusal', 'e11-range-token-cap'],
+    ['nan-score-refusal', 'e11-range-token-cap'],
+    ['infinite-score-refusal', 'e11-range-token-cap'],
+    ['range-score-refusal', 'e11-range-token-cap'],
+    ['wrong-type-score-refusal', 'e11-wrong-type-score'],
+    ['provider-tool-refusal', 'e11-refusal-content-free'],
+    ['hostile-reason-refusal', 'e11-refusal-content-free'],
+    ['redirect-refusal', 'e11-journal-exactness'],
+    ['oversize-response-refusal', 'e11-journal-exactness'],
+    ['output-token-refusal', 'e11-range-token-cap'],
+    ['input-token-refusal', 'e7-full-request-estimate'],
+    ['request-cap-refusal', 'e7-full-request-estimate'],
+    ['disabled-kind-refusal', 'e4-kind-disable-recovery'],
+    ['kind-disable-race', 'e4-kind-disable-recovery'],
+    ['rule-revocation-race', 'e7-pause-fence'],
+    ['inactive-budget-refusal', 'e5-no-active-singleton'],
+    ['budget-owner-race', 'e4-final-pointer-drift'],
+    ['post-io-unknown', 'e5-unparsed-outcome-never-refunds'],
+    ['response-to-hold', 'e8-decision-bound-token'],
+    ['response-after-hold-expiry', 'e8-expiry-before-control'],
+    ['late-response-after-expiry', 'e11-late-hold-response'],
+    ['userinfo-endpoint-refusal', 'e6-no-redirect'],
+    ['path-host-drift-refusal', 'e11-host-drift-before-byte'],
+    ['host-drift-write-fence-refusal', 'e11-host-drift-before-byte'],
+    ['dns-rebinding-refusal', 'e6-dns-final-gate'],
+  ]),
+]);
+
+const PHASE_E_AUDIT_MATRIX_SHA256 = '78f98882a6f593f599d6323c3feac42a4efa07792a8f4fc4649312f43aa7f88e';
+const REQUIRED_CORPUS_ROWS = Object.freeze(
+  PHASE_E_AUDIT_MATRIX.filter((row) => row.category === 'corpus-case').map((row) => row.id),
+);
+
+const REQUIRED_PURGE_CALLERS = Object.freeze([
+  ['kind-disable', 'packages/events-daemon/src/runtime/judge-kinds.ts', ').kind(enabledKind);'],
+  ['judge-remove', 'packages/events-daemon/src/runtime/b3-operator-control.ts', ').judge({'],
+  [
+    'rule-disable-revoke',
+    'packages/events-daemon/src/runtime/revocations.ts',
+    'purgeRevokedRuleWork(database.database, ruleId, live, revokedAt);',
+  ],
+  [
+    'target-remove',
+    'packages/events-daemon/src/runtime/revocations.ts',
+    'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);',
+  ],
+  [
+    'subscriber-remove',
+    'packages/events-daemon/src/runtime/b3-operator-control.ts',
+    'purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], now);',
+  ],
+  ['disable-all', 'packages/events-daemon/src/runtime/lifecycle.ts', ').all();'],
+  ['account-remove', 'packages/events-daemon/src/runtime/account-fence.ts', ').account({ source, accountId });'],
+  [
+    'account-single-rule-revoke',
+    'packages/events-daemon/src/runtime/account-fence.ts',
+    'purgeRevokedRuleWork(database, version.rule_id, [version.version], now);',
+  ],
+  ['whatsapp-hide', 'packages/events-daemon/src/runtime/whatsapp-visibility.ts', 'judgePurge.event({'],
+  ['projection-expiry', 'packages/events-daemon/src/runtime/expiry.ts', 'judgePurge.event({'],
+  [
+    'hold-claim-expiry',
+    'packages/events-daemon/src/runtime/holds.ts',
+    "expireHeldDecisionsInTransaction(database);\n      return { kind: 'expired' };",
+  ],
+  [
+    'hold-api-expiry',
+    'packages/events-daemon/src/runtime/holds.ts',
+    'return store.immediate(() => expireHeldDecisionsInTransaction(store.database));',
+  ],
+  [
+    'hold-resolution-expiry',
+    'packages/events-daemon/src/runtime/decisions.ts',
+    'expireHeldDecisionsInTransaction(database);\n      return true;',
+  ],
+  [
+    'expiry-held-sweep',
+    'packages/events-daemon/src/runtime/expiry.ts',
+    'expireHeldDecisionsInTransaction(database);\n      const expiringJudgeWork',
+  ],
+  [
+    'tightening-held-sweep',
+    'packages/events-daemon/src/runtime/replacements.ts',
+    'expireHeldDecisionsInTransaction(database);\n  const retainedVersions',
+  ],
+  ['retention-tightening', 'packages/events-daemon/src/runtime/replacements.ts', ').retainedProjection({'],
+  [
+    'derived-parent-revoke',
+    'packages/events-daemon/src/runtime/replacements.ts',
+    'purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version], input.now);',
+  ],
 ]);
 
 async function source(root, file) {
@@ -243,9 +510,41 @@ function isSourceScopeEnumeration(statement) {
   );
 }
 
+function isSyntheticAuthorityEnumeration(statement) {
+  return (
+    /^\s*SELECT\s+DISTINCT\s+test_work_id\b/iu.test(statement) &&
+    /\bwork_scope\s*=\s*'synthetic-test'\s+AND\s+test_work_id\s+IS\s+NOT\s+NULL/iu.test(statement) &&
+    /\btest_authority_rule_id\s*=\s*\?/iu.test(statement) &&
+    /\btest_authority_rule_version\s+IN\s*\(/iu.test(statement)
+  );
+}
+
 /** Scan one production source file; exported so fixture-copy tests exercise the exact static rules. */
 export function verifyPhaseEJudgeSource({ file, source: text }) {
   const problems = [];
+  const judgePath =
+    file.startsWith('packages/events-daemon/src/') && file !== 'packages/events-daemon/src/runtime/sse-server.ts';
+  const executableText = text.replace(/\/\*[\s\S]*?\*\/|^\s*\/\/[^\r\n]*$/gmu, '');
+  if (judgePath && /\bfetch\s*\(/u.test(executableText)) problems.push(`${file}: judge paths must not call fetch`);
+  else if (judgePath && /\bfetch\b/u.test(executableText))
+    problems.push(`${file}: judge paths must not reference fetch`);
+  if (judgePath && /\bhttp\s*\.\s*request\s*\(/u.test(executableText))
+    problems.push(`${file}: judge paths must not call http.request`);
+  if (judgePath && /\bhttps\s*\.\s*request\s*\(/u.test(executableText))
+    problems.push(`${file}: judge paths must not call https.request`);
+  if (judgePath && /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?https?['"]/u.test(executableText))
+    problems.push(`${file}: judge paths must not import node:http or node:https`);
+  const computedModuleSpecifier = [
+    ...executableText.matchAll(/(?<![\w$.#])(import|require)\s*\(\s*([^\r\n)]*)/gmu),
+  ].some((match) => {
+    const argument = match[2]?.trim() ?? '';
+    if (argument.startsWith("'") || argument.startsWith('"')) return false;
+    return match[1] !== 'require' || !/^[A-Za-z_$][\w$]*\s*:/u.test(argument);
+  });
+  if (judgePath && computedModuleSpecifier)
+    problems.push(`${file}: judge paths must not use computed module specifiers`);
+  if (judgePath && /\[\s*['"]request['"]\s*\]\s*\(/u.test(executableText))
+    problems.push(`${file}: judge paths must not use computed request aliases`);
   if (file !== 'packages/events-daemon/src/domain/lifecycle.ts' && hasClosedKindLiteral(text)) {
     problems.push(`${file}: judge kind literals must come from domain/lifecycle.ts`);
   }
@@ -266,7 +565,11 @@ export function verifyPhaseEJudgeSource({ file, source: text }) {
         )
           problems.push(`${file}: source-owned judge SQL must bind account_id and source in the same statement`);
       } else if (value === "'synthetic-test'") {
-        if (!isScopeEnumeration(statement) && !/\btest_work_id\s*=\s*\?/iu.test(statement))
+        if (
+          !isScopeEnumeration(statement) &&
+          !isSyntheticAuthorityEnumeration(statement) &&
+          !/\btest_work_id\s*=\s*\?/iu.test(statement)
+        )
           problems.push(`${file}: synthetic judge SQL must bind test_work_id in the same statement`);
       } else {
         problems.push(`${file}: judge SQL work_scope must compare with a source-owned or synthetic-test literal`);
@@ -283,7 +586,12 @@ export async function verifyPhaseEStaticGuards({ root = ROOT } = {}) {
     const text = await source(root, file);
     if (text !== undefined) files.push({ file, source: text });
   }
-  return files.flatMap(verifyPhaseEJudgeSource);
+  const problems = files.flatMap(verifyPhaseEJudgeSource);
+  for (const [id, file, marker] of REQUIRED_PURGE_CALLERS) {
+    const text = await source(root, file);
+    if (text !== undefined && !text.includes(marker)) problems.push(`purge caller ${id} is absent from ${file}`);
+  }
+  return problems;
 }
 
 function importCandidates(file, specifier) {
@@ -344,7 +652,7 @@ async function readRunner(root, runnerName, problems) {
   ).exec(runnerTest);
   if (!loop || !new RegExp(`\\b${runner.helper}\\s*\\(\\s*mutation\\s*\\)`, 'u').test(loop[1]))
     problems.push(`${runnerName}: mutation loop does not call ${runner.helper} with its loop mutation`);
-  return { ids: collection.map((entry) => entry.id), runner };
+  return { ids: collection.map((entry) => entry.id), mutations: collection, runner, support };
 }
 
 export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefined } = {}) {
@@ -370,6 +678,17 @@ export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefin
   const mutations = Array.isArray(loaded?.mutations) ? loaded.mutations : [];
   if (!cases.length || !guards.length || !mutations.length) {
     problems.push('Phase-E manifest must declare at least one case, guard, and mutation');
+  }
+  const matrixDigest = createHash('sha256').update(JSON.stringify(PHASE_E_AUDIT_MATRIX)).digest('hex');
+  if (matrixDigest !== PHASE_E_AUDIT_MATRIX_SHA256)
+    problems.push('Phase-E audit matrix digest does not match its immutable inventory');
+  if (typeof loaded?.audit !== 'object' || loaded.audit === null || Array.isArray(loaded.audit)) {
+    problems.push('Phase-E audit matrix is missing');
+    problems.push('Phase-E audit must declare deferred: Task 10');
+  } else {
+    if (loaded.audit.matrixVersion !== 1) problems.push('Phase-E audit matrix version must be 1');
+    if (loaded.audit.covers !== 'Tasks 3-9 and 11') problems.push('Phase-E audit must cover Tasks 3-9 and 11');
+    if (loaded.audit.deferred !== 'Task 10') problems.push('Phase-E audit must declare deferred: Task 10');
   }
 
   const guardIds = new Set(guards.flatMap((entry) => (typeof entry?.id === 'string' ? [entry.id] : [])));
@@ -435,6 +754,37 @@ export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefin
     }
   }
 
+  const casesById = new Map(cases.flatMap((entry) => (typeof entry?.id === 'string' ? [[entry.id, entry]] : [])));
+  const auditIds = PHASE_E_AUDIT_MATRIX.map((row) => `${row.category}:${row.id}`);
+  if (new Set(auditIds).size !== auditIds.length) problems.push('Phase-E audit matrix rows must be unique');
+  for (const row of PHASE_E_AUDIT_MATRIX) {
+    const owner = casesById.get(row.owner);
+    if (owner === undefined) {
+      problems.push(`audit ${row.category} row ${row.id} has no manifest owner ${row.owner}`);
+      continue;
+    }
+    if (typeof owner?.mutation?.id !== 'string')
+      problems.push(`audit ${row.category} row ${row.id} has no strict mutation`);
+  }
+  const corpusManifest = await source(root, 'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json');
+  if (corpusManifest === undefined) {
+    problems.push('Phase-E adversarial corpus manifest is missing');
+  } else {
+    try {
+      const corpus = JSON.parse(corpusManifest);
+      const corpusIds = Array.isArray(corpus?.cases)
+        ? corpus.cases.flatMap((entry) => (typeof entry?.id === 'string' ? [entry.id] : []))
+        : [];
+      for (const id of REQUIRED_CORPUS_ROWS)
+        if (!corpusIds.includes(id)) problems.push(`required Phase-E corpus row is absent: ${id}`);
+      for (const id of corpusIds)
+        if (!REQUIRED_CORPUS_ROWS.includes(id)) problems.push(`unrecognised Phase-E corpus row: ${id}`);
+      if (new Set(corpusIds).size !== corpusIds.length) problems.push('Phase-E corpus row ids must be unique');
+    } catch {
+      problems.push('Phase-E adversarial corpus manifest is valid JSON');
+    }
+  }
+
   for (const [id, count] of guardOwners) {
     if (count !== 1) problems.push(`${id}: guard has ${count} owners`);
   }
@@ -459,6 +809,15 @@ export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefin
     }
     for (const id of manifestRows.keys()) {
       if (!loadedRunner.ids.includes(id)) problems.push(`${runnerName}: manifest row mutation is not in runner: ${id}`);
+    }
+    for (const entry of loadedRunner.mutations) {
+      const ownerId = manifestRows.get(entry.id);
+      const owner = casesById.get(ownerId);
+      if (owner?.task !== 'E12') continue;
+      if (typeof entry.killingAssertion !== 'string' || entry.killingAssertion.length === 0)
+        problems.push(`${entry.id}: Task 12 mutation must name its killing assertion`);
+      if (!loadedRunner.support.includes('result.output.includes(mutation.killingAssertion)'))
+        problems.push(`${runnerName}: Task 12 runner must enforce each killing assertion`);
     }
   }
 

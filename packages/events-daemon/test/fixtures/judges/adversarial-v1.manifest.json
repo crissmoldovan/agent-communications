@@ -5,7 +5,10 @@
     "packages/events-daemon/test/fixtures/judges/adversarial-v1.jsonl",
     "packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json",
     "packages/events-daemon/test/support/judge-adversarial-fixture.ts",
-    "packages/events-daemon/test/support/judge-adversarial-mutants.ts"
+    "packages/events-daemon/test/support/judge-adversarial-mutants.ts",
+    "packages/events-daemon/test/support/short-temp.ts",
+    "packages/events-daemon/test/support/strict-mutation-child.ts",
+    "packages/events-daemon/test/support/writer-quiescer.ts"
   ],
   "corpus": "adversarial-v1.jsonl",
   "sha256": "1da176f3b48fc75aab0d309d959ee7fd94273a7447ccc9d60fe1d3e11dec5098",

@@ -1,18 +1,59 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { canonicalJson } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
+import { purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
+import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
+import { commitDecisionOutbox } from '../src/runtime/decisions.ts';
+import { claimDelivery, completeDeliveryClaim } from '../src/runtime/delivery-claim.ts';
+import { DryRunDispatcher } from '../src/runtime/dispatcher.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
-import { beginJudgeTransport, reserveJudgeWork } from '../src/runtime/judge-budget.ts';
+import { claimHeldDecision } from '../src/runtime/holds.ts';
+import { beginJudgeTransport, reserveJudgeTest, reserveJudgeWork } from '../src/runtime/judge-budget.ts';
 import { JudgeKinds } from '../src/runtime/judge-kinds.ts';
+import { recoverJudgeWork } from '../src/runtime/judge-recovery.ts';
+import { EventLifecycle } from '../src/runtime/lifecycle.ts';
+import { createB2RetainedContentParticipants } from '../src/runtime/phase-d-b2-retention.ts';
+import { createPhaseDWhatsAppOwnerComposition } from '../src/runtime/phase-d-whatsapp-owner-composition.ts';
 import { applyDerivedTightening } from '../src/runtime/replacements.ts';
+import { disableRule, removeTarget } from '../src/runtime/revocations.ts';
+import { SseDispatcher } from '../src/runtime/sse-dispatcher.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+
+/**
+ * The lasting handles a test may leak — sockets, pipes, timers, child processes, servers. One-shot requests (a file
+ * system read, a DNS lookup, a pending write) can be in flight at either snapshot without anything having leaked, so
+ * they are left out of the before/after comparison.
+ */
+function lastingResources(): string[] {
+  return process
+    .getActiveResourcesInfo()
+    .filter((name) => !/Req|^WriteWrap$|^ShutdownWrap$/u.test(name))
+    .sort();
+}
 
 const NOW = 1_800_000_000_000;
 const accountId = 'ibx_E4PURGEAAAAAAAA';
 const target = { targetId: 'target-e4-purge', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
+const subscriber = {
+  subscriberId: 'subscriber-e12-purge',
+  version: 1,
+  kind: 'sse' as const,
+  authority: { host: '127.0.0.1' as const, port: 43_101 },
+  origins: ['https://console.invalid'],
+  retentionMs: 60_000,
+};
+const sseTarget = {
+  targetId: 'target-e12-sse',
+  version: 1,
+  kind: 'sse' as const,
+  subscriberId: subscriber.subscriberId,
+  subscriberVersion: subscriber.version,
+  representation: 'plain' as const,
+};
 const judge = {
   judgeId: 'judge-e4-purge',
   version: 1,
@@ -121,6 +162,602 @@ function assertLiveRuleB(store: Awaited<ReturnType<typeof openEventDatabase>>, l
     `${label}: rule B projection remains live`,
   );
 }
+
+async function purgeFixture(input: { readonly label: string; readonly source?: 'gmail' | 'whatsapp' }): Promise<{
+  readonly root: string;
+  readonly store: Awaited<ReturnType<typeof openEventDatabase>>;
+  readonly eventId: string;
+  readonly reservationId: string;
+  readonly ruleId: string;
+  readonly close: () => void;
+}> {
+  const root = await shortTempDir(`events-e12-${input.label}-`);
+  const store = await openEventDatabase({ stateDir: root });
+  const source = input.source ?? 'gmail';
+  const eventId = `event-e12-${input.label}`;
+  const lifecycleEventIds = [eventId, ...['hold', 'queued', 'retryable', 'logged'].map((kind) => `${eventId}-${kind}`)];
+  const reservationId = `reservation-e12-${input.label}`;
+  const ruleId = `rule-e12-${input.label}`;
+  const versions = new ImmutableVersions(store.database);
+  const rule = agenticRule({ ruleId, version: 1 });
+  if (source === 'whatsapp') {
+    Object.assign(rule, {
+      source: {
+        channel: 'whatsapp',
+        accountIds: [accountId],
+        options: { channel: 'whatsapp', chats: 'all-allowed' },
+      },
+      event: { type: 'whatsapp.message.received', version: 1 },
+      condition: { path: '/text', op: 'exists' },
+    });
+    assert.ok(rule.agentic, 'the purge fixture remains agentic');
+    Object.assign(rule.agentic, { inputs: ['/text'] });
+  }
+  versions.createTarget(target);
+  versions.createSubscriber(subscriber);
+  versions.createTarget(sseTarget);
+  versions.createJudge(judge);
+  versions.createJudgeKind({
+    id: 'judge-kind:typesafe',
+    kind: 'typesafe',
+    version: 1,
+    endpoint: 'https://api.typesafe.ai/v1/systemone',
+  });
+  versions.createJudgeBudget({
+    budgetId: 'judge-budget',
+    version: 1,
+    global: { ...budgetLimits, concurrency: 3 },
+    providers: [{ provider: 'typesafe', ...budgetLimits }],
+  });
+  Object.assign(rule, { targets: [target, sseTarget], subscribers: [subscriber], deliveryRateCap: 10 });
+  versions.createRule(rule);
+  store.database.exec(
+    `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+     INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+       VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1),
+              ('rule', '${ruleId}', 1, NULL, 1);
+     UPDATE rule_versions SET state = 'active', approval_id = 'approval-e12',
+       authorization_activation_id = 'activation-e12', activated_at = 1
+       WHERE rule_id = '${ruleId}' AND version = 1;`,
+  );
+  if (source === 'whatsapp')
+    store.database
+      .prepare('INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES (?, 1, ?, ?)')
+      .run(accountId, 'a'.repeat(64), NOW);
+  for (const [index, lifecycleEventId] of lifecycleEventIds.entries()) {
+    store.database
+      .prepare(
+        `INSERT INTO ingest
+         (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        lifecycleEventId,
+        store.installationId,
+        `${source}.message.received`,
+        accountId,
+        lifecycleEventId,
+        NOW,
+        NOW,
+        NOW,
+      );
+    const messageId =
+      source === 'whatsapp' ? canonicalJson(['wa-msg', `chat-${index}`, `sender-${index}`, `id-${index}`]) : null;
+    store.database
+      .prepare(
+        `INSERT INTO ingest_rules
+         (event_id, rule_id, rule_version, decision_deadline, encrypted_projection,
+          whatsapp_visibility_version, whatsapp_message_id)
+         VALUES (?, ?, 1, ?, X'01', ?, ?)`,
+      )
+      .run(lifecycleEventId, ruleId, NOW + 10_000, source === 'whatsapp' ? 1 : null, messageId);
+    if (messageId !== null)
+      store.database
+        .prepare(
+          `INSERT INTO whatsapp_occurrences
+           (account_id, message_id, first_seen_generation, first_seen_at, visibility_version, event_id)
+           VALUES (?, ?, 1, ?, 1, ?)`,
+        )
+        .run(accountId, messageId, NOW, lifecycleEventId);
+  }
+  reserveJudgeWork({
+    store,
+    id: reservationId,
+    workId: `work:${reservationId}`,
+    scope: {
+      scope: 'source-owned',
+      source,
+      accountId,
+      eventId: `${eventId}-queued`,
+      ruleId,
+      ruleVersion: 1,
+      judgeId: judge.judgeId,
+      judgeVersion: judge.version,
+    },
+    judge,
+    limits,
+    finalEnvelope: Buffer.from(input.label),
+    switchGeneration: 0,
+    now: NOW,
+  });
+  beginJudgeTransport({ store, reservationId, now: NOW });
+  reserveJudgeWork({
+    store,
+    id: `${reservationId}-reserved`,
+    workId: `work:${reservationId}-reserved`,
+    scope: {
+      scope: 'source-owned',
+      source,
+      accountId,
+      eventId,
+      ruleId,
+      ruleVersion: 1,
+      judgeId: judge.judgeId,
+      judgeVersion: judge.version,
+    },
+    judge,
+    limits,
+    finalEnvelope: Buffer.from(`${input.label}-reserved`),
+    switchGeneration: 0,
+    now: NOW,
+  });
+  const holdDecisionId = `decision-e12-${input.label}-hold`;
+  const holdEventId = lifecycleEventIds[1];
+  if (holdEventId === undefined) throw new Error('the held lifecycle fixture event is missing');
+  commitDecisionOutbox(store, {
+    id: holdDecisionId,
+    eventId: holdEventId,
+    accountId,
+    ruleId,
+    ruleVersion: 1,
+    outcome: 'hold',
+    metadataExpiresAt: NOW + 10_000,
+    switchGeneration: 0,
+    ...(source === 'whatsapp'
+      ? { whatsapp: { messageId: canonicalJson(['wa-msg', 'chat-1', 'sender-1', 'id-1']), visibilityVersion: 1 } }
+      : {}),
+    deliveries: [],
+    encryptedMetadata: Buffer.from([2]),
+    retainProjection: true,
+    hold: { holdMs: 10_000, ingestMs: 10_000 },
+  });
+  assert.equal(
+    claimHeldDecision({ store, decisionId: holdDecisionId, leaseMs: 5_000, claimToken: new Uint8Array(32).fill(7) })
+      .kind,
+    'claimed',
+    `${input.label}: the production claim path seeds one held resolver lease`,
+  );
+  const record = Buffer.from(
+    JSON.stringify({ cloudEventBytes: '{"data":"synthetic"}', untrusted: [], representation: 'plain' }),
+  );
+  const delivery = (id: string, kind: 'dry-run' | 'sse') => ({
+    id,
+    targetKey:
+      kind === 'dry-run'
+        ? `dryrun:${target.targetId}:${target.version}`
+        : `sse:${sseTarget.targetId}:${sseTarget.version}:${subscriber.subscriberId}:${subscriber.version}`,
+    target:
+      kind === 'dry-run'
+        ? {
+            kind: 'dry-run' as const,
+            targetId: target.targetId,
+            targetVersion: target.version,
+            representation: 'plain' as const,
+          }
+        : {
+            kind: 'sse' as const,
+            targetId: sseTarget.targetId,
+            targetVersion: sseTarget.version,
+            subscriberId: subscriber.subscriberId,
+            subscriberVersion: subscriber.version,
+            representation: 'plain' as const,
+          },
+    representation: 'plain' as const,
+    cloudEventBytes: '{"data":"synthetic"}',
+    encryptedRecord: record,
+    expiresAt: NOW + 10_000,
+  });
+  const commitMatched = (
+    kind: 'queued' | 'retryable' | 'logged',
+    deliveries: readonly ReturnType<typeof delivery>[],
+  ) => {
+    const index = kind === 'queued' ? 2 : kind === 'retryable' ? 3 : 4;
+    const lifecycleEventId = lifecycleEventIds[index];
+    if (lifecycleEventId === undefined) throw new Error(`${kind}: the lifecycle fixture event is missing`);
+    commitDecisionOutbox(store, {
+      id: `decision-e12-${input.label}-${kind}`,
+      eventId: lifecycleEventId,
+      accountId,
+      ruleId,
+      ruleVersion: 1,
+      outcome: 'matched',
+      metadataExpiresAt: NOW + 10_000,
+      switchGeneration: 0,
+      ...(source === 'whatsapp'
+        ? {
+            whatsapp: {
+              messageId: canonicalJson(['wa-msg', `chat-${index}`, `sender-${index}`, `id-${index}`]),
+              visibilityVersion: 1,
+            },
+          }
+        : {}),
+      deliveries,
+      encryptedMetadata: Buffer.from([3]),
+    });
+  };
+  const dryrunDelivery = delivery(`delivery-e12-${input.label}-dryrun`, 'dry-run');
+  const streamDelivery = delivery(`delivery-e12-${input.label}-sse`, 'sse');
+  commitMatched('logged', [dryrunDelivery, streamDelivery]);
+  const cipher = {
+    async encrypt(_location: unknown, bytes: Uint8Array) {
+      return Buffer.from(bytes);
+    },
+    async decrypt(_location: unknown, bytes: Uint8Array) {
+      return Buffer.from(bytes);
+    },
+  };
+  const config = {
+    load: async () =>
+      source === 'whatsapp'
+        ? { inboxes: {}, accounts: { synthetic: { id: accountId, platform: 'whatsapp' } } }
+        : { inboxes: { synthetic: { id: accountId, provider: 'gmail' } }, accounts: {} },
+  };
+  const visibilityFence =
+    source === 'whatsapp'
+      ? createPhaseDWhatsAppOwnerComposition({
+          database: store,
+          now: () => NOW,
+          eventOperations: {
+            withCurrentEventVisibility: async (_input, work) =>
+              work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true }),
+          },
+          createRetainedContentParticipants: createB2RetainedContentParticipants,
+        }).visibilityFence
+      : undefined;
+  const dryrun = new DryRunDispatcher({
+    store,
+    cipher,
+    approvals: { get: async () => null },
+    config: config as never,
+    now: () => NOW,
+    fence: async () => undefined,
+    ...(visibilityFence === undefined ? {} : { whatsappVisibilityFence: visibilityFence }),
+  });
+  assert.deepEqual(
+    await dryrun.dispatch(dryrunDelivery.id),
+    { state: 'delivered', deliveryId: dryrunDelivery.id },
+    `${input.label}: the production dry-run dispatcher seeds retained local content`,
+  );
+  const sse = new SseDispatcher({
+    store,
+    cipher,
+    approvals: { get: async () => null },
+    config: config as never,
+    now: () => NOW,
+    fence: async () => undefined,
+    ...(visibilityFence === undefined
+      ? {}
+      : { visibilityGate: visibilityFence, hasConcreteWhatsAppVisibilityFence: true }),
+  });
+  assert.deepEqual(
+    await sse.dispatch(streamDelivery.id),
+    { state: 'delivered', deliveryId: streamDelivery.id },
+    `${input.label}: the production SSE dispatcher seeds retained replay content`,
+  );
+  const retryableDelivery = delivery(`delivery-e12-${input.label}-retryable`, 'dry-run');
+  commitMatched('retryable', [retryableDelivery]);
+  const claimed = await claimDelivery({
+    store,
+    deliveryId: retryableDelivery.id,
+    now: NOW,
+    leaseMs: 5_000,
+    newAttemptId: () => `attempt-e12-${input.label}`,
+    newLeaseToken: () => `lease-e12-${input.label}`,
+    assertAccountLive: async () => undefined,
+    preflight: async () => undefined,
+  });
+  assert.equal(claimed.kind, 'claimed', `${input.label}: the production delivery claim path seeds retryable work`);
+  if (claimed.kind !== 'claimed') throw new Error(`${input.label}: retryable delivery was not claimed`);
+  assert.equal(
+    completeDeliveryClaim(store, claimed.claim, { state: 'retryable', clearRecord: false }),
+    true,
+    `${input.label}: the production delivery transition seeds retryable work`,
+  );
+  const queuedDelivery = delivery(`delivery-e12-${input.label}-queued`, 'dry-run');
+  commitMatched('queued', [queuedDelivery]);
+  let open = true;
+  return {
+    root,
+    store,
+    eventId,
+    reservationId,
+    ruleId,
+    close: () => {
+      if (!open) return;
+      open = false;
+      store.close();
+    },
+  };
+}
+
+function assertPurgedSurfaceInStore(
+  store: Awaited<ReturnType<typeof openEventDatabase>>,
+  setup: Awaited<ReturnType<typeof purgeFixture>>,
+  label: string,
+): void {
+  assert.deepEqual(
+    {
+      ...(store.database
+        .prepare('SELECT state, concurrency_owned FROM judge_budget_reservations WHERE id = ?')
+        .get(setup.reservationId) as Record<string, unknown>),
+    },
+    { state: 'settled', concurrency_owned: 0 },
+    `${label}: the real purge caller settles in-flight judge work`,
+  );
+  assert.deepEqual(
+    {
+      ...(store.database
+        .prepare('SELECT state, concurrency_owned FROM judge_budget_reservations WHERE id = ?')
+        .get(`${setup.reservationId}-reserved`) as Record<string, unknown>),
+    },
+    { state: 'released', concurrency_owned: 0 },
+    `${label}: the real purge caller releases reserved judge work`,
+  );
+  assert.equal(
+    (
+      store.database
+        .prepare('SELECT COUNT(*) AS count FROM ingest_rules WHERE event_id = ? AND rule_id = ?')
+        .get(setup.eventId, setup.ruleId) as { count: number }
+    ).count,
+    0,
+    `${label}: the real purge caller removes the encrypted projection`,
+  );
+  assert.deepEqual(
+    {
+      ...(store.database
+        .prepare('SELECT outcome, encrypted_record FROM decisions WHERE id = ?')
+        .get(`decision-e12-${setup.ruleId.slice('rule-e12-'.length)}-hold`) as Record<string, unknown>),
+    },
+    { outcome: 'cancelled', encrypted_record: null },
+    `${label}: held content is terminalised and erased`,
+  );
+  assert.equal(
+    (store.database.prepare('SELECT COUNT(*) AS count FROM hold_resolution_claims').get() as { count: number }).count,
+    0,
+    `${label}: the held resolver claim is consumed by purge`,
+  );
+  assert.equal(
+    (
+      store.database
+        .prepare('SELECT COUNT(*) AS count FROM decisions WHERE rule_id = ? AND encrypted_record IS NOT NULL')
+        .get(setup.ruleId) as { count: number }
+    ).count,
+    0,
+    `${label}: every affected held and matched decision ciphertext is erased`,
+  );
+  assert.deepEqual(
+    (
+      store.database
+        .prepare(
+          "SELECT state, encrypted_record FROM deliveries WHERE state IN ('queued', 'retryable', 'cancelled') ORDER BY id",
+        )
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({ ...row })),
+    [
+      { state: 'cancelled', encrypted_record: null },
+      { state: 'cancelled', encrypted_record: null },
+    ],
+    `${label}: queued and retryable payloads are cancelled and erased`,
+  );
+  assert.equal(
+    (store.database.prepare('SELECT COUNT(*) AS count FROM dryrun_log').get() as { count: number }).count,
+    0,
+    `${label}: dry-run retained content is purged`,
+  );
+  assert.equal(
+    (store.database.prepare('SELECT COUNT(*) AS count FROM stream_log').get() as { count: number }).count,
+    0,
+    `${label}: SSE retained content is purged`,
+  );
+}
+
+async function assertPurgedSurface(setup: Awaited<ReturnType<typeof purgeFixture>>, label: string): Promise<void> {
+  assertPurgedSurfaceInStore(setup.store, setup, label);
+  setup.close();
+  const reopened = await openEventDatabase({ stateDir: setup.root });
+  try {
+    assertPurgedSurfaceInStore(reopened, setup, `${label} after restart`);
+    assert.deepEqual(
+      reopened.immediate(() => recoverJudgeWork({ database: reopened.database, now: NOW + 2 })),
+      { released: 0, settled: 0 },
+      `${label}: startup recovery finds no stale work to resurrect`,
+    );
+    assertPurgedSurfaceInStore(reopened, setup, `${label} after startup recovery`);
+  } finally {
+    reopened.close();
+  }
+}
+
+async function withPurgeClosure(
+  input: Parameters<typeof purgeFixture>[0] & { readonly assertionLabel: string },
+  action: (setup: Awaited<ReturnType<typeof purgeFixture>>) => Promise<void> | void,
+): Promise<void> {
+  const resourcesBefore = lastingResources();
+  const setup = await purgeFixture(input);
+  try {
+    await action(setup);
+    await assertPurgedSurface(setup, input.assertionLabel);
+  } finally {
+    setup.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    `${input.assertionLabel}: the lifecycle purge and restart probe closes every database and asynchronous handle`,
+  );
+}
+
+test('E12 purge closure: target remove uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'target', assertionLabel: 'target remove' }, async (setup) => {
+    await removeTarget(setup.store, { cancelForRevocation: async () => undefined }, target.targetId);
+  });
+});
+
+test('E12 purge closure: subscriber remove uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'subscriber', assertionLabel: 'subscriber remove' }, async (setup) => {
+    const control = new B3OperatorControl({
+      store: setup.store,
+      ports: {
+        quiescer: { withShared: async (work: () => unknown) => work() },
+        closeSubscriberStreams: () => undefined,
+      } as never,
+      now: () => NOW + 1,
+    });
+    await control.handle({ operation: 'removeSubscriber', args: { subscriberId: subscriber.subscriberId } });
+  });
+});
+
+test('E12 purge closure: judge remove uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'judge', assertionLabel: 'judge remove' }, async (setup) => {
+    const syntheticAuthority = agenticRule({ ruleId: 'rule-e12-judge-synthetic-authority', version: 1 });
+    new ImmutableVersions(setup.store.database).createRule(syntheticAuthority);
+    setup.store.database
+      .prepare(
+        "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', ?, 1, NULL, ?)",
+      )
+      .run(syntheticAuthority.ruleId, NOW);
+    setup.store.database
+      .prepare(
+        "UPDATE rule_versions SET state = 'active', approval_id = ?, authorization_activation_id = ?, activated_at = ? WHERE rule_id = ? AND version = 1",
+      )
+      .run('approval-e12-judge-synthetic', 'activation-e12-judge-synthetic', NOW, syntheticAuthority.ruleId);
+    reserveJudgeTest({
+      store: setup.store,
+      id: 'reservation-e12-judge-synthetic',
+      workId: 'work:reservation-e12-judge-synthetic',
+      testWorkId: 'test-work-e12-judge-synthetic',
+      judge,
+      finalEnvelope: Buffer.from('synthetic-judge-remove'),
+      switchGeneration: 0,
+      now: NOW,
+      authority: { ruleId: syntheticAuthority.ruleId, ruleVersion: 1 },
+    });
+    beginJudgeTransport({
+      store: setup.store,
+      reservationId: 'reservation-e12-judge-synthetic',
+      now: NOW,
+    });
+    setup.store.database
+      .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND version = 1")
+      .run(NOW, syntheticAuthority.ruleId);
+    setup.store.database
+      .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = 1")
+      .run(syntheticAuthority.ruleId);
+    const control = new B3OperatorControl({
+      store: setup.store,
+      ports: { quiescer: { withShared: async (work: () => unknown) => work() } } as never,
+      activations: { cancelForRevocation: async () => undefined } as never,
+      now: () => NOW + 1,
+    });
+    await control.handle({ operation: 'removeJudge', args: { judgeId: judge.judgeId } });
+    assert.equal(
+      (
+        setup.store.database
+          .prepare('SELECT state FROM judge_budget_reservations WHERE id = ?')
+          .get('reservation-e12-judge-synthetic') as { state: string }
+      ).state,
+      'settled',
+      'judge remove enumerates and settles exact synthetic-test work independently of bound rules',
+    );
+  });
+});
+
+test('E12 purge closure: rule disable uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'rule-disable', assertionLabel: 'rule disable' }, async (setup) => {
+    await disableRule(setup.store, { cancelForRevocation: async () => undefined }, setup.ruleId);
+  });
+});
+
+test('E12 purge closure: disable all uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'disable-all', assertionLabel: 'disable all' }, async (setup) => {
+    await new EventLifecycle(setup.store, () => NOW + 1).disableAll();
+  });
+});
+
+test('E12 purge closure: account remove and re-add use the production participant', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withPurgeClosure({ label: 'account', assertionLabel: 'account remove' }, (setup) => {
+    const row = setup.store.database
+      .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = 1')
+      .get(setup.ruleId) as { document: string };
+    const document = JSON.parse(row.document) as { source: { accountIds: string[] } };
+    document.source.accountIds.push('ibx_E12OTHERACCOUNT');
+    setup.store.database
+      .prepare('UPDATE rule_versions SET document = ? WHERE rule_id = ? AND version = 1')
+      .run(canonicalJson(document), setup.ruleId);
+    purgeRemovedAccountWork(setup.store.database, { source: 'gmail', accountId }, NOW + 1);
+    assert.equal(
+      (
+        setup.store.database
+          .prepare('SELECT COUNT(*) AS count FROM account_revocations WHERE account_id = ?')
+          .get(accountId) as { count: number }
+      ).count,
+      1,
+      'account remove/re-add keeps a durable revocation marker for the stale identity',
+    );
+  });
+});
+
+test('E12 purge closure: single-account rule revoke uses the production participant', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withPurgeClosure({ label: 'account-single-rule', assertionLabel: 'single-account rule revoke' }, (setup) => {
+    reserveJudgeTest({
+      store: setup.store,
+      id: 'reservation-e12-account-single-synthetic',
+      workId: 'work:reservation-e12-account-single-synthetic',
+      testWorkId: 'test-work-e12-account-single-synthetic',
+      judge,
+      finalEnvelope: Buffer.from('synthetic-account-single-rule'),
+      switchGeneration: 0,
+      now: NOW,
+      authority: { ruleId: setup.ruleId, ruleVersion: 1 },
+    });
+    beginJudgeTransport({
+      store: setup.store,
+      reservationId: 'reservation-e12-account-single-synthetic',
+      now: NOW,
+    });
+    purgeRemovedAccountWork(setup.store.database, { source: 'gmail', accountId }, NOW + 1);
+    assert.equal(
+      (
+        setup.store.database
+          .prepare('SELECT state FROM judge_budget_reservations WHERE id = ?')
+          .get('reservation-e12-account-single-synthetic') as { state: string }
+      ).state,
+      'settled',
+      'single-account rule revoke settles synthetic work bound to the revoked rule',
+    );
+  });
+});
+
+test('E12 purge closure: WhatsApp hide uses the production participant', { skip: WINDOWS_SKIP }, async () => {
+  await withPurgeClosure({ label: 'whatsapp', source: 'whatsapp', assertionLabel: 'WhatsApp hide' }, async (setup) => {
+    const { visibilityFence } = createPhaseDWhatsAppOwnerComposition({
+      database: setup.store,
+      now: () => NOW + 1,
+      eventOperations: {
+        withCurrentEventVisibility: async (_input, work) =>
+          work({ version: 1, digest: 'b'.repeat(64), seesMessage: () => false }),
+      },
+      createRetainedContentParticipants: createB2RetainedContentParticipants,
+    });
+    await visibilityFence.withCurrentVisibility({ accountId }, () => undefined);
+  });
+});
 
 test('E4 purge closure: kind disable settles in-flight and releases reserved work through the one recovery helper', {
   skip: WINDOWS_SKIP,
@@ -295,7 +932,6 @@ test('E4 purge closure: expiry settles only the expired rule on an event shared 
     );
     insertRuleBoundReservation({ store, id: 'work-a', ruleId: 'rule-e4-a', ruleVersion: 1 });
     insertRuleBoundReservation({ store, id: 'work-b', ruleId: 'rule-e4-b', ruleVersion: 1 });
-
     new EventExpiry(store, () => NOW).sweep();
 
     assert.equal(
@@ -335,7 +971,7 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     versions.createJudgeBudget({
       budgetId: 'judge-budget',
       version: 1,
-      global: budgetLimits,
+      global: { ...budgetLimits, concurrency: 3 },
       providers: [{ provider: 'typesafe', ...budgetLimits }],
     });
     versions.createRule(parent);
@@ -370,6 +1006,18 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     );
     insertRuleBoundReservation({ store, id: 'work-a', ruleId: 'rule-e4-a', ruleVersion: 1 });
     insertRuleBoundReservation({ store, id: 'work-b', ruleId: 'rule-e4-b', ruleVersion: 1 });
+    reserveJudgeTest({
+      store,
+      id: 'work-derived-parent-synthetic',
+      workId: 'work:derived-parent-synthetic',
+      testWorkId: 'test-work-derived-parent-synthetic',
+      judge,
+      finalEnvelope: Buffer.from('synthetic-derived-parent'),
+      switchGeneration: 0,
+      now: NOW,
+      authority: { ruleId: parent.ruleId, ruleVersion: parent.version },
+    });
+    beginJudgeTransport({ store, reservationId: 'work-derived-parent-synthetic', now: NOW });
 
     await applyDerivedTightening({
       database: store.database,
@@ -381,6 +1029,15 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     });
 
     assertLiveRuleB(store, 'retention tightening');
+    assert.equal(
+      (
+        store.database
+          .prepare('SELECT state FROM judge_budget_reservations WHERE id = ?')
+          .get('work-derived-parent-synthetic') as { state: string }
+      ).state,
+      'settled',
+      'derived parent revoke settles synthetic work bound to the revoked parent',
+    );
   } finally {
     store.close();
     await rm(root, { recursive: true, force: true });

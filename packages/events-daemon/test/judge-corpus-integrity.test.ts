@@ -504,6 +504,11 @@ test('E11 adversarial corpus integrity: TypeScript structural aliases cannot byp
       reason: 'a provider-shaped accessor is refused',
     },
     {
+      text: "declare const captured: string; const headers = [['x-request-id', captured]];",
+      message: /captured provider-response shape/u,
+      reason: 'a provider-shaped header tuple is refused',
+    },
+    {
       text: 'const response = { server() { return undefined; } };',
       message: /captured provider-response shape/u,
       reason: 'a provider-shaped method is refused',
@@ -750,6 +755,61 @@ test('E11 adversarial corpus integrity: TypeScript structural aliases cannot byp
       text: "import https from 'node:https'; declare const destination: string; https.get(destination);",
       message: /URL must be a complete string literal/u,
       reason: 'an HTTPS helper cannot receive a dynamic destination',
+    },
+    {
+      text: "import { endpoint as destination } from './records.ts'; void destination;",
+      message: /imported aliases may carry a URL/u,
+      reason: 'an imported alias cannot carry an unscanned URL',
+    },
+    {
+      text: 'declare const source: { value: string }; const destination = source.value;',
+      message: /property access may carry a URL/u,
+      reason: 'a property access cannot carry an unscanned URL',
+    },
+    {
+      text: 'declare const source: { value: string }; declare function sink(value: string): void; sink(source.value);',
+      message: /property access may carry a URL/u,
+      reason: 'a property access passed directly to a call cannot carry an unscanned URL',
+    },
+    {
+      text: 'declare const source: { value: string }; let destination: string; destination = source.value;',
+      message: /property access may carry a URL/u,
+      reason: 'a property access on an assignment RHS cannot carry an unscanned URL',
+    },
+    {
+      text: "declare const source: Record<string, string>; let destination: string; destination = source['value'];",
+      message: /computed access may carry a URL/u,
+      reason: 'a computed access on an assignment RHS cannot carry an unscanned URL',
+    },
+    {
+      text: "declare const source: { value?: string }; const destination = source.value ?? 'synthetic';",
+      message: /property access may carry a URL/u,
+      reason: 'a property access in a coalescing expression cannot carry an unscanned URL',
+    },
+    {
+      text: "declare const source: Record<string, string>; const destination = source['value'];",
+      message: /computed access may carry a URL/u,
+      reason: 'a computed access cannot carry an unscanned URL',
+    },
+    {
+      text: "import Builder from './records.ts'; const value = new Builder(); void value;",
+      message: /default-imported constructors may carry a URL/u,
+      reason: 'a default-imported constructor cannot carry an unscanned URL',
+    },
+    {
+      text: "import Builder from './records.ts'; const Alias = Builder; const value = new Alias(); void value;",
+      message: /default-imported constructors may carry a URL/u,
+      reason: 'an alias of a default-imported constructor cannot carry an unscanned URL',
+    },
+    {
+      text: 'declare const values: string[]; const copied = [...values]; void copied;',
+      message: /array spreads may carry a URL/u,
+      reason: 'an array spread cannot carry an unscanned URL',
+    },
+    {
+      text: "declare const config: object; declare const source: { value: string }; Reflect.set(config, 'host', source.value);",
+      message: /complete string literal/u,
+      reason: 'a reflective host write cannot carry an unscanned URL',
     },
     {
       text: `let marker: number;\nlabel:// ${SK_FAKE}\nmarker = 1;`,
@@ -1518,6 +1578,111 @@ test('E11 adversarial corpus integrity: an unregistered adversarial file fails d
         /adversarial-unregistered\.jsonl.*missing from the corpus manifest/u,
       );
     },
+  );
+});
+
+test('E12 adversarial corpus integrity: a registered helper re-export cannot escape dependency-closed scanning', async () => {
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      await writeFile(join(support, 'judge-adversarial-entry.ts'), "export { capture } from './records.ts';\n");
+      await writeFile(join(support, 'records.ts'), "export const capture = 'synthetic';\n");
+      await assert.rejects(
+        () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+        /records\.ts.*missing from the corpus manifest/u,
+        'a transitive helper dependency must be registered and scanned',
+      );
+    },
+  );
+
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      await writeFile(join(support, 'judge-adversarial-entry.ts'), "void import('./dynamic-records.ts');\n");
+      await writeFile(join(support, 'dynamic-records.ts'), "export const capture = 'synthetic';\n");
+      await assert.rejects(
+        () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+        /dynamic-records\.ts.*missing from the corpus manifest/u,
+        'a dynamic helper dependency must be registered and scanned',
+      );
+    },
+  );
+
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      await writeFile(
+        join(support, 'judge-adversarial-entry.ts'),
+        "const specifier = './computed-records.ts'; void import(specifier);\n",
+      );
+      await writeFile(join(support, 'computed-records.ts'), "export const capture = 'synthetic';\n");
+      await assert.rejects(
+        () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+        /module specifiers must be static string literals/u,
+        'a computed dynamic import fails closed instead of escaping dependency discovery',
+      );
+    },
+  );
+
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      await writeFile(
+        join(support, 'judge-adversarial-entry.ts'),
+        "import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); load('./required-records.ts');\n",
+      );
+      await writeFile(join(support, 'required-records.ts'), "export const capture = 'synthetic';\n");
+      await assert.rejects(
+        () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+        /must not create CommonJS loaders/u,
+        'a createRequire loader fails closed instead of escaping dependency discovery',
+      );
+    },
+  );
+});
+
+test('E12 adversarial corpus integrity: nested and mixed-case support helpers cannot escape discovery', async () => {
+  await withInventoryFixture(
+    ['packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json'],
+    async (repositoryRoot) => {
+      const nested = join(repositoryRoot, 'packages/events-daemon/test/support/nested');
+      await mkdir(nested, { recursive: true });
+      await writeFile(join(nested, 'Judge-Adversarial-Escape.TS'), 'export const safe = true;\n');
+      await assert.rejects(
+        () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+        /Judge-Adversarial-Escape\.TS.*missing from the corpus manifest/u,
+        'support discovery is recursive and case-insensitive',
+      );
+    },
+  );
+});
+
+test('E12 adversarial corpus integrity: mixed-case TypeScript extensions still receive structural scanning', () => {
+  assert.throws(
+    () =>
+      assertSyntheticFixtureText({
+        text: 'declare const source: { value: string }; const destination = source.value;',
+        file: 'Judge-Adversarial-Escape.TS',
+        declaredHashes: new Set<string>(),
+      }),
+    /property access may carry a URL/u,
+    'TypeScript extension classification is case-insensitive',
   );
 });
 

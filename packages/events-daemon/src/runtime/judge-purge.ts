@@ -21,6 +21,7 @@ export class JudgePurgeParticipant {
   all(): JudgeRecoveryResult {
     const result = recoverJudgeWork({ database: this.#database, now: this.#now(), selector: { scope: 'all' } });
     purgeHeldDecisionsInTransaction(this.#database, { scope: 'all' });
+    this.#database.prepare('UPDATE decisions SET encrypted_record = NULL WHERE encrypted_record IS NOT NULL').run();
     return result;
   }
 
@@ -160,6 +161,24 @@ export class JudgePurgeParticipant {
           ruleId: input.ruleId,
           ruleVersion: row.rule_version,
         },
+      });
+      released += result.released;
+      settled += result.settled;
+    }
+    const synthetic = this.#database
+      .prepare(
+        `SELECT DISTINCT test_work_id
+           FROM judge_budget_reservations
+          WHERE work_scope = 'synthetic-test' AND test_work_id IS NOT NULL
+            AND test_authority_rule_id = ?
+            AND test_authority_rule_version IN (${versions.map(() => '?').join(', ')})`,
+      )
+      .all(input.ruleId, ...versions) as Array<{ test_work_id: string }>;
+    for (const row of synthetic) {
+      const result = recoverJudgeWork({
+        database: this.#database,
+        now: this.#now(),
+        selector: { scope: 'synthetic-test', testWorkId: row.test_work_id },
       });
       released += result.released;
       settled += result.settled;

@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
-import { type SecretStore, TaintStore } from '@agentcomms/core';
+import { canonicalJson, type SecretStore, TaintStore } from '@agentcomms/core';
 import { gmailMessageReceivedV1, whatsappMessageReceivedV1 } from '@agentcomms/events';
 import { ImmutableVersions } from '../src/domain/versions.ts';
-import { assertLiveEventAccount } from '../src/runtime/account-fence.ts';
+import { assertLiveEventAccount, purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
+import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
 import { commitHeldDecisionOutbox, StaleDecisionError } from '../src/runtime/decisions.ts';
 import { EventEvaluator } from '../src/runtime/evaluate.ts';
-import { claimHeldDecision, HoldResolver } from '../src/runtime/holds.ts';
+import { EventExpiry } from '../src/runtime/expiry.ts';
+import { claimHeldDecision, expireHeldDecisions, HoldResolver } from '../src/runtime/holds.ts';
 import { JudgeCoordinator } from '../src/runtime/judge-coordinator.ts';
 import { JudgeTransport } from '../src/runtime/judge-transport.ts';
+import { removeTarget } from '../src/runtime/revocations.ts';
 import { type EventTaintRecorder, recordEventTaint } from '../src/runtime/untrusted.ts';
 import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -17,6 +20,18 @@ import { openEventSecretStore, selectEventSecretStore } from '../src/store/event
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
+
+/**
+ * The lasting handles a test may leak — sockets, pipes, timers, child processes, servers. One-shot requests (a file
+ * system read, a DNS lookup, a pending write) can be in flight at either snapshot without anything having leaked, so
+ * they are left out of the before/after comparison.
+ */
+function lastingResources(): string[] {
+  return process
+    .getActiveResourcesInfo()
+    .filter((name) => !/Req|^WriteWrap$|^ShutdownWrap$/u.test(name))
+    .sort();
+}
 
 const ACCOUNT = 'ibx_E8RACE';
 const WHATSAPP_ACCOUNT = 'acc_ABCDEFGHIJKLMNOP';
@@ -221,12 +236,18 @@ async function fixture(
     record: (input) => recordEventTaint(taintStore, { ownAddresses: [], internalDomains: [] }, input),
   };
   let ids = 0;
+  let transportCalls = 0;
   const coordinator = new JudgeCoordinator({
     store,
     taint,
     now: () => evaluatorNow,
     newId: () => `e8-reservation-${++ids}`,
-    transport: new JudgeTransport({ tcpConnect: async () => responseSocket(input.responseValue) as never }),
+    transport: new JudgeTransport({
+      tcpConnect: async () => {
+        transportCalls += 1;
+        return responseSocket(input.responseValue) as never;
+      },
+    }),
   });
   const evaluator = new EventEvaluator({
     store,
@@ -254,7 +275,7 @@ async function fixture(
     'terminal',
   );
   const decisionId = (store.database.prepare('SELECT id FROM decisions').get() as { id: string }).id;
-  return { stateDir, store, cipher, taint, decisionId, accountId, whatsapp };
+  return { stateDir, store, cipher, taint, decisionId, accountId, whatsapp, transportCalls: () => transportCalls };
 }
 
 test('E8 P1: a stale evaluator clock cannot create a hold past its SQLite ingest deadline', {
@@ -587,6 +608,149 @@ test('E8: final hold resolution refuses a mismatched decision-bound claim token 
   }
 });
 
+function assertExpiredHeldDecision(
+  setup: Readonly<{
+    store: Awaited<ReturnType<typeof openEventDatabase>>;
+    decisionId: string;
+  }>,
+  label: string,
+): void {
+  const decision = setup.store.database
+    .prepare('SELECT outcome, encrypted_record FROM decisions WHERE id = ?')
+    .get(setup.decisionId) as { outcome: string; encrypted_record: Uint8Array | null };
+  assert.equal(decision.outcome, 'hold-expired', `${label}: the held decision reaches its exact terminal outcome`);
+  assert.equal(decision.encrypted_record, null, `${label}: expiry erases the retained decision ciphertext`);
+  assert.equal(
+    (setup.store.database.prepare('SELECT COUNT(*) AS count FROM ingest_rules').get() as { count: number }).count,
+    0,
+    `${label}: expiry purges the retained projection`,
+  );
+}
+
+async function holdExpiryFixture(label: string) {
+  const stateDir = await shortTempDir(`events-e12-hold-expiry-${label}-`);
+  const store = await openEventDatabase({ stateDir });
+  const versions = new ImmutableVersions(store.database);
+  versions.createTarget(target);
+  versions.createJudge(judge);
+  versions.createRule(heldRule());
+  const eventId = `event-e12-hold-expiry-${label}`;
+  const decisionId = `decision-e12-hold-expiry-${label}`;
+  store.database
+    .prepare(
+      `INSERT INTO ingest
+       (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+       VALUES (?, ?, 'gmail.message.received', 1, ?, ?, ?, ?, ?)`,
+    )
+    .run(eventId, store.installationId, ACCOUNT, label, STAGED_AT, STAGED_AT, STAGED_AT);
+  store.database
+    .prepare(
+      `INSERT INTO ingest_rules
+       (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
+       VALUES (?, 'rule-e8-race', 1, ?, X'01')`,
+    )
+    .run(eventId, STAGED_AT + 60_000);
+  store.database
+    .prepare(
+      `INSERT INTO decisions
+       (id, event_id, account_id, rule_id, rule_version, outcome, hold_created_at, hold_expires_at, hold_bound_by,
+        metadata_expires_at, metadata_state, encrypted_record)
+       VALUES (?, ?, ?, 'rule-e8-race', 1, 'hold', ?, ?, 'hold-window', ?, 'retained', X'02')`,
+    )
+    .run(decisionId, eventId, ACCOUNT, STAGED_AT, STAGED_AT + 60_000, STAGED_AT + 60_000);
+  return { stateDir, store, eventId, decisionId };
+}
+
+test('E12 hold claim expiry caller terminalises through its exact production operation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  const setup = await holdExpiryFixture('claim');
+  try {
+    setup.store.database.prepare('UPDATE decisions SET hold_expires_at = 0 WHERE id = ?').run(setup.decisionId);
+    assert.deepEqual(
+      claimHeldDecision({ store: setup.store, decisionId: setup.decisionId, leaseMs: 30_000 }),
+      { kind: 'expired' },
+      'claiming an expired hold runs the claim-path expiry call',
+    );
+    assertExpiredHeldDecision(setup, 'claim path');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the exact hold-claim expiry path closes every database and asynchronous handle',
+  );
+});
+
+test('E12 hold expiry API caller terminalises through its exact production operation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  const setup = await holdExpiryFixture('api');
+  try {
+    setup.store.database.prepare('UPDATE decisions SET hold_expires_at = 0 WHERE id = ?').run(setup.decisionId);
+    assert.equal(expireHeldDecisions(setup.store), 1, 'the public expiry API terminalises one expired hold');
+    assertExpiredHeldDecision(setup, 'public API');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the public hold-expiry API path closes every database and asynchronous handle',
+  );
+});
+
+test('E12 final hold-resolution expiry caller commits terminal purge before reporting stale', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  const setup = await holdExpiryFixture('resolution');
+  try {
+    const claimed = claimHeldDecision({
+      store: setup.store,
+      decisionId: setup.decisionId,
+      leaseMs: 30_000,
+    });
+    assert.equal(claimed.kind, 'claimed', 'the final-resolution fixture owns the live hold claim');
+    if (claimed.kind !== 'claimed') throw new Error('the final-resolution fixture must own one claim');
+    setup.store.database.prepare('UPDATE decisions SET hold_expires_at = 0 WHERE id = ?').run(setup.decisionId);
+    assert.throws(
+      () =>
+        commitHeldDecisionOutbox(setup.store, {
+          id: setup.decisionId,
+          eventId: setup.eventId,
+          accountId: ACCOUNT,
+          ruleId: 'rule-e8-race',
+          ruleVersion: 1,
+          claimToken: claimed.claim.claimToken,
+          outcome: 'no-match',
+          switchGeneration: 8,
+          deliveries: [],
+          disclosure: { approvalId: 'approval-e8', authorizationActivationId: 'activation-e8' },
+        }),
+      StaleDecisionError,
+      'the final-resolution transaction expires the hold before accepting its result',
+    );
+    assertExpiredHeldDecision(setup, 'final resolution');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the final hold-resolution expiry path closes every database and asynchronous handle',
+  );
+});
+
 test('E8: resolver transaction crash points leave one recoverable held decision and no partial delivery', {
   skip: WINDOWS_SKIP,
 }, async (context) => {
@@ -632,4 +796,168 @@ test('E8: resolver transaction crash points leave one recoverable held decision 
       }
     });
   }
+});
+
+function pausedSecondAuthorisation(): {
+  readonly authorise: () => Promise<void>;
+  readonly paused: Promise<void>;
+  readonly resume: () => void;
+} {
+  let checks = 0;
+  let signalPaused: (() => void) | undefined;
+  let resume: (() => void) | undefined;
+  const paused = new Promise<void>((resolve) => {
+    signalPaused = resolve;
+  });
+  const resumed = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  return {
+    authorise: async () => {
+      checks += 1;
+      if (checks !== 2) return;
+      signalPaused?.();
+      await resumed;
+    },
+    paused,
+    resume: () => resume?.(),
+  };
+}
+
+async function expectPausedPurgeRace(
+  label: string,
+  mutate: (setup: Awaited<ReturnType<typeof fixture>>) => Promise<void> | void,
+  options: Readonly<{
+    fixture?: Parameters<typeof fixture>[0];
+    resolver?: (setup: Awaited<ReturnType<typeof fixture>>) => Parameters<typeof resolverFor>[3];
+  }> = {},
+): Promise<void> {
+  const setup = await fixture(options.fixture);
+  const seam = pausedSecondAuthorisation();
+  try {
+    const requestsBefore = setup.transportCalls();
+    const resolving = resolverFor(setup, seam.authorise, undefined, options.resolver?.(setup)).resolve({
+      decisionId: setup.decisionId,
+      decision: 'accept',
+    });
+    await seam.paused;
+    await mutate(setup);
+    seam.resume();
+    assert.deepEqual(await resolving, { kind: 'stale' }, `${label}: resumed stale work is refused`);
+    assert.equal(
+      (setup.store.database.prepare('SELECT COUNT(*) AS count FROM deliveries').get() as { count: number }).count,
+      0,
+      `${label}: no stale delivery write survives the race`,
+    );
+    assert.equal(setup.transportCalls(), requestsBefore, `${label}: held resolution emits no new network attempt`);
+  } finally {
+    seam.resume();
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+}
+
+test('E12 judge race: paused held resolution loses to target, subscriber, judge, account re-add, WhatsApp hide and expiry purges', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  await expectPausedPurgeRace('target remove', async (setup) => {
+    await removeTarget(setup.store, { cancelForRevocation: async () => undefined }, target.targetId);
+  });
+  await expectPausedPurgeRace('judge remove', async (setup) => {
+    const control = new B3OperatorControl({
+      store: setup.store,
+      ports: { quiescer: testWriterQuiescer() } as never,
+      activations: { cancelForRevocation: async () => undefined } as never,
+      now: () => STAGED_AT + 1,
+    });
+    await control.handle({ operation: 'removeJudge', args: { judgeId: judge.judgeId } });
+  });
+  await expectPausedPurgeRace('subscriber remove', async (setup) => {
+    const subscriber = {
+      subscriberId: 'subscriber-e12-race',
+      version: 1,
+      kind: 'sse' as const,
+      authority: { host: '127.0.0.1' as const, port: 43_102 },
+      origins: ['https://console.invalid'],
+      retentionMs: 60_000,
+    };
+    new ImmutableVersions(setup.store.database).createSubscriber(subscriber);
+    const row = setup.store.database
+      .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = 1')
+      .get('rule-e8-race') as { document: string };
+    const document = JSON.parse(row.document) as Record<string, unknown>;
+    document.subscribers = [subscriber];
+    setup.store.database
+      .prepare('UPDATE rule_versions SET document = ? WHERE rule_id = ? AND version = 1')
+      .run(canonicalJson(document), 'rule-e8-race');
+    const control = new B3OperatorControl({
+      store: setup.store,
+      ports: { quiescer: testWriterQuiescer(), closeSubscriberStreams: () => undefined } as never,
+      now: () => STAGED_AT + 1,
+    });
+    await control.handle({ operation: 'removeSubscriber', args: { subscriberId: subscriber.subscriberId } });
+  });
+  let accountPresent = true;
+  const config = {
+    load: async () => ({
+      inboxes: accountPresent ? { synthetic: { id: ACCOUNT, provider: 'gmail' } } : {},
+      accounts: {},
+    }),
+  };
+  await expectPausedPurgeRace(
+    'account remove and re-add',
+    (setup) => {
+      accountPresent = false;
+      purgeRemovedAccountWork(setup.store.database, { source: 'gmail', accountId: ACCOUNT }, STAGED_AT + 1);
+      accountPresent = true;
+      assert.equal(
+        (
+          setup.store.database
+            .prepare('SELECT COUNT(*) AS count FROM account_revocations WHERE account_id = ?')
+            .get(ACCOUNT) as { count: number }
+        ).count,
+        1,
+        'account re-add cannot erase the stale identity revocation marker',
+      );
+    },
+    {
+      resolver: () => ({
+        accountLive: ({ source, accountId }) => assertLiveEventAccount(config as never, { source, accountId }),
+      }),
+    },
+  );
+  let whatsappVisible = true;
+  const whatsappVisibility = (setup: Awaited<ReturnType<typeof fixture>>) =>
+    new WhatsAppVisibilityFence({
+      store: setup.store,
+      now: () => STAGED_AT + 1,
+      withCurrentEventVisibility: async (_input, work) =>
+        work({
+          version: 1,
+          digest: (whatsappVisible ? 'a' : 'b').repeat(64),
+          seesMessage: () => whatsappVisible,
+        }),
+    });
+  await expectPausedPurgeRace(
+    'WhatsApp hide',
+    async (setup) => {
+      whatsappVisible = false;
+      await whatsappVisibility(setup).withCurrentVisibility({ accountId: setup.accountId }, () => undefined);
+    },
+    {
+      fixture: { source: 'whatsapp' },
+      resolver: (setup) => ({ whatsappVisibilityFence: whatsappVisibility(setup) }),
+    },
+  );
+  await expectPausedPurgeRace('expiry', (setup) => {
+    setup.store.database.prepare('UPDATE decisions SET hold_expires_at = 0 WHERE id = ?').run(setup.decisionId);
+    new EventExpiry(setup.store, () => STAGED_AT + 1).sweep();
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'paused purge races close every socket, database and asynchronous handle on every path',
+  );
 });

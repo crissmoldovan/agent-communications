@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,7 @@ const CREDENTIAL_FIELD = /^(?:key|token|secret|password|authorization|bearer|api
 const KEY_LIKE_RUN = /(?:[A-Za-z0-9+/_-]{24,}|[A-Za-z0-9+/_-]{22,}={1,2})/gu;
 const KEY_LIKE_IDENTIFIER = /[A-Za-z0-9+/_-]{24,}/u;
 const PROVIDER_CAPTURE_FIELD = /["']?(?:x-request-id|cf-ray|x-ratelimit-limit|set-cookie|server)["']?\s*:/iu;
+const PROVIDER_CAPTURE_TUPLE = /\[\s*["'](?:x-request-id|cf-ray|x-ratelimit-limit|set-cookie|server)["']\s*,/iu;
 const PROVIDER_CAPTURE_NAME = /^(?:x-request-id|cf-ray|x-ratelimit-limit|set-cookie|server)$/iu;
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_DIRECTORY = 'packages/events-daemon/test/fixtures/judges';
@@ -111,6 +112,8 @@ const ALLOWED_STRING_CALLS = new Set([
   "join(root,'node_modules')",
   "join(packageRoot,'node_modules')",
   "join(copiedPackage,'node_modules')",
+  "join(process.platform==='win32'?tmpdir():'/tmp',prefix)",
+  'tmpdir()',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: exact source text for the closed call allowlist.
   "mutation.testName.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')",
   "join(mutantsRoot,mutation.id,'tree')",
@@ -125,6 +128,7 @@ const ALLOWED_HELPER_LITERAL_RUNS = new Set([
   '/src/runtime/judge-coordinator',
   '/src/runtime/judge-recovery',
   '/src/runtime/judge-transport',
+  '/src/runtime/writer-quiescer',
   '/src/store/event-secrets',
   '/test/helpers/loopback-seal-preload',
   'authorization_activation_id',
@@ -145,6 +149,9 @@ const ALLOWED_HELPER_LITERAL_RUNS = new Set([
   'JudgeAdversarialMutation',
   'JUDGE_ADVERSARIAL_MUTATIONS',
   'JUDGE_ADVERSARIAL_MUTATION_TIMEOUT_MS',
+  'STRICT_MUTATION_CHILD_TIMEOUT_MS',
+  'StrictMutationChildResult',
+  'runStrictMutationChild',
   'late-response-after-expiry',
   'packages/events-daemon/src/runtime/expiry',
   'packages/events-daemon/src/runtime/judge-adapters',
@@ -183,6 +190,9 @@ const ALLOWED_DATA_LITERAL_RUNS = new Set([
   'packages/events-daemon/test/fixtures/judges/adversarial-v1',
   'packages/events-daemon/test/support/judge-adversarial-fixture',
   'packages/events-daemon/test/support/judge-adversarial-mutants',
+  'packages/events-daemon/test/support/short-temp',
+  'packages/events-daemon/test/support/strict-mutation-child',
+  'packages/events-daemon/test/support/writer-quiescer',
   'provider-match-is-not-authority',
   'provider-match-low-score-refusal',
   'response-after-hold-expiry',
@@ -241,6 +251,71 @@ const ALLOWED_OBJECT_SPREADS = new Set([
   "...(row.scenario==='dns-rebinding'?{hostedApiKeyFor:async()=>'synthetic-boundary-value'}:{})",
   "...(row.scenario==='post-io-unknown'?{failpoint:(point)=>{if(point==='after-decision')thrownewError('syntheticpost-I/Ointerruption');},}:{})",
 ]);
+const ALLOWED_ARRAY_SPREADS = new Set([
+  '...expectedKinds',
+  '...input.args',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: exact source text for the closed spread allowlist.
+  "...output.matchAll(newRegExp(`^#${label}(\\\\d+)$`,'gmu'))",
+  '...result.output.matchAll(/^#Subtest:(.+)$/gmu)',
+]);
+const ALLOWED_PROPERTY_STRING_READS = new Set([
+  'attempt.target',
+  'coordinatorRefusal.reason',
+  'coordinatorRefusal?.kind',
+  'decision.id',
+  'decision.metadata_state',
+  'decision.outcome',
+  'error.code',
+  'error.message',
+  'event.id',
+  'event.type',
+  'held?.hold_bound_by',
+  'held?.outcome',
+  'import.meta.dirname',
+  'input.command',
+  'input.cwd',
+  'journal.destination',
+  'judge.kind',
+  'judge.provider',
+  "pathToFileURL(join(root,'test/helpers/loopback-seal-preload.mjs')).href",
+  'baseline.output',
+  'mutation.after',
+  'mutation.before',
+  'mutation.id',
+  'mutation.killingAssertion',
+  'mutation.source',
+  'mutation.test',
+  'mutation.testName',
+  'options.host',
+  'process.execPath',
+  'process.platform',
+  'row.expected.metadataState',
+  'row.expected.outcome',
+  'row.expected.projection',
+  'row.expected.reservation',
+  'row.id',
+  'rule.ruleId',
+  'run.destination',
+  'run.durableContent',
+  'run.evaluationFailure',
+  'run.metadataState',
+  'run.outcome',
+  'run.refusal',
+  'run.reservation',
+  'result.output',
+  'result.kind',
+  'reservation?.state',
+  'row.expected.refusal',
+  'row.response',
+  'row.scenario',
+  'row.subject',
+  'store.installationId',
+  'stored.document',
+  'transportRefusal.code',
+  'transportRefusal?.kind',
+  'entry.pointer',
+]);
+const ALLOWED_COMPUTED_STRING_READS = new Set(['match[1]', 'matches[0]?.[1]']);
 function mayProduceString(type, seen = new Set()) {
   if (type === undefined) return true;
   if (seen.has(type)) return false;
@@ -280,6 +355,7 @@ function allowedComputedTemplate(node, source) {
     /^`\^\$\{name\.replace\(.+\)\}\$`$/u.test(compact) ||
     /^`\^#\$\{label\}\(\\\\d\+\)\$`$/u.test(compact) ||
     /^`strictchildemittedoneTAP\$\{label\}summary\\n\$\{output\}`$/u.test(compact) ||
+    /^`strictmutationchildtimedoutafter\$\{timeoutMs\}ms;itwaskilledbytherunner`$/u.test(compact) ||
     /^`\$\{mutation\.id\}:[^$`]*(?:\\n\$\{(?:result|baseline)\.output\})?`$/u.test(compact) ||
     /^`\^notok\\\\d\+-\$\{escaped\}\(\?:\\\\s\|\$\)`$/u.test(compact)
   );
@@ -287,6 +363,11 @@ function allowedComputedTemplate(node, source) {
 
 function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
   assert.equal(KNOWN_SECRET_MATERIAL.test(text), false, `${file}: fixture has no recognised secret-looking material`);
+  assert.equal(
+    PROVIDER_CAPTURE_TUPLE.test(text),
+    false,
+    `${file}: fixture has no captured provider-response shape (header tuple)`,
+  );
   for (const comment of text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/gu))
     assertSyntheticPlainText({
       text: comment[0],
@@ -296,19 +377,27 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
       allowedKeyRuns: ALLOWED_HELPER_LITERAL_RUNS,
       scanNetwork: false,
     });
+  // TypeScript names files with forward slashes on every platform, while `resolve` gives Windows backslashes. Hand
+  // TypeScript one spelling and match it case-insensitively where Windows does, or the in-memory text is never
+  // served and TypeScript scans the file on disk instead of the text under test.
+  const apiPath = sourcePath.replaceAll('\\', '/');
+  const samePath = (candidate) => {
+    const spelled = candidate.replaceAll('\\', '/');
+    return process.platform === 'win32' ? spelled.toLowerCase() === apiPath.toLowerCase() : spelled === apiPath;
+  };
   const api = new API({
     cwd: REPOSITORY_ROOT,
-    fs: { readFile: (path) => (path === sourcePath ? text : undefined) },
+    fs: { readFile: (path) => (samePath(path) ? text : undefined) },
   });
   let snapshot;
   try {
-    snapshot = api.updateSnapshot({ openFiles: [sourcePath] });
-    const project = snapshot.getDefaultProjectForFile(sourcePath);
+    snapshot = api.updateSnapshot({ openFiles: [apiPath] });
+    const project = snapshot.getDefaultProjectForFile(apiPath);
     assert.ok(project, `${file}: fixture helper has a TypeScript project for structural scanning`);
-    const source = project.program.getSourceFile(sourcePath);
+    const source = project.program.getSourceFile(apiPath);
     assert.ok(source, `${file}: fixture helper source parses for structural scanning`);
     assert.deepEqual(
-      project.program.getSyntacticDiagnostics(sourcePath),
+      project.program.getSyntacticDiagnostics(apiPath),
       [],
       `${file}: fixture helper has no syntax error that can evade structural scanning`,
     );
@@ -328,6 +417,35 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
     const readFileImportSpecifiers = exactImportSpecifiers('node:fs/promises', 'readFile');
     const mkdirImportSpecifiers = exactImportSpecifiers('node:fs/promises', 'mkdir');
     const shortTempDirImportSpecifiers = exactImportSpecifiers('./short-temp.ts', 'shortTempDir');
+    const defaultImportSpecifiers = source.statements.flatMap((statement) =>
+      statement.kind === SyntaxKind.ImportDeclaration &&
+      statement.importClause?.name !== undefined &&
+      statement.importClause.isTypeOnly !== true
+        ? [statement.importClause.name]
+        : [],
+    );
+    const defaultImportSymbols = new Set(
+      defaultImportSpecifiers.map((specifier) => project.checker.getSymbolAtLocation(specifier)).filter(Boolean),
+    );
+    const hasAncestorKind = (candidate, kind) => {
+      for (let parent = candidate.parent; parent !== undefined; parent = parent.parent)
+        if (parent.kind === kind) return true;
+      return false;
+    };
+    const resolvesToDefaultImport = (candidate, seen = new Set()) => {
+      const value = unwrapExpression(candidate);
+      if (value?.kind !== SyntaxKind.Identifier) return false;
+      const symbol = project.checker.getSymbolAtLocation(value);
+      if (symbol === undefined || seen.has(symbol)) return false;
+      if (defaultImportSymbols.has(symbol)) return true;
+      seen.add(symbol);
+      return (symbol.declarations ?? []).some(
+        (declaration) =>
+          declaration.kind === SyntaxKind.VariableDeclaration &&
+          declaration.initializer !== undefined &&
+          resolvesToDefaultImport(declaration.initializer, seen),
+      );
+    };
     assert.ok(endpointImportSpecifiers.length <= 1, `${file}: the production TypeSafe endpoint import is unique`);
     assert.ok(evaluatorImportSpecifiers.length <= 1, `${file}: the production evaluator import is unique`);
     const importedEndpointSymbol = endpointImportSpecifiers[0]
@@ -354,6 +472,13 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
         ['node:process', 'process'].includes(statement.moduleSpecifier?.text)
       )
         assert.fail(`${file}: TypeScript adversarial helpers must not read process.env`);
+    for (const statement of source.statements) {
+      if (statement.kind !== SyntaxKind.ImportDeclaration) continue;
+      const clause = statement.importClause;
+      for (const element of clause?.namedBindings?.elements ?? [])
+        if (element.propertyName !== undefined && element.propertyName.text !== element.name.text)
+          assert.fail(`${file}: imported aliases may carry a URL`);
+    }
     const isImportedEndpointIdentifier = (node) =>
       node?.kind === SyntaxKind.Identifier &&
       node.text === TYPESAFE_ENDPOINT_IDENTIFIER &&
@@ -374,6 +499,25 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
         current = current.expression;
       return current;
     };
+    const defaultConstructorNames = new Set(defaultImportSpecifiers.map((specifier) => specifier.text));
+    let addedConstructorAlias = true;
+    while (addedConstructorAlias) {
+      addedConstructorAlias = false;
+      const collectConstructorAliases = (candidate) => {
+        if (
+          candidate.kind === SyntaxKind.VariableDeclaration &&
+          candidate.name?.kind === SyntaxKind.Identifier &&
+          unwrapExpression(candidate.initializer)?.kind === SyntaxKind.Identifier &&
+          defaultConstructorNames.has(unwrapExpression(candidate.initializer).text) &&
+          !defaultConstructorNames.has(candidate.name.text)
+        ) {
+          defaultConstructorNames.add(candidate.name.text);
+          addedConstructorAlias = true;
+        }
+        candidate.forEachChild(collectConstructorAliases);
+      };
+      collectConstructorAliases(source);
+    }
     const staticString = (node) => {
       const value = unwrapExpression(node);
       return [SyntaxKind.StringLiteral, SyntaxKind.NoSubstitutionTemplateLiteral].includes(value?.kind)
@@ -743,7 +887,7 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
       const name = staticString(node.arguments?.[1]);
       assert.notEqual(name, undefined, `${file}: fixture has no unresolved computed property name`);
       assertSafePropertyName(name, node);
-      if (!/^(?:endpoint|url)$/iu.test(name ?? '')) return;
+      if (!/^(?:address|destination|endpoint|host|hostname|url)$/iu.test(name ?? '')) return;
       if (callee === 'Reflect.set') {
         assertLiteralUrlSource(node.arguments?.[2]);
         return;
@@ -826,8 +970,8 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
         assert.equal(
           node.parent?.kind === SyntaxKind.PropertyAccessExpression &&
             node.parent.expression === node &&
-            node.parent.name?.text === 'execPath' &&
-            node.parent.getText(source) === 'process.execPath',
+            ['execPath', 'platform'].includes(node.parent.name?.text) &&
+            ['process.execPath', 'process.platform'].includes(node.parent.getText(source)),
           true,
           `${file}: TypeScript adversarial helpers must not read process.env`,
         );
@@ -845,7 +989,7 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
       )
         assertSyntheticPlainText({
           text: node.text,
-          file: `${file}: TypeScript identifier`,
+          file: `${file}: TypeScript identifier ${node.text}`,
           declaredHashes,
           sourceCode: false,
           allowedKeyRuns: ALLOWED_HELPER_LITERAL_RUNS,
@@ -882,6 +1026,14 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
           true,
           `${file}: computed fixture strings must use the closed computed-string allowlist`,
         );
+      if (node.kind === SyntaxKind.SpreadElement) {
+        const compact = node.getText(source).replaceAll(/\s+/gu, '');
+        assert.equal(
+          ALLOWED_ARRAY_SPREADS.has(compact),
+          true,
+          `${file}: array spreads may carry a URL and must use the closed allowlist (${compact})`,
+        );
+      }
       if (node.kind === SyntaxKind.CallExpression) {
         if (
           node.expression?.kind === SyntaxKind.ImportKeyword &&
@@ -942,6 +1094,13 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
       }
       if (node.kind === SyntaxKind.NewExpression && isUrlConstructor(node.expression))
         assert.fail(`${file}: a URL must be a complete string literal or the imported ${TYPESAFE_ENDPOINT_IDENTIFIER}`);
+      if (
+        node.kind === SyntaxKind.NewExpression &&
+        (resolvesToDefaultImport(node.expression) ||
+          (unwrapExpression(node.expression)?.kind === SyntaxKind.Identifier &&
+            defaultConstructorNames.has(unwrapExpression(node.expression).text)))
+      )
+        assert.fail(`${file}: default-imported constructors may carry a URL`);
       if (node.kind === SyntaxKind.TaggedTemplateExpression) {
         const type = project.checker.getTypeAtLocation(node);
         assert.equal(
@@ -1025,6 +1184,42 @@ function assertClosedComputedStrings(text, file, declaredHashes, sourcePath) {
       node.forEachChild(visit);
     };
     visit(source);
+    const unsafePropertyReads = [];
+    const unsafeComputedReads = [];
+    const visitUrlCarriers = (node) => {
+      const assignmentLeft =
+        node.parent?.kind === SyntaxKind.BinaryExpression &&
+        ASSIGNMENT_OPERATORS.has(node.parent.operatorToken.getText(source)) &&
+        unwrapExpression(node.parent.left) === node;
+      const propertyText = node.getText(source).replaceAll(/\s+/gu, '');
+      const normalizedPropertyText =
+        node.kind === SyntaxKind.PropertyAccessExpression
+          ? `${unwrapExpression(node.expression)?.getText(source).replaceAll(/\s+/gu, '')}.${node.name.text}`
+          : propertyText;
+      if (
+        node.kind === SyntaxKind.PropertyAccessExpression &&
+        !assignmentLeft &&
+        !hasAncestorKind(node, SyntaxKind.SpreadAssignment) &&
+        !/(?:\bprocess\b|\benv\b)/u.test(propertyText) &&
+        mayProduceString(project.checker.getTypeAtLocation(node)) &&
+        !ALLOWED_PROPERTY_STRING_READS.has(propertyText) &&
+        !ALLOWED_PROPERTY_STRING_READS.has(normalizedPropertyText)
+      )
+        unsafePropertyReads.push(propertyText);
+      if (
+        node.kind === SyntaxKind.ElementAccessExpression &&
+        !assignmentLeft &&
+        !hasAncestorKind(node, SyntaxKind.SpreadAssignment) &&
+        !/(?:\bprocess\b|\benv\b)/u.test(propertyText) &&
+        mayProduceString(project.checker.getTypeAtLocation(node)) &&
+        !ALLOWED_COMPUTED_STRING_READS.has(propertyText)
+      )
+        unsafeComputedReads.push(propertyText);
+      node.forEachChild(visitUrlCarriers);
+    };
+    visitUrlCarriers(source);
+    assert.deepEqual([...new Set(unsafePropertyReads)], [], `${file}: property access may carry a URL`);
+    assert.deepEqual([...new Set(unsafeComputedReads)], [], `${file}: computed access may carry a URL`);
   } finally {
     snapshot?.dispose();
     api.close();
@@ -1219,25 +1414,26 @@ function assertDecodedJson(value, file, declaredHashes, checkKeyRuns, path = [])
  * transport itself; every other address is from RFC 5737 or RFC 3849.
  */
 export function assertSyntheticFixtureText({ text, file, declaredHashes, sourcePath, checkKeyRuns = true }) {
-  if (file.endsWith('.ts'))
+  const lowerFile = file.toLowerCase();
+  if (lowerFile.endsWith('.ts'))
     assertClosedComputedStrings(
       text,
       file,
       declaredHashes,
       sourcePath ?? resolve(REPOSITORY_ROOT, 'packages/events-daemon/test/support/judge-adversarial-fixture.ts'),
     );
-  const structuredData = file.endsWith('.json') || file.endsWith('.jsonl');
+  const structuredData = lowerFile.endsWith('.json') || lowerFile.endsWith('.jsonl');
   assertSyntheticPlainText({
     text,
     file,
     declaredHashes,
-    sourceCode: file.endsWith('.ts'),
+    sourceCode: lowerFile.endsWith('.ts'),
     checkKeyRuns: checkKeyRuns && !structuredData,
-    scanNetwork: !structuredData && !file.endsWith('.ts'),
+    scanNetwork: !structuredData && !lowerFile.endsWith('.ts'),
   });
-  if (file.endsWith('.json'))
+  if (lowerFile.endsWith('.json'))
     assertDecodedJson(JSON.parse(text), `${file}: decoded JSON value`, declaredHashes, checkKeyRuns);
-  if (file.endsWith('.jsonl'))
+  if (lowerFile.endsWith('.jsonl'))
     for (const [index, line] of text.trim().split('\n').entries())
       assertDecodedJson(JSON.parse(line), `${file}: decoded JSONL row ${index + 1}`, declaredHashes, checkKeyRuns);
 }
@@ -1249,9 +1445,87 @@ async function fixtureFilesUnder(directory) {
     const path = resolve(directory, entry.name);
     if (entry.isSymbolicLink()) assert.fail(`${path}: symlinks are not permitted in the adversarial corpus tree`);
     if (entry.isDirectory()) files.push(...(await fixtureFilesUnder(path)));
-    else if (entry.isFile() && entry.name.startsWith('adversarial-')) files.push(path);
+    else if (entry.isFile() && entry.name.toLowerCase().startsWith('adversarial-')) files.push(path);
   }
   return files;
+}
+
+async function supportFilesUnder(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    const matches = /^judge-adversarial-.*\.ts$/iu.test(entry.name);
+    if (entry.isSymbolicLink()) {
+      if (matches) assert.fail(`${path}: symlinks are not permitted in the adversarial corpus`);
+      continue;
+    }
+    if (entry.isDirectory()) files.push(...(await supportFilesUnder(path)));
+    else if (entry.isFile() && matches) files.push(path);
+  }
+  return files;
+}
+
+function staticModuleSpecifiers(text, file) {
+  const imports = text.matchAll(/^\s*import\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/gmu);
+  const exports = text.matchAll(
+    /^\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gmu,
+  );
+  const importEquals = text.matchAll(/^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/gmu);
+  if (/\bcreateRequire\b/u.test(text)) assert.fail(`${file}: adversarial helpers must not create CommonJS loaders`);
+  const calledSpecifiers = [];
+  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*([^\r\n)]*)\)/gmu)) {
+    const argument = match[1]?.trim() ?? '';
+    const literal = /^(['"])([^'"]+)\1$/u.exec(argument);
+    if (literal === null) assert.fail(`${file}: adversarial helper module specifiers must be static string literals`);
+    calledSpecifiers.push(literal[2]);
+  }
+  return [...imports, ...exports, ...importEquals].map((match) => match[1]).concat(calledSpecifiers);
+}
+
+function insideDirectory(directory, path) {
+  const child = relative(directory, path);
+  return child === '' || (!child.startsWith(`..${sep}`) && child !== '..');
+}
+
+async function supportDependency(importer, specifier, supportRoot) {
+  if (!specifier.startsWith('.')) return undefined;
+  const requested = resolve(dirname(importer), specifier);
+  if (!insideDirectory(supportRoot, requested)) return undefined;
+  const candidates = [requested];
+  if (!/\.[A-Za-z0-9]+$/u.test(requested))
+    candidates.push(`${requested}.ts`, `${requested}.mts`, resolve(requested, 'index.ts'));
+  for (const candidate of candidates) {
+    try {
+      const metadata = await lstat(candidate);
+      assert.equal(
+        metadata.isSymbolicLink(),
+        false,
+        `${candidate}: symlinks are not permitted in the adversarial corpus`,
+      );
+      if (metadata.isFile()) return candidate;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  assert.fail(`${repositoryRelative(REPOSITORY_ROOT, requested)}: imported adversarial helper does not exist`);
+}
+
+async function dependencyClosedSupportFiles(roots, supportRoot) {
+  const discovered = new Set(roots);
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const importer = pending.pop();
+    assert.ok(importer, 'the dependency-closure work item exists');
+    const text = await readFile(importer, 'utf8');
+    for (const specifier of staticModuleSpecifiers(text, repositoryRelative(REPOSITORY_ROOT, importer))) {
+      const dependency = await supportDependency(importer, specifier, supportRoot);
+      if (dependency === undefined || discovered.has(dependency)) continue;
+      discovered.add(dependency);
+      pending.push(dependency);
+    }
+  }
+  return [...discovered];
 }
 
 function repositoryRelative(repositoryRoot, path) {
@@ -1262,23 +1536,13 @@ function repositoryRelative(repositoryRoot, path) {
 export async function assertAdversarialCorpusFileInventory({ repositoryRoot = REPOSITORY_ROOT } = {}) {
   const fixtureRoot = resolve(repositoryRoot, FIXTURE_DIRECTORY);
   const supportRoot = resolve(repositoryRoot, SUPPORT_DIRECTORY);
-  const [fixtureFiles, supportEntries] = await Promise.all([
+  const [fixtureFiles, supportRoots] = await Promise.all([
     fixtureFilesUnder(fixtureRoot),
-    readdir(supportRoot, { withFileTypes: true }),
+    supportFilesUnder(supportRoot),
   ]);
-  const supportFiles = supportEntries
-    .filter((entry) => {
-      if (!/^judge-adversarial-.*\.ts$/u.test(entry.name)) return false;
-      assert.equal(
-        entry.isSymbolicLink(),
-        false,
-        `${entry.name}: symlinks are not permitted in the adversarial corpus`,
-      );
-      return entry.isFile();
-    })
-    .map((entry) => resolve(supportRoot, entry.name));
+  const supportFiles = await dependencyClosedSupportFiles(supportRoots, supportRoot);
   const discovered = [...fixtureFiles, ...supportFiles].map((path) => repositoryRelative(repositoryRoot, path)).sort();
-  const manifests = fixtureFiles.filter((path) => /^adversarial-.*\.manifest\.json$/u.test(basename(path)));
+  const manifests = fixtureFiles.filter((path) => /^adversarial-.*\.manifest\.json$/iu.test(basename(path)));
   assert.equal(manifests.length, 1, 'the discovered adversarial corpus has exactly one manifest');
   const manifestPath = manifests[0];
   assert.ok(manifestPath, 'the discovered adversarial corpus manifest exists');
