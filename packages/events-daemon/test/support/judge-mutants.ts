@@ -397,6 +397,18 @@ const phaseEGateMutations: readonly JudgeMutation[] = [
     killingAssertion: 'judge kind disable: the real purge caller removes the encrypted projection',
   },
   {
+    id: 'e-review-kind-disable-keeps-rule-authority',
+    source: 'packages/events-daemon/src/runtime/replacements.ts',
+    before:
+      '  for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now, { keepAuthority: true });',
+    after:
+      '  for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now, { keepAuthority: false });',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing',
+    killingAssertion:
+      'kind disable keeps the bound rule able to resume: its activation point and target references stay',
+  },
+  {
     id: 'e-review-preio-release-commit',
     source: 'packages/events-daemon/src/runtime/judge-budget.ts',
     before: `      releaseReservationInTransaction(input.store.database, row.id, input.now);

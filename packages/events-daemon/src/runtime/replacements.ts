@@ -423,23 +423,31 @@ export function purgeRevokedRuleWork(
   ruleId: string,
   versions: readonly number[],
   now: number = Date.now(),
+  options: { readonly keepAuthority?: boolean } = {},
 ): void {
+  // A judge-kind disable purges a rule's work but keeps the rule able to resume once the kind is re-enabled (D11):
+  // its activation points, target references, WhatsApp admissions and replacement drains are authority, not work.
+  const keepAuthority = options.keepAuthority === true;
   new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   for (const version of versions) {
     const versionId = ruleVersionId(ruleId, version);
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database.prepare('DELETE FROM ingest_rules WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
-    database
-      .prepare('DELETE FROM whatsapp_rule_admissions WHERE rule_id = ? AND rule_version = ?')
-      .run(ruleId, version);
-    database
-      .prepare(
-        `DELETE FROM slack_reply_drains
-         WHERE intent_id IN (SELECT id FROM activation_intents WHERE replacement_of_version = ?)`,
-      )
-      .run(versionId);
-    database.prepare('DELETE FROM rule_activation_points WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
+    if (!keepAuthority) {
+      database
+        .prepare('DELETE FROM whatsapp_rule_admissions WHERE rule_id = ? AND rule_version = ?')
+        .run(ruleId, version);
+      database
+        .prepare(
+          `DELETE FROM slack_reply_drains
+           WHERE intent_id IN (SELECT id FROM activation_intents WHERE replacement_of_version = ?)`,
+        )
+        .run(versionId);
+      database
+        .prepare('DELETE FROM rule_activation_points WHERE rule_id = ? AND rule_version = ?')
+        .run(ruleId, version);
+    }
     database
       .prepare(
         `UPDATE deliveries
@@ -477,6 +485,7 @@ export function purgeRevokedRuleWork(
       )
       .run(ruleId, version);
     database.prepare('DELETE FROM source_stage_rule_debts WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
+    if (keepAuthority) continue;
     const targets = removeRuleVersionTargetReferences(database, ruleId, version);
     for (const target of targets) {
       purgeUnreferencedSystemTargets(database, { ...target, now: Date.now() });
@@ -495,7 +504,7 @@ export function purgeJudgeKindRuleWork(database: DatabaseSync, judgeKind: string
         ORDER BY rule_id, version`,
     )
     .all(judgeKind) as Array<{ rule_id: string; version: number }>;
-  for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now);
+  for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now, { keepAuthority: true });
 }
 
 interface StoredRuleRetention {

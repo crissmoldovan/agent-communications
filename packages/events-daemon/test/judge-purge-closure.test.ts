@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import type { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { canonicalJson } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
@@ -1134,9 +1135,31 @@ test('E4 purge closure: kind disable removes every bound work class and re-enabl
        VALUES ('event-e4-kind-disable-other', '${setup.store.installationId}', 'gmail.message.received', 1,
                '${accountId}', 'dedupe-e4-kind-disable-other', ${NOW}, ${NOW}, ${NOW});
        INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
-       VALUES ('event-e4-kind-disable-other', 'rule-e4-kind-disable-other', 1, ${NOW + 10_000}, X'04');`,
+       VALUES ('event-e4-kind-disable-other', 'rule-e4-kind-disable-other', 1, ${NOW + 10_000}, X'04');
+       INSERT INTO rule_activation_points
+         (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+       VALUES ('activation-e12', '${setup.ruleId}', 1, 'gmail', '${accountId}', 'mailbox', X'01', ${NOW});`,
     );
+    const authorityRows = (database: DatabaseSync) => ({
+      activationPoints: (
+        database
+          .prepare('SELECT COUNT(*) AS count FROM rule_activation_points WHERE rule_id = ? AND rule_version = 1')
+          .get(setup.ruleId) as { count: number }
+      ).count,
+      targetReferences: (
+        database
+          .prepare('SELECT COUNT(*) AS count FROM target_version_references WHERE rule_id = ? AND rule_version = 1')
+          .get(setup.ruleId) as { count: number }
+      ).count,
+    });
+    const authorityBefore = authorityRows(setup.store.database);
+    assert.equal(authorityBefore.activationPoints, 1, 'the bound rule starts with its activation point');
     new JudgeKinds({ store: setup.store, now: () => NOW + 1 }).disable('typesafe');
+    assert.deepEqual(
+      authorityRows(setup.store.database),
+      authorityBefore,
+      'kind disable keeps the bound rule able to resume: its activation point and target references stay',
+    );
     assertPurgedSurfaceInStore(setup.store, setup, 'judge kind disable');
     assert.deepEqual(
       {
@@ -1191,6 +1214,11 @@ test('E4 purge closure: kind disable removes every bound work class and re-enabl
         reopened.immediate(() => recoverJudgeWork({ database: reopened.database, now: NOW + 3 })),
         { released: 0, settled: 0 },
         're-enabling the retained kind finds no reservation or projection to resume',
+      );
+      assert.deepEqual(
+        authorityRows(reopened.database),
+        authorityBefore,
+        'after restart and re-enable the bound rule still has its activation point, so new events reach it again',
       );
       assertPurgedSurfaceInStore(reopened, setup, 'judge kind re-enable');
     } finally {
