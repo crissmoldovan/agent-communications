@@ -11,6 +11,7 @@ export interface JudgeMutation {
   readonly after: string;
   readonly test: string;
   readonly testName: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
@@ -170,6 +171,171 @@ export const PHASE_E_GATE_MUTATIONS: readonly JudgeMutation[] = [
     testName:
       'E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached',
   },
+  {
+    id: 'e12-target-remove-purge',
+    source: 'packages/events-daemon/src/runtime/revocations.ts',
+    before: 'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);',
+    after: 'void rule;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: target remove uses the production participant',
+    killingAssertion: 'target remove: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-subscriber-remove-purge',
+    source: 'packages/events-daemon/src/runtime/b3-operator-control.ts',
+    before: 'purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], now);',
+    after: 'void rule;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: subscriber remove uses the production participant',
+    killingAssertion: 'subscriber remove: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-judge-remove-purge',
+    source: 'packages/events-daemon/src/runtime/b3-operator-control.ts',
+    before: `new JudgePurgeParticipant({ database: this.#store.database, now: () => revokedAt }).judge({
+        judgeId,
+        versions: [...removedVersions],
+      });`,
+    after: 'void removedVersions;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: judge remove uses the production participant',
+    killingAssertion: 'judge remove enumerates and settles exact synthetic-test work independently of bound rules',
+  },
+  {
+    id: 'e12-account-remove-readd-purge',
+    source: 'packages/events-daemon/src/runtime/account-fence.ts',
+    before: 'new JudgePurgeParticipant({ database, now: () => now }).account({ source, accountId });',
+    after: 'void source; void accountId;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: account remove and re-add use the production participant',
+    killingAssertion: 'account remove: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-whatsapp-hide-purge',
+    source: 'packages/events-daemon/src/runtime/whatsapp-visibility.ts',
+    before:
+      "for (const event of affectedEvents) judgePurge.event({ source: 'whatsapp', accountId, eventId: event.event_id });",
+    after: 'void judgePurge; void affectedEvents;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: WhatsApp hide uses the production participant',
+    killingAssertion: 'WhatsApp hide: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-rule-disable-purge',
+    source: 'packages/events-daemon/src/runtime/revocations.ts',
+    before: 'purgeRevokedRuleWork(database.database, ruleId, live, revokedAt);',
+    after: 'void live;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: rule disable uses the production participant',
+    killingAssertion: 'rule disable: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-disable-all-purge',
+    source: 'packages/events-daemon/src/runtime/lifecycle.ts',
+    before: 'new JudgePurgeParticipant({ database, now: this.now }).all();',
+    after: 'void database;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: disable all uses the production participant',
+    killingAssertion: 'disable all: the real purge caller settles in-flight judge work',
+  },
+  {
+    id: 'e12-account-rule-revoke',
+    source: 'packages/events-daemon/src/runtime/account-fence.ts',
+    before: 'purgeRevokedRuleWork(database, version.rule_id, [version.version], now);',
+    after: 'void version;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E12 purge closure: single-account rule revoke uses the production participant',
+    killingAssertion: 'single-account rule revoke settles synthetic work bound to the revoked rule',
+  },
+  {
+    id: 'e12-derived-parent-revoke',
+    source: 'packages/events-daemon/src/runtime/replacements.ts',
+    before: 'purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version], input.now);',
+    after: 'void input.parent;',
+    test: 'packages/events-daemon/test/judge-purge-closure.test.ts',
+    testName: 'E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work',
+    killingAssertion: 'derived parent revoke settles synthetic work bound to the revoked parent',
+  },
+  {
+    id: 'e12-audit-matrix',
+    source: 'scripts/verify-events-phase-e-tests.mjs',
+    before: "    ['activation-approval-claim-to-pointer', 'e4-final-pointer-drift'],\n",
+    after: '',
+    test: 'packages/events-daemon/test/judge-scope.test.ts',
+    testName: 'E12 scope: the audit matrix and explicit Task 10 deferral are structural, not manifest-defined',
+    killingAssertion: 'the immutable audit matrix digest must stay exact',
+  },
+  {
+    id: 'e12-static-network-path',
+    source: 'scripts/verify-events-phase-e-tests.mjs',
+    before: `  else if (judgePath && /\\bfetch\\b/u.test(executableText))
+    problems.push(\`\${file}: judge paths must not reference fetch\`);`,
+    after: `  else if (false && judgePath && /\\bfetch\\b/u.test(executableText))
+    problems.push(\`\${file}: judge paths must not reference fetch\`);`,
+    test: 'packages/events-daemon/test/judge-scope.test.ts',
+    testName: 'E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural',
+    killingAssertion: 'judge helper names and raw-client aliases cannot escape the static network boundary',
+  },
+  {
+    id: 'e12-purge-caller-registry',
+    source: 'scripts/verify-events-phase-e-tests.mjs',
+    before: `  [
+    'target-remove',
+    'packages/events-daemon/src/runtime/revocations.ts',
+    'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);',
+  ],`,
+    after: '',
+    test: 'packages/events-daemon/test/judge-scope.test.ts',
+    testName: 'E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural',
+    killingAssertion: "deleting target removal's purge caller must fail closed",
+  },
+  {
+    id: 'e12-corpus-dependency-closure',
+    source: 'scripts/verify-events-adversarial-corpus.mjs',
+    before: '  return [...discovered];',
+    after: '  return [...roots];',
+    test: 'packages/events-daemon/test/judge-corpus-integrity.test.ts',
+    testName:
+      'E12 adversarial corpus integrity: a registered helper re-export cannot escape dependency-closed scanning',
+    killingAssertion: 'a transitive helper dependency must be registered and scanned',
+  },
+  {
+    id: 'e12-held-purge-race',
+    source: 'packages/events-daemon/src/runtime/holds.ts',
+    before: "      if (error instanceof StaleDecisionError) return { kind: 'stale' };",
+    after: "      if (error instanceof StaleDecisionError) return { kind: 'resolved', outcome: 'matched' };",
+    test: 'packages/events-daemon/test/judge-races.test.ts',
+    testName:
+      'E12 judge race: paused held resolution loses to target, subscriber, judge, account re-add, WhatsApp hide and expiry purges',
+    killingAssertion: 'target remove: resumed stale work is refused',
+  },
+  {
+    id: 'e12-hold-claim-expiry-call',
+    source: 'packages/events-daemon/src/runtime/holds.ts',
+    before: "      expireHeldDecisionsInTransaction(database);\n      return { kind: 'expired' };",
+    after: "      void database;\n      return { kind: 'expired' };",
+    test: 'packages/events-daemon/test/judge-races.test.ts',
+    testName: 'E12 hold claim expiry caller terminalises through its exact production operation',
+    killingAssertion: 'claim path: the held decision reaches its exact terminal outcome',
+  },
+  {
+    id: 'e12-hold-api-expiry-call',
+    source: 'packages/events-daemon/src/runtime/holds.ts',
+    before: '  return store.immediate(() => expireHeldDecisionsInTransaction(store.database));',
+    after: '  return 0;',
+    test: 'packages/events-daemon/test/judge-races.test.ts',
+    testName: 'E12 hold expiry API caller terminalises through its exact production operation',
+    killingAssertion: 'the public expiry API terminalises one expired hold',
+  },
+  {
+    id: 'e12-hold-resolution-expiry-call',
+    source: 'packages/events-daemon/src/runtime/decisions.ts',
+    before: '      expireHeldDecisionsInTransaction(database);\n      return true;',
+    after: '      void database;\n      return true;',
+    test: 'packages/events-daemon/test/judge-races.test.ts',
+    testName: 'E12 final hold-resolution expiry caller commits terminal purge before reporting stale',
+    killingAssertion: 'final resolution: the held decision reaches its exact terminal outcome',
+  },
 ];
 
 const packageRoot = join(import.meta.dirname, '..', '..');
@@ -227,6 +393,10 @@ async function copyMutationClosure(root: string): Promise<void> {
     cp(
       join(repositoryRoot, 'scripts', 'verify-b3-writer-inventory.mjs'),
       join(root, 'scripts', 'verify-b3-writer-inventory.mjs'),
+    ),
+    cp(
+      join(repositoryRoot, 'scripts', 'verify-events-adversarial-corpus.mjs'),
+      join(root, 'scripts', 'verify-events-adversarial-corpus.mjs'),
     ),
     cp(join(repositoryRoot, 'test', 'helpers'), join(root, 'test', 'helpers'), { recursive: true }),
   ]);
@@ -298,6 +468,12 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       tapSummary(result.output, 'fail', 1),
       `${mutation.id}: named test did not fail exactly once\n${result.output}`,
     );
+    if (mutation.killingAssertion !== undefined)
+      assert.equal(
+        result.output.includes(mutation.killingAssertion),
+        true,
+        `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+      );
   } finally {
     await rm(mutationRoot, { recursive: true, force: true });
   }
