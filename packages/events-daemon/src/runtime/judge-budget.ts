@@ -8,6 +8,7 @@ import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { JudgeWorkScope } from '../store/records.ts';
 import { fixedDeadline } from '../store/retention.ts';
+import { assertPendingRuleJudgeTestAuthority } from './b3-pending-rule-judge-test.ts';
 
 export const JUDGE_MAX_REQUEST_BYTES: number = 65_536;
 export const JUDGE_CALL_WINDOW_MS: number = 60 * 60 * 1000;
@@ -106,6 +107,29 @@ export interface ReserveJudgeTestInput {
   readonly finalEnvelope: Uint8Array;
   readonly switchGeneration: number;
   readonly now: number;
+  /**
+   * The immutable rule (or, for a pending terminal/app approval, its activation intent) that authorised this
+   * synthetic test.  It is stored with the reservation and re-read at every final transport fence.
+   */
+  readonly authority: {
+    readonly ruleId: string;
+    readonly ruleVersion: number;
+    readonly activationId?: string | undefined;
+    readonly approval?:
+      | {
+          readonly approvalId: string;
+          readonly hash: string;
+          readonly origin: 'terminal' | 'view';
+          readonly expiresAt: number | null;
+        }
+      | undefined;
+  };
+  /**
+   * The operator's active/pending-rule eligibility is not a budget dimension, but it is still authority.  The
+   * caller supplies one synchronous, transaction-local check so an await before synthetic-test admission cannot
+   * reserve against a rule that was disabled in the meantime.
+   */
+  readonly assertAuthority?: ((database: DatabaseSync) => void) | undefined;
 }
 
 export type JudgeSettlementResult = 'completed' | 'unknown' | 'timeout' | 'transport-failure' | 'output-token-limit';
@@ -150,6 +174,13 @@ interface StoredReservation {
   readonly judge_version: number;
   readonly judge_kind: CanonicalJudgeDocument['kind'];
   readonly test_work_id: string | null;
+  readonly test_authority_rule_id: string | null;
+  readonly test_authority_rule_version: number | null;
+  readonly test_authority_activation_id: string | null;
+  readonly test_authority_approval_id: string | null;
+  readonly test_authority_challenge_hash: string | null;
+  readonly test_authority_challenge_origin: 'terminal' | 'view' | null;
+  readonly test_authority_challenge_expires_at: number | null;
   readonly budget_version: number;
   readonly provider: string | null;
   readonly state: JudgeReservation['state'];
@@ -409,6 +440,7 @@ function insertReservation(
     readonly estimate: number;
     readonly switchGeneration: number;
     readonly now: number;
+    readonly testAuthority?: ReserveJudgeTestInput['authority'] | undefined;
   },
 ): JudgeReservation {
   const source = input.scope.scope === 'source-owned' ? input.scope : null;
@@ -417,9 +449,12 @@ function insertReservation(
     .prepare(
       `INSERT INTO judge_budget_reservations
        (id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
-        judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+        judge_kind, test_work_id, test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+        test_authority_approval_id, test_authority_challenge_hash, test_authority_challenge_origin,
+        test_authority_challenge_expires_at,
+        budget_version, provider, global_ledger_key, state, estimated_input_tokens,
         actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, NULL, 1, ?, NULL, NULL, NULL, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, NULL, 1, ?, NULL, NULL, NULL, ?)`,
     )
     .run(
       input.id,
@@ -434,6 +469,13 @@ function insertReservation(
       input.judge.version,
       input.judge.kind,
       synthetic?.testWorkId ?? null,
+      input.testAuthority?.ruleId ?? null,
+      input.testAuthority?.ruleVersion ?? null,
+      input.testAuthority?.activationId ?? null,
+      input.testAuthority?.approval?.approvalId ?? null,
+      input.testAuthority?.approval?.hash ?? null,
+      input.testAuthority?.approval?.origin ?? null,
+      input.testAuthority?.approval?.expiresAt ?? null,
       input.budgetVersion,
       source === null ? null : input.judge.provider,
       GLOBAL_LEDGER_KEY,
@@ -454,9 +496,19 @@ function readReservation(database: DatabaseSync, id: string): StoredReservation 
   );
 }
 
-function readReservationForWork(database: DatabaseSync, workId: string): StoredReservation | null {
+function readReservationForSourceWork(
+  database: DatabaseSync,
+  workId: string,
+  scope: SourceJudgeWork,
+): StoredReservation | null {
   return (
-    (database.prepare('SELECT * FROM judge_budget_reservations WHERE work_id = ?').get(workId) as
+    (database
+      .prepare(
+        `SELECT * FROM judge_budget_reservations
+          WHERE work_id = ? AND work_scope = 'source-owned' AND source = ? AND account_id = ?
+            AND event_id = ? AND rule_id = ? AND rule_version = ?`,
+      )
+      .get(workId, scope.source, scope.accountId, scope.eventId, scope.ruleId, scope.ruleVersion) as
       | StoredReservation
       | undefined) ?? null
   );
@@ -511,6 +563,7 @@ function reservationView(row: StoredReservation): JudgeReservation {
 function assertReservationAuthority(
   database: DatabaseSync,
   row: StoredReservation,
+  now: number,
 ): { readonly budget: ActiveBudget; readonly judge: CanonicalJudgeDocument; readonly limits?: JudgeWorkLimits } {
   const budget = activeBudget(database);
   if (budget.version !== row.budget_version)
@@ -520,8 +573,86 @@ function assertReservationAuthority(
     refusal('JUDGE_AUTHORITY_CHANGED', 'the durable judge authority no longer agrees with its reservation');
   activeKind(database, judge.kind);
   const scope = sourceScope(row);
-  if (scope === null) return { budget, judge };
+  if (scope === null) {
+    assertSyntheticTestAuthority(database, row, judge, now);
+    return { budget, judge };
+  }
   return { budget, judge, limits: ruleAuthority(database, scope, judge) };
+}
+
+/** The durable test binding is a real transport authority, not merely admission bookkeeping. */
+function assertSyntheticTestAuthority(
+  database: DatabaseSync,
+  row: StoredReservation,
+  judge: CanonicalJudgeDocument,
+  now: number,
+): void {
+  if (row.test_authority_rule_id === null || row.test_authority_rule_version === null)
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test authority is unavailable');
+  if (row.test_authority_activation_id !== null) {
+    try {
+      const pending = assertPendingRuleJudgeTestAuthority({
+        database,
+        activationId: row.test_authority_activation_id,
+        ruleId: row.test_authority_rule_id,
+        ruleVersion: row.test_authority_rule_version,
+        judgeId: row.judge_id,
+        judgeVersion: row.judge_version,
+      });
+      if (!sameCanonical(pending.judge, judge))
+        refusal('JUDGE_AUTHORITY_CHANGED', 'the pending rule no longer grants this judge authority');
+      const challenge = database
+        .prepare(
+          'SELECT state, origin, challenge_hash, expires_at FROM activation_view_challenges WHERE approval_id = ?',
+        )
+        .get(row.test_authority_approval_id) as
+        | {
+            readonly state: string;
+            readonly origin: string;
+            readonly challenge_hash: string | null;
+            readonly expires_at: number | null;
+          }
+        | undefined;
+      if (
+        row.test_authority_approval_id === null ||
+        row.test_authority_challenge_hash === null ||
+        row.test_authority_challenge_origin === null ||
+        challenge === undefined ||
+        challenge.state !== 'active' ||
+        challenge.origin !== row.test_authority_challenge_origin ||
+        challenge.challenge_hash !== row.test_authority_challenge_hash ||
+        (row.test_authority_challenge_origin === 'terminal'
+          ? challenge.expires_at !== null || row.test_authority_challenge_expires_at !== null
+          : challenge.expires_at === null ||
+            challenge.expires_at !== row.test_authority_challenge_expires_at ||
+            challenge.expires_at <= now)
+      )
+        refusal('JUDGE_AUTHORITY_CHANGED', 'the pending approval challenge is no longer live');
+      return;
+    } catch (error) {
+      if (error instanceof JudgeBudgetError) throw error;
+      refusal('JUDGE_AUTHORITY_CHANGED', 'the pending rule authority is unavailable');
+    }
+  }
+  const active = database
+    .prepare("SELECT 1 AS present FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
+    .get(row.test_authority_rule_id, row.test_authority_rule_version) as { present: number } | undefined;
+  if (active === undefined) refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test rule is no longer active');
+  const rule = database
+    .prepare('SELECT document, state FROM rule_versions WHERE rule_id = ? AND version = ?')
+    .get(row.test_authority_rule_id, row.test_authority_rule_version) as
+    | { document: string; state: string | null }
+    | undefined;
+  if (rule === undefined || rule.state === 'revoked')
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test rule is unavailable');
+  try {
+    const document = canonicalFullRuleDocument(JSON.parse(rule.document));
+    if (document.agentic === undefined || !sameCanonical(document.agentic.judge, judge))
+      refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test rule no longer grants this judge');
+  } catch (error) {
+    if (error instanceof JudgeBudgetError) throw error;
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test rule is invalid');
+  }
 }
 
 /** Reserves source-owned work inside the real ledger before a caller may enter a transport boundary. */
@@ -536,7 +667,7 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
     const limits = ruleAuthority(input.store.database, input.scope, judge);
     if (!sameCanonical(limits, input.limits))
       refusal('JUDGE_AUTHORITY_CHANGED', 'the supplied limits differ from the immutable rule authority');
-    const prior = readReservationForWork(input.store.database, input.workId);
+    const prior = readReservationForSourceWork(input.store.database, input.workId, input.scope);
     if (prior?.state === 'reserved' || prior?.state === 'in-flight')
       refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');
     assertReservationLimits(input.store.database, {
@@ -570,6 +701,28 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
 export function reserveJudgeTest(input: ReserveJudgeTestInput): JudgeReservation {
   const estimate = assertInputBound(input.finalEnvelope, JUDGE_MAX_REQUEST_BYTES);
   return input.store.immediate(() => {
+    const pendingApprovalInvalid = (() => {
+      if (input.authority.activationId === undefined) return false;
+      const approval = input.authority.approval;
+      return (
+        typeof input.authority.activationId !== 'string' ||
+        input.authority.activationId.length === 0 ||
+        approval === undefined ||
+        approval.approvalId.length === 0 ||
+        !/^[a-f0-9]{64}$/u.test(approval.hash) ||
+        (approval.origin === 'terminal'
+          ? approval.expiresAt !== null
+          : !Number.isSafeInteger(approval.expiresAt) || (approval.expiresAt as number) <= input.now)
+      );
+    })();
+    if (
+      typeof input.authority.ruleId !== 'string' ||
+      input.authority.ruleId.length === 0 ||
+      !positiveInteger(input.authority.ruleVersion) ||
+      pendingApprovalInvalid
+    )
+      refusal('JUDGE_AUTHORITY_CHANGED', 'the synthetic judge test authority is invalid');
+    input.assertAuthority?.(input.store.database);
     const budget = activeBudget(input.store.database);
     const judge = immutableJudge(input.store.database, input.judge.judgeId, input.judge.version);
     if (!sameCanonical(judge, input.judge))
@@ -598,6 +751,7 @@ export function reserveJudgeTest(input: ReserveJudgeTestInput): JudgeReservation
       judge,
       budgetVersion: budget.version,
       estimate,
+      testAuthority: input.authority,
     });
   });
 }
@@ -612,7 +766,7 @@ export function beginJudgeTransport(input: {
     const row = readReservation(input.store.database, input.reservationId);
     if (row === null || row.state !== 'reserved') return false;
     try {
-      const authority = assertReservationAuthority(input.store.database, row);
+      const authority = assertReservationAuthority(input.store.database, row, input.now);
       const scope = sourceScope(row) ?? {
         scope: 'synthetic-test' as const,
         testWorkId: row.test_work_id as string,
@@ -648,11 +802,15 @@ export function beginJudgeTransport(input: {
  * The synchronous final transport/decision fence.  It reuses the one reservation authority reader rather than
  * manufacturing a second reservation path, and is safe to call immediately beside each Task-6 I/O action.
  */
-export function assertJudgeReservationInFlightInTransaction(database: DatabaseSync, reservationId: string): void {
+export function assertJudgeReservationInFlightInTransaction(
+  database: DatabaseSync,
+  reservationId: string,
+  now: number = Date.now(),
+): void {
   const row = readReservation(database, reservationId);
   if (row === null || row.state !== 'in-flight' || row.concurrency_owned !== 1)
     refusal('JUDGE_AUTHORITY_CHANGED', 'the judge reservation is no longer in flight');
-  assertReservationAuthority(database, row);
+  assertReservationAuthority(database, row, now);
   const scope = sourceScope(row);
   if (scope === null) return;
   assertSourceReservationBoundary(database, scope, row.switch_generation);
@@ -679,9 +837,10 @@ function assertSourceReservationBoundary(
 export function assertJudgeReservationStillInFlight(input: {
   readonly store: EventDatabase;
   readonly reservationId: string;
+  readonly now?: number | undefined;
 }): void {
   input.store.immediate(() => {
-    assertJudgeReservationInFlightInTransaction(input.store.database, input.reservationId);
+    assertJudgeReservationInFlightInTransaction(input.store.database, input.reservationId, input.now);
   });
 }
 
@@ -697,7 +856,8 @@ function releaseReservationInTransaction(
         `UPDATE judge_budget_reservations
          SET state = 'released', concurrency_owned = 0, released_at = ?
          WHERE id = ? AND concurrency_owned = 1
-           AND (state = 'reserved' OR (state = 'in-flight' AND ? = 1))`,
+           AND state != 'settled' AND state != 'released'
+           AND state = CASE WHEN ? = 1 THEN state ELSE 'reserved' END`,
       )
       .run(now, reservationId, mayReleaseInFlight ? 1 : 0).changes === 1
   );

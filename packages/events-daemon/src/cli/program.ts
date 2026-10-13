@@ -3,7 +3,13 @@ import { agentMarker, CommsError, canPrompt, escapeForDisplay, isCommsError, isD
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
-import { approve, disclosureChallenge, pendingTargetTest, type TerminalApprovalStart } from '../operations/approve.ts';
+import {
+  approve,
+  disclosureChallenge,
+  pendingRuleJudgeTest,
+  pendingTargetTest,
+  type TerminalApprovalStart,
+} from '../operations/approve.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
   type B3CliRegistrar,
@@ -61,6 +67,7 @@ import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } fr
 import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 
 export interface EventsCliStreams {
@@ -115,6 +122,7 @@ export async function runTerminalApprovalFlow(input: {
   readonly terminal: { question(prompt: string): Promise<string> };
   readonly start: (approvalId: string) => Promise<TerminalApprovalStart>;
   readonly testPendingTarget: (selector: B3PendingTargetSelectorV1) => Promise<unknown>;
+  readonly testPendingRuleJudge?: ((selector: PendingRuleJudgeTestSelector) => Promise<unknown>) | undefined;
   readonly approve: (approvalId: string, answer: string) => Promise<unknown>;
   readonly print: (result: unknown) => void;
 }): Promise<void> {
@@ -126,6 +134,15 @@ export async function runTerminalApprovalFlow(input: {
       `Test pending target ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
     if (/^\s*(?:y|yes)\s*$/iu.test(answer)) input.print(await input.testPendingTarget(selector));
+  }
+  for (let index = 0; index < start.pendingRuleJudgeTestSelectors.length; index += 1) {
+    const selector = start.pendingRuleJudgeTestSelectors[index];
+    if (selector === undefined) continue;
+    const answer = await input.terminal.question(
+      `Test pending rule judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
+    );
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer) && input.testPendingRuleJudge !== undefined)
+      input.print(await input.testPendingRuleJudge(selector));
   }
   const answer = await input.terminal.question(
     `Type this approval challenge: ${escapeForDisplay(start.challenge)}\n> `,
@@ -218,7 +235,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       : deps.b3Registrar.owner.handle({
           operation,
           args,
-          ...(isB3SecretOperation(operation) ? { origin: B3_SECRET_TERMINAL_ORIGIN } : {}),
+          ...(isB3SecretOperation(operation) || operation === 'decideHeld'
+            ? { origin: B3_SECRET_TERMINAL_ORIGIN }
+            : {}),
         });
   const assertHuman = (): void => assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
   const hidden = async (prompt: string): Promise<string> =>
@@ -496,12 +515,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       });
   }
 
-  const judges = program.command('judges').description('inspect typed pre-Phase-E judge controls');
+  const judges = program.command('judges').description('inspect immutable content-free judge metadata');
   judges.command('list').action(async () => {
     ran = true;
     print(await judgesList(controlOptions(program)));
   });
-  const judge = program.command('judge').description('use typed unavailable judge controls until Phase E');
+  const judge = program.command('judge').description('manage immutable judges and run fixed synthetic tests');
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
     print(await addJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
@@ -521,7 +540,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       print(await judgeTest(judgeId, parseVersion(options.version as string), controlOptions(program)));
     });
-  const budget = program.command('budget').description('use typed unavailable budget controls until Phase E');
+  const budget = program.command('budget').description('inspect or prepare the immutable global judge budget');
   budget.command('show').action(async () => {
     ran = true;
     print(await budgetShow(controlOptions(program)));
@@ -530,12 +549,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(await updateBudget(jsonArgument(document, 'budget document'), controlOptions(program)));
   });
-  const judgeKinds = judge.command('kinds').description('list typed unavailable judge kinds until Phase E');
+  const judgeKinds = judge.command('kinds').description('list disabled/enabled kinds and the typed Laya E2 seam');
   judgeKinds.command('list').action(async () => {
     ran = true;
     print(await judgeKindsList(controlOptions(program)));
   });
-  const judgeKind = judge.command('kind').description('use typed unavailable judge kind controls until Phase E');
+  const judgeKind = judge.command('kind').description('prepare enablement or immediately disable one judge kind');
   judgeKind.command('enable <kind>').action(async (kind: string) => {
     ran = true;
     print(await enableJudgeKind(kind, controlOptions(program)));
@@ -638,6 +657,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           terminal,
           start: (id) => disclosureChallenge(id, controlOptions(program)),
           testPendingTarget: (selector) => pendingTargetTest(selector, controlOptions(program)),
+          testPendingRuleJudge: (selector) => pendingRuleJudgeTest(selector, controlOptions(program)),
           approve: (id, answer) => approve(id, answer, controlOptions(program)),
           print,
         });

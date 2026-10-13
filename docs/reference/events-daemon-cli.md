@@ -53,9 +53,9 @@ Scripts should read these rather than parse output.
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
 | [`subscribers`](#agent-events-subscribers) | inspect immutable SSE subscriber versions |
 | [`subscriber`](#agent-events-subscriber) | create, update, and revoke immutable SSE subscribers |
-| [`judges`](#agent-events-judges) | inspect typed pre-Phase-E judge controls |
-| [`judge`](#agent-events-judge) | use typed unavailable judge controls until Phase E |
-| [`budget`](#agent-events-budget) | use typed unavailable budget controls until Phase E |
+| [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
+| [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
+| [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
@@ -447,7 +447,7 @@ agent-events subscriber token rotate [options] <subscriber-id>
 
 ### `agent-events judges`
 
-inspect typed pre-Phase-E judge controls
+inspect immutable content-free judge metadata
 
 ```
 agent-events judges [options] [command]
@@ -461,7 +461,7 @@ agent-events judges list [options]
 
 ### `agent-events judge`
 
-use typed unavailable judge controls until Phase E
+manage immutable judges and run fixed synthetic tests
 
 ```
 agent-events judge [options] [command]
@@ -497,7 +497,7 @@ agent-events judge test [options] <judge-id>
 
 ### `agent-events judge kinds`
 
-list typed unavailable judge kinds until Phase E
+list disabled/enabled kinds and the typed Laya E2 seam
 
 ```
 agent-events judge kinds [options] [command]
@@ -511,7 +511,7 @@ agent-events judge kinds list [options]
 
 ### `agent-events judge kind`
 
-use typed unavailable judge kind controls until Phase E
+prepare enablement or immediately disable one judge kind
 
 ```
 agent-events judge kind [options] [command]
@@ -579,7 +579,7 @@ agent-events judge key rotate [options] <judge-id>
 
 ### `agent-events budget`
 
-use typed unavailable budget controls until Phase E
+inspect or prepare the immutable global judge budget
 
 ```
 agent-events budget [options] [command]

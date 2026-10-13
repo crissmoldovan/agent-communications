@@ -106,7 +106,9 @@ async function fixture(
   store.database.exec(`INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
     VALUES ('judge-budget', 'judge-budget', 1, 'judge-budget@1', 1);
     INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
-    VALUES ('judge-kind', 'typesafe', 1, 'judge-kind:typesafe@1', 1);`);
+    VALUES ('judge-kind', 'typesafe', 1, 'judge-kind:typesafe@1', 1);
+    INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+    VALUES ('rule', 'rule-e5-budget', 1, 'rule-e5-budget@1', 1);`);
   return { root, store, versions, limits: sourceLimits };
 }
 
@@ -663,6 +665,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
         finalEnvelope: Buffer.from('x'),
         switchGeneration: 0,
         now: NOW,
+        authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
       });
       beginJudgeTransport({ store: setup.store, reservationId: reservation.id, now: NOW });
       settleJudgeWork({ store: setup.store, reservationId: reservation.id, result: 'unknown', now: NOW });
@@ -678,6 +681,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
           finalEnvelope: Buffer.from('x'),
           switchGeneration: 0,
           now: NOW,
+          authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
         }),
       expectBudget('JUDGE_TEST_RATE_EXHAUSTED'),
     );
@@ -691,6 +695,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
       finalEnvelope: Buffer.from('x'),
       switchGeneration: 0,
       now: NOW,
+      authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
     });
     assert.equal(nextVersion.provider, null);
     assert.equal(

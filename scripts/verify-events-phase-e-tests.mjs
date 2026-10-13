@@ -110,6 +110,10 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e8-legacy-hold-ingest-cap',
   'e8-legacy-hold-repeated-tightening',
   'e8-held-final-live-account-fence',
+  'e9-fixed-synthetic-judge-input',
+  'e9-judge-key-rotate-current-generation',
+  'e9-mcp-kind-enable-no-active-pointer',
+  'e9-pending-rule-judge-origin',
 ]);
 
 async function source(root, file) {
