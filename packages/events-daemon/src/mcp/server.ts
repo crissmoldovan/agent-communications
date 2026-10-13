@@ -58,7 +58,7 @@ function reply(data: unknown) {
   };
 }
 
-/** Creates the held local-event service's deliberately content-free MCP surface. */
+/** Creates the local event service's deliberately content-free MCP surface. */
 export async function createEventsMcpServer(options: EventsMcpOptions = {}): Promise<EventsMcpServer> {
   const server = new McpServer({ name: 'agent-events', version: '0.14.1' });
 
@@ -360,7 +360,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_held_list',
     'List held decisions',
-    'Returns the typed empty held-decision result before Phase E.',
+    'Returns the typed empty held-decision result; judges, which can hold an event, are not available yet.',
     {},
     () => heldList(options),
   );

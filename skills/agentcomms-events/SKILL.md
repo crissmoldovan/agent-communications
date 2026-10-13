@@ -41,8 +41,8 @@ available on this machine yet and stop: do not substitute another tool, and do n
 
 ## Judge boundary
 
-Every judge kind is off until a person enables it. Until Phase E, judge, budget and kind tools return typed
-unavailable results; Laya remains unavailable until Phase E2. Report that state. Do not substitute a target test,
+Every judge kind is off until a person enables it. Judges are not available in this release: judge, budget and kind
+tools return typed unavailable results, and so do Laya's. Report that state. Do not substitute a target test,
 local endpoint or another tool for a judge.
 
 ## Approval handoff

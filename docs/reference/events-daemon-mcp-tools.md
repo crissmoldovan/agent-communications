@@ -41,7 +41,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_deliveries_list`](#events_deliveries_list) | Lists content-free delivery metadata. |
 | [`events_delivery_retry`](#events_delivery_retry) | Retries one exact retryable delivery. |
 | [`events_delivery_drop`](#events_delivery_drop) | Drops one exact dead-letter delivery and its retained payload. |
-| [`events_held_list`](#events_held_list) | Returns the typed empty held-decision result before Phase E. |
+| [`events_held_list`](#events_held_list) | Returns the typed empty held-decision result; judges, which can hold an event, are not available yet. |
 | [`events_catalogue_show`](#events_catalogue_show) | Shows one selectable local event definition. |
 | [`events_sources_list`](#events_sources_list) | Lists configured local event sources. |
 | [`events_source_show`](#events_source_show) | Shows one configured local event source. |
@@ -333,7 +333,7 @@ Drops one exact dead-letter delivery and its retained payload.
 
 ### `events_held_list`
 
-Returns the typed empty held-decision result before Phase E.
+Returns the typed empty held-decision result; judges, which can hold an event, are not available yet.
 
 *read-only · idempotent*
 
