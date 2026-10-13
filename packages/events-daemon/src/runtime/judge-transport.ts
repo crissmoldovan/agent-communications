@@ -276,7 +276,15 @@ async function beforeDeadline<T>(
   clock: JudgeTransportClock,
   disposeLate?: (value: T) => void,
 ): Promise<T> {
-  assertBeforeDeadline(deadline, clock);
+  try {
+    assertBeforeDeadline(deadline, clock);
+  } catch (error) {
+    work.then(
+      (late) => disposeLate?.(late),
+      () => undefined,
+    );
+    throw error;
+  }
   const remaining = deadline - clock.now();
   let timedOut = false;
   let handle: unknown;
@@ -290,7 +298,16 @@ async function beforeDeadline<T>(
         }, remaining);
       }),
     ]);
-    assertBeforeDeadline(deadline, clock);
+    try {
+      assertBeforeDeadline(deadline, clock);
+    } catch (error) {
+      try {
+        disposeLate?.(result);
+      } catch {
+        // Cleanup failure cannot turn an elapsed attempt into a usable socket or hide the deadline refusal.
+      }
+      throw error;
+    }
     return result;
   } finally {
     if (handle !== undefined) clock.clearTimeout(handle);

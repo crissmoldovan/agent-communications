@@ -87,10 +87,8 @@ export const JUDGE_ADVERSARIAL_MUTATIONS: readonly JudgeAdversarialMutation[] = 
   {
     id: 'e11-host-drift-before-byte',
     source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
-    // Task 12's fix carries the hosted key's generation into this recheck; the mutant still disables the whole call.
-    before: '        assertJudgeReservationStillInFlight({\n          store: this.#store,',
-    after:
-      '        void reservation;\n        if (false) assertJudgeReservationStillInFlight({\n          store: this.#store,',
+    before: '        assertJudgeReservationStillInFlight({',
+    after: '        ((_: unknown): void => undefined)({',
     test: 'packages/events-daemon/test/judge-adversarial-corpus.test.ts',
     testName:
       'E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes',
@@ -159,7 +157,7 @@ export const JUDGE_ADVERSARIAL_MUTATIONS: readonly JudgeAdversarialMutation[] = 
     test: 'packages/events-daemon/test/judge-adversarial-corpus.test.ts',
     testName:
       'E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes',
-    killingAssertion: 'late-response-after-expiry: Task 8 settles the expired in-flight reservation',
+    killingAssertion: 'late-response-after-expiry: durable decision outcome',
   },
   {
     id: 'e11-corpus-integrity-allowlist',

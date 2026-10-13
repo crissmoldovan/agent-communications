@@ -1,5 +1,6 @@
-import { canonicalJson } from '@agentcomms/core';
+import { canonicalJson, newBoundary, wrapUntrusted } from '@agentcomms/core';
 import {
+  applyRepresentation,
   catalogueEntry,
   classifyMapped,
   compileMapping,
@@ -86,8 +87,17 @@ export function buildJudgeInput(rule: CanonicalFullRuleDocument, event: Record<s
   if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored judge input mapping is unavailable');
   const sanitised = sanitiseSenderFields(found.value, event);
   const mapped: MappedValue = evaluateMapping(compiled.value, sanitised);
-  const classification = classifyMapped(found.value as never, sanitised as never, mapped);
-  const state = canonicalJson(mapped.data);
+  const plainClassification = classifyMapped(found.value as never, sanitised as never, mapped);
+  const boundary = newBoundary();
+  const enveloped: MappedValue = {
+    data: applyRepresentation(mapped.data, plainClassification, {
+      kind: 'enveloped',
+      envelope: (text) => wrapUntrusted(text, { field: 'judge-input' }, boundary),
+    }),
+    provenance: mapped.provenance,
+  };
+  const classification = classifyMapped(found.value as never, sanitised as never, enveloped);
+  const state = canonicalJson(enveloped.data);
   return { state, classification };
 }
 
@@ -150,6 +160,7 @@ export class JudgeCoordinator {
     await this.#taint.record({
       eventId: input.eventId,
       accountId: input.accountId,
+      channel: input.rule.source.channel,
       classification: envelope.classification,
     });
 

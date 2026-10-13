@@ -11,10 +11,11 @@ export interface JudgeKindMutation {
   readonly after: string;
   readonly testFile: string;
   readonly testName: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 /** Each E1 kind fence is removed in one copied production file and killed by its sole real-path oracle. */
-export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
+const judgeKindMutations: readonly JudgeKindMutation[] = [
   {
     id: 'e1-canonical-documents',
     file: 'domain/judges.ts',
@@ -23,6 +24,7 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
     after: "if (false) return fail('a typesafe judge names the TypeSafe Jev adapter');",
     testFile: 'judge-documents.test.ts',
     testName: 'E1: judge documents are closed discriminated forms with a concrete local score pointer',
+    killingAssertion: 'each malformed judge document is refused by its closed discriminant',
   },
   {
     id: 'e1-prepare-disabled-kind',
@@ -67,6 +69,12 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
     testName: 'E1 judge-kind finalisation race: disabling after claim refuses the final pointer transaction',
   },
 ];
+
+export const JUDGE_KIND_MUTATIONS: readonly (JudgeKindMutation & { readonly killingAssertion: string })[] =
+  judgeKindMutations.map((mutation): JudgeKindMutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
 
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
@@ -128,6 +136,26 @@ function assertExactlyOneNamedMutationFailure(
   assert.deepEqual(subtests, [mutation.testName], `${mutation.id}: a different test ran\n${result.output}`);
   const failures = [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]);
   assert.deepEqual(failures, [mutation.testName], `${mutation.id}: its named test did not fail\n${result.output}`);
+  assert.equal(
+    result.output.includes(mutation.killingAssertion ?? ''),
+    true,
+    `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+  );
+}
+
+function assertExactlyOneNamedMutationPass(
+  mutation: JudgeKindMutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.equal(result.code, 0, `${mutation.id}: unmutated named test did not pass\n${result.output}`);
+  const summary = (name: 'tests' | 'pass' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: baseline emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: baseline ran more than one named test\n${result.output}`);
+  assert.equal(summary('pass'), 1, `${mutation.id}: baseline did not pass exactly once\n${result.output}`);
+  assert.equal(summary('fail'), 0, `${mutation.id}: baseline reported a failure\n${result.output}`);
 }
 
 /** Runs one exact test against a one-edit copied production tree and proves its oracle rejects the absent guard. */
@@ -146,25 +174,23 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
       `${mutation.id}: guarded production text must match exactly once in ${relative(packageRoot, target)}`,
     );
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
-    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await runStrictMutationChild({
-      command: process.execPath,
-      args: [
-        '--import',
-        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, 'test', mutation.testFile),
-      ],
-      cwd: root,
-      env: environment,
-    });
+    const args = [
+      '--import',
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+      '--test-reporter=tap',
+      '--test-name-pattern',
+      exactTestName(mutation.testName),
+      join(root, 'test', mutation.testFile),
+    ];
+    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const result = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
     assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;
   } finally {

@@ -302,6 +302,11 @@ function embeddedAddresses(address: ParsedIpAddress, options: AddressPolicyOptio
     embedded.push(ipv4From(address.value >> 64n));
     embedded.push(ipv4From((address.value ^ IPV4_MAX) & IPV4_MAX));
   }
+  // RFC 5214 carries an IPv4 address in an ISATAP interface identifier under any IPv6 prefix.  Both the universal
+  // and local forms are transition addresses; validating only the globally-routable outer prefix would let the
+  // embedded private, link-local, or metadata destination bypass the recursive policy.
+  const isatapInterface = (address.value >> 32n) & IPV4_MAX;
+  if (isatapInterface === 0x00005efen || isatapInterface === 0x02005efen) embedded.push(ipv4From(address.value));
   return embedded;
 }
 

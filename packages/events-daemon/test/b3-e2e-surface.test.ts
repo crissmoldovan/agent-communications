@@ -8,10 +8,12 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { type EventsCliStreams, run, runTerminalApprovalFlow } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
+import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
-import { B3_CAPABILITIES } from '../src/operations/b3-contract.ts';
+import { B3_CAPABILITIES, type B3OwnerService } from '../src/operations/b3-contract.ts';
 import { ActivationRuntime } from '../src/runtime/activations.ts';
+import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
 import {
   createOwnerB3ControlService,
   disclosureApprovalChannel,
@@ -47,7 +49,11 @@ function tty(): EventsCliStreams {
 async function cli(
   argv: readonly string[],
   stateDir: string,
-  options: { readonly human?: boolean; readonly readSecret?: () => Promise<string> } = {},
+  options: {
+    readonly human?: boolean;
+    readonly readSecret?: () => Promise<string>;
+    readonly owner?: B3OwnerService;
+  } = {},
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const streams =
     options.human === true
@@ -68,6 +74,7 @@ async function cli(
   const code = await run(['--state-dir', stateDir, ...argv], {
     streams,
     env: {},
+    ...(options.owner === undefined ? {} : { b3Registrar: { owner: options.owner } }),
     ...(options.readSecret === undefined ? {} : { readSecret: options.readSecret }),
   });
   return { code, stdout: stdout(), stderr: stderr() };
@@ -147,6 +154,107 @@ const JUDGE_SURFACE_FAILURES: Readonly<Record<string, { readonly exit: number; r
   'events-daemon.judge-kind.enable': { exit: EXIT_CODES.BAD_DATA, message: 'the judge kind is not recognised' },
   'events-daemon.judge-kind.disable': { exit: EXIT_CODES.BAD_DATA, message: 'the judge kind is not recognised' },
 };
+
+const MUTATING_JUDGE_SURFACE_IDS = new Set([
+  'events-daemon.judge.add',
+  'events-daemon.judge.update',
+  'events-daemon.judge.remove',
+  'events-daemon.budget.update',
+  'events-daemon.judge-kind.enable',
+  'events-daemon.judge-kind.disable',
+]);
+
+const parityJudge = {
+  judgeId: 'judge-parity',
+  version: 1,
+  kind: 'local-endpoint' as const,
+  provider: 'ollama',
+  model: 'parity-model',
+  endpoint: 'http://127.0.0.1:11434/v1/systemone',
+  approvedAddressSet: ['127.0.0.1'] as const,
+  promptTemplate: 'local-noul-v1',
+  protocol: 'noul' as const,
+};
+
+const parityBudget = {
+  budgetId: 'judge-budget' as const,
+  version: 1,
+  global: { callsPerRollingHour: 11, inputTokensPerRolling30Days: 1_100, concurrency: 2 },
+  providers: [{ provider: 'typesafe', callsPerRollingHour: 7, inputTokensPerRolling30Days: 700, concurrency: 1 }],
+};
+
+const MUTATING_JUDGE_SUCCESS_VECTORS = [
+  {
+    id: 'events-daemon.judge.add',
+    cli: ['judge', 'add', JSON.stringify(parityJudge)],
+    mcp: 'events_judge_add',
+    args: { document: parityJudge },
+  },
+  {
+    id: 'events-daemon.judge.update',
+    cli: ['judge', 'update', JSON.stringify({ ...parityJudge, version: 2, model: 'parity-model-v2' })],
+    mcp: 'events_judge_update',
+    args: { document: { ...parityJudge, version: 2, model: 'parity-model-v2' } },
+    seedJudge: true,
+  },
+  {
+    id: 'events-daemon.judge.remove',
+    cli: ['judge', 'remove', parityJudge.judgeId],
+    mcp: 'events_judge_remove',
+    args: { judgeId: parityJudge.judgeId },
+    seedJudge: true,
+  },
+  {
+    id: 'events-daemon.budget.update',
+    cli: ['budget', 'update', JSON.stringify(parityBudget)],
+    mcp: 'events_budget_update',
+    args: { document: parityBudget },
+  },
+  {
+    id: 'events-daemon.judge-kind.enable',
+    cli: ['judge', 'kind', 'enable', 'typesafe'],
+    mcp: 'events_judge_kind_enable',
+    args: { kind: 'typesafe' },
+  },
+  {
+    id: 'events-daemon.judge-kind.disable',
+    cli: ['judge', 'kind', 'disable', 'typesafe'],
+    mcp: 'events_judge_kind_disable',
+    args: { kind: 'typesafe' },
+  },
+] as const;
+
+function mutationParityControl(store: Awaited<ReturnType<typeof openEventDatabase>>): B3OwnerService {
+  const prepared = (kind: 'judge-budget' | 'judge-kind') =>
+    ({
+      intentId: `intent-parity-${kind}`,
+      approvalId: `approval-parity-${kind}`,
+      binding: {},
+      kind,
+      status: 'pending',
+    }) as never;
+  const control = new B3OperatorControl({
+    store,
+    ports: { quiescer: new WriterQuiescer() },
+    activations: {
+      prepareJudgeBudget: async () => prepared('judge-budget'),
+      prepareJudgeKind: async () => prepared('judge-kind'),
+      cancelForJudgeKindInTransaction: () => 0,
+      cancelForRevocation: async () => undefined,
+    },
+  });
+  return {
+    async handle(request) {
+      try {
+        return await control.handle(request);
+      } catch (error) {
+        if (error instanceof EventDomainError)
+          throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+        throw error;
+      }
+    },
+  };
+}
 
 /** Every former B3 E judge/budget/kind row must prove its actual E result through both public adapters. */
 function assertExactJudgeSurfaceResponse(
@@ -443,7 +551,9 @@ test('B3 e2e drives every declared both control row through real Commander and M
     const client = new Client({ name: 'events-b3-e2e', version: '0' });
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     try {
-      const rows = (await daemonRows()).filter((row) => row.status === 'both' && row.id !== 'events-daemon.stop');
+      const rows = (await daemonRows()).filter(
+        (row) => row.status === 'both' && row.id !== 'events-daemon.stop' && !MUTATING_JUDGE_SURFACE_IDS.has(row.id),
+      );
       assert.ok(rows.length > 0, 'the capability registry declares the dual surface under test');
       for (const row of rows) {
         const command = await cli([...commandWords(row), ...(row.argv ?? [])], stateDir);
@@ -495,6 +605,151 @@ test('B3 e2e drives every declared both control row through real Commander and M
     owner = undefined;
   } finally {
     await owner?.stop();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 judge mutation parity: valid isolated inputs succeed through real Commander and MCP adapters', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const vector of MUTATING_JUDGE_SUCCESS_VECTORS) {
+    for (const surface of ['cli', 'mcp'] as const) {
+      const stateDir = await shortTempDir(`aev-b3-mutation-${surface}-`);
+      const store = await openEventDatabase({ stateDir });
+      try {
+        if ('seedJudge' in vector) new ImmutableVersions(store.database).createJudge(parityJudge);
+        const owner = mutationParityControl(store);
+        let result: unknown;
+        if (surface === 'cli') {
+          const command = await cli(vector.cli, stateDir, { owner });
+          assert.equal(command.code, EXIT_CODES.OK, `${vector.id}: valid CLI input succeeds`);
+          assert.equal(command.stderr, '', `${vector.id}: valid CLI input has no refusal`);
+          result = JSON.parse(command.stdout);
+        } else {
+          const { server } = await createEventsMcpServer({ b3Registrar: { owner } });
+          const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+          const client = new Client({ name: 'events-b3-mutation-parity', version: '0' });
+          await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+          try {
+            const reply = await client.callTool({ name: vector.mcp, arguments: vector.args });
+            assert.notEqual(reply.isError, true, `${vector.id}: valid MCP input succeeds`);
+            result = reply.structuredContent;
+          } finally {
+            await Promise.all([client.close(), server.close()]);
+          }
+        }
+        assert.equal(typeof result, 'object', `${vector.id}: ${surface} returns its structured success result`);
+        if (vector.id === 'events-daemon.judge-kind.disable')
+          assert.deepEqual(
+            result,
+            { kind: 'typesafe', disabled: true, pointer: 'absent', pendingActivationsCancelled: 0 },
+            `${vector.id}: ${surface} disables the requested valid kind`,
+          );
+        const scalar = (sql: string, ...params: string[]) =>
+          Number((store.database.prepare(sql).get(...params) as { count: number }).count);
+        if (vector.id === 'events-daemon.judge.add')
+          assert.equal(
+            scalar(
+              'SELECT count(*) AS count FROM judge_versions WHERE judge_id = ? AND version = 1',
+              parityJudge.judgeId,
+            ),
+            1,
+            `${surface}: judge add persists its valid document`,
+          );
+        if (vector.id === 'events-daemon.judge.update')
+          assert.equal(
+            scalar(
+              'SELECT count(*) AS count FROM judge_versions WHERE judge_id = ? AND version = 2',
+              parityJudge.judgeId,
+            ),
+            1,
+            `${surface}: judge update persists its valid replacement`,
+          );
+        if (vector.id === 'events-daemon.judge.remove')
+          assert.equal(
+            scalar(
+              'SELECT count(*) AS count FROM judge_versions WHERE judge_id = ? AND revoked_at IS NOT NULL',
+              parityJudge.judgeId,
+            ),
+            1,
+            `${surface}: judge remove revokes its valid seeded judge`,
+          );
+        if (vector.id === 'events-daemon.budget.update')
+          assert.equal(
+            scalar('SELECT count(*) AS count FROM judge_budget_versions WHERE version = 1'),
+            1,
+            `${surface}: budget update persists its valid immutable version`,
+          );
+        if (vector.id === 'events-daemon.judge-kind.enable')
+          assert.equal(
+            scalar("SELECT count(*) AS count FROM judge_kind_versions WHERE kind = 'typesafe' AND version = 1"),
+            1,
+            `${surface}: kind enable persists its valid immutable enablement`,
+          );
+      } finally {
+        store.close();
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test('B3 judge mutation parity: invalid inputs retain exact Commander and MCP refusals', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-b3-mutation-refusals-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const owner = mutationParityControl(store);
+    const { server } = await createEventsMcpServer({ b3Registrar: { owner } });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'events-b3-mutation-refusals', version: '0' });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const refusals = [
+        { id: 'events-daemon.judge.add', cli: ['judge', 'add', '{}'], mcp: 'events_judge_add', args: { document: {} } },
+        {
+          id: 'events-daemon.judge.update',
+          cli: ['judge', 'update', '{}'],
+          mcp: 'events_judge_update',
+          args: { document: {} },
+        },
+        {
+          id: 'events-daemon.budget.update',
+          cli: ['budget', 'update', '{}'],
+          mcp: 'events_budget_update',
+          args: { document: {} },
+        },
+        {
+          id: 'events-daemon.judge-kind.enable',
+          cli: ['judge', 'kind', 'enable', 'basic'],
+          mcp: 'events_judge_kind_enable',
+          args: { kind: 'basic' },
+        },
+        {
+          id: 'events-daemon.judge-kind.disable',
+          cli: ['judge', 'kind', 'disable', 'basic'],
+          mcp: 'events_judge_kind_disable',
+          args: { kind: 'basic' },
+        },
+      ] as const;
+      for (const refusal of refusals) {
+        const command = await cli(refusal.cli, stateDir, { owner });
+        const reply = await client.callTool({ name: refusal.mcp, arguments: refusal.args });
+        const text = reply.content.find((item) => item.type === 'text');
+        assertExactJudgeSurfaceResponse(
+          { id: refusal.id } as Capability,
+          command,
+          reply.structuredContent,
+          text?.text ?? '',
+          reply.isError,
+        );
+      }
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
+  } finally {
+    store.close();
     await rm(stateDir, { recursive: true, force: true });
   }
 });

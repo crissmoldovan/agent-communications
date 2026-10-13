@@ -10,6 +10,7 @@ export interface JudgeTask5Mutation {
   readonly test: string;
   readonly testName: string;
   readonly changes: readonly { readonly before: string; readonly after: string }[];
+  readonly killingAssertion?: string | undefined;
 }
 
 const judgeKindSqlSource =
@@ -18,7 +19,7 @@ const judgeKindSqlSource =
   '{kind.replaceAll("\'", "\'\'")}' +
   "'`).join(', ');";
 
-export const JUDGE_TASK5_MUTATIONS: readonly JudgeTask5Mutation[] = [
+const judgeTask5Mutations: readonly JudgeTask5Mutation[] = [
   {
     id: 'e2-durable-schema',
     source: 'src/store/schema-v1.ts',
@@ -41,6 +42,12 @@ export const JUDGE_TASK5_MUTATIONS: readonly JudgeTask5Mutation[] = [
     changes: [{ before: judgeKindSqlSource, after: "const JUDGE_KIND_SQL_VALUES = \"'typesafe', 'local-endpoint'\";" }],
   },
 ];
+
+export const JUDGE_TASK5_MUTATIONS: readonly (JudgeTask5Mutation & { readonly killingAssertion: string })[] =
+  judgeTask5Mutations.map((mutation): JudgeTask5Mutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
 
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
@@ -102,6 +109,26 @@ function assertOneNamedFailure(
     [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]),
     [mutation.testName],
   );
+  assert.equal(
+    result.output.includes(mutation.killingAssertion ?? ''),
+    true,
+    `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+  );
+}
+
+function assertOneNamedPass(
+  mutation: JudgeTask5Mutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.equal(result.code, 0, `${mutation.id}: unmutated named test did not pass\n${result.output}`);
+  const summary = (name: 'tests' | 'pass' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: baseline emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: baseline ran more than one named test\n${result.output}`);
+  assert.equal(summary('pass'), 1, `${mutation.id}: baseline did not pass exactly once\n${result.output}`);
+  assert.equal(summary('fail'), 0, `${mutation.id}: baseline reported a failure\n${result.output}`);
 }
 
 /** Applies one Task-5 defect to copied production source and proves its one named regression test kills it. */
@@ -118,25 +145,23 @@ export async function expectJudgeTask5MutationToFail(mutation: JudgeTask5Mutatio
       assert.equal(occurrences(changed, change.before), 1, `${mutation.id}: guarded source must match exactly once`);
       changed = changed.replace(change.before, change.after);
     }
-    await writeFile(target, changed, 'utf8');
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await runStrictMutationChild({
-      command: process.execPath,
-      args: [
-        '--import',
-        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, mutation.test),
-      ],
-      cwd: root,
-      env: environment,
-    });
+    const args = [
+      '--import',
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+      '--test-reporter=tap',
+      '--test-name-pattern',
+      exactTestName(mutation.testName),
+      join(root, mutation.test),
+    ];
+    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    assertOneNamedPass(mutation, baseline);
+    await writeFile(target, changed, 'utf8');
+    const result = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
     assertOneNamedFailure(mutation, result);
   } finally {
     await rm(root, { recursive: true, force: true });

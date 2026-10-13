@@ -183,6 +183,7 @@ export class JudgeTestControl {
     await this.#taint.record({
       eventId: TEST_EVENT_ID,
       accountId: TEST_ACCOUNT_ID,
+      channel: 'gmail',
       classification: { untrusted: [], addresses: [], handles: [] },
     });
 

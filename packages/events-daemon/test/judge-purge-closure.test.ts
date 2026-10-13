@@ -1100,6 +1100,114 @@ test('E4 purge closure: kind disable settles in-flight and releases reserved wor
   }
 });
 
+test('E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  const setup = await purgeFixture({ label: 'kind-disable' });
+  try {
+    const localJudge = {
+      judgeId: 'judge-kind-disable-other',
+      version: 1,
+      kind: 'local-endpoint' as const,
+      provider: 'ollama',
+      model: 'nimble',
+      endpoint: 'http://127.0.0.1:11434/v1/systemone',
+      approvedAddressSet: ['127.0.0.1'] as const,
+      promptTemplate: 'ollama-noul-v1',
+      protocol: 'noul' as const,
+    };
+    const otherRule = agenticRule({ ruleId: 'rule-e4-kind-disable-other', version: 1 });
+    assert.ok(otherRule.agentic, 'the other-kind fixture remains agentic');
+    Object.assign(otherRule.agentic, { judge: localJudge });
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createJudge(localJudge);
+    versions.createRule(otherRule);
+    setup.store.database.exec(
+      `UPDATE rule_versions SET state = 'active', approval_id = 'approval-e4-other',
+         authorization_activation_id = 'activation-e4-other', activated_at = ${NOW}
+       WHERE rule_id = 'rule-e4-kind-disable-other' AND version = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+       VALUES ('rule', 'rule-e4-kind-disable-other', 1, NULL, ${NOW});
+       INSERT INTO ingest
+       (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+       VALUES ('event-e4-kind-disable-other', '${setup.store.installationId}', 'gmail.message.received', 1,
+               '${accountId}', 'dedupe-e4-kind-disable-other', ${NOW}, ${NOW}, ${NOW});
+       INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
+       VALUES ('event-e4-kind-disable-other', 'rule-e4-kind-disable-other', 1, ${NOW + 10_000}, X'04');`,
+    );
+    new JudgeKinds({ store: setup.store, now: () => NOW + 1 }).disable('typesafe');
+    assertPurgedSurfaceInStore(setup.store, setup, 'judge kind disable');
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare(
+            'SELECT state, approval_id, authorization_activation_id FROM rule_versions WHERE rule_id = ? AND version = 1',
+          )
+          .get(setup.ruleId) as Record<string, unknown>),
+      },
+      { state: 'active', approval_id: 'approval-e12', authorization_activation_id: 'activation-e12' },
+      'kind disable keeps the bound rule version and its standing approval lineage',
+    );
+    assert.equal(
+      (
+        setup.store.database
+          .prepare(
+            'SELECT COUNT(*) AS count FROM judge_versions WHERE judge_id = ? AND version = 1 AND revoked_at IS NULL',
+          )
+          .get(judge.judgeId) as { count: number }
+      ).count,
+      1,
+      'kind disable keeps the immutable judge version unrevoked',
+    );
+    assert.equal(
+      (
+        setup.store.database
+          .prepare('SELECT COUNT(*) AS count FROM ingest_rules WHERE rule_id = ?')
+          .get(otherRule.ruleId) as { count: number }
+      ).count,
+      1,
+      "kind disable leaves another judge kind's retained projection untouched",
+    );
+    setup.close();
+    const reopened = await openEventDatabase({ stateDir: setup.root });
+    try {
+      assertPurgedSurfaceInStore(reopened, setup, 'judge kind disable after restart');
+      assert.equal(
+        (
+          reopened.database
+            .prepare('SELECT COUNT(*) AS count FROM ingest_rules WHERE rule_id = ?')
+            .get(otherRule.ruleId) as { count: number }
+        ).count,
+        1,
+        "restart preserves the other judge kind's retained projection",
+      );
+      reopened.database
+        .prepare(
+          "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('judge-kind', 'typesafe', 1, NULL, ?)",
+        )
+        .run(NOW + 2);
+      assert.deepEqual(
+        reopened.immediate(() => recoverJudgeWork({ database: reopened.database, now: NOW + 3 })),
+        { released: 0, settled: 0 },
+        're-enabling the retained kind finds no reservation or projection to resume',
+      );
+      assertPurgedSurfaceInStore(reopened, setup, 'judge kind re-enable');
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    setup.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'kind disable, restart and re-enable close every database and asynchronous handle',
+  );
+});
+
 test('E4 purge closure: expiry settles only the expired rule on an event shared with live rule B work', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -1179,8 +1287,8 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     versions.createJudgeBudget({
       budgetId: 'judge-budget',
       version: 1,
-      global: { ...budgetLimits, concurrency: 3 },
-      providers: [{ provider: 'typesafe', ...budgetLimits }],
+      global: { ...budgetLimits, concurrency: 4 },
+      providers: [{ provider: 'typesafe', ...budgetLimits, concurrency: 4 }],
     });
     versions.createRule(parent);
     versions.createRule(child);
@@ -1210,9 +1318,11 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     store.database.exec(
       `INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
        VALUES ('event-e4-rule-bound', 'rule-e4-a', 1, ${NOW + 10_000}, X'01'),
+              ('event-e4-rule-bound', 'rule-e4-a', 2, ${NOW + 10_000}, X'01'),
               ('event-e4-rule-bound', 'rule-e4-b', 1, ${NOW + 10_000}, X'01');`,
     );
     insertRuleBoundReservation({ store, id: 'work-a', ruleId: 'rule-e4-a', ruleVersion: 1 });
+    insertRuleBoundReservation({ store, id: 'work-a-v2', ruleId: 'rule-e4-a', ruleVersion: 2 });
     insertRuleBoundReservation({ store, id: 'work-b', ruleId: 'rule-e4-b', ruleVersion: 1 });
     reserveJudgeTest({
       store,
@@ -1236,6 +1346,24 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
       encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
     });
 
+    assert.equal(
+      (
+        store.database.prepare('SELECT state FROM judge_budget_reservations WHERE id = ?').get('work-a') as {
+          state: string;
+        }
+      ).state,
+      'settled',
+      'retention tightening: rule A is terminalised',
+    );
+    assert.equal(
+      (
+        store.database.prepare('SELECT state FROM judge_budget_reservations WHERE id = ?').get('work-a-v2') as {
+          state: string;
+        }
+      ).state,
+      'settled',
+      'retention tightening: rule A version 2 is terminalised',
+    );
     assertLiveRuleB(store, 'retention tightening');
     assert.equal(
       (

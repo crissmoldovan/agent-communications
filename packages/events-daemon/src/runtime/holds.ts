@@ -510,6 +510,7 @@ export class HoldResolver {
       await this.#taint.record({
         eventId: after.reference.eventId,
         accountId: after.accountId,
+        channel: after.rule.source.channel,
         classification: evaluated.classification,
       });
     // Encryption and taint both await. This repeats the shared live-account fence immediately before the only

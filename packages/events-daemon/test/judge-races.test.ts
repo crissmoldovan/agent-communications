@@ -592,6 +592,7 @@ test('E8: final hold resolution refuses a mismatched decision-bound claim token 
           disclosure: { approvalId: 'approval-e8', authorizationActivationId: 'activation-e8' },
         }),
       StaleDecisionError,
+      'a mismatched decision-bound claim token is refused before any delivery write',
     );
     assert.equal(
       (

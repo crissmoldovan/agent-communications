@@ -484,6 +484,20 @@ export function purgeRevokedRuleWork(
   }
 }
 
+/** Kind disable keeps immutable rule authority but applies the same content/work closure as revoking each bound rule. */
+export function purgeJudgeKindRuleWork(database: DatabaseSync, judgeKind: string, now: number = Date.now()): void {
+  const rows = database
+    .prepare(
+      `SELECT rule_id, version
+         FROM rule_versions
+        WHERE state IN ('active', 'superseded')
+          AND json_extract(document, '$.agentic.judge.kind') = ?
+        ORDER BY rule_id, version`,
+    )
+    .all(judgeKind) as Array<{ rule_id: string; version: number }>;
+  for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now);
+}
+
 interface StoredRuleRetention {
   readonly version: number;
   readonly document: string;

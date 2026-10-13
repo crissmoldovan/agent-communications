@@ -19,6 +19,9 @@ test('E6-A: global-only policy accepts only globally reachable literals and ever
     '192.0.2.1',
     '2002:a00:1::',
     '2001:0:a00:1::f7ff:fffe',
+    '2600::5efe:a00:1',
+    '2600::200:5efe:a9fe:101',
+    '2600::5efe:a9fe:a9fe',
   ]) {
     assert.throws(
       () => assertAddressAllowed(address, globalOnly),
@@ -60,6 +63,13 @@ test('NET-B2: validates the outer and every embedded transition address', () => 
     () => assertAddressAllowed('2001:0:a00:1::f7f7:f7f7', { approvedAddressSet: ['2001::/32', '10.0.0.0/8'] }),
     (error: unknown) => error instanceof AddressPolicyError && error.code === 'NETWORK_ADDRESS_REFUSED',
   );
+  for (const address of ['2600::5efe:a00:1', '2600::200:5efe:a9fe:101', '2600::5efe:a9fe:a9fe']) {
+    assert.throws(
+      () => assertAddressAllowed(address, { approvedAddressSet: ['2600::/16'] }),
+      (error: unknown) => error instanceof AddressPolicyError && error.code === 'NETWORK_ADDRESS_REFUSED',
+      `${address}: an approved ISATAP outer address cannot hide an unapproved embedded IPv4 address`,
+    );
+  }
   assert.throws(
     () => assertAddressAllowed('64:ff9b::808:808', { approvedAddressSet: ['64:ff9b::/96', '8.8.8.8'] }),
     /NAT64/i,

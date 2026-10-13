@@ -6,292 +6,920 @@
     "deferred": "Task 10"
   },
   "guards": [
-    { "id": "task-1-canonical-documents" },
-    { "id": "task-2-durable-schema" },
-    { "id": "phase-e-b3-prerequisite-gate" },
-    { "id": "phase-e-b3-secret-origin" },
-    { "id": "phase-e-b3-pending-target-origin" },
-    { "id": "phase-e-source-scope" },
-    { "id": "phase-e-synthetic-scope" },
-    { "id": "e1-prepare-disabled-kind" },
-    { "id": "e1-claim-before-core-disabled-kind" },
-    { "id": "e1-local-claim-transaction-disabled-kind" },
-    { "id": "e1-finalise-transaction-disabled-kind" },
-    { "id": "e5-rolling-includes-reserved" },
-    { "id": "e5-rolling-includes-in-flight" },
-    { "id": "e5-concurrency-excludes-settled" },
-    { "id": "e5-stable-rule-key" },
-    { "id": "e5-input-max-before-io" },
-    { "id": "e5-byte-estimate" },
-    { "id": "e5-no-active-singleton" },
-    { "id": "e5-unparsed-outcome-never-refunds" },
-    { "id": "e5-omitted-result-never-defaults-completed" },
-    { "id": "e5-terminal-decision-is-no-match" },
-    { "id": "e5-terminal-projection-purge" },
-    { "id": "e5-single-transport-entry" },
-    { "id": "e5-concurrency-release" },
-    { "id": "e5-double-settle" },
-    { "id": "e5-owner-start-recovery" },
-    { "id": "e5-v1-literal-judge-kinds" },
-    { "id": "e6-reference-date" },
-    { "id": "e6-header-allowlist" },
-    { "id": "e6-single-line-hosted-key" },
-    { "id": "e6-request-cap" },
-    { "id": "e6-response-cap" },
-    { "id": "e6-streaming-response-cap" },
-    { "id": "e6-output-token-limit" },
-    { "id": "e6-provider-match" },
-    { "id": "e6-score-clamp" },
-    { "id": "e6-closed-score-pointer" },
-    { "id": "e6-dns-final-gate" },
-    { "id": "e6-tcp-final-gate" },
-    { "id": "e6-tls-final-gate" },
-    { "id": "e6-write-final-gate" },
-    { "id": "e6-write-gate-adjacency" },
-    { "id": "e6-no-http-client" },
-    { "id": "e6-no-proxy-path" },
-    { "id": "e6-no-redirect" },
-    { "id": "e6-literal-loopback-only" },
-    { "id": "e6-attempt-deadline" },
-    { "id": "e6-post-gate-deadline" },
-    { "id": "e6-final-gate-deadline" },
-    { "id": "e6-synchronous-final-gate" },
-    { "id": "e6-response-deadline" },
-    { "id": "e6-fatal-utf8" },
-    { "id": "e6-a-accept-non-global" },
-    { "id": "e6-a-skip-embedded-addresses" },
-    { "id": "e6-a-allow-global-only-non-typesafe" },
-    { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" },
-    { "id": "e4-no-pointer-at-prepare" },
-    { "id": "e4-final-pointer-drift" },
-    { "id": "e4-claim-pointer-drift" },
-    { "id": "e4-disabled-judge-add" },
-    { "id": "e4-kind-disable-recovery" },
-    { "id": "e4-laya-before-intent" },
-    { "id": "e4-budget-digest-prepare" },
-    { "id": "e4-kind-digest-prepare" },
-    { "id": "e4-budget-digest-claim" },
-    { "id": "e4-kind-digest-claim" },
-    { "id": "e4-budget-digest-finalise" },
-    { "id": "e4-kind-digest-finalise" },
-    { "id": "e4-budget-digest-live-reservation" },
-    { "id": "e4-kind-digest-live-reservation" },
-    { "id": "e4-first-enablement-disable" },
-    { "id": "e4-absent-kind-disable-generation" },
-    { "id": "e4-expiry-rule-version" },
-    { "id": "e4-tightening-rule-version" },
-    { "id": "e4-unscoped-kind-static-guard" },
-    { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" },
-    { "id": "e7-deterministic-first" },
-    { "id": "e7-taint-before-reserve" },
-    { "id": "e7-exact-input-provenance" },
-    { "id": "e7-settlement-token" },
-    { "id": "e7-pause-fence" },
-    { "id": "e7-full-request-estimate" },
-    { "id": "e7-single-decision-owner" },
-    { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" },
-    { "id": "e8-sqlite-hold-clock" },
-    { "id": "e8-ingest-tie" },
-    { "id": "e8-lease-recovery" },
-    { "id": "e8-expiry-before-control" },
-    { "id": "e8-decision-bound-token" },
-    { "id": "e8-final-resolution-recheck" },
-    { "id": "e8-account-purge-claim" },
-    { "id": "e8-evaluator-db-clock" },
-    { "id": "e8-hold-write-expiry" },
-    { "id": "e8-held-whatsapp-live-fence" },
-    { "id": "e8-held-whatsapp-journal-version" },
-    { "id": "e8-legacy-hold-ingest-cap" },
-    { "id": "e8-legacy-hold-repeated-tightening" },
-    { "id": "e8-held-final-live-account-fence" },
-    { "id": "e9-fixed-synthetic-judge-input" },
-    { "id": "e9-judge-key-rotate-current-generation" },
-    { "id": "e9-mcp-kind-enable-no-active-pointer" },
-    { "id": "e9-pending-rule-judge-origin" },
-    { "id": "e11-provider-match-authority" },
-    { "id": "e11-envelope-provenance" },
-    { "id": "e11-range-token-cap" },
-    { "id": "e11-wrong-type-score" },
-    { "id": "e11-host-drift-before-byte" },
-    { "id": "e11-journal-exactness" },
-    { "id": "e11-refusal-content-free" },
-    { "id": "e11-late-hold-response" },
-    { "id": "e11-corpus-integrity-allowlist" },
-    { "id": "e11-response-fixture-pinning" },
-    { "id": "e11-corpus-manifest-pairing" },
-    { "id": "e12-target-remove-purge" },
-    { "id": "e12-subscriber-remove-purge" },
-    { "id": "e12-judge-remove-purge" },
-    { "id": "e12-account-remove-readd-purge" },
-    { "id": "e12-whatsapp-hide-purge" },
-    { "id": "e12-rule-disable-purge" },
-    { "id": "e12-disable-all-purge" },
-    { "id": "e12-account-rule-revoke" },
-    { "id": "e12-derived-parent-revoke" },
-    { "id": "e12-account-source-purge" },
-    { "id": "e12-judge-key-generation-fence" },
-    { "id": "e12-judge-kind-literal-guard" },
-    { "id": "e12-audit-matrix" },
-    { "id": "e12-static-network-path" },
-    { "id": "e12-purge-caller-registry" },
-    { "id": "e12-corpus-dependency-closure" },
-    { "id": "e12-held-purge-race" },
-    { "id": "e12-hold-claim-expiry-call" },
-    { "id": "e12-hold-api-expiry-call" },
-    { "id": "e12-hold-resolution-expiry-call" },
-    { "id": "e13-required-release-gate" },
-    { "id": "e13-b3-capability-row" },
-    { "id": "e13-doctor-hold-clock" },
-    { "id": "e13-laya-typed-unavailable" },
-    { "id": "e13-kind-enablement-approval" },
-    { "id": "e13-owner-judge-wiring" }
+    {
+      "id": "task-1-canonical-documents"
+    },
+    {
+      "id": "task-2-durable-schema"
+    },
+    {
+      "id": "phase-e-b3-prerequisite-gate"
+    },
+    {
+      "id": "phase-e-b3-secret-origin"
+    },
+    {
+      "id": "phase-e-b3-pending-target-origin"
+    },
+    {
+      "id": "phase-e-source-scope"
+    },
+    {
+      "id": "phase-e-synthetic-scope"
+    },
+    {
+      "id": "e1-prepare-disabled-kind"
+    },
+    {
+      "id": "e1-claim-before-core-disabled-kind"
+    },
+    {
+      "id": "e1-local-claim-transaction-disabled-kind"
+    },
+    {
+      "id": "e1-finalise-transaction-disabled-kind"
+    },
+    {
+      "id": "e5-rolling-includes-reserved"
+    },
+    {
+      "id": "e5-rolling-includes-in-flight"
+    },
+    {
+      "id": "e5-concurrency-excludes-settled"
+    },
+    {
+      "id": "e5-stable-rule-key"
+    },
+    {
+      "id": "e5-input-max-before-io"
+    },
+    {
+      "id": "e5-byte-estimate"
+    },
+    {
+      "id": "e5-no-active-singleton"
+    },
+    {
+      "id": "e5-unparsed-outcome-never-refunds"
+    },
+    {
+      "id": "e5-omitted-result-never-defaults-completed"
+    },
+    {
+      "id": "e5-terminal-decision-is-no-match"
+    },
+    {
+      "id": "e5-terminal-projection-purge"
+    },
+    {
+      "id": "e5-single-transport-entry"
+    },
+    {
+      "id": "e5-concurrency-release"
+    },
+    {
+      "id": "e5-double-settle"
+    },
+    {
+      "id": "e5-owner-start-recovery"
+    },
+    {
+      "id": "e5-v1-literal-judge-kinds"
+    },
+    {
+      "id": "e6-reference-date"
+    },
+    {
+      "id": "e6-header-allowlist"
+    },
+    {
+      "id": "e6-single-line-hosted-key"
+    },
+    {
+      "id": "e6-request-cap"
+    },
+    {
+      "id": "e6-response-cap"
+    },
+    {
+      "id": "e6-streaming-response-cap"
+    },
+    {
+      "id": "e6-output-token-limit"
+    },
+    {
+      "id": "e6-provider-match"
+    },
+    {
+      "id": "e6-score-clamp"
+    },
+    {
+      "id": "e6-closed-score-pointer"
+    },
+    {
+      "id": "e6-dns-final-gate"
+    },
+    {
+      "id": "e6-tcp-final-gate"
+    },
+    {
+      "id": "e6-tls-final-gate"
+    },
+    {
+      "id": "e6-write-final-gate"
+    },
+    {
+      "id": "e6-write-gate-adjacency"
+    },
+    {
+      "id": "e6-no-http-client"
+    },
+    {
+      "id": "e6-no-proxy-path"
+    },
+    {
+      "id": "e6-no-redirect"
+    },
+    {
+      "id": "e6-literal-loopback-only"
+    },
+    {
+      "id": "e6-attempt-deadline"
+    },
+    {
+      "id": "e6-post-gate-deadline"
+    },
+    {
+      "id": "e6-final-gate-deadline"
+    },
+    {
+      "id": "e6-synchronous-final-gate"
+    },
+    {
+      "id": "e6-response-deadline"
+    },
+    {
+      "id": "e6-fatal-utf8"
+    },
+    {
+      "id": "e6-a-accept-non-global"
+    },
+    {
+      "id": "e6-a-skip-embedded-addresses"
+    },
+    {
+      "id": "e6-a-allow-global-only-non-typesafe"
+    },
+    {
+      "id": "e6-m-accept-alias"
+    },
+    {
+      "id": "e6-m-substitute-constant-model"
+    },
+    {
+      "id": "e4-no-pointer-at-prepare"
+    },
+    {
+      "id": "e4-final-pointer-drift"
+    },
+    {
+      "id": "e4-claim-pointer-drift"
+    },
+    {
+      "id": "e4-disabled-judge-add"
+    },
+    {
+      "id": "e4-kind-disable-recovery"
+    },
+    {
+      "id": "e4-laya-before-intent"
+    },
+    {
+      "id": "e4-budget-digest-prepare"
+    },
+    {
+      "id": "e4-kind-digest-prepare"
+    },
+    {
+      "id": "e4-budget-digest-claim"
+    },
+    {
+      "id": "e4-kind-digest-claim"
+    },
+    {
+      "id": "e4-budget-digest-finalise"
+    },
+    {
+      "id": "e4-kind-digest-finalise"
+    },
+    {
+      "id": "e4-budget-digest-live-reservation"
+    },
+    {
+      "id": "e4-kind-digest-live-reservation"
+    },
+    {
+      "id": "e4-first-enablement-disable"
+    },
+    {
+      "id": "e4-absent-kind-disable-generation"
+    },
+    {
+      "id": "e4-expiry-rule-version"
+    },
+    {
+      "id": "e4-tightening-rule-version"
+    },
+    {
+      "id": "e4-unscoped-kind-static-guard"
+    },
+    {
+      "id": "e4-primary-key-exemption"
+    },
+    {
+      "id": "e4-required-guard-rows"
+    },
+    {
+      "id": "e7-deterministic-first"
+    },
+    {
+      "id": "e7-taint-before-reserve"
+    },
+    {
+      "id": "e7-exact-input-provenance"
+    },
+    {
+      "id": "e7-settlement-token"
+    },
+    {
+      "id": "e7-pause-fence"
+    },
+    {
+      "id": "e7-full-request-estimate"
+    },
+    {
+      "id": "e7-single-decision-owner"
+    },
+    {
+      "id": "e7-deterministic-shared-route"
+    },
+    {
+      "id": "e7-evaluator-writer-lease"
+    },
+    {
+      "id": "e8-sqlite-hold-clock"
+    },
+    {
+      "id": "e8-ingest-tie"
+    },
+    {
+      "id": "e8-lease-recovery"
+    },
+    {
+      "id": "e8-expiry-before-control"
+    },
+    {
+      "id": "e8-decision-bound-token"
+    },
+    {
+      "id": "e8-final-resolution-recheck"
+    },
+    {
+      "id": "e8-account-purge-claim"
+    },
+    {
+      "id": "e8-evaluator-db-clock"
+    },
+    {
+      "id": "e8-hold-write-expiry"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening"
+    },
+    {
+      "id": "e8-held-final-live-account-fence"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin"
+    },
+    {
+      "id": "e11-provider-match-authority"
+    },
+    {
+      "id": "e11-envelope-provenance"
+    },
+    {
+      "id": "e11-range-token-cap"
+    },
+    {
+      "id": "e11-wrong-type-score"
+    },
+    {
+      "id": "e11-host-drift-before-byte"
+    },
+    {
+      "id": "e11-journal-exactness"
+    },
+    {
+      "id": "e11-refusal-content-free"
+    },
+    {
+      "id": "e11-late-hold-response"
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist"
+    },
+    {
+      "id": "e11-response-fixture-pinning"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing"
+    },
+    {
+      "id": "e12-target-remove-purge"
+    },
+    {
+      "id": "e12-subscriber-remove-purge"
+    },
+    {
+      "id": "e12-judge-remove-purge"
+    },
+    {
+      "id": "e12-account-remove-readd-purge"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge"
+    },
+    {
+      "id": "e12-rule-disable-purge"
+    },
+    {
+      "id": "e12-disable-all-purge"
+    },
+    {
+      "id": "e12-account-rule-revoke"
+    },
+    {
+      "id": "e12-derived-parent-revoke"
+    },
+    {
+      "id": "e12-account-source-purge"
+    },
+    {
+      "id": "e12-judge-key-generation-fence"
+    },
+    {
+      "id": "e12-judge-kind-literal-guard"
+    },
+    {
+      "id": "e12-audit-matrix"
+    },
+    {
+      "id": "e12-static-network-path"
+    },
+    {
+      "id": "e12-purge-caller-registry"
+    },
+    {
+      "id": "e12-corpus-dependency-closure"
+    },
+    {
+      "id": "e12-held-purge-race"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call"
+    },
+    {
+      "id": "e12-hold-api-expiry-call"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call"
+    },
+    {
+      "id": "e13-required-release-gate"
+    },
+    {
+      "id": "e13-b3-capability-row"
+    },
+    {
+      "id": "e13-doctor-hold-clock"
+    },
+    {
+      "id": "e13-laya-typed-unavailable"
+    },
+    {
+      "id": "e13-kind-enablement-approval"
+    },
+    {
+      "id": "e13-owner-judge-wiring"
+    },
+    {
+      "id": "e-review-judge-input-envelope"
+    },
+    {
+      "id": "e-review-event-taint-platform"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure"
+    },
+    {
+      "id": "e-review-preio-release-commit"
+    },
+    {
+      "id": "e-review-response-owner-recovery"
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal"
+    },
+    {
+      "id": "e-review-b3-capability-operation"
+    },
+    {
+      "id": "e-review-isatap-embedded-address"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal"
+    }
   ],
   "mutations": [
-    { "id": "e1-canonical-documents" },
-    { "id": "e2-durable-schema" },
-    { "id": "e3-b3-contract-version" },
-    { "id": "e3-b3-unavailable-variants" },
-    { "id": "e3-b3-vector-schema-validation" },
-    { "id": "e3-scope-account-source" },
-    { "id": "e3-scope-synthetic-work" },
-    { "id": "e1-prepare-disabled-kind" },
-    { "id": "e1-claim-before-core-disabled-kind" },
-    { "id": "e1-local-claim-transaction-disabled-kind" },
-    { "id": "e1-finalise-transaction-disabled-kind" },
-    { "id": "e5-rolling-includes-reserved" },
-    { "id": "e5-rolling-includes-in-flight" },
-    { "id": "e5-concurrency-excludes-settled" },
-    { "id": "e5-stable-rule-key" },
-    { "id": "e5-input-max-before-io" },
-    { "id": "e5-byte-estimate" },
-    { "id": "e5-no-active-singleton" },
-    { "id": "e5-unparsed-outcome-never-refunds" },
-    { "id": "e5-omitted-result-never-defaults-completed" },
-    { "id": "e5-terminal-decision-is-no-match" },
-    { "id": "e5-terminal-projection-purge" },
-    { "id": "e5-single-transport-entry" },
-    { "id": "e5-concurrency-release" },
-    { "id": "e5-double-settle" },
-    { "id": "e5-owner-start-recovery" },
-    { "id": "e5-v1-literal-judge-kinds" },
-    { "id": "e6-reference-date" },
-    { "id": "e6-header-allowlist" },
-    { "id": "e6-single-line-hosted-key" },
-    { "id": "e6-request-cap" },
-    { "id": "e6-response-cap" },
-    { "id": "e6-streaming-response-cap" },
-    { "id": "e6-output-token-limit" },
-    { "id": "e6-provider-match" },
-    { "id": "e6-score-clamp" },
-    { "id": "e6-closed-score-pointer" },
-    { "id": "e6-dns-final-gate" },
-    { "id": "e6-tcp-final-gate" },
-    { "id": "e6-tls-final-gate" },
-    { "id": "e6-write-final-gate" },
-    { "id": "e6-write-gate-adjacency" },
-    { "id": "e6-no-http-client" },
-    { "id": "e6-no-proxy-path" },
-    { "id": "e6-no-redirect" },
-    { "id": "e6-literal-loopback-only" },
-    { "id": "e6-attempt-deadline" },
-    { "id": "e6-post-gate-deadline" },
-    { "id": "e6-final-gate-deadline" },
-    { "id": "e6-synchronous-final-gate" },
-    { "id": "e6-response-deadline" },
-    { "id": "e6-fatal-utf8" },
-    { "id": "e6-a-accept-non-global" },
-    { "id": "e6-a-skip-embedded-addresses" },
-    { "id": "e6-a-allow-global-only-non-typesafe" },
-    { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" },
-    { "id": "e4-no-pointer-at-prepare" },
-    { "id": "e4-final-pointer-drift" },
-    { "id": "e4-claim-pointer-drift" },
-    { "id": "e4-disabled-judge-add" },
-    { "id": "e4-kind-disable-recovery" },
-    { "id": "e4-laya-before-intent" },
-    { "id": "e4-budget-digest-prepare" },
-    { "id": "e4-kind-digest-prepare" },
-    { "id": "e4-budget-digest-claim" },
-    { "id": "e4-kind-digest-claim" },
-    { "id": "e4-budget-digest-finalise" },
-    { "id": "e4-kind-digest-finalise" },
-    { "id": "e4-budget-digest-live-reservation" },
-    { "id": "e4-kind-digest-live-reservation" },
-    { "id": "e4-first-enablement-disable" },
-    { "id": "e4-absent-kind-disable-generation" },
-    { "id": "e4-expiry-rule-version" },
-    { "id": "e4-tightening-rule-version" },
-    { "id": "e4-unscoped-kind-static-guard" },
-    { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" },
-    { "id": "e7-deterministic-first" },
-    { "id": "e7-taint-before-reserve" },
-    { "id": "e7-exact-input-provenance" },
-    { "id": "e7-settlement-token" },
-    { "id": "e7-pause-fence" },
-    { "id": "e7-full-request-estimate" },
-    { "id": "e7-single-decision-owner" },
-    { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" },
-    { "id": "e8-sqlite-hold-clock" },
-    { "id": "e8-ingest-tie" },
-    { "id": "e8-lease-recovery" },
-    { "id": "e8-expiry-before-control" },
-    { "id": "e8-decision-bound-token" },
-    { "id": "e8-final-resolution-recheck" },
-    { "id": "e8-account-purge-claim" },
-    { "id": "e8-evaluator-db-clock" },
-    { "id": "e8-hold-write-expiry" },
-    { "id": "e8-held-whatsapp-live-fence" },
-    { "id": "e8-held-whatsapp-journal-version" },
-    { "id": "e8-legacy-hold-ingest-cap" },
-    { "id": "e8-legacy-hold-repeated-tightening" },
-    { "id": "e8-held-final-live-account-fence" },
-    { "id": "e9-fixed-synthetic-judge-input" },
-    { "id": "e9-judge-key-rotate-current-generation" },
-    { "id": "e9-mcp-kind-enable-no-active-pointer" },
-    { "id": "e9-pending-rule-judge-origin" },
-    { "id": "e11-provider-match-authority" },
-    { "id": "e11-envelope-provenance" },
-    { "id": "e11-range-token-cap" },
-    { "id": "e11-wrong-type-score" },
-    { "id": "e11-host-drift-before-byte" },
-    { "id": "e11-journal-exactness" },
-    { "id": "e11-refusal-content-free" },
-    { "id": "e11-late-hold-response" },
-    { "id": "e11-corpus-integrity-allowlist" },
-    { "id": "e11-response-fixture-pinning" },
-    { "id": "e11-corpus-manifest-pairing" },
-    { "id": "e12-target-remove-purge" },
-    { "id": "e12-subscriber-remove-purge" },
-    { "id": "e12-judge-remove-purge" },
-    { "id": "e12-account-remove-readd-purge" },
-    { "id": "e12-whatsapp-hide-purge" },
-    { "id": "e12-rule-disable-purge" },
-    { "id": "e12-disable-all-purge" },
-    { "id": "e12-account-rule-revoke" },
-    { "id": "e12-derived-parent-revoke" },
-    { "id": "e12-account-source-purge" },
-    { "id": "e12-judge-key-generation-fence" },
-    { "id": "e12-judge-kind-literal-guard" },
-    { "id": "e12-audit-matrix" },
-    { "id": "e12-static-network-path" },
-    { "id": "e12-purge-caller-registry" },
-    { "id": "e12-corpus-dependency-closure" },
-    { "id": "e12-held-purge-race" },
-    { "id": "e12-hold-claim-expiry-call" },
-    { "id": "e12-hold-api-expiry-call" },
-    { "id": "e12-hold-resolution-expiry-call" },
-    { "id": "e13-required-release-gate" },
-    { "id": "e13-b3-capability-row" },
-    { "id": "e13-doctor-hold-clock" },
-    { "id": "e13-laya-typed-unavailable" },
-    { "id": "e13-kind-enablement-approval" },
-    { "id": "e13-owner-judge-wiring" }
+    {
+      "id": "e1-canonical-documents"
+    },
+    {
+      "id": "e2-durable-schema"
+    },
+    {
+      "id": "e3-b3-contract-version"
+    },
+    {
+      "id": "e3-b3-unavailable-variants"
+    },
+    {
+      "id": "e3-b3-vector-schema-validation"
+    },
+    {
+      "id": "e3-scope-account-source"
+    },
+    {
+      "id": "e3-scope-synthetic-work"
+    },
+    {
+      "id": "e1-prepare-disabled-kind"
+    },
+    {
+      "id": "e1-claim-before-core-disabled-kind"
+    },
+    {
+      "id": "e1-local-claim-transaction-disabled-kind"
+    },
+    {
+      "id": "e1-finalise-transaction-disabled-kind"
+    },
+    {
+      "id": "e5-rolling-includes-reserved"
+    },
+    {
+      "id": "e5-rolling-includes-in-flight"
+    },
+    {
+      "id": "e5-concurrency-excludes-settled"
+    },
+    {
+      "id": "e5-stable-rule-key"
+    },
+    {
+      "id": "e5-input-max-before-io"
+    },
+    {
+      "id": "e5-byte-estimate"
+    },
+    {
+      "id": "e5-no-active-singleton"
+    },
+    {
+      "id": "e5-unparsed-outcome-never-refunds"
+    },
+    {
+      "id": "e5-omitted-result-never-defaults-completed"
+    },
+    {
+      "id": "e5-terminal-decision-is-no-match"
+    },
+    {
+      "id": "e5-terminal-projection-purge"
+    },
+    {
+      "id": "e5-single-transport-entry"
+    },
+    {
+      "id": "e5-concurrency-release"
+    },
+    {
+      "id": "e5-double-settle"
+    },
+    {
+      "id": "e5-owner-start-recovery"
+    },
+    {
+      "id": "e5-v1-literal-judge-kinds"
+    },
+    {
+      "id": "e6-reference-date"
+    },
+    {
+      "id": "e6-header-allowlist"
+    },
+    {
+      "id": "e6-single-line-hosted-key"
+    },
+    {
+      "id": "e6-request-cap"
+    },
+    {
+      "id": "e6-response-cap"
+    },
+    {
+      "id": "e6-streaming-response-cap"
+    },
+    {
+      "id": "e6-output-token-limit"
+    },
+    {
+      "id": "e6-provider-match"
+    },
+    {
+      "id": "e6-score-clamp"
+    },
+    {
+      "id": "e6-closed-score-pointer"
+    },
+    {
+      "id": "e6-dns-final-gate"
+    },
+    {
+      "id": "e6-tcp-final-gate"
+    },
+    {
+      "id": "e6-tls-final-gate"
+    },
+    {
+      "id": "e6-write-final-gate"
+    },
+    {
+      "id": "e6-write-gate-adjacency"
+    },
+    {
+      "id": "e6-no-http-client"
+    },
+    {
+      "id": "e6-no-proxy-path"
+    },
+    {
+      "id": "e6-no-redirect"
+    },
+    {
+      "id": "e6-literal-loopback-only"
+    },
+    {
+      "id": "e6-attempt-deadline"
+    },
+    {
+      "id": "e6-post-gate-deadline"
+    },
+    {
+      "id": "e6-final-gate-deadline"
+    },
+    {
+      "id": "e6-synchronous-final-gate"
+    },
+    {
+      "id": "e6-response-deadline"
+    },
+    {
+      "id": "e6-fatal-utf8"
+    },
+    {
+      "id": "e6-a-accept-non-global"
+    },
+    {
+      "id": "e6-a-skip-embedded-addresses"
+    },
+    {
+      "id": "e6-a-allow-global-only-non-typesafe"
+    },
+    {
+      "id": "e6-m-accept-alias"
+    },
+    {
+      "id": "e6-m-substitute-constant-model"
+    },
+    {
+      "id": "e4-no-pointer-at-prepare"
+    },
+    {
+      "id": "e4-final-pointer-drift"
+    },
+    {
+      "id": "e4-claim-pointer-drift"
+    },
+    {
+      "id": "e4-disabled-judge-add"
+    },
+    {
+      "id": "e4-kind-disable-recovery"
+    },
+    {
+      "id": "e4-laya-before-intent"
+    },
+    {
+      "id": "e4-budget-digest-prepare"
+    },
+    {
+      "id": "e4-kind-digest-prepare"
+    },
+    {
+      "id": "e4-budget-digest-claim"
+    },
+    {
+      "id": "e4-kind-digest-claim"
+    },
+    {
+      "id": "e4-budget-digest-finalise"
+    },
+    {
+      "id": "e4-kind-digest-finalise"
+    },
+    {
+      "id": "e4-budget-digest-live-reservation"
+    },
+    {
+      "id": "e4-kind-digest-live-reservation"
+    },
+    {
+      "id": "e4-first-enablement-disable"
+    },
+    {
+      "id": "e4-absent-kind-disable-generation"
+    },
+    {
+      "id": "e4-expiry-rule-version"
+    },
+    {
+      "id": "e4-tightening-rule-version"
+    },
+    {
+      "id": "e4-unscoped-kind-static-guard"
+    },
+    {
+      "id": "e4-primary-key-exemption"
+    },
+    {
+      "id": "e4-required-guard-rows"
+    },
+    {
+      "id": "e7-deterministic-first"
+    },
+    {
+      "id": "e7-taint-before-reserve"
+    },
+    {
+      "id": "e7-exact-input-provenance"
+    },
+    {
+      "id": "e7-settlement-token"
+    },
+    {
+      "id": "e7-pause-fence"
+    },
+    {
+      "id": "e7-full-request-estimate"
+    },
+    {
+      "id": "e7-single-decision-owner"
+    },
+    {
+      "id": "e7-deterministic-shared-route"
+    },
+    {
+      "id": "e7-evaluator-writer-lease"
+    },
+    {
+      "id": "e8-sqlite-hold-clock"
+    },
+    {
+      "id": "e8-ingest-tie"
+    },
+    {
+      "id": "e8-lease-recovery"
+    },
+    {
+      "id": "e8-expiry-before-control"
+    },
+    {
+      "id": "e8-decision-bound-token"
+    },
+    {
+      "id": "e8-final-resolution-recheck"
+    },
+    {
+      "id": "e8-account-purge-claim"
+    },
+    {
+      "id": "e8-evaluator-db-clock"
+    },
+    {
+      "id": "e8-hold-write-expiry"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening"
+    },
+    {
+      "id": "e8-held-final-live-account-fence"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin"
+    },
+    {
+      "id": "e11-provider-match-authority"
+    },
+    {
+      "id": "e11-envelope-provenance"
+    },
+    {
+      "id": "e11-range-token-cap"
+    },
+    {
+      "id": "e11-wrong-type-score"
+    },
+    {
+      "id": "e11-host-drift-before-byte"
+    },
+    {
+      "id": "e11-journal-exactness"
+    },
+    {
+      "id": "e11-refusal-content-free"
+    },
+    {
+      "id": "e11-late-hold-response"
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist"
+    },
+    {
+      "id": "e11-response-fixture-pinning"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing"
+    },
+    {
+      "id": "e12-target-remove-purge"
+    },
+    {
+      "id": "e12-subscriber-remove-purge"
+    },
+    {
+      "id": "e12-judge-remove-purge"
+    },
+    {
+      "id": "e12-account-remove-readd-purge"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge"
+    },
+    {
+      "id": "e12-rule-disable-purge"
+    },
+    {
+      "id": "e12-disable-all-purge"
+    },
+    {
+      "id": "e12-account-rule-revoke"
+    },
+    {
+      "id": "e12-derived-parent-revoke"
+    },
+    {
+      "id": "e12-account-source-purge"
+    },
+    {
+      "id": "e12-judge-key-generation-fence"
+    },
+    {
+      "id": "e12-judge-kind-literal-guard"
+    },
+    {
+      "id": "e12-audit-matrix"
+    },
+    {
+      "id": "e12-static-network-path"
+    },
+    {
+      "id": "e12-purge-caller-registry"
+    },
+    {
+      "id": "e12-corpus-dependency-closure"
+    },
+    {
+      "id": "e12-held-purge-race"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call"
+    },
+    {
+      "id": "e12-hold-api-expiry-call"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call"
+    },
+    {
+      "id": "e13-required-release-gate"
+    },
+    {
+      "id": "e13-b3-capability-row"
+    },
+    {
+      "id": "e13-doctor-hold-clock"
+    },
+    {
+      "id": "e13-laya-typed-unavailable"
+    },
+    {
+      "id": "e13-kind-enablement-approval"
+    },
+    {
+      "id": "e13-owner-judge-wiring"
+    },
+    {
+      "id": "e-review-judge-input-envelope"
+    },
+    {
+      "id": "e-review-event-taint-platform"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure"
+    },
+    {
+      "id": "e-review-preio-release-commit"
+    },
+    {
+      "id": "e-review-response-owner-recovery"
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal"
+    },
+    {
+      "id": "e-review-b3-capability-operation"
+    },
+    {
+      "id": "e-review-isatap-embedded-address"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal"
+    }
   ],
   "cases": [
     {
@@ -346,7 +974,7 @@
       "id": "e3-b3-vector-schema-validation",
       "task": "E3",
       "coverage": ["phase-e-b3-pending-target-origin"],
-      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
       "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
       "mutation": {
         "id": "e3-b3-vector-schema-validation",
@@ -912,7 +1540,10 @@
       "coverage": ["e6-fatal-utf8"],
       "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
       "test": "packages/events-daemon/test/judge-transport.test.ts",
-      "mutation": { "id": "e6-fatal-utf8", "test": "E6: malformed UTF-8 anywhere in a Noul answer is fail-closed" },
+      "mutation": {
+        "id": "e6-fatal-utf8",
+        "test": "E6: malformed UTF-8 anywhere in a Noul answer is fail-closed"
+      },
       "strictRunner": "judge-transport-mutants"
     },
     {
@@ -923,7 +1554,7 @@
       "test": "packages/events-daemon/test/network/address-policy.test.ts",
       "mutation": {
         "id": "e6-a-accept-non-global",
-        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+        "test": "NET-B2: validates the outer and every embedded transition address"
       },
       "strictRunner": "judge-transport-mutants"
     },
@@ -2003,6 +2634,130 @@
         "test": "E13 final owner E2E: Gmail source reaches a local judge match through control approvals and owner restart"
       },
       "strictRunner": "judge-final-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-judge-input-envelope",
+      "task": "E7",
+      "coverage": ["e-review-judge-input-envelope"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-taint.test.ts",
+      "mutation": {
+        "id": "e-review-judge-input-envelope",
+        "test": "E7 taint: exact judge input preserves copied scalar, parent and subtree provenance while constants inherit none"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-event-taint-platform",
+      "task": "E7",
+      "coverage": ["e-review-event-taint-platform"],
+      "productionEntry": "packages/events-daemon/src/runtime/untrusted.ts",
+      "test": "packages/events-daemon/test/event-taint-platform.test.ts",
+      "mutation": {
+        "id": "e-review-event-taint-platform",
+        "test": "E7 taint platform: real Slack and WhatsApp delivery commits see the channel-scoped handle first"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-work-closure"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-kinds.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-work-closure",
+        "test": "E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-preio-release-commit",
+      "task": "E5",
+      "coverage": ["e-review-preio-release-commit"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/pending-rule-judge-test.test.ts",
+      "mutation": {
+        "id": "e-review-preio-release-commit",
+        "test": "E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-response-owner-recovery",
+      "task": "E7",
+      "coverage": ["e-review-response-owner-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e-review-response-owner-recovery",
+        "test": "E7: pause fences reserved judge I/O and completed-response decision writes"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity",
+      "task": "E9",
+      "coverage": ["e-review-valid-mcp-kind-disable-parity"],
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-e2e-surface.test.ts",
+      "mutation": {
+        "id": "e-review-valid-mcp-kind-disable-parity",
+        "test": "B3 judge mutation parity: valid isolated inputs succeed through real Commander and MCP adapters"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal",
+      "task": "E3",
+      "coverage": ["e-review-b3-capability-row-removal"],
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e-review-b3-capability-row-removal",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-b3-capability-operation",
+      "task": "E3",
+      "coverage": ["e-review-b3-capability-operation"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e-review-b3-capability-operation",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-isatap-embedded-address",
+      "task": "E6",
+      "coverage": ["e-review-isatap-embedded-address"],
+      "productionEntry": "packages/events-daemon/src/network/address-policy.ts",
+      "test": "packages/events-daemon/test/network/address-policy.test.ts",
+      "mutation": {
+        "id": "e-review-isatap-embedded-address",
+        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal",
+      "task": "E6",
+      "coverage": ["e-review-exact-deadline-socket-disposal"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e-review-exact-deadline-socket-disposal",
+        "test": "E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte"
+      },
+      "strictRunner": "judge-transport-mutants",
       "network": true
     }
   ]

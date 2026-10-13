@@ -149,6 +149,7 @@ class InjectedJournalSocket extends Duplex {
   readonly #responseGate: Promise<void> | undefined;
   readonly #onWrite: (() => void) | undefined;
   readonly #onResponse: (() => void) | undefined;
+  readonly #writeError: Error | undefined;
 
   constructor(
     requests: Buffer[],
@@ -156,6 +157,7 @@ class InjectedJournalSocket extends Duplex {
     responseGate?: Promise<void>,
     onWrite?: () => void,
     onResponse?: () => void,
+    writeError?: Error,
   ) {
     super();
     this.#requests = requests;
@@ -163,6 +165,7 @@ class InjectedJournalSocket extends Duplex {
     this.#responseGate = responseGate;
     this.#onWrite = onWrite;
     this.#onResponse = onResponse;
+    this.#writeError = writeError;
     this.on('error', () => undefined);
   }
 
@@ -171,6 +174,10 @@ class InjectedJournalSocket extends Duplex {
   override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     this.#requests.push(Buffer.from(chunk));
     this.#onWrite?.();
+    if (this.#writeError !== undefined) {
+      callback(this.#writeError);
+      return;
+    }
     void (this.#responseGate ?? Promise.resolve()).then(() =>
       queueMicrotask(() => {
         if (this.destroyed) return;
@@ -463,6 +470,7 @@ export async function runAdversarialCase(
               : () => {
                   lateResponseArrived = true;
                 },
+            row.scenario === 'endpoint-host-drift-race' ? new Error('synthetic') : undefined,
           ) as unknown as net.Socket;
         },
         ...(row.scenario === 'dns-rebinding'
@@ -773,10 +781,53 @@ export function assertAdversarialRun(
       `${row.id}: copied object provenance remains in the exact input envelope`,
     );
   }
+  if (row.category === 'injection-envelope-forgery') {
+    const request = run.actualRequests[0];
+    assert.ok(request, `${row.id}: the envelope-injection row wrote one exact request`);
+    const bodyOffset = request.indexOf('\r\n\r\n');
+    assert.notEqual(bodyOffset, -1, `${row.id}: the exact request contains one HTTP body boundary`);
+    const body = JSON.parse(request.subarray(bodyOffset + 4).toString('utf8')) as { state: string };
+    const state = JSON.parse(body.state) as { inputs: readonly { pointer: string; value: unknown }[] };
+    const subject = state.inputs.find((entry) => entry.pointer === '/subject')?.value;
+    assert.equal(typeof subject, 'string', `${row.id}: the hostile subject remains a scalar judge input`);
+    assert.match(
+      String(subject),
+      /^<untrusted-content boundary="([A-Za-z0-9_-]+)" field="judge-input">\n[\s\S]*\n<\/untrusted-content boundary="\1">$/u,
+      `${row.id}: the hostile sender string is inside one complete D3 envelope`,
+    );
+    assert.equal(
+      body.state.replace(String(subject), '').includes(row.subject ?? ''),
+      false,
+      `${row.id}: the hostile sender string appears nowhere outside its envelope`,
+    );
+  }
   assert.equal(goldenRequests.length, row.expected.requests, `${row.id}: fixture-pinned golden request count`);
+  const normaliseBoundary = (request: Buffer): Buffer => {
+    const text = request.toString('utf8');
+    const bodyOffset = text.indexOf('\r\n\r\n');
+    if (bodyOffset === -1) return request;
+    try {
+      const body = JSON.parse(text.slice(bodyOffset + 4)) as { state?: unknown };
+      if (typeof body.state !== 'string') return request;
+      const values: unknown[] = [JSON.parse(body.state)];
+      let boundary: string | undefined;
+      while (values.length > 0 && boundary === undefined) {
+        const value = values.pop();
+        if (typeof value === 'string') {
+          const match = /<untrusted-content boundary="([A-Za-z0-9_-]+)"/u.exec(value);
+          boundary = match?.[1];
+        } else if (Array.isArray(value)) for (const entry of value) values.push(entry);
+        else if (value !== null && typeof value === 'object')
+          for (const entry of Object.values(value)) values.push(entry);
+      }
+      return boundary === undefined ? request : Buffer.from(text.replaceAll(boundary, 'BOUNDARY'));
+    } catch {
+      return request;
+    }
+  };
   assert.deepEqual(
-    run.actualRequests,
-    goldenRequests,
+    run.actualRequests.map(normaliseBoundary),
+    goldenRequests.map(normaliseBoundary),
     `${row.id}: every sealed journal request byte is fixture-pinned and exact`,
   );
   if (row.expected.requests > 0)

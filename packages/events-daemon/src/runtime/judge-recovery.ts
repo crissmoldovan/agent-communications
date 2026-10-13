@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { EventDatabase } from '../store/database.ts';
 import { recoverOneJudgeReservationInTransaction } from './judge-budget.ts';
 
 /** A closed selector keeps every recovery/purge caller scoped by account/source, kind, or exact synthetic work. */
@@ -40,6 +41,17 @@ export type JudgeRecoverySelector =
 export interface JudgeRecoveryResult {
   readonly released: number;
   readonly settled: number;
+}
+
+/** Exact response-owner recovery: the same pessimistic transition used by startup and every purge participant. */
+export function recoverJudgeReservation(input: {
+  readonly store: EventDatabase;
+  readonly reservationId: string;
+  readonly now: number;
+}): 'released' | 'settled' | null {
+  return input.store.immediate(() =>
+    recoverOneJudgeReservationInTransaction(input.store.database, input.reservationId, input.now),
+  );
 }
 
 function matchingReservationIds(

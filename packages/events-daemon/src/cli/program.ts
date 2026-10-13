@@ -523,15 +523,17 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const judge = program.command('judge').description('manage immutable judges and run fixed synthetic tests');
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
-    print(await addJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'judge document');
+    print(await humanB3('addJudge', { document: parsed }, () => addJudge(parsed, controlOptions(program))));
   });
   judge.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'judge document');
+    print(await humanB3('updateJudge', { document: parsed }, () => updateJudge(parsed, controlOptions(program))));
   });
   judge.command('remove <judge-id>').action(async (judgeId: string) => {
     ran = true;
-    print(await removeJudge(judgeId, controlOptions(program)));
+    print(await humanB3('removeJudge', { judgeId }, () => removeJudge(judgeId, controlOptions(program))));
   });
   judge
     .command('test <judge-id>')
@@ -547,7 +549,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   budget.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateBudget(jsonArgument(document, 'budget document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'budget document');
+    print(await humanB3('updateBudget', { document: parsed }, () => updateBudget(parsed, controlOptions(program))));
   });
   const judgeKinds = judge.command('kinds').description('list disabled/enabled kinds and the typed Laya E2 seam');
   judgeKinds.command('list').action(async () => {
@@ -557,11 +560,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const judgeKind = judge.command('kind').description('prepare enablement or immediately disable one judge kind');
   judgeKind.command('enable <kind>').action(async (kind: string) => {
     ran = true;
-    print(await enableJudgeKind(kind, controlOptions(program)));
+    print(await humanB3('enableJudgeKind', { kind }, () => enableJudgeKind(kind, controlOptions(program))));
   });
   judgeKind.command('disable <kind>').action(async (kind: string) => {
     ran = true;
-    print(await disableJudgeKind(kind, controlOptions(program)));
+    print(await humanB3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, controlOptions(program))));
   });
   const judgeModel = judge
     .command('model')

@@ -195,6 +195,45 @@ test('E3: every B3 prerequisite drift refuses the E build/package/release gate b
   }
 });
 
+test('E3: the exact B3 capability inventory rejects a removed row and a stubbed operation', async () => {
+  for (const mutation of [
+    {
+      label: 'removed row',
+      change: (capabilities: { capabilities: Array<{ id: string }> }) => {
+        capabilities.capabilities = capabilities.capabilities.filter(
+          (row) => row.id !== 'events-daemon.judge-kind.disable',
+        );
+      },
+    },
+    {
+      label: 'stubbed operation',
+      change: (capabilities: { capabilities: Array<{ id: string; operation?: string }> }) => {
+        const row = capabilities.capabilities.find((entry) => entry.id === 'events-daemon.judge-kind.disable');
+        assert.ok(row, 'fixture contains the B3 capability row');
+        row.operation = 'stubbedDisableJudgeKind';
+      },
+    },
+  ] as const) {
+    const root = await prerequisiteFixture();
+    try {
+      const path = join(root, 'capabilities.json');
+      const capabilities = JSON.parse(await readFile(path, 'utf8')) as {
+        capabilities: Array<{ id: string; operation?: string }>;
+      };
+      mutation.change(capabilities);
+      await writeFile(path, `${JSON.stringify(capabilities, null, 2)}\n`);
+      const problems = await verifyPhaseEPrerequisites({ root });
+      assert.equal(
+        problems.includes('capabilities.json B3 projection matches the exact E-owned B3 capability inventory'),
+        true,
+        `${mutation.label} must fail the exact B3 inventory gate: ${problems.join('; ')}`,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('E3: the B3 v1 inventory is closed and digest-pinned even when vectors, previews, or its consumer are made inert', async () => {
   const emptyVectors = await prerequisiteFixture();
   try {

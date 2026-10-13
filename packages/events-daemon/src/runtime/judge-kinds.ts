@@ -5,6 +5,7 @@ import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { ActivationRuntime, PreparedActivation } from './activations.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
+import { purgeJudgeKindRuleWork } from './replacements.ts';
 
 function available(kind: string): JudgeKind {
   if (!(JUDGE_KINDS as readonly string[]).includes(kind))
@@ -58,6 +59,7 @@ export class JudgeKinds {
       // pointer exists yet; otherwise the original approval could recreate authority after this transaction commits.
       const pendingActivationsCancelled = this.#activations?.cancelForJudgeKindInTransaction(enabledKind) ?? 0;
       new JudgePurgeParticipant({ database: this.#store.database, now: this.#now }).kind(enabledKind);
+      purgeJudgeKindRuleWork(this.#store.database, enabledKind, this.#now());
       if (active !== null)
         this.#store.database
           .prepare("DELETE FROM active_versions WHERE kind = 'judge-kind' AND object_id = ? AND version = ?")

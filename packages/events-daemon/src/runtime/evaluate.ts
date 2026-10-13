@@ -9,6 +9,7 @@ import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-
 import { assertDisclosable } from './disclosure-fence.ts';
 import { sqliteTransactionNow } from './holds.ts';
 import { JudgeCoordinator } from './judge-coordinator.ts';
+import { recoverJudgeReservation } from './judge-recovery.ts';
 import type { HostedJudgeCredential } from './judge-transport.ts';
 import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
@@ -328,84 +329,98 @@ export class EventEvaluator {
         );
       }
       if (judged.kind === 'completed') {
-        const decisionId = this.#newId();
-        const result = judged.outcome === 'matched' ? evaluateRuleProjection(rule, projection.event) : null;
-        const evaluated = result === null || 'rejected' in result ? null : result;
-        const outcome =
-          judged.outcome === 'hold'
-            ? 'hold'
-            : result === null
-              ? 'no-match'
-              : 'rejected' in result
-                ? 'mapping-rejected'
-                : 'matched';
-        const deliveries =
-          evaluated === null
-            ? []
-            : await prepareDeliveries({
-                cipher: this.#cipher,
-                definition: evaluated.definition,
-                event: projection.event,
-                rule,
-                classification: evaluated.classification,
-                installationId: this.#store.installationId,
-                createdAt: this.#now(),
-                newId: this.#newId,
-                data: evaluated.mapped.data,
-              });
-        // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
-        // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
-        if (evaluated !== null)
-          await this.#taint.record({
-            eventId: input.eventId,
-            accountId: ingest.account_id,
-            classification: evaluated.classification,
-          });
-        const encryptedMetadata = await this.#cipher.encrypt(
-          { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decisionId }] },
-          Buffer.from(JSON.stringify(judged.metadata)),
-        );
-        if (!(await this.#accountStillLive(rule.source.channel, ingest.account_id))) return 'terminal';
-        return this.#commit(() =>
-          commitDecisionOutbox(
-            this.#store,
-            {
-              id: decisionId,
+        let committed = false;
+        try {
+          const decisionId = this.#newId();
+          const result = judged.outcome === 'matched' ? evaluateRuleProjection(rule, projection.event) : null;
+          const evaluated = result === null || 'rejected' in result ? null : result;
+          const outcome =
+            judged.outcome === 'hold'
+              ? 'hold'
+              : result === null
+                ? 'no-match'
+                : 'rejected' in result
+                  ? 'mapping-rejected'
+                  : 'matched';
+          const deliveries =
+            evaluated === null
+              ? []
+              : await prepareDeliveries({
+                  cipher: this.#cipher,
+                  definition: evaluated.definition,
+                  event: projection.event,
+                  rule,
+                  classification: evaluated.classification,
+                  installationId: this.#store.installationId,
+                  createdAt: this.#now(),
+                  newId: this.#newId,
+                  data: evaluated.mapped.data,
+                });
+          // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
+          // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
+          if (evaluated !== null)
+            await this.#taint.record({
               eventId: input.eventId,
               accountId: ingest.account_id,
-              ruleId: input.ruleId,
-              ruleVersion: input.ruleVersion,
-              outcome,
-              metadataExpiresAt: fixedDeadline(this.#now(), rule.retention.decisionMetadataMs),
-              switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
-              ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
-                ? {}
-                : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
-              deliveries,
-              settlement: {
-                reservationId: judged.reservationId,
-                actualInputTokens: judged.actualInputTokens,
-                settledAt: this.#now(),
+              channel: rule.source.channel,
+              classification: evaluated.classification,
+            });
+          const encryptedMetadata = await this.#cipher.encrypt(
+            { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decisionId }] },
+            Buffer.from(JSON.stringify(judged.metadata)),
+          );
+          if (!(await this.#accountStillLive(rule.source.channel, ingest.account_id))) return 'terminal';
+          const terminal = this.#commit(() => {
+            commitDecisionOutbox(
+              this.#store,
+              {
+                id: decisionId,
+                eventId: input.eventId,
+                accountId: ingest.account_id,
+                ruleId: input.ruleId,
+                ruleVersion: input.ruleVersion,
+                outcome,
+                metadataExpiresAt: fixedDeadline(this.#now(), rule.retention.decisionMetadataMs),
+                switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+                ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+                  ? {}
+                  : {
+                      whatsapp: {
+                        messageId: row.whatsappMessageId,
+                        visibilityVersion: row.whatsappVisibilityVersion,
+                      },
+                    }),
+                deliveries,
+                settlement: {
+                  reservationId: judged.reservationId,
+                  actualInputTokens: judged.actualInputTokens,
+                  settledAt: this.#now(),
+                },
+                ...(authorised === undefined
+                  ? {}
+                  : {
+                      disclosure: {
+                        approvalId: authorised.approvalId,
+                        authorizationActivationId: authorised.authorizationActivationId,
+                      },
+                    }),
+                encryptedMetadata,
+                ...(outcome === 'hold'
+                  ? {
+                      retainProjection: true,
+                      hold: { holdMs: rule.retention.holdMs, ingestMs: rule.retention.ingestMs },
+                    }
+                  : {}),
               },
-              ...(authorised === undefined
-                ? {}
-                : {
-                    disclosure: {
-                      approvalId: authorised.approvalId,
-                      authorizationActivationId: authorised.authorizationActivationId,
-                    },
-                  }),
-              encryptedMetadata,
-              ...(outcome === 'hold'
-                ? {
-                    retainProjection: true,
-                    hold: { holdMs: rule.retention.holdMs, ingestMs: rule.retention.ingestMs },
-                  }
-                : {}),
-            },
-            this.#failpoint,
-          ),
-        );
+              this.#failpoint,
+            );
+            committed = true;
+          });
+          return terminal;
+        } finally {
+          if (!committed)
+            recoverJudgeReservation({ store: this.#store, reservationId: judged.reservationId, now: this.#now() });
+        }
       }
     }
     const result = evaluateRuleProjection(rule, projection.event);
@@ -431,6 +446,7 @@ export class EventEvaluator {
       await this.#taint.record({
         eventId: input.eventId,
         accountId: ingest.account_id,
+        channel: rule.source.channel,
         classification: evaluated.classification,
       });
     // D9: the account is read again immediately before the commit; one removed during the decryption, encryption or

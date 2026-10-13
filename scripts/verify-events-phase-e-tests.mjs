@@ -72,6 +72,16 @@ const STRICT_RUNNERS = Object.freeze({
   },
 });
 
+const COPIED_TREE_BASELINE_RUNNERS = new Set([
+  'judge-kind-mutants',
+  'judge-budget-mutants',
+  'judge-task5-mutants',
+  'judge-task4-mutants',
+  'judge-mutants',
+  'judge-transport-mutants',
+  'judge-adversarial-mutants',
+]);
+
 /** E owns these rows rather than allowing a mutable manifest to define which completed-task guards matter. */
 const REQUIRED_GUARD_ROWS = Object.freeze([
   'task-1-canonical-documents',
@@ -740,7 +750,27 @@ async function readRunner(root, runnerName, problems) {
   ).exec(runnerTest);
   if (!loop || !new RegExp(`\\b${runner.helper}\\s*\\(\\s*mutation\\s*\\)`, 'u').test(loop[1]))
     problems.push(`${runnerName}: mutation loop does not call ${runner.helper} with its loop mutation`);
-  return { ids: collection.map((entry) => entry.id), mutations: collection, runner, support };
+  const executable = `${support}\n${runnerTest}`;
+  if (COPIED_TREE_BASELINE_RUNNERS.has(runnerName)) {
+    const helperStart = executable.search(new RegExp(`(?:export\\s+)?async\\s+function\\s+${runner.helper}\\b`, 'u'));
+    const helperSource = helperStart < 0 ? '' : executable.slice(helperStart);
+    const mutationWrite = helperSource.search(/writeFile\(\s*target/u);
+    const baselineRun = helperSource.indexOf('runStrictMutationChild');
+    const baselineAssertion =
+      /(?:assert\w*(?:Named)?(?:Mutation)?Pass|baseline\.code|,\s*mutation,\s*true\s*,?\s*\))/u.test(
+        mutationWrite < 0 ? helperSource : helperSource.slice(0, mutationWrite),
+      );
+    if (
+      helperStart < 0 ||
+      mutationWrite < 0 ||
+      baselineRun < 0 ||
+      baselineRun > mutationWrite ||
+      !baselineAssertion ||
+      !helperSource.slice(0, mutationWrite).includes('--test-reporter=tap')
+    )
+      problems.push(`${runnerName}: strict copied-tree runner must prove one named TAP pass before mutation`);
+  }
+  return { ids: collection.map((entry) => entry.id), mutations: collection, runner, support, executable };
 }
 
 export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefined } = {}) {
@@ -899,13 +929,13 @@ export async function verifyPhaseETestManifest({ root = ROOT, manifest = undefin
       if (!loadedRunner.ids.includes(id)) problems.push(`${runnerName}: manifest row mutation is not in runner: ${id}`);
     }
     for (const entry of loadedRunner.mutations) {
-      const ownerId = manifestRows.get(entry.id);
-      const owner = casesById.get(ownerId);
-      if (owner?.task !== 'E12') continue;
       if (typeof entry.killingAssertion !== 'string' || entry.killingAssertion.length === 0)
-        problems.push(`${entry.id}: Task 12 mutation must name its killing assertion`);
-      if (!loadedRunner.support.includes('result.output.includes(mutation.killingAssertion)'))
-        problems.push(`${runnerName}: Task 12 runner must enforce each killing assertion`);
+        problems.push(`${entry.id}: mutation must name its killing assertion`);
+      if (
+        !/result\.output\.includes\(mutation\.killingAssertion/u.test(loadedRunner.executable) &&
+        !/return\s+expectJudgeMutationToFail\(mutation\)/u.test(loadedRunner.executable)
+      )
+        problems.push(`${runnerName}: strict runner must enforce each killing assertion`);
     }
   }
 
