@@ -38,6 +38,7 @@ import { stop } from '../operations/stop.ts';
 import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { VERSION } from '../version.ts';
 
 export interface EventsMcpServer {
   readonly server: McpServer;
@@ -60,7 +61,7 @@ function reply(data: unknown) {
 
 /** Creates the local event service's deliberately content-free MCP surface. */
 export async function createEventsMcpServer(options: EventsMcpOptions = {}): Promise<EventsMcpServer> {
-  const server = new McpServer({ name: 'agent-events', version: '0.14.1' });
+  const server = new McpServer({ name: 'agent-events', version: VERSION });
 
   server.registerTool(
     'events_status',
