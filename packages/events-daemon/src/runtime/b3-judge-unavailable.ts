@@ -1,3 +1,4 @@
+import { JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import type {
   B3ControlOperation,
   B3HeldListV1,
@@ -30,7 +31,7 @@ export function judgeUnavailable(
 ): B3JudgeUnavailableV1 | undefined {
   if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return unavailableE2();
   if (!E_OPERATIONS.has(operation)) return undefined;
-  if ((operation === 'enableJudgeKind' || operation === 'disableJudgeKind') && args.kind === 'laya')
+  if ((operation === 'enableJudgeKind' || operation === 'disableJudgeKind') && args.kind === JUDGE_KIND_LAYA)
     return unavailableE2();
   return unavailableE();
 }

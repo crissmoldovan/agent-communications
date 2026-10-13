@@ -1257,7 +1257,8 @@ async function startOwnerWithLock(
         purpose: 'judge-key',
         cipher,
       });
-      return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      const current = generations.find((generation) => generation.lifecycle === 'current');
+      return current === undefined ? null : { generation: current.generation, material: current.material };
     },
     sourceWorkFor: async (scope) => {
       await runSourceOwnerWork(
@@ -1284,7 +1285,8 @@ async function startOwnerWithLock(
               purpose: 'judge-key',
               cipher,
             });
-            return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+            const current = generations.find((generation) => generation.lifecycle === 'current');
+            return current === undefined ? null : { generation: current.generation, material: current.material };
           },
         },
         scope,
@@ -1345,7 +1347,8 @@ async function startOwnerWithLock(
             purpose: 'judge-key',
             cipher,
           });
-          return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+          const current = generations.find((generation) => generation.lifecycle === 'current');
+          return current === undefined ? null : { generation: current.generation, material: current.material };
         },
       }),
       holdResolver: new HoldResolver({

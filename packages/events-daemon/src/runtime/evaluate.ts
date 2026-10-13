@@ -9,6 +9,7 @@ import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-
 import { assertDisclosable } from './disclosure-fence.ts';
 import { sqliteTransactionNow } from './holds.ts';
 import { JudgeCoordinator } from './judge-coordinator.ts';
+import type { HostedJudgeCredential } from './judge-transport.ts';
 import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
@@ -31,7 +32,7 @@ export interface EventEvaluatorOptions {
   readonly judgeCoordinator?: JudgeCoordinator | undefined;
   /** Read only at the hosted judge boundary; the evaluator neither retains nor exposes this material. */
   readonly hostedJudgeKeyFor?:
-    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
     | undefined;
   /** The owner-wide writer lease spans projection decryption through every encrypted decision or delivery commit. */
   readonly writerQuiescer?: WriterQuiescer | undefined;

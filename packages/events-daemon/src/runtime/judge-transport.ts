@@ -1,6 +1,7 @@
 import type net from 'node:net';
 import type tls from 'node:tls';
 import { APPROVED_TYPESAFE_MODELS } from '../domain/judges.ts';
+import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { validateLocalEndpoint } from '../network/local-endpoint.ts';
 import {
   addressSetDigest,
@@ -34,7 +35,7 @@ export type JudgeTransportPhase = 'dns' | 'tcp' | 'tls' | 'write';
 type LocalJudgeBase = {
   readonly judgeId: string;
   readonly version: number;
-  readonly kind: 'local-endpoint';
+  readonly kind: typeof JUDGE_KIND_LOCAL_ENDPOINT;
   readonly provider: string;
   readonly model: string;
   readonly endpoint: string;
@@ -46,8 +47,8 @@ export type TransportJudge =
   | {
       readonly judgeId: string;
       readonly version: number;
-      readonly kind: 'typesafe';
-      readonly provider: 'typesafe';
+      readonly kind: typeof JUDGE_KIND_TYPESAFE;
+      readonly provider: typeof JUDGE_KIND_TYPESAFE;
       readonly model: string;
       readonly endpoint: typeof TYPESAFE_ENDPOINT;
       readonly promptTemplate: string;
@@ -55,6 +56,12 @@ export type TransportJudge =
     }
   | (LocalJudgeBase & { readonly protocol: 'noul' })
   | (LocalJudgeBase & { readonly protocol: 'json-score'; readonly scorePointer: string });
+
+/** The material and immutable generation identity read together from the hosted judge's current secret slot. */
+export interface HostedJudgeCredential {
+  readonly generation: number;
+  readonly material: string;
+}
 
 export interface JudgeTransportCall {
   readonly judge: TransportJudge;
@@ -64,7 +71,7 @@ export interface JudgeTransportCall {
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
   /** B3 supplies this at the hosted boundary only; it is never persisted or returned. */
-  readonly hostedApiKey?: string | undefined;
+  readonly hostedApiKey?: HostedJudgeCredential | undefined;
 }
 
 export interface JudgeTransportHooks {
@@ -92,8 +99,10 @@ export interface JudgeTransportOptions {
 }
 
 export interface PreparedJudgeTransportRequest {
-  readonly adapter: 'typesafe' | 'ollama';
+  readonly adapter: typeof JUDGE_KIND_TYPESAFE | 'ollama';
   readonly endpoint: URL;
+  /** Non-null for every hosted request, so each adjacent transport gate can revalidate the exact secret generation. */
+  readonly hostedKeyGeneration: number | null;
   /** The exact protocol body lets the coordinator prove that it reserved the stricter full request. */
   readonly body: Buffer;
   readonly request: Buffer;
@@ -127,15 +136,15 @@ function requestWithinLimit(request: Uint8Array): boolean {
   return request.byteLength <= JUDGE_MAX_REQUEST_BYTES;
 }
 
-function adapterFor(call: JudgeTransportCall): 'typesafe' | 'ollama' | null {
-  if (call.judge.kind === 'typesafe') {
+function adapterFor(call: JudgeTransportCall): typeof JUDGE_KIND_TYPESAFE | 'ollama' | null {
+  if (call.judge.kind === JUDGE_KIND_TYPESAFE) {
     if (
       call.judge.endpoint !== TYPESAFE_ENDPOINT ||
       call.judge.protocol !== 'noul' ||
       !(APPROVED_TYPESAFE_MODELS as readonly string[]).includes(call.judge.model)
     )
       return null;
-    return 'typesafe';
+    return JUDGE_KIND_TYPESAFE;
   }
   if (call.judge.protocol !== 'noul' || call.judge.provider !== 'ollama') return null;
   let endpoint: ReturnType<typeof validateLocalEndpoint>;
@@ -191,13 +200,20 @@ export function prepareJudgeTransportRequest(
     return refused('MALFORMED_RESPONSE', true);
   let wire: ReturnType<typeof buildJudgeWireRequest>;
   try {
+    if (
+      call.judge.kind === JUDGE_KIND_TYPESAFE &&
+      (call.hostedApiKey === undefined ||
+        !positiveInteger(call.hostedApiKey.generation) ||
+        call.hostedApiKey.material.length === 0)
+    )
+      return refused('ADAPTER_REFERENCE_BLOCKED', true);
     wire = buildJudgeWireRequest({
       adapter,
       model: call.judge.model,
       state: call.state,
       questionName: call.questionName,
       instructions: call.instructions,
-      ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey }),
+      ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey.material }),
     });
   } catch {
     return refused('ADAPTER_REFERENCE_BLOCKED', true);
@@ -205,7 +221,7 @@ export function prepareJudgeTransportRequest(
   let endpoint: URL;
   try {
     endpoint =
-      call.judge.kind === 'typesafe'
+      call.judge.kind === JUDGE_KIND_TYPESAFE
         ? new URL(TYPESAFE_ENDPOINT)
         : validateLocalEndpoint(call.judge.endpoint, call.judge.approvedAddressSet).url;
   } catch {
@@ -213,7 +229,13 @@ export function prepareJudgeTransportRequest(
   }
   const request = requestBytesForEndpoint(endpoint, wire.body, wire.headers);
   if (!requestWithinLimit(request)) return refused('REQUEST_TOO_LARGE', true);
-  return { adapter, endpoint, body: wire.body, request };
+  return {
+    adapter,
+    endpoint,
+    hostedKeyGeneration: call.hostedApiKey?.generation ?? null,
+    body: wire.body,
+    request,
+  };
 }
 
 function boundedResponse(socket: net.Socket | tls.TLSSocket): Promise<Buffer> {
@@ -316,10 +338,10 @@ export class JudgeTransport {
       assertBeforeDeadline(deadline, this.#clock);
       // A literal local endpoint reaches this preparation without DNS. Hosted judges use a hostname, so resolving it
       // is the first physical action and any later refusal is conservatively post-I/O.
-      enteredIo = call.judge.kind === 'typesafe';
+      enteredIo = call.judge.kind === JUDGE_KIND_TYPESAFE;
       const connection = await beforeDeadline(
         preparePinnedConnection(
-          call.judge.kind === 'typesafe'
+          call.judge.kind === JUDGE_KIND_TYPESAFE
             ? {
                 url: endpoint,
                 addressMode: 'global-only',

@@ -11,7 +11,12 @@ import { claimDelivery, completeDeliveryClaim } from '../src/runtime/delivery-cl
 import { DryRunDispatcher } from '../src/runtime/dispatcher.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
 import { claimHeldDecision } from '../src/runtime/holds.ts';
-import { beginJudgeTransport, reserveJudgeTest, reserveJudgeWork } from '../src/runtime/judge-budget.ts';
+import {
+  assertJudgeReservationStillInFlight,
+  beginJudgeTransport,
+  reserveJudgeTest,
+  reserveJudgeWork,
+} from '../src/runtime/judge-budget.ts';
 import { JudgeKinds } from '../src/runtime/judge-kinds.ts';
 import { recoverJudgeWork } from '../src/runtime/judge-recovery.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
@@ -709,6 +714,209 @@ test('E12 purge closure: account remove and re-add use the production participan
       'account remove/re-add keeps a durable revocation marker for the stale identity',
     );
   });
+});
+
+test('E12 account scope: removing Gmail preserves same-id Slack work and its final reservation authority', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('events-e12-cross-source-account-');
+  const store = await openEventDatabase({ stateDir: root });
+  const sharedAccountId = 'shared-account-e12';
+  const gmailRule = agenticRule({ ruleId: 'rule-e12-shared-gmail', version: 1 });
+  const slackRule = agenticRule({ ruleId: 'rule-e12-shared-slack', version: 1 });
+  Object.assign(gmailRule.source, { accountIds: [sharedAccountId] });
+  Object.assign(slackRule, {
+    source: {
+      channel: 'slack',
+      accountIds: [sharedAccountId],
+      options: { channel: 'slack', conversations: ['C-e12-cross-source'] },
+    },
+    event: { type: 'slack.message.posted', version: 1 },
+    condition: { path: '/text', op: 'exists' },
+  });
+  assert.ok(slackRule.agentic, 'the cross-source Slack fixture remains agentic');
+  Object.assign(slackRule.agentic, { inputs: ['/text'] });
+  try {
+    const versions = new ImmutableVersions(store.database);
+    versions.createTarget(target);
+    versions.createJudge(judge);
+    versions.createJudgeKind({
+      id: 'judge-kind:typesafe',
+      kind: 'typesafe',
+      version: 1,
+      endpoint: 'https://api.typesafe.ai/v1/systemone',
+    });
+    versions.createJudgeBudget({
+      budgetId: 'judge-budget',
+      version: 1,
+      global: budgetLimits,
+      providers: [{ provider: 'typesafe', ...budgetLimits }],
+    });
+    versions.createRule(gmailRule);
+    versions.createRule(slackRule);
+    store.database.exec(
+      `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES
+         ('judge-budget', 'judge-budget', 1, NULL, 1),
+         ('judge-kind', 'typesafe', 1, NULL, 1),
+         ('rule', 'rule-e12-shared-gmail', 1, NULL, 1),
+         ('rule', 'rule-e12-shared-slack', 1, NULL, 1);
+       UPDATE rule_versions SET state = 'active', approval_id = 'approval-e12-cross-source',
+         authorization_activation_id = 'activation-e12-cross-source', activated_at = 1
+         WHERE rule_id IN ('rule-e12-shared-gmail', 'rule-e12-shared-slack');`,
+    );
+    const insertIngest = store.database.prepare(
+      `INSERT INTO ingest
+       (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+    );
+    insertIngest.run(
+      'event-e12-shared-gmail',
+      store.installationId,
+      'gmail.message.received',
+      sharedAccountId,
+      'gmail-dedupe',
+      NOW,
+      NOW,
+      NOW,
+    );
+    insertIngest.run(
+      'event-e12-shared-slack',
+      store.installationId,
+      'slack.message.posted',
+      sharedAccountId,
+      'slack-dedupe',
+      NOW,
+      NOW,
+      NOW,
+    );
+    const insertProjection = store.database.prepare(
+      `INSERT INTO ingest_rules
+       (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
+       VALUES (?, ?, 1, ?, ?)`,
+    );
+    insertProjection.run('event-e12-shared-gmail', gmailRule.ruleId, NOW + 10_000, Buffer.from('gmail'));
+    insertProjection.run('event-e12-shared-slack', slackRule.ruleId, NOW + 10_000, Buffer.from('slack'));
+    const insertDecision = store.database.prepare(
+      `INSERT INTO decisions
+       (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state, encrypted_record)
+       VALUES (?, ?, ?, ?, 1, 'matched', ?, 'retained', ?)`,
+    );
+    insertDecision.run(
+      'decision-e12-shared-gmail',
+      'event-e12-shared-gmail',
+      sharedAccountId,
+      gmailRule.ruleId,
+      NOW + 10_000,
+      Buffer.from('gmail'),
+    );
+    insertDecision.run(
+      'decision-e12-shared-slack',
+      'event-e12-shared-slack',
+      sharedAccountId,
+      slackRule.ruleId,
+      NOW + 10_000,
+      Buffer.from('slack'),
+    );
+    const insertDelivery = store.database.prepare(
+      `INSERT INTO deliveries
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+        encrypted_record, next_at, expires_at, state, switch_generation, target_kind, target_representation,
+        ordering_sequence)
+       VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?, 'queued', 0, 'dry-run', 'plain', 0)`,
+    );
+    insertDelivery.run(
+      'delivery-e12-shared-gmail',
+      'decision-e12-shared-gmail',
+      sharedAccountId,
+      gmailRule.ruleId,
+      'gmail-target',
+      target.targetId,
+      Buffer.from('gmail'),
+      NOW,
+      NOW + 10_000,
+    );
+    insertDelivery.run(
+      'delivery-e12-shared-slack',
+      'decision-e12-shared-slack',
+      sharedAccountId,
+      slackRule.ruleId,
+      'slack-target',
+      target.targetId,
+      Buffer.from('slack'),
+      NOW,
+      NOW + 10_000,
+    );
+    reserveJudgeWork({
+      store,
+      id: 'reservation-e12-shared-slack',
+      workId: 'work:reservation-e12-shared-slack',
+      scope: {
+        scope: 'source-owned',
+        source: 'slack',
+        accountId: sharedAccountId,
+        eventId: 'event-e12-shared-slack',
+        ruleId: slackRule.ruleId,
+        ruleVersion: 1,
+        judgeId: judge.judgeId,
+        judgeVersion: judge.version,
+      },
+      judge,
+      limits,
+      finalEnvelope: Buffer.from('synthetic-cross-source'),
+      switchGeneration: 0,
+      now: NOW,
+    });
+    assert.equal(
+      beginJudgeTransport({ store, reservationId: 'reservation-e12-shared-slack', now: NOW }),
+      true,
+      'the Slack reservation reaches the production final-fence state before Gmail removal',
+    );
+
+    store.immediate(() =>
+      purgeRemovedAccountWork(store.database, { source: 'gmail', accountId: sharedAccountId }, NOW + 1),
+    );
+
+    assert.doesNotThrow(
+      () =>
+        assertJudgeReservationStillInFlight({
+          store,
+          reservationId: 'reservation-e12-shared-slack',
+          now: NOW + 2,
+        }),
+      'removing Gmail leaves the same-id Slack reservation authorised at the final fence',
+    );
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT state, concurrency_owned FROM judge_budget_reservations WHERE id = ?')
+          .get('reservation-e12-shared-slack') as Record<string, unknown>),
+      },
+      { state: 'in-flight', concurrency_owned: 1 },
+      'removing Gmail leaves the same-id Slack reservation state and concurrency ownership untouched',
+    );
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT state, encrypted_record IS NOT NULL AS retained FROM deliveries WHERE id = ?')
+          .get('delivery-e12-shared-slack') as Record<string, unknown>),
+      },
+      { state: 'queued', retained: 1 },
+      'removing Gmail leaves the same-id Slack delivery queued with its retained record',
+    );
+    assert.equal(
+      (
+        store.database
+          .prepare('SELECT COUNT(*) AS count FROM ingest_rules WHERE event_id = ?')
+          .get('event-e12-shared-slack') as { count: number }
+      ).count,
+      1,
+      'removing Gmail leaves the same-id Slack projection untouched',
+    );
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('E12 purge closure: single-account rule revoke uses the production participant', {

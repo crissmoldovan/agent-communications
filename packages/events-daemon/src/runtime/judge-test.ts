@@ -3,6 +3,7 @@ import { TEST_CLOUD_EVENT } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { CanonicalJudgeDocument } from '../domain/judges.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
   assertPendingRuleJudgeTestAuthority,
@@ -16,7 +17,7 @@ import {
   reserveJudgeTest,
   settleJudgeWork,
 } from './judge-budget.ts';
-import { JudgeTransport, prepareJudgeTransportRequest } from './judge-transport.ts';
+import { type HostedJudgeCredential, JudgeTransport, prepareJudgeTransportRequest } from './judge-transport.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
 
 const TEST_ACCOUNT_ID = 'synthetic-judge-test';
@@ -130,7 +131,7 @@ export class JudgeTestControl {
   readonly #hostedApiKeyFor: (input: {
     readonly judgeId: string;
     readonly judgeVersion: number;
-  }) => Promise<string | null>;
+  }) => Promise<HostedJudgeCredential | null>;
 
   constructor(input: {
     readonly store: EventDatabase;
@@ -139,7 +140,7 @@ export class JudgeTestControl {
     readonly now?: (() => number) | undefined;
     readonly newId?: (() => string) | undefined;
     readonly hostedApiKeyFor?:
-      | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+      | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
       | undefined;
   }) {
     this.#store = input.store;
@@ -185,13 +186,13 @@ export class JudgeTestControl {
       classification: { untrusted: [], addresses: [], handles: [] },
     });
 
-    let hostedApiKey: string | undefined;
-    if (authority.judge.kind === 'typesafe') {
+    let hostedApiKey: HostedJudgeCredential | undefined;
+    if (authority.judge.kind === JUDGE_KIND_TYPESAFE) {
       const key = await this.#hostedApiKeyFor({
         judgeId: authority.judge.judgeId,
         judgeVersion: authority.judge.version,
       });
-      if (typeof key !== 'string' || key.length === 0)
+      if (key === null || !Number.isSafeInteger(key.generation) || key.generation < 1 || key.material.length === 0)
         return { kind: 'refused', judgeId: input.judgeId, version: input.version, code: 'HOSTED_KEY_UNAVAILABLE' };
       hostedApiKey = key;
     }
@@ -274,7 +275,20 @@ export class JudgeTestControl {
     }
     const result = await this.#transport.execute(call, {
       finalGate: () => {
-        assertJudgeReservationStillInFlight({ store: this.#store, reservationId: reservation.id, now: this.#now() });
+        assertJudgeReservationStillInFlight({
+          store: this.#store,
+          reservationId: reservation.id,
+          now: this.#now(),
+          ...(prepared.hostedKeyGeneration === null
+            ? {}
+            : {
+                hostedKey: {
+                  judgeId: authority.judge.judgeId,
+                  judgeVersion: authority.judge.version,
+                  generation: prepared.hostedKeyGeneration,
+                },
+              }),
+        });
         return undefined;
       },
       preparedRequest: prepared,

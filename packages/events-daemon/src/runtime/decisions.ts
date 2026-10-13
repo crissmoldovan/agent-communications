@@ -105,16 +105,16 @@ export function commitDecisionOutbox(
       .prepare(
         `SELECT 1 AS present
            FROM account_revocations AS revocation
+           JOIN rule_versions AS version ON version.rule_id = ? AND version.version = ?
+           LEFT JOIN activation_intents AS intent ON intent.id = version.authorization_activation_id
           WHERE revocation.account_id = ?
+            AND (revocation.source IS NULL OR revocation.source = COALESCE(json_extract(version.document, '$.source.channel'), 'gmail'))
             AND revocation.revoked_at >= COALESCE(
-              (SELECT intent.created_at
-                 FROM rule_versions AS version
-                 JOIN activation_intents AS intent ON intent.id = version.authorization_activation_id
-                WHERE version.rule_id = ? AND version.version = ?),
+              intent.created_at,
               0
             )`,
       )
-      .get(input.accountId, input.ruleId, input.ruleVersion);
+      .get(input.ruleId, input.ruleVersion, input.accountId);
     if (accountRevoked !== undefined) throw new StaleDecisionError('PROJECTION_GONE');
     if (outcome !== 'retention-expired') {
       const settings = store.database
@@ -289,16 +289,16 @@ export function commitHeldDecisionOutbox(
       .prepare(
         `SELECT 1 AS present
            FROM account_revocations AS revocation
+           JOIN rule_versions AS version ON version.rule_id = ? AND version.version = ?
+           LEFT JOIN activation_intents AS intent ON intent.id = version.authorization_activation_id
           WHERE revocation.account_id = ?
+            AND (revocation.source IS NULL OR revocation.source = COALESCE(json_extract(version.document, '$.source.channel'), 'gmail'))
             AND revocation.revoked_at >= COALESCE(
-              (SELECT intent.created_at
-                 FROM rule_versions AS version
-                 JOIN activation_intents AS intent ON intent.id = version.authorization_activation_id
-                WHERE version.rule_id = ? AND version.version = ?),
+              intent.created_at,
               0
             )`,
       )
-      .get(input.accountId, input.ruleId, input.ruleVersion);
+      .get(input.ruleId, input.ruleVersion, input.accountId);
     if (accountRevoked !== undefined) throw new StaleDecisionError('PROJECTION_GONE');
     const settings = database
       .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')

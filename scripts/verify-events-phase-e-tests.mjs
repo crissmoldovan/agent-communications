@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createScanner, SyntaxKind } from 'typescript/unstable/ast';
+import { JUDGE_KINDS } from '../packages/events-daemon/src/domain/lifecycle.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MANIFEST = 'packages/events-daemon/test/fixtures/judges/case-manifest.json';
@@ -191,6 +193,9 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e12-disable-all-purge',
   'e12-account-rule-revoke',
   'e12-derived-parent-revoke',
+  'e12-account-source-purge',
+  'e12-judge-key-generation-fence',
+  'e12-judge-kind-literal-guard',
   'e12-audit-matrix',
   'e12-static-network-path',
   'e12-purge-caller-registry',
@@ -208,6 +213,7 @@ export const PHASE_E_AUDIT_MATRIX = Object.freeze([
   ...auditRows('await-write', [
     ['activation-approval-claim-to-pointer', 'e4-final-pointer-drift'],
     ['secret-store-to-key-completion', 'e9-judge-key-rotate-current-generation'],
+    ['hosted-key-read-to-transport-gates', 'e12-judge-key-generation-fence'],
     ['decrypt-evaluate-to-reservation', 'e7-settlement-token'],
     ['taint-flush-to-reservation', 'e7-taint-before-reserve'],
     ['authority-read-to-in-flight', 'e6-write-final-gate'],
@@ -249,7 +255,7 @@ export const PHASE_E_AUDIT_MATRIX = Object.freeze([
   ]),
   ...auditRows('alias', [
     ['account-remove-readd', 'e12-account-remove-readd-purge'],
-    ['same-looking-cross-source-id', 'e3-scope-account-source'],
+    ['same-looking-cross-source-id', 'e12-account-source-purge'],
     ['stable-rule-id-across-version', 'e5-stable-rule-key'],
     ['unique-work-id', 'e5-double-settle'],
     ['provider-from-embedded-judge', 'e5-stable-rule-key'],
@@ -335,7 +341,7 @@ export const PHASE_E_AUDIT_MATRIX = Object.freeze([
   ]),
 ]);
 
-const PHASE_E_AUDIT_MATRIX_SHA256 = '78f98882a6f593f599d6323c3feac42a4efa07792a8f4fc4649312f43aa7f88e';
+const PHASE_E_AUDIT_MATRIX_SHA256 = '81974f7a8d9cf2a8d783f42718227380a201cae40e06c186728ff55e9ac7cdf1';
 const REQUIRED_CORPUS_ROWS = Object.freeze(
   PHASE_E_AUDIT_MATRIX.filter((row) => row.category === 'corpus-case').map((row) => row.id),
 );
@@ -419,27 +425,98 @@ async function tsFiles(root, directory) {
   return files;
 }
 
-const typesafeKind = 'typesafe';
-const layaKind = 'laya';
-const localEndpointKind = 'local-endpoint';
-const JUDGE_KIND_NAMES = new Set([typesafeKind, layaKind, localEndpointKind]);
+const EXPRESSION_END_TOKENS = new Set([
+  SyntaxKind.Identifier,
+  SyntaxKind.PrivateIdentifier,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.ThisKeyword,
+  SyntaxKind.SuperKeyword,
+  SyntaxKind.CloseBracketToken,
+  SyntaxKind.TemplateTail,
+]);
+const CONTROL_PAREN_TOKENS = new Set([
+  SyntaxKind.IfKeyword,
+  SyntaxKind.WhileKeyword,
+  SyntaxKind.ForKeyword,
+  SyntaxKind.WithKeyword,
+  SyntaxKind.SwitchKeyword,
+  SyntaxKind.CatchKeyword,
+]);
 
-function hasAllJudgeKinds(text) {
-  return [...JUDGE_KIND_NAMES].every((kind) => new RegExp(`['"]${kind}['"]`, 'u').test(text));
+function contextualTokens(text) {
+  const scanner = createScanner(true, undefined, text);
+  const templateBraceDepths = [];
+  const controlParens = [];
+  const tokens = [];
+  let expressionMayStart = true;
+  let previousToken;
+  for (let token = scanner.scan(); token !== SyntaxKind.EndOfFile; token = scanner.scan()) {
+    const expressionCouldStartBeforeToken = expressionMayStart;
+    if (expressionMayStart && (token === SyntaxKind.SlashToken || token === SyntaxKind.SlashEqualsToken))
+      token = scanner.reScanSlashToken();
+    if (token === SyntaxKind.TemplateHead) templateBraceDepths.push(0);
+    else if (templateBraceDepths.length > 0 && token === SyntaxKind.OpenBraceToken)
+      templateBraceDepths[templateBraceDepths.length - 1] += 1;
+    else if (templateBraceDepths.length > 0 && token === SyntaxKind.CloseBraceToken) {
+      const depth = templateBraceDepths.length - 1;
+      if (templateBraceDepths[depth] > 0) templateBraceDepths[depth] -= 1;
+      else if (scanner.reScanTemplateToken() === SyntaxKind.TemplateTail) templateBraceDepths.pop();
+    }
+    // A context-free scanner reports a zero-width private identifier for a bare `#` in a regular expression.
+    // Rescanning it as an invalid identifier preserves progress without treating regex contents as strings.
+    if (scanner.getTokenEnd() === scanner.getTokenStart()) scanner.reScanInvalidIdentifier();
+    tokens.push({ kind: token, value: scanner.getTokenValue() });
+
+    if (token === SyntaxKind.OpenParenToken) {
+      controlParens.push(CONTROL_PAREN_TOKENS.has(previousToken));
+      expressionMayStart = true;
+    } else if (token === SyntaxKind.CloseParenToken) {
+      expressionMayStart = controlParens.pop() === true;
+    } else if (token === SyntaxKind.CloseBraceToken) {
+      // A block can be followed by an expression statement. Treat the ambiguous object/block case as a regex so
+      // quote characters inside that regex cannot corrupt every token that follows it.
+      expressionMayStart = true;
+    } else if (token === SyntaxKind.PlusPlusToken || token === SyntaxKind.MinusMinusToken) {
+      expressionMayStart = expressionCouldStartBeforeToken;
+    } else if (token === SyntaxKind.ExclamationToken && !expressionCouldStartBeforeToken) {
+      expressionMayStart = false;
+    } else {
+      expressionMayStart = !EXPRESSION_END_TOKENS.has(token);
+    }
+    previousToken = token;
+  }
+  return tokens;
 }
 
-function hasClosedKindLiteral(text) {
-  const arrays = text.match(/\[[^\]]{0,500}\]/gsu) ?? [];
-  if (arrays.some(hasAllJudgeKinds)) return true;
-  const objects = text.match(/\{[^{}]{0,500}\}/gsu) ?? [];
+function hasJudgeKindLiteral(text) {
+  const kinds = new Set(JUDGE_KINDS);
   if (
-    objects.some((object) =>
-      [...JUDGE_KIND_NAMES].every((kind) => new RegExp(`(?:['"]${kind}['"]|${kind})\\s*:`, 'u').test(object)),
+    contextualTokens(text).some(
+      (token) =>
+        (token.kind === SyntaxKind.StringLiteral || token.kind === SyntaxKind.NoSubstitutionTemplateLiteral) &&
+        kinds.has(token.value),
     )
   )
     return true;
-  const declarations = text.match(/(?:type|interface)\s+[A-Za-z_$][\w$]*(?:\s*<[^>]*>)?\s*=\s*[^;\n]{0,500}/gu) ?? [];
-  return declarations.some((declaration) => declaration.includes('|') && hasAllJudgeKinds(declaration));
+  // Fail closed if malformed surrounding syntax still confuses contextual tokenisation: scan from every possible
+  // literal opener so one earlier token can never swallow a later canonical value.
+  for (const match of text.matchAll(/['"`]/gu)) {
+    const scanner = createScanner(true, undefined, text.slice(match.index));
+    const token = scanner.scan();
+    if (
+      (token === SyntaxKind.StringLiteral || token === SyntaxKind.NoSubstitutionTemplateLiteral) &&
+      kinds.has(scanner.getTokenValue())
+    )
+      return true;
+  }
+  return false;
 }
 
 function sqlStatements(text) {
@@ -545,7 +622,7 @@ export function verifyPhaseEJudgeSource({ file, source: text }) {
     problems.push(`${file}: judge paths must not use computed module specifiers`);
   if (judgePath && /\[\s*['"]request['"]\s*\]\s*\(/u.test(executableText))
     problems.push(`${file}: judge paths must not use computed request aliases`);
-  if (file !== 'packages/events-daemon/src/domain/lifecycle.ts' && hasClosedKindLiteral(text)) {
+  if (file !== 'packages/events-daemon/src/domain/lifecycle.ts' && hasJudgeKindLiteral(text)) {
     problems.push(`${file}: judge kind literals must come from domain/lifecycle.ts`);
   }
   for (const statement of sqlStatements(text)) {

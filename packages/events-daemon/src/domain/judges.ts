@@ -2,7 +2,14 @@ import { canonicalJson } from '@agentcomms/core';
 import { parsePointer } from '@agentcomms/events';
 import { assertApprovedAddressSet, parseIpLiteral } from '../network/address-policy.ts';
 import { validateLocalEndpoint } from '../network/local-endpoint.ts';
-import { EventDomainError, JUDGE_KINDS, type JudgeKind } from './lifecycle.ts';
+import {
+  EventDomainError,
+  JUDGE_KIND_LAYA,
+  JUDGE_KIND_LOCAL_ENDPOINT,
+  JUDGE_KIND_TYPESAFE,
+  JUDGE_KINDS,
+  type JudgeKind,
+} from './lifecycle.ts';
 
 export const TYPESAFE_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const JUDGE_BUDGET_ID = 'judge-budget';
@@ -17,8 +24,8 @@ export type JudgeProtocol =
 export interface TypeSafeJudgeDocument {
   readonly judgeId: string;
   readonly version: number;
-  readonly kind: 'typesafe';
-  readonly provider: 'typesafe';
+  readonly kind: typeof JUDGE_KIND_TYPESAFE;
+  readonly provider: typeof JUDGE_KIND_TYPESAFE;
   readonly model: ApprovedTypeSafeModel;
   readonly endpoint: typeof TYPESAFE_SYSTEM_ONE_ENDPOINT;
   readonly promptTemplate: string;
@@ -28,7 +35,7 @@ export interface TypeSafeJudgeDocument {
 interface LocalEndpointJudgeBase {
   readonly judgeId: string;
   readonly version: number;
-  readonly kind: 'local-endpoint';
+  readonly kind: typeof JUDGE_KIND_LOCAL_ENDPOINT;
   readonly provider: string;
   readonly model: string;
   readonly endpoint: string;
@@ -58,11 +65,15 @@ export interface CanonicalJudgeBudgetDocument {
 export type CanonicalJudgeKindEnablementDocument =
   | {
       readonly id: 'judge-kind:typesafe';
-      readonly kind: 'typesafe';
+      readonly kind: typeof JUDGE_KIND_TYPESAFE;
       readonly version: number;
       readonly endpoint: typeof TYPESAFE_SYSTEM_ONE_ENDPOINT;
     }
-  | { readonly id: 'judge-kind:local-endpoint'; readonly kind: 'local-endpoint'; readonly version: number };
+  | {
+      readonly id: 'judge-kind:local-endpoint';
+      readonly kind: typeof JUDGE_KIND_LOCAL_ENDPOINT;
+      readonly version: number;
+    };
 
 export interface JudgeKindDefinition {
   readonly kind: JudgeKind;
@@ -146,14 +157,14 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
   const kind = judge.kind;
   if (!(JUDGE_KINDS as readonly string[]).includes(kind as string))
     return fail('a judge document has a known judge kind');
-  if (kind === 'laya') return fail('laya is unavailable until E2', 'E2_REQUIRED');
-  if (kind === 'typesafe') {
+  if (kind === JUDGE_KIND_LAYA) return fail('laya is unavailable until E2', 'E2_REQUIRED');
+  if (kind === JUDGE_KIND_TYPESAFE) {
     exactKeys(
       judge,
       ['judgeId', 'version', 'kind', 'provider', 'model', 'endpoint', 'promptTemplate', 'protocol'],
       'a typesafe judge document',
     );
-    if (judge.provider !== 'typesafe') return fail('a typesafe judge names the TypeSafe Jev adapter');
+    if (judge.provider !== JUDGE_KIND_TYPESAFE) return fail('a typesafe judge names the TypeSafe Jev adapter');
     if (!(APPROVED_TYPESAFE_MODELS as readonly string[]).includes(judge.model as string))
       return fail('a typesafe judge names one concrete model listed in the provider record');
     if (judge.endpoint !== TYPESAFE_SYSTEM_ONE_ENDPOINT)
@@ -162,8 +173,8 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
     if (parsedProtocol.protocol !== 'noul') return fail('a typesafe judge uses the noul protocol');
     return {
       ...identity(judge, 'a typesafe judge'),
-      kind: 'typesafe',
-      provider: 'typesafe',
+      kind: JUDGE_KIND_TYPESAFE,
+      provider: JUDGE_KIND_TYPESAFE,
       model: judge.model as ApprovedTypeSafeModel,
       endpoint: TYPESAFE_SYSTEM_ONE_ENDPOINT,
       promptTemplate: text(judge.promptTemplate, 'a typesafe judge prompt template'),
@@ -211,7 +222,7 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
     if (local.url.search !== '') return fail('a local judge endpoint has no query');
     return {
       ...identity(judge, 'a local judge'),
-      kind: 'local-endpoint',
+      kind: JUDGE_KIND_LOCAL_ENDPOINT,
       provider: text(judge.provider, 'a local judge provider'),
       model: text(judge.model, 'a local judge model'),
       endpoint: local.url.href,
@@ -295,13 +306,13 @@ export function canonicalJudgeKindEnablement(value: unknown): CanonicalJudgeKind
     return fail('laya is unavailable until E2', 'E2_REQUIRED');
   const id = `judge-kind:${kind}`;
   if (enablement.id !== id) return fail(`a judge-kind document id is ${id}`);
-  if (kind === 'typesafe') {
+  if (kind === JUDGE_KIND_TYPESAFE) {
     exactKeys(enablement, ['id', 'kind', 'version', 'endpoint'], 'a typesafe judge-kind document');
     if (enablement.endpoint !== TYPESAFE_SYSTEM_ONE_ENDPOINT)
       return fail('a typesafe judge-kind document has the fixed System One endpoint');
     return {
       id: 'judge-kind:typesafe',
-      kind: 'typesafe',
+      kind: JUDGE_KIND_TYPESAFE,
       version: positiveInteger(enablement.version, 'a judge-kind version'),
       endpoint: TYPESAFE_SYSTEM_ONE_ENDPOINT,
     };
@@ -309,7 +320,7 @@ export function canonicalJudgeKindEnablement(value: unknown): CanonicalJudgeKind
   exactKeys(enablement, ['id', 'kind', 'version'], 'a local-endpoint judge-kind document');
   return {
     id: 'judge-kind:local-endpoint',
-    kind: 'local-endpoint',
+    kind: JUDGE_KIND_LOCAL_ENDPOINT,
     version: positiveInteger(enablement.version, 'a judge-kind version'),
   };
 }

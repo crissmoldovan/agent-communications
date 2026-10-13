@@ -94,8 +94,11 @@ export function assertSourceWriteStillLive(
     .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
     .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
   const revoked = database
-    .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ? AND revoked_at >= ?')
-    .get(scope.accountId, snapshot.startedAt);
+    .prepare(
+      `SELECT 1 AS present FROM account_revocations
+        WHERE account_id = ? AND (source IS NULL OR source = ?) AND revoked_at >= ?`,
+    )
+    .get(scope.accountId, scope.source, snapshot.startedAt);
   if (
     settings === undefined ||
     settings.enabled !== snapshot.enabled ||

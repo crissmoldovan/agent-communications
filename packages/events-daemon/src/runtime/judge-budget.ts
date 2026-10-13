@@ -806,11 +806,30 @@ export function assertJudgeReservationInFlightInTransaction(
   database: DatabaseSync,
   reservationId: string,
   now: number = Date.now(),
+  hostedKey?: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined,
 ): void {
   const row = readReservation(database, reservationId);
   if (row === null || row.state !== 'in-flight' || row.concurrency_owned !== 1)
     refusal('JUDGE_AUTHORITY_CHANGED', 'the judge reservation is no longer in flight');
   assertReservationAuthority(database, row, now);
+  if (hostedKey !== undefined) {
+    if (row.judge_id !== hostedKey.judgeId || row.judge_version !== hostedKey.judgeVersion)
+      refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key does not belong to this reservation');
+    const current = database
+      .prepare(
+        `SELECT 1 AS present
+           FROM event_secret_generations AS generation
+           JOIN judge_versions AS judge
+             ON judge.judge_id = generation.owner_id AND judge.version = generation.owner_version
+          WHERE generation.owner_kind = 'judge' AND generation.purpose = 'judge-key'
+            AND generation.owner_id = ? AND generation.owner_version = ? AND generation.generation = ?
+            AND generation.lifecycle = 'current' AND generation.owner_digest = judge.digest
+            AND judge.revoked_at IS NULL`,
+      )
+      .get(hostedKey.judgeId, hostedKey.judgeVersion, hostedKey.generation);
+    if (current === undefined)
+      refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key generation is no longer current');
+  }
   const scope = sourceScope(row);
   if (scope === null) return;
   assertSourceReservationBoundary(database, scope, row.switch_generation);
@@ -828,8 +847,11 @@ function assertSourceReservationBoundary(
   if (settings?.enabled !== 1 || settings.switch_generation !== switchGeneration)
     refusal('JUDGE_AUTHORITY_CHANGED', 'the event switch changed before the judge boundary');
   const revoked = database
-    .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ?')
-    .get(scope.accountId);
+    .prepare(
+      `SELECT 1 AS present FROM account_revocations
+        WHERE account_id = ? AND (source IS NULL OR source = ?)`,
+    )
+    .get(scope.accountId, scope.source);
   if (revoked !== undefined)
     refusal('JUDGE_AUTHORITY_CHANGED', 'the event account was removed before the judge boundary');
 }
@@ -838,9 +860,10 @@ export function assertJudgeReservationStillInFlight(input: {
   readonly store: EventDatabase;
   readonly reservationId: string;
   readonly now?: number | undefined;
+  readonly hostedKey?: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined;
 }): void {
   input.store.immediate(() => {
-    assertJudgeReservationInFlightInTransaction(input.store.database, input.reservationId, input.now);
+    assertJudgeReservationInFlightInTransaction(input.store.database, input.reservationId, input.now, input.hostedKey);
   });
 }
 

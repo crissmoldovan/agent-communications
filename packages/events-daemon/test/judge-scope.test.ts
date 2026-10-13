@@ -352,6 +352,55 @@ test('E3 scope: a strict runner whose loop only diagnoses mutations is rejected 
 });
 
 test('E3 scope: static guards analyse each kind literal and each SQL statement independently', () => {
+  const kindProblem = ['src/runtime/kinds.ts: judge kind literals must come from domain/lifecycle.ts'];
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const hosted = 'typesafe'; const embedded = 'laya'; const local = 'local-endpoint';",
+    }),
+    kindProblem,
+    'separate constants cannot split the closed judge-kind vocabulary past the guard',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const kinds = { hosted: 'typesafe', embedded: 'laya', local: 'local-endpoint' };",
+    }),
+    kindProblem,
+    'an object of judge-kind values cannot duplicate the canonical registry',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: 'const hosted = `typesafe`; const embedded = `laya`; const local = `local-endpoint`;',
+    }),
+    kindProblem,
+    'no-substitution template literals cannot duplicate the canonical judge-kind registry',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const hosted = '\\x74ypesafe';",
+    }),
+    kindProblem,
+    'an escaped string literal cannot disguise a canonical judge kind',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const open = '/*'; const hosted = 'typesafe'; const close = '*/';",
+    }),
+    kindProblem,
+    'comment delimiters inside strings cannot hide a canonical judge kind',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const quote = /['\"]/; const hosted = 'typesafe';",
+    }),
+    kindProblem,
+    'regular-expression quote characters cannot hide a canonical judge kind',
+  );
   assert.deepEqual(
     verifyPhaseEJudgeSource({
       file: 'src/runtime/kinds.ts',

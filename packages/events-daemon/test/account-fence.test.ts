@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { assertLiveGmailAccount, purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
+import { assertSourceWriteStillLive, StaleSourceWriteError, sourceRuleSetSnapshot } from '../src/sources/contracts.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -94,6 +95,32 @@ test('TGT-B1: an account removal purges its points, resolutions and pending inge
     assert.equal(state('multi@1'), 'active', 'a version that binds another account stays live for it');
     assert.equal(count("active_versions WHERE object_id = 'multi'"), 1);
     assert.equal(count('account_revocations WHERE account_id = ?', removed), 1);
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('E12 account scope: migrated source-less revocations fail closed for every source', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-account-legacy-revocation-');
+  const store = await openEventDatabase({ stateDir });
+  const accountId = 'same-looking-legacy-account';
+  try {
+    store.database.prepare('INSERT INTO account_revocations (account_id, revoked_at) VALUES (?, ?)').run(accountId, 2);
+    for (const source of ['gmail', 'slack', 'resend', 'whatsapp'] as const)
+      assert.throws(
+        () =>
+          assertSourceWriteStillLive(
+            store.database,
+            { source, accountId, scopeId: 'synthetic-scope' },
+            { generation: 0, enabled: 1, startedAt: 1, rules: sourceRuleSetSnapshot([]) },
+            () => [],
+          ),
+        StaleSourceWriteError,
+        `a migrated source-less revocation fails closed for ${source}`,
+      );
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });

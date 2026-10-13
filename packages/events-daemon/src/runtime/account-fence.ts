@@ -104,10 +104,12 @@ export function purgeRemovedAccountWork(
        WHERE id IN (${plannedIntentIds})`,
     )
     .run(ACTIVATION_FAILURE.ACCOUNT_REMOVED, now, accountId, source);
+  const sourceEventIds = `SELECT event_id FROM ingest WHERE account_id = ? AND type GLOB ?`;
+  const eventTypePattern = `${source}.*`;
   if (source === 'whatsapp') {
     // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
     // occurrence ledger when a re-check observes account removal under the list lock.
-    database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
+    database.prepare(`DELETE FROM stream_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
     database.prepare('DELETE FROM whatsapp_rule_admissions WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_heads WHERE account_id = ?').run(accountId);
@@ -124,24 +126,35 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM cursors WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM activation_baselines WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
-  database
-    .prepare('DELETE FROM ingest_rules WHERE event_id IN (SELECT event_id FROM ingest WHERE account_id = ?)')
-    .run(accountId);
-  database.prepare('DELETE FROM dryrun_log WHERE account_id = ?').run(accountId);
-  if (source !== 'whatsapp') database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
+  database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
+  database.prepare(`DELETE FROM dryrun_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
+  database.prepare(`DELETE FROM stream_log WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE account_id = ? AND state = 'disclosing'",
+      `UPDATE deliveries
+          SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+        WHERE decision_id IN (
+          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
+        ) AND state = 'disclosing'`,
     )
-    .run(accountId);
+    .run(accountId, eventTypePattern);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, next_at = NULL WHERE account_id = ? AND state IN ('queued', 'retryable')",
+      `UPDATE deliveries
+          SET state = 'cancelled', encrypted_record = NULL, next_at = NULL
+        WHERE decision_id IN (
+          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
+        ) AND state IN ('queued', 'retryable')`,
     )
-    .run(accountId);
+    .run(accountId, eventTypePattern);
   database
-    .prepare("UPDATE deliveries SET encrypted_record = NULL WHERE account_id = ? AND state = 'dead-lettered'")
-    .run(accountId);
+    .prepare(
+      `UPDATE deliveries SET encrypted_record = NULL
+        WHERE decision_id IN (
+          SELECT decision.id FROM decisions AS decision WHERE decision.event_id IN (${sourceEventIds})
+        ) AND state = 'dead-lettered'`,
+    )
+    .run(accountId, eventTypePattern);
   // D9: the account's activation points and source resolutions go too, so a later reconnect of the same stable id can
   // never resume from a cut-over taken before the removal and backfill the mail that arrived meanwhile.
   database.prepare('DELETE FROM rule_activation_points WHERE source = ? AND account_id = ?').run(source, accountId);
@@ -153,20 +166,24 @@ export function purgeRemovedAccountWork(
     .run(source, accountId);
   database
     .prepare(
-      "UPDATE decisions SET outcome = 'cancelled', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL WHERE account_id = ? AND outcome = 'hold'",
+      `UPDATE decisions
+          SET outcome = 'cancelled', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL
+        WHERE event_id IN (${sourceEventIds}) AND outcome = 'hold'`,
     )
-    .run(accountId);
-  database.prepare('UPDATE decisions SET encrypted_record = NULL WHERE account_id = ?').run(accountId);
+    .run(accountId, eventTypePattern);
+  database
+    .prepare(`UPDATE decisions SET encrypted_record = NULL WHERE event_id IN (${sourceEventIds})`)
+    .run(accountId, eventTypePattern);
   // Its ingest records go with its projections. One a terminal decision still names stays as that content-free
   // decision's identity (the spec keeps the delivery's cancelled or in-flight outcome), and goes when the decision does.
   database
     .prepare(
-      `DELETE FROM ingest WHERE account_id = ?
+      `DELETE FROM ingest WHERE account_id = ? AND type GLOB ?
          AND NOT EXISTS (SELECT 1 FROM decisions WHERE decisions.event_id = ingest.event_id)
          AND NOT EXISTS (SELECT 1 FROM dryrun_log WHERE dryrun_log.event_id = ingest.event_id)
          AND NOT EXISTS (SELECT 1 FROM stream_log WHERE stream_log.event_id = ingest.event_id)`,
     )
-    .run(accountId);
+    .run(accountId, eventTypePattern);
   // D9: every live rule version whose source scope names only that account is revoked, as a disable revokes it. A
   // multi-account version stays live for its other ids; the account fence stops it polling or disclosing this one.
   const versions = database
@@ -191,6 +208,9 @@ export function purgeRemovedAccountWork(
       .run(version.rule_id, version.version);
   }
   database
-    .prepare('INSERT OR REPLACE INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
-    .run(accountId, now);
+    .prepare(
+      `INSERT INTO account_revocations (source, account_id, revoked_at) VALUES (?, ?, ?)
+       ON CONFLICT(source, account_id) DO UPDATE SET revoked_at = excluded.revoked_at`,
+    )
+    .run(source, accountId, now);
 }

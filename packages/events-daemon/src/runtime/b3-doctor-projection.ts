@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import { isActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import { JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
+import { JUDGE_KIND_LAYA, JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
 import {
   assertDoctorReportV1,
   assertDoctorReportV2,
@@ -20,7 +20,9 @@ import { type LineageFailureCode, type RuleLineageRow, validateRuleLineage } fro
 export const DOCTOR_REPORT_V1_SCHEMA_VERSION = 'doctor-v1' as const;
 
 function preEJudgeBoundary(kind: JudgeKind): DoctorReportV1['judgeBoundary'][number] {
-  return kind === 'laya' ? { kind, code: 'E2_REQUIRED', phase: 'E2' } : { kind, code: 'E_REQUIRED', phase: 'E' };
+  return kind === JUDGE_KIND_LAYA
+    ? { kind, code: 'E2_REQUIRED', phase: 'E2' }
+    : { kind, code: 'E_REQUIRED', phase: 'E' };
 }
 
 interface DoctorProjectionInput {
@@ -418,8 +420,12 @@ export async function projectB3Doctor(input: DoctorProjectionInput): Promise<Doc
     .filter(({ account }) => live.has(`${account.source}\u0000${account.accountId}`))
     .filter(
       ({ account }) =>
-        input.database.prepare('SELECT 1 FROM account_revocations WHERE account_id = ?').get(account.accountId) !==
-        undefined,
+        input.database
+          .prepare(
+            `SELECT 1 FROM account_revocations
+              WHERE account_id = ? AND (source IS NULL OR source = ?)`,
+          )
+          .get(account.accountId, account.source) !== undefined,
     )
     .filter(
       ({ row, account }) =>
@@ -587,7 +593,8 @@ export async function projectB3Doctor(input: DoctorProjectionInput): Promise<Doc
 export async function projectE9Doctor(input: DoctorProjectionInput): Promise<DoctorReportV2> {
   const report = await projectB3Doctor(input);
   const kinds = [...JUDGE_KINDS].map((kind) => {
-    if (kind === 'laya') return { kind: 'laya' as const, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
+    if (kind === JUDGE_KIND_LAYA)
+      return { kind: JUDGE_KIND_LAYA, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
     const active = input.database
       .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
       .get(kind) as { version: number } | undefined;
@@ -644,7 +651,7 @@ export async function projectE9Doctor(input: DoctorProjectionInput): Promise<Doc
   return assertDoctorReportV2({
     ...report,
     schemaVersion: 'doctor-v2',
-    judgeBoundary: [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+    judgeBoundary: [{ kind: JUDGE_KIND_LAYA, code: 'E2_REQUIRED', phase: 'E2' }],
     judge: { kinds, budget: { activeVersion: budget?.version ?? null }, reservations },
   });
 }

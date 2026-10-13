@@ -1,4 +1,5 @@
 import { canonicalJudge, JUDGE_KIND_DEFINITIONS } from '../domain/judges.ts';
+import { JUDGE_KIND_LAYA, JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import {
   B3_CAPABILITIES,
   B3_CONTROL_CONTRACT,
@@ -18,8 +19,8 @@ const VALID_JUDGES = [
   {
     judgeId: 'phase-e-prerequisite-typesafe',
     version: 1,
-    kind: 'typesafe',
-    provider: 'typesafe',
+    kind: JUDGE_KIND_TYPESAFE,
+    provider: JUDGE_KIND_TYPESAFE,
     model: 'jev-1.13.0',
     endpoint: 'https://api.typesafe.ai/v1/systemone',
     promptTemplate: 'typesafe-jev-noul-v1',
@@ -28,7 +29,7 @@ const VALID_JUDGES = [
   {
     judgeId: 'phase-e-prerequisite-local',
     version: 1,
-    kind: 'local-endpoint',
+    kind: JUDGE_KIND_LOCAL_ENDPOINT,
     provider: 'synthetic-local',
     model: 'noul',
     endpoint: 'http://127.0.0.1:11434/v1/decide',
@@ -40,7 +41,7 @@ const VALID_JUDGES = [
 const INVALID_JUDGES: readonly unknown[] = [
   { ...VALID_JUDGES[0], protocol: 'json-score', scorePointer: '/score' },
   { ...VALID_JUDGES[1], approvedAddressSet: ['203.0.113.1'] },
-  { ...VALID_JUDGES[0], kind: 'laya' },
+  { ...VALID_JUDGES[0], kind: JUDGE_KIND_LAYA },
 ];
 function requireCanonicalJudgeRefusal(value: unknown): void {
   try {
@@ -83,11 +84,17 @@ export function assertPhaseEPrerequisites(): void {
 
   required(
     JUDGE_KIND_DEFINITIONS.length === 3 &&
-      JUDGE_KIND_DEFINITIONS.some((entry) => entry.kind === 'typesafe' && entry.availability === 'available') &&
-      JUDGE_KIND_DEFINITIONS.some((entry) => entry.kind === 'local-endpoint' && entry.availability === 'available') &&
+      JUDGE_KIND_DEFINITIONS.some(
+        (entry) => entry.kind === JUDGE_KIND_TYPESAFE && entry.availability === 'available',
+      ) &&
+      JUDGE_KIND_DEFINITIONS.some(
+        (entry) => entry.kind === JUDGE_KIND_LOCAL_ENDPOINT && entry.availability === 'available',
+      ) &&
       JUDGE_KIND_DEFINITIONS.some(
         (entry) =>
-          entry.kind === 'laya' && entry.availability === 'unavailable' && entry.unavailableCode === 'E2_REQUIRED',
+          entry.kind === JUDGE_KIND_LAYA &&
+          entry.availability === 'unavailable' &&
+          entry.unavailableCode === 'E2_REQUIRED',
       ),
     'Phase E judge-kind registry',
   );
