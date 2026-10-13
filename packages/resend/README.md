@@ -9,7 +9,8 @@ npm install -g @agentcomms/resend    # or run it with npx @agentcomms/resend <co
 
 New in 0.7.0.
 
-Phase D's held local event daemon may call this package's internal read-only event operation. It adds no Resend command
+The local event daemon, [`@agentcomms/events-daemon`](../events-daemon/README.md), may call this package's internal
+read-only event operation. It adds no Resend command
 or MCP tool, and it cannot send.
 
 ## What it promises, and who enforces it

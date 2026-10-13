@@ -1133,7 +1133,7 @@ test('the hand-written-list guard reads its words from the registry, so a channe
   assert.doesNotMatch('const ALSO_FOREIGN = { newcomer: [/\\bmailbox(es)?\\b/i] };', guard);
 });
 
-test('this checkout’s registry is the five channels, one held library, one held service and eight packages it ships', () => {
+test('this checkout’s registry is the five channels, one library, one service and eight packages it ships, none held', () => {
   assert.deepEqual(
     REGISTRY.channels.map((channel) => channel.directory),
     ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
@@ -1158,9 +1158,10 @@ test('this checkout’s registry is the five channels, one held library, one hel
     REGISTRY.services.map((service) => service.directory),
     ['events-daemon'],
   );
+  // 0.16.0 lifted the holds on the event library and daemon: both are now published with every release.
   assert.deepEqual(
     REGISTRY.held.map((entry) => entry.directory),
-    ['events', 'events-daemon'],
+    [],
   );
   assert.deepEqual(REGISTRY.undeclared, []);
 });

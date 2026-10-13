@@ -58,29 +58,27 @@ test('every declared CLI/MCP surface has generated reference destinations', () =
   }
 });
 
-test('the held local event service README states the B1, B2 and Phase-D boundaries', async () => {
+test('the local event service README states its boundaries for the person using it', async () => {
   const readme = await readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8');
   const prose = readme.replace(/\s+/g, ' ');
-  assert.match(prose, /foreground owner only/i);
-  assert.match(prose, /macOS and Linux only/i);
-  assert.match(prose, /Windows refuses/i);
+  assert.match(prose, /foreground owner/i);
+  assert.match(prose, /no background service or autostart/i);
+  assert.match(prose, /macOS or Linux/i);
+  assert.match(prose, /Windows is refused/i);
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
-  assert.match(prose, /B1 accepts the local .*dry-run target/i);
-  assert.match(prose, /reads are terminal-only/i);
-  assert.match(prose, /Gmail, Slack, Resend and WhatsApp.*one owner/i);
-  assert.match(prose, /Slack scans history and thread replies.*reply barrier/i);
-  assert.match(prose, /Resend resolves received mail through its detail operation.*sent-mail status/i);
-  assert.match(prose, /Unicode-validated and bounded.*local throttle/i);
-  assert.match(prose, /WhatsApp reads the local checked copy only through the current live chat lists/i);
-  assert.match(prose, /hidden chat reaches no dry-run, stream or dead letter/i);
-  assert.match(prose, /Phase D adds no command or MCP tool beyond the `source show` rows for the new sources/i);
   assert.match(
     prose,
-    /stream and dead-letter handling is registered into Phase D's single list-change and retention transaction/i,
+    /Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal/i,
   );
-  assert.match(prose, /Every Phase D test uses fakes, never a real provider/i);
-  assert.match(prose, /held from publication throughout B1, B2 and Phase D/i);
-  assert.match(prose, /A B1, B2 or Phase D merge publishes neither package/i);
+  assert.match(prose, /dry-run log you read at your terminal/i);
+  assert.match(prose, /only a person at a terminal can read/i);
+  assert.match(prose, /Gmail, Slack, Resend and WhatsApp/i);
+  assert.match(prose, /Slack messages and thread replies/i);
+  assert.match(prose, /Resend received mail and sent-mail status/i);
+  assert.match(prose, /hidden chat never reaches a target/i);
+  assert.match(prose, /never sends mail or messages through them/i);
+  assert.match(prose, /An agent can never/i);
+  assert.match(prose, /judges are not available yet/i);
 });
 
 test('the Phase-D channel README notes keep event operations internal and read-only', async () => {
@@ -93,7 +91,11 @@ test('the Phase-D channel README notes keep event operations internal and read-o
 
   for (const { channel, text } of readmes) {
     const prose = text.replace(/\s+/g, ' ');
-    assert.match(prose, /held local event daemon may call this package's internal read-only event operation/i, channel);
+    assert.match(
+      prose,
+      /local event daemon, \[`@agentcomms\/events-daemon`\]\(\.\.\/events-daemon\/README\.md\), may call this package's internal read-only event operation/i,
+      channel,
+    );
     assert.match(prose, new RegExp(`adds no ${channel} command or MCP tool`, 'i'), channel);
   }
 });

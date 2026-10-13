@@ -3,6 +3,36 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.16.0
+
+**Local events: `agent-events` watches the Gmail, Slack, Resend and WhatsApp accounts you connected and, when an event
+matches a rule you approved at your terminal, delivers it — to a signed webhook, a local live stream or a dry-run
+log.** Until now an agent could read your mail and messages only when asked; nothing could react when something
+arrived. Two new packages, and a skill:
+- **`@agentcomms/events-daemon`** (`agent-events`) — the local service, with its CLI and MCP server. A rule says which
+  source and accounts, which event, a condition on its fields, exactly which fields go out, and to which targets. When
+  you enable it you see the exact preview, and nothing is collected until you approve it by typing its challenge at
+  your terminal. Sources: Gmail (received, sent and labelled mail), Slack (messages and thread replies), Resend
+  (received mail and sent-mail status) and WhatsApp (messages from the chats WhatsApp for Mac lists; a hidden chat never
+  reaches a target). Targets: HTTPS webhooks — or plain HTTP to the literal loopback address — with pinned addresses,
+  every attempt signed (Standard Webhooks), and retry or drop per delivery; a loopback live stream (server-sent events)
+  with a token per subscriber; and an encrypted dry-run log only a person at a terminal can read. `pause`, `resume`,
+  `disable-all` (stops collection and purges pending work at once) and a content-free `doctor`.
+- **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a library with
+  no I/O for Node and browsers.
+- **The `agentcomms-events` skill** — how an agent proposes and tests rules over MCP. An agent can propose and test;
+  it can never approve, read what the dry-run log kept, see or set a secret, resume a target or decide a held event.
+
+**What is not in it yet.** Judges — a rule asking a model a yes/no question about an event — the desktop app and the
+local Laya model come in later releases; rules on an event's fields need none of them, and the judge commands say so.
+`agent-events` runs in the foreground, in a terminal you keep open, on macOS and Linux with Node 22.16 or newer;
+Windows is refused for now.
+
+**Upgrading.** Nothing changes for Gmail, Slack, Resend or WhatsApp. To try events: `npm i -g
+@agentcomms/events-daemon`, `agent-events run` in one terminal, then add a dry-run target and a rule as [its
+README](packages/events-daemon/README.md) shows. `agentcomms mcp install` does not register its MCP server yet: add
+`npx -y @agentcomms/events-daemon mcp` to your client yourself.
+
 ## 0.15.2
 
 **A Slack post, reaction, edit or deletion that Slack rate-limits waits and tries again, as Gmail and Resend sends do

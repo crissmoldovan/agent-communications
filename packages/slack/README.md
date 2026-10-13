@@ -7,7 +7,8 @@ draft messages that **nothing posts without a person's approval of exactly what 
 npm install -g @agentcomms/slack    # or run it with npx @agentcomms/slack <command>
 ```
 
-Phase D's held local event daemon may call this package's internal read-only event operation. It adds no Slack command
+The local event daemon, [`@agentcomms/events-daemon`](../events-daemon/README.md), may call this package's internal
+read-only event operation. It adds no Slack command
 or MCP tool, and it cannot post.
 
 ## What makes this different from a Slack integration

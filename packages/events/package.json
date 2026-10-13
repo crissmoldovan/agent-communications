@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "description": "The event catalogue, conditions and mapping templates of agent-communications' local event emission: isomorphic, with no I/O and no Node imports.",
   "type": "module",
   "license": "MIT",
@@ -48,8 +48,5 @@
   },
   "agentcommsPackage": {
     "kind": "library"
-  },
-  "agentcommsRelease": {
-    "hold": "Held until the first package that depends on it ships; its first version is then published by hand (docs/RELEASING.md, A package held back from release)."
   }
 }
