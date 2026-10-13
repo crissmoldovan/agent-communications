@@ -241,23 +241,22 @@ earlier, if the owner decides to publish it on its own:
 Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
 [a new package's first version](#a-new-packages-first-version), reached by lifting the hold.
 
-### The held event library and daemon
+### The event library and daemon
 
-`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1, B2 and Phase D. A B1, B2 or Phase D
-merge publishes neither package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and
-packed-tarball consumer checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths
-do not read their packuments.
+`@agentcomms/events` and `@agentcomms/events-daemon` were both held throughout phases A, B1, B2, B3 and D, and are
+released together from 0.16.0. While held, both stayed in `PUBLISHABLE` for builds, licences, version
+synchronisation and packed-tarball consumer checks, but neither was in `PACKAGES`, so no release read, sent or
+confirmed them.
 
-The B2 runtime's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS
-browser gate. It remains a release requirement while the packages are held; it is not a publish surface or a reason to
-lift either hold.
+The daemon's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS browser
+gate, and remains a release requirement.
 
-When the owner decides to release the first daemon consumer, they remove both holds in one normal version/release
-commit and tag it only after the complete release checks pass. From that same checked tag, the owner first publishes
-`@agentcomms/events`, then publishes `@agentcomms/events-daemon` with the same checked tag and command form. The order
-is required: the daemon pins its runtime dependency on the library to exactly that version. The owner then configures
-trusted publishing for each package and re-runs the tagged release, as [a new package's first
-version](#a-new-packages-first-version) describes. Use `next`, rather than `latest`, for a prerelease.
+Their first release removed both holds in the 0.16.0 version commit, tagged only after the complete release checks
+passed. From that same checked tag, the owner first publishes `@agentcomms/events`, then publishes
+`@agentcomms/events-daemon` with the same checked tag and command form. The order is required: the daemon pins its
+runtime dependency on the library to exactly that version. The owner then configures trusted publishing for each
+package and re-runs the tagged release, as [a new package's first version](#a-new-packages-first-version) describes.
+From then on both are published by every release, like the channels.
 
 ## If a publish fails part way through
 

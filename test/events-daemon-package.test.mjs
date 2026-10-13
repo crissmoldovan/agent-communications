@@ -29,7 +29,7 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
       contract: 'skills/_shared/contract-events.md',
     },
   });
-  assert.match(manifest.agentcommsRelease.hold, /held/i);
+  assert.equal(manifest.agentcommsRelease, undefined, 'released from 0.16.0: the daemon is no longer held');
   assert.deepEqual(manifest.dependencies, {
     '@agentcomms/core': 'workspace:*',
     '@agentcomms/events': 'workspace:*',

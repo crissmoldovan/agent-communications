@@ -9,8 +9,8 @@ It has no I/O. The same build runs in Node and browser webviews, imports no `nod
 file-system, clock or randomness call. Sanitising, untrusted-content envelopes, signing and delivery belong to the
 daemon that uses this library; this package reports source-field and mapped-value provenance instead.
 
-This package is held back from release until the first package that depends on it ships. Its first version is then
-published by hand; see [the release guide](../../docs/RELEASING.md#A-package-held-back-from-release).
+It is published with every release from 0.16.0, with [`@agentcomms/events-daemon`](../events-daemon/README.md), the
+local service that uses it.
 
 ## API
 

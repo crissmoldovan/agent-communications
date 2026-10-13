@@ -1,71 +1,146 @@
 # @agentcomms/events-daemon
 
-`@agentcomms/events-daemon` is the held local service package for agent-communications event emission. Its B1
-**foreground owner only** owns local state while the controlling terminal runs it, and stops cleanly on request or
-terminal shutdown. B2 keeps that lifecycle: there is no background fork, OS service, autostart, or tray owner.
+`agent-events` watches the Gmail, Slack, Resend and WhatsApp accounts you have already connected with
+agent-communications. When an event matches a rule you approved, it delivers that event to the rule's targets:
+- a signed HTTPS webhook;
+- a local live stream (server-sent events) for your own tools;
+- a dry-run log you read at your terminal.
 
-The package runs on **macOS and Linux only**. Windows refuses in B1 because Node cannot yet create a control pipe that
-only the current account can open. It needs **Node 22.16.0 or newer**, the first Node release with complete built-in
-SQLite support without a flag; an older Node is refused with what to install. Its control socket lives under the state
-directory, and a state directory deep enough to make that path longer than the system allows (103 bytes on macOS,
-107 on Linux) is refused with a hint to pin a shorter one.
+Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal.
 
-B1 accepts the local **dry-run target**. Dry-run reads are terminal-only: MCP never receives retained content, JSON
-output cannot select it, and an interactive human terminal renders it through the untrusted-content envelope after the
-live disclosure fence passes.
+```bash
+npm i -g @agentcomms/events-daemon   # or run any command with: npx -y @agentcomms/events-daemon <command>
+agent-events run                     # in a terminal you keep open: the owner of all event state
+```
 
-B2 adds internally fenced webhook delivery and a literal-loopback SSE listener, including browser CORS verification.
-B2 adds no command or MCP tool: the existing B1 target-version and `doctor` surfaces remain the whole public boundary.
-Delivery retry, drop or hold controls, subscriber management, named event-secret or migration operations, target
-test/resume/replay controls, judges, and B3 doctor extensions are not present. The B2 runtime never sends mail or
-messages through the channel packages.
+## What it needs
 
-Every socket and server the owner holds — webhook connections, the control socket and its server, the SSE listener and
-its streams — keeps an error listener for its whole life, so a peer that resets a connection ends that connection,
-never the owner.
+- **macOS or Linux.** Windows is refused for now: Node cannot yet make a control pipe that only your account can open.
+- **Node 22.16.0 or newer**, the first release with Node's built-in SQLite. An older Node is refused, and the message
+  says what to install.
+- **The accounts you want to watch, already connected** with `agent-gmail`, `agent-slack`, `agent-resend` or
+  `agent-whatsapp`. The daemon reads through those packages and never sends mail or messages through them.
 
-Phase D puts the four local sources — Gmail, Slack, Resend and WhatsApp — behind that one owner. Slack scans history
-and thread replies, and its reply barrier holds progress until both are covered. Resend resolves received mail through
-its detail operation and observes sent-mail status; its text is Unicode-validated and bounded, and all its event reads
-share the local throttle. WhatsApp reads the local checked copy only through the current live chat lists: a hidden chat
-reaches no dry-run, stream or dead letter. Phase D adds no command or MCP tool beyond the `source show` rows for the
-new sources. B2's stream and dead-letter handling is registered into Phase D's single list-change and retention
-transaction. Every Phase D test uses fakes, never a real provider.
+## How it runs
 
-## B3 compatibility contract
+`agent-events run` starts the **foreground owner**. It owns the event database while that terminal runs, and stops
+cleanly on `agent-events stop` or when the terminal closes. There is no background service or autostart in this
+release; the desktop app will supervise it later. Its state lives in an owner-only directory. A state directory so
+deep that its control socket's path would pass the system limit (103 bytes on macOS, 107 on Linux) is refused, with
+a hint to pin a shorter one.
 
-The data-only B3 control contract is published as
-[`b3-control-v1.schema.json`](src/operations/contracts/b3-control-v1.schema.json), with language-neutral,
-content-free request/result/error vectors in
-[`test/fixtures/b3-control-contract-v1`](test/fixtures/b3-control-contract-v1) and shared terminal approval-preview
-vectors in [`test/fixtures/b3-approval-preview-v1`](test/fixtures/b3-approval-preview-v1). It covers every
-desktop-callable `events-daemon` capability in `capabilities.json`—including lifecycle, catalogue, sources, rules,
-targets, subscribers, dry-run and B3 controls—while deliberately excluding process entry points such as `run` and
-the MCP server. Capability function names are mapped through the owner dispatcher’s exported registry, so the schema
-and vectors carry the exact authenticated control wire names (for example, `disable-all`). Every such wire has a
-closed result branch and at least one Ajv-validated result vector. Its doctor result is a `$ref` to the existing closed
-[`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json), not a copy that could drift.
-Successful vectors carrying a rule, target, subscriber, judge, or approval-preview document are also accepted by the
-daemon's canonical document validators.
+## A first rule: Gmail into the dry-run log
 
-`ordinary-results.json` is regenerated from the real owner; the ten seeded-state result vectors are deliberately
-synthetic, hand-corrected and schema-validated, while `rules-list`, `rule-show`, `targets-list`, `subscribersList`,
-`deliveriesList`, `dryrun-list`, and `sources-list` accounts retain open JSON items. Reusing an existing version number for an
-update still surfaces B1's `UNEXPECTED`; that follow-up is not changed by this contract.
+The dry-run target keeps what matched in an encrypted local log that only a person at a terminal can read. It is the
+safe way to see what a rule would send before you point it at a webhook.
 
-The contract never contains a secret value. Secret controls accept only the `interactive-terminal` origin; app and
-approval-screen callers receive `APP_SECRET_CAPABILITY_UNAVAILABLE`. A ready `approvalView` result carries one
-owner-built pending-target selector for each pending rule target (and none for other activation kinds); the terminal
-approval flow and an app approval screen pass that selector unchanged. The pending target selector belongs only to the
-approval flow, never an ordinary CLI/MCP target test.
+```bash
+# 1. a target: the local dry-run log, keeping records for a day
+agent-events target add '{"targetId":"log","version":1,"kind":"dry-run","retentionMs":86400000}'
 
-Phase E imports its real code and this contract, lands the build/ship negative gate before any owner registration or
-callable judge, and requires B3 merged.
+# 2. a rule: every received Gmail message with a subject, mapped to its subject only
+agent-events sources list          # the Gmail account ids you can name in a rule
+agent-events rule create "$(cat rule.json)"
 
-Both this package and `@agentcomms/events` are held from publication throughout B1, B2 and Phase D. A B1, B2 or Phase D
-merge publishes neither package. When the owner elects to make the first release from one checked tag, they publish
-`@agentcomms/events` first and then `@agentcomms/events-daemon`, because the daemon has an exact runtime dependency on
-the library. See the [release guide](../../docs/RELEASING.md#the-held-event-library-and-daemon).
+# 3. turn it on: each step prints an approval, which you approve by typing its challenge
+agent-events rule enable mail-subjects 1
+agent-events approve <approval-id>
+agent-events enable-all            # the standing approval that starts collection
+agent-events approve <approval-id>
+
+# 4. read what matched
+agent-events dryrun list
+```
+
+`rule.json`:
+
+```json
+{
+  "ruleId": "mail-subjects",
+  "version": 1,
+  "source": {
+    "channel": "gmail",
+    "accountIds": ["<an account id from sources list>"],
+    "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+  },
+  "event": { "type": "gmail.message.received", "version": 1 },
+  "condition": { "path": "/subject", "op": "exists" },
+  "mapping": { "subject": { "$path": "/subject" } },
+  "targets": [{ "targetId": "log", "version": 1, "kind": "dry-run", "retentionMs": 86400000 }],
+  "subscribers": [],
+  "judges": [],
+  "deliveryRateCap": 1,
+  "retention": {
+    "ingestMs": 86400000,
+    "holdMs": 86400000,
+    "deliveryMs": 86400000,
+    "dryrunMs": 86400000,
+    "sseReplayMs": 86400000,
+    "deadLetterMs": 86400000,
+    "decisionMetadataMs": 604800000
+  }
+}
+```
+
+Rules, targets and subscribers are immutable versions. To change one, create its next version and enable it. The
+approval preview then shows exactly what changes.
+
+## What you can do with it
+
+- **Sources:**
+  - Gmail, received and sent mail, and labels;
+  - Slack messages and thread replies;
+  - Resend received mail and sent-mail status;
+  - WhatsApp messages from the chats WhatsApp for Mac lists. A hidden chat never reaches a target.
+  
+  The event catalogue, `agent-events catalogue list`, gives every event type and field.
+- **Conditions and mapping:** checks on an event's fields, and a mapping that names exactly the fields a target
+  receives. Nothing else leaves.
+- **Targets:**
+  - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
+    is signed (Standard Webhooks). Each delivery can be retried or dropped (`delivery retry`, `delivery drop`).
+  - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
+    token, and its origin is checked.
+  - **The dry-run log.**
+- **Control:**
+  - `pause` / `resume`;
+  - `disable-all`, which stops collection and purges pending work at once;
+  - `doctor`, a content-free health report.
+  
+  Every command takes `--json`. The [CLI reference](../../docs/reference/events-daemon-cli.md) lists them all.
+
+## Agents and approvals
+
+`agent-events mcp` serves the same operations to a coding agent over MCP. Register it with your client as you would
+any MCP server, with `npx -y @agentcomms/events-daemon mcp` as the command. The
+[`agentcomms-events` skill](../../skills/agentcomms-events/SKILL.md) tells an agent how to use it.
+
+- **An agent can:** read the catalogue and your rules, propose rules and targets, and test a rule against a sample
+  event.
+- **An agent can never:**
+  - approve anything;
+  - read what the dry-run log kept;
+  - see, set or rotate a webhook secret or stream token;
+  - resume a target;
+  - decide a held event.
+
+  Those are human-only, at your terminal. Every event's content is marked as untrusted wherever it is shown. So a
+  message that tries to instruct an agent reaches it as quoted data, never as an instruction.
+
+## Judges
+
+A rule can later ask a model a yes/no question about an event: hosted Jev, or a model you run on this machine. That
+comes in a later release. In this one, the `judge`, `judges` and `budget` commands answer that judges are not
+available yet, and no event is ever sent to a model.
+
+## For desktop and tool builders
+
+The data-only control contract is
+[`b3-control-v1.schema.json`](src/operations/contracts/b3-control-v1.schema.json). Its content-free
+request, result and error vectors are in [`test/fixtures/b3-control-contract-v1`](test/fixtures/b3-control-contract-v1),
+and the terminal approval-preview vectors are in [`test/fixtures/b3-approval-preview-v1`](test/fixtures/b3-approval-preview-v1).
+It covers every capability a desktop app may call, and never contains a secret value. Its doctor result is the closed
+[`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json).
 
 ## Licence
 

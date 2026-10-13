@@ -25,7 +25,7 @@ verifies the tarball you installed was built from this repository by the workflo
 
 ## What you get
 
-Six packages and twenty skills.
+Eight packages and twenty-one skills.
 
 - **`@agentcomms/gmail`** — the CLI (`agent-gmail`) and the library. Everything works from a
   terminal, with `--json` for anything that consumes it.
@@ -42,10 +42,16 @@ Six packages and twenty skills.
   (`agent-whatsapp mcp`) and the library. Read-only, on macOS: lists, reads and searches the chats
   WhatsApp for Mac keeps on the Mac, and drafts replies as links you open and send yourself. No
   network client, no WhatsApp session, nothing that sends.
+- **`@agentcomms/events-daemon`** — local events (`agent-events`): watches the Gmail, Slack, Resend and
+  WhatsApp accounts you connected and, when an event matches a rule you approved at your terminal, delivers it
+  to a signed webhook, a local live stream or a dry-run log. Its MCP server (`agent-events mcp`) lets an agent
+  propose and test rules, never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
+- **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a
+  library with no I/O that runs in Node and in a browser.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
   sanitiser. Provider-neutral, so every channel shares it. Its `agentcomms` command and MCP
   server (`agentcomms mcp`) install and manage the others, from a terminal or from a chat.
-- **Twenty skills** — twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one that sets it all up and one that updates it — that teach an agent how to use all of it
+- **Twenty-one skills** — twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for local events, one that sets it all up and one that updates it — that teach an agent how to use all of it
   well, and where to stop.
 
 ## How the send gate works
@@ -280,7 +286,7 @@ are yours, at a terminal — no tool changes them. Needs Node 22.16 or newer. 6 
 npx skills add crissmoldovan/agent-communications --skill '*'
 ```
 
-Twenty-one skills, twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for setting it all up, one for updating it and one for the local event daemon, which is not released yet: which tool to reach for, what a result means, and when to
+Twenty-one skills, twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for setting it all up, one for updating it and one for the local event daemon: which tool to reach for, what a result means, and when to
 stop and ask. The channel skills work with the MCP server and without it, falling back to the CLI; the event skill uses only its MCP tools. [The skills](docs/skills.md).
 
 ### Already running another Gmail MCP server?

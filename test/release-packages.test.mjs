@@ -1008,16 +1008,20 @@ test('REL-d: the release documents say what a hold is, and how it is lifted', as
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
-test('REL-B1: B1 through Phase D stay held, while their eventual owner publish is events then events-daemon from one checked tag', async () => {
-  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked while held');
-  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked while held');
-  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B1');
-  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B1');
-  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B1 tag publish');
-  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B1 tag publish');
+test('REL-B1: from 0.16.0 the event library and daemon publish with every release, the library first', async () => {
+  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked');
+  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked');
+  assert.ok(!Object.hasOwn(HELD, 'events'), '@agentcomms/events is no longer held');
+  assert.ok(!Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon is no longer held');
+  assert.ok(PACKAGES.includes('events'), '@agentcomms/events is in every tag publish');
+  assert.ok(PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is in every tag publish');
+  assert.ok(
+    PACKAGES.indexOf('events') < PACKAGES.indexOf('events-daemon'),
+    'the daemon publishes after the library it pins exactly',
+  );
 
   const release = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
-  assert.match(release, /A B1, B2 or Phase D merge publishes neither package/i);
+  assert.match(release, /released together from 0\.16\.0/i);
   assert.match(release, /same checked tag/i);
   assert.match(
     release,
@@ -1026,32 +1030,19 @@ test('REL-B1: B1 through Phase D stay held, while their eventual owner publish i
   );
 });
 
-test('REL-B2: the held B2 and Phase-D runtime stays out of publication and the release browser gate proves loopback SSE/CORS', async () => {
-  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events remains consumer-checked for B2');
-  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon remains consumer-checked for B2');
-  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B2');
-  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B2');
-  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B2 tag publish');
-  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B2 tag publish');
-
+test('REL-B2: the released daemon keeps its human-only boundary, and the release browser gate proves loopback SSE/CORS', async () => {
   const [readme, release] = await Promise.all([
     readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8'),
     readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8'),
   ]);
-  assert.match(readme, /B2 adds no command or MCP tool/i, 'B2 does not create a new public surface');
-  assert.match(readme, /delivery retry, drop or hold/i, 'B3 delivery controls remain absent');
-  assert.match(readme, /subscriber management/i, 'B3 subscriber controls remain absent');
-  assert.match(readme, /named event-secret or migration operation/i, 'B3 secret operations remain absent');
-  assert.match(
-    release,
-    /both held throughout B1, B2 and Phase D/i,
-    'the release guide keeps both packages held through Phase D',
-  );
-  assert.match(
-    readme,
-    /held from publication throughout B1, B2 and Phase D/i,
-    'the daemon README keeps both packages held through Phase D',
-  );
+  const text = readme.replace(/\s+/g, ' ');
+  assert.match(text, /until you approve the rule yourself, at your terminal/i, 'collection waits for a person');
+  assert.match(text, /An agent can never/i, 'the README states what an agent cannot do');
+  assert.match(text, /approve anything/i, 'an agent never approves');
+  assert.match(text, /see, set or rotate a webhook secret or stream token/i, 'secrets stay human-only');
+  assert.match(text, /decide a held event/i, 'held decisions stay human-only');
+  assert.match(text, /judges are not available yet/i, 'judges are not part of this release');
+  assert.match(text, /macOS or Linux/i, 'the supported platforms are stated');
   assert.match(release, /loopback daemon SSE\/CORS/i, 'the release browser gate includes B2 SSE/CORS verification');
 });
 
