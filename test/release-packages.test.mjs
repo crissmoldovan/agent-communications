@@ -1096,7 +1096,12 @@ test('REL-B2: the released daemon keeps its human-only boundary, and the release
   assert.match(text, /approve anything/i, 'an agent never approves');
   assert.match(text, /see, set or rotate a webhook secret or stream token/i, 'secrets stay human-only');
   assert.match(text, /decide a held event/i, 'held decisions stay human-only');
-  assert.match(text, /judges are not available yet/i, 'judges are not part of this release');
+  assert.match(
+    text,
+    /Every judge kind is off until you enable it, at your terminal/i,
+    'judges stay off until a person enables them',
+  );
+  assert.match(text, /see, set or rotate a hosted judge's API key/i, "a judge's key stays human-only");
   assert.match(text, /macOS or Linux/i, 'the supported platforms are stated');
   assert.match(release, /loopback daemon SSE\/CORS/i, 'the release browser gate includes B2 SSE/CORS verification');
 });

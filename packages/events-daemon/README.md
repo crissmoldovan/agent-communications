@@ -95,7 +95,8 @@ approval preview then shows exactly what changes.
   
   The event catalogue, `agent-events catalogue list`, gives every event type and field.
 - **Conditions and mapping:** checks on an event's fields, and a mapping that names exactly the fields a target
-  receives. Nothing else leaves.
+  receives. Nothing else leaves. Once you enable a judge, a rule can also ask a model one yes/no question
+  ([Judges](#judges)).
 - **Targets:**
   - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
     is signed (Standard Webhooks). Each delivery can be retried or dropped (`delivery retry`, `delivery drop`).
@@ -115,12 +116,14 @@ approval preview then shows exactly what changes.
 any MCP server, with `npx -y @agentcomms/events-daemon mcp` as the command. The
 [`agentcomms-events` skill](../../skills/agentcomms-events/SKILL.md) tells an agent how to use it.
 
-- **An agent can:** read the catalogue and your rules, propose rules and targets, and test a rule against a sample
-  event.
+- **An agent can:** read the catalogue and your rules, propose rules, targets, judges and a judge budget, test a rule
+  against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's enablement,
+  and turn a judge kind off.
 - **An agent can never:**
   - approve anything;
   - read what the dry-run log kept;
   - see, set or rotate a webhook secret or stream token;
+  - see, set or rotate a hosted judge's API key;
   - resume a target;
   - decide a held event.
 
@@ -129,9 +132,126 @@ any MCP server, with `npx -y @agentcomms/events-daemon mcp` as the command. The
 
 ## Judges
 
-A rule can later ask a model a yes/no question about an event: hosted Jev, or a model you run on this machine. That
-comes in a later release. In this one, the `judge`, `judges` and `budget` commands answer that judges are not
-available yet, and no event is ever sent to a model.
+A rule can ask a model one yes/no question about an event, after the rule's own conditions on its fields have matched.
+Two kinds of judge are available:
+- **`typesafe`:** TypeSafe's hosted **Jev** (`jev-1.13.0`), through its System One API at
+  `https://api.typesafe.ai/v1/systemone`. The fields the rule names leave this machine for TypeSafe, sent with your
+  TypeSafe API key.
+- **`local-endpoint`:** a model server you run on this machine, at a plain-HTTP URL whose host is the literal
+  `127.0.0.1` or `::1`; hostnames, HTTPS and any other address are refused. It is sent the same System One request
+  as Jev. A server that answers in its own JSON says where its number is, with `"protocol": "json-score"` and a
+  `scorePointer`, and that number is labelled an uncalibrated score. Nothing leaves this machine.
+
+The third kind, **`laya`**, runs the Laya model inside the daemon. It is not available yet: `agent-events judge kinds
+list` shows it as unavailable, and a judge naming it is refused.
+
+**Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
+turns one on. To ask Jev about received mail:
+
+```bash
+# 1. turn the kind on: you approve its exact enablement at this terminal
+agent-events judge kind enable typesafe
+agent-events approve <approval-id>
+
+# 2. the daemon-wide judge budget: no judge is called without one
+agent-events budget update "$(cat budget.json)"
+agent-events approve <approval-id>
+
+# 3. the judge, then its TypeSafe API key, which you enter at this terminal
+agent-events judge add "$(cat judge.json)"
+agent-events judge key set jev --version 1
+
+# 4. a rule that asks it; its approval shows the question, the fields the judge sees and where they go
+agent-events rule create "$(cat rule.json)"
+agent-events rule enable mail-asks 1
+agent-events approve <approval-id>
+
+# 5. try the judge on the daemon's own synthetic event, never one of yours
+agent-events judge test jev --version 1
+```
+
+`judge.json`:
+
+```json
+{
+  "judgeId": "jev",
+  "version": 1,
+  "kind": "typesafe",
+  "provider": "typesafe",
+  "model": "jev-1.13.0",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "promptTemplate": "typesafe-jev-noul-v1",
+  "protocol": "noul"
+}
+```
+
+`budget.json`, the ceilings for every judge call, overall and per provider:
+
+```json
+{
+  "budgetId": "judge-budget",
+  "version": 1,
+  "global": { "callsPerRollingHour": 60, "inputTokensPerRolling30Days": 1000000, "concurrency": 2 },
+  "providers": [
+    { "provider": "typesafe", "callsPerRollingHour": 60, "inputTokensPerRolling30Days": 1000000, "concurrency": 2 }
+  ]
+}
+```
+
+`rule.json` is the first rule with `"ruleId": "mail-asks"` and an `agentic` part beside its `condition`. Its `judge`
+is the judge document exactly as you added it:
+
+```json
+"agentic": {
+  "judge": {
+    "judgeId": "jev",
+    "version": 1,
+    "kind": "typesafe",
+    "provider": "typesafe",
+    "model": "jev-1.13.0",
+    "endpoint": "https://api.typesafe.ai/v1/systemone",
+    "promptTemplate": "typesafe-jev-noul-v1",
+    "protocol": "noul"
+  },
+  "question": "Does this message ask me to do something today?",
+  "inputs": ["/subject"],
+  "threshold": 0.8,
+  "onUncertain": "hold",
+  "callsPerRollingHour": 20,
+  "inputTokensPerRolling30Days": 100000,
+  "concurrency": 1,
+  "maxInputTokens": 512,
+  "maxOutputTokens": 64
+}
+```
+
+A local judge has `"kind": "local-endpoint"`, your server's `provider`, `model` and `endpoint`, and that endpoint's
+address in `"approvedAddressSet": ["127.0.0.1"]`. It needs no key.
+
+**What a judge sees, and what it decides:**
+- Only the fields in `inputs`, sanitised and marked as untrusted inside a fixed prompt. The rule's `condition` must
+  check a content field too (`/subject` above), so a judge is never asked about every event.
+- It has no tools, secrets or authority. Its answer is one number from 0 to 1, and the rule matches when that number
+  reaches `threshold`. A message written to talk the judge into a match can move only that number; it cannot change
+  the rule, its fields or its targets.
+- An answer up to 0.1 below the threshold is uncertain. It is no match or, with `"onUncertain": "hold"`, a held
+  decision that waits for you: `agent-events held list` shows them, and `agent-events held decide <decision-id> accept`
+  (or `reject`) settles one, at your terminal.
+- A timeout, a malformed answer or a spent budget is no match. Retrying a delivery never asks the judge again.
+
+**Budgets.** Each rule sets its own ceilings: calls per rolling hour, input tokens per rolling 30 days, concurrent
+calls, and the most input and output tokens per call. The daemon-wide budget caps every rule, overall and per
+provider, and a rule cannot raise it. A rule's new version inherits the charges of the versions before it, so a new
+version never resets a budget. `judge test` runs at most ten times an hour per judge version, charged to the overall
+budget.
+
+**Turning a kind off.** `agent-events judge kind disable typesafe` takes effect at once: decisions waiting on its
+judges, and the deliveries, dry-run records and stream entries bound to them, are cancelled and purged. Rules that
+name its judges stay, but cannot call them; turning the kind back on needs a new approval. `disable-all` stops judges
+along with everything else.
+
+`doctor` shows each kind's state, the active budget version and its reservations, and Laya as not available yet,
+all without content.
 
 ## For desktop and tool builders
 
