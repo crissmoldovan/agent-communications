@@ -1030,6 +1030,42 @@ test('REL-B1: from 0.16.0 the event library and daemon publish with every releas
   );
 });
 
+test('REL-B1: no public surface of the released daemon still calls it held, unreleased or "until Phase E"', async () => {
+  // What a person installs, runs or reads: the manifest, the CLI and MCP text, the skill and its contract, the
+  // generated references and the READMEs. "Held decisions" (judge holds) are a feature, not a release status.
+  const daemonSurfaces = [
+    'packages/events-daemon/package.json',
+    'packages/events-daemon/README.md',
+    'packages/events-daemon/src/cli/program.ts',
+    'packages/events-daemon/src/mcp/server.ts',
+    'packages/events-daemon/src/index.ts',
+    'packages/events/README.md',
+    'skills/_shared/contract-events.md',
+    'skills/agentcomms-events/SKILL.md',
+    'skills/agentcomms-events/references/contract.md',
+    'docs/reference/events-daemon-cli.md',
+    'docs/reference/events-daemon-mcp-tools.md',
+  ];
+  const stale =
+    /\bheld (?:local|service|back from release|from publication)\b|\blocal and held\b|\bremains? held\b|\bnot released yet\b|\bpre-Phase-E\b|\buntil Phase E2?\b/i;
+  for (const file of daemonSurfaces) {
+    const text = (await readFile(join(ROOT, file), 'utf8')).replace(/\s+/g, ' ');
+    assert.doesNotMatch(text, stale, `${file} still describes the released daemon as held or unreleased`);
+  }
+  // The repository-wide documents keep the generic hold procedure for future packages, so only the daemon's own
+  // wording is checked there.
+  for (const file of ['README.md', 'CONTRIBUTING.md']) {
+    const text = (await readFile(join(ROOT, file), 'utf8')).replace(/\s+/g, ' ');
+    assert.doesNotMatch(
+      text,
+      /held local event|event daemon, which is not released|events-daemon\b[^.]{0,60}\b(?:is|are|remains?|stays?) held\b|remain held through/i,
+      `${file} still describes the released daemon as held`,
+    );
+  }
+  const manifest = JSON.parse(await readFile(join(ROOT, 'packages', 'events-daemon', 'package.json'), 'utf8'));
+  assert.doesNotMatch(manifest.description, /\bheld\b/i, 'the npm description does not call the daemon held');
+});
+
 test('REL-B2: the released daemon keeps its human-only boundary, and the release browser gate proves loopback SSE/CORS', async () => {
   const [readme, release] = await Promise.all([
     readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8'),

@@ -20,9 +20,8 @@ Thanks for helping make email safe to hand to an agent.
 ```text
 packages/core         @agentcomms/core         provider-neutral core (config, secrets, approvals, envelopes), the
                                                agentcomms CLI and the core MCP server
-packages/events       @agentcomms/events       the event catalogue, conditions and mapping: an isomorphic library,
-                                               held back from release until something depends on it
-packages/events-daemon @agentcomms/events-daemon held local event-emission service: CLI (agent-events) and MCP server
+packages/events       @agentcomms/events       the event catalogue, conditions and mapping: an isomorphic library
+packages/events-daemon @agentcomms/events-daemon local event-emission service: CLI (agent-events) and MCP server
 packages/gmail        @agentcomms/gmail        Gmail channel: CLI (agent-gmail) and MCP server factory
 packages/gmail-mcp    @agentcomms/gmail-mcp    the Gmail MCP server as its own package (agent-gmail-mcp)
 packages/resend       @agentcomms/resend       Resend channel: CLI (agent-resend) and MCP server
@@ -35,10 +34,9 @@ scripts/              repository checks
 
 The design lives in `docs/superpowers/specs/`, and the implementation plan in `docs/superpowers/plans/`.
 
-`@agentcomms/events` and `@agentcomms/events-daemon` remain held through the B1 merge. Their eventual first release
-is an owner action from one checked tag: publish the library first, then the daemon that pins it at runtime. See [the
-held event library and daemon](docs/RELEASING.md#the-held-event-library-and-daemon); do not add either package to a B1
-tag publish.
+`@agentcomms/events` and `@agentcomms/events-daemon` were held through phases A–D and are published with every
+release from 0.16.0, the library first because the daemon pins it at runtime. See [the event library and
+daemon](docs/RELEASING.md#the-event-library-and-daemon).
 
 ## Local setup
 

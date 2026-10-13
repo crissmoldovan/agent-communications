@@ -152,7 +152,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
 
   program
     .name('agent-events')
-    .description('The held local event-emission service with one foreground owner and local control clients.')
+    .description('The local event-emission service: one foreground owner and local control clients.')
     .option('--json', 'write machine-readable output')
     .option('--no-color', 'never colour the output')
     .option('--config-dir <dir>', 'pin the configuration directory for this run')
@@ -274,7 +274,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       if (program.opts<EventsCliOptions>().json) print(result);
       else streams.stdout.write(`${renderApprovalViewForTerminal(result)}\n`);
     });
-  const catalogue = program.command('catalogue').description('inspect the held local event catalogue');
+  const catalogue = program.command('catalogue').description('inspect the local event catalogue');
   catalogue.command('list').action(async () => {
     ran = true;
     print(await catalogueList(controlOptions(program)));
@@ -496,12 +496,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       });
   }
 
-  const judges = program.command('judges').description('inspect typed pre-Phase-E judge controls');
+  const judges = program.command('judges').description('inspect judge controls (judges are not available yet)');
   judges.command('list').action(async () => {
     ran = true;
     print(await judgesList(controlOptions(program)));
   });
-  const judge = program.command('judge').description('use typed unavailable judge controls until Phase E');
+  const judge = program.command('judge').description('judge controls, which answer that judges are not available yet');
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
     print(await addJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
@@ -521,7 +521,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       print(await judgeTest(judgeId, parseVersion(options.version as string), controlOptions(program)));
     });
-  const budget = program.command('budget').description('use typed unavailable budget controls until Phase E');
+  const budget = program
+    .command('budget')
+    .description('judge budget controls, which answer that judges are not available yet');
   budget.command('show').action(async () => {
     ran = true;
     print(await budgetShow(controlOptions(program)));
@@ -530,12 +532,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(await updateBudget(jsonArgument(document, 'budget document'), controlOptions(program)));
   });
-  const judgeKinds = judge.command('kinds').description('list typed unavailable judge kinds until Phase E');
+  const judgeKinds = judge
+    .command('kinds')
+    .description('list judge kinds, which answer that judges are not available yet');
   judgeKinds.command('list').action(async () => {
     ran = true;
     print(await judgeKindsList(controlOptions(program)));
   });
-  const judgeKind = judge.command('kind').description('use typed unavailable judge kind controls until Phase E');
+  const judgeKind = judge
+    .command('kind')
+    .description('judge kind controls, which answer that judges are not available yet');
   judgeKind.command('enable <kind>').action(async (kind: string) => {
     ran = true;
     print(await enableJudgeKind(kind, controlOptions(program)));
@@ -544,7 +550,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(await disableJudgeKind(kind, controlOptions(program)));
   });
-  const judgeModel = judge.command('model').description('use typed unavailable Laya model controls until Phase E2');
+  const judgeModel = judge
+    .command('model')
+    .description('local Laya model controls, which answer that Laya is not available yet');
   judgeModel.command('status').action(async () => {
     ran = true;
     print(await judgeModelStatus(controlOptions(program)));
