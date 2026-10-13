@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PACKAGE_DIR = join(ROOT, 'packages', 'events-daemon');
 
-test('PKG-B1-b: the local event daemon is a held service with its declared runtime boundaries', () => {
+test('PKG-B1-b: the local event daemon is a released service with its declared runtime boundaries', () => {
   assert.ok(existsSync(PACKAGE_DIR), 'packages/events-daemon is the Task 4 service package');
   const manifest = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
 

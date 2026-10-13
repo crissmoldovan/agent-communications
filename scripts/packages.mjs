@@ -31,7 +31,7 @@
  * dependencies. A new package is published by declaring itself — there is no list here to add it to, and the test
  * above still fails when a publishable package is not in the result.
  *
- *   node scripts/packages.mjs      # prints PACKAGES, e.g. core gmail gmail-mcp resend slack whatsapp
+ *   node scripts/packages.mjs   # prints PACKAGES, e.g. core events gmail gmail-mcp resend slack whatsapp events-daemon
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

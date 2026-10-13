@@ -3,6 +3,40 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run
+on this machine — and match only when the answer clears the rule's threshold.** Conditions on an event's fields can
+say that a message is from a customer or mentions an invoice; they cannot say whether it asks you to do something
+today. A judge answers that, inside the same boundary as the rest of `agent-events`:
+- **Two kinds, each off until you enable it at your terminal.** `typesafe` sends the fields a rule names to TypeSafe's
+  System One API (`jev-1.13.0`), with your TypeSafe API key, which you enter at your terminal. `local-endpoint` calls a
+  server you run at `127.0.0.1` or `::1`, so nothing leaves the machine. Installing, updating, a rule or a budget never
+  enables a kind, and `judge kind disable` turns one off at once, purging the work bound to it.
+- **A judge sees only what the rule names.** It is asked only after the rule's own conditions match, about the exact
+  fields in its `inputs`, sanitised and marked as untrusted. It has no tools, secrets or authority: its answer is one
+  number from 0 to 1, and a message written to talk it into a match can move only that number. A timeout, a malformed
+  answer or a spent budget is no match.
+- **An uncertain answer can wait for you.** An answer just below the threshold is no match or, if the rule says
+  `"onUncertain": "hold"`, a held decision you settle at your terminal with `agent-events held decide`.
+- **Budgets you approve.** Every call counts against the rule's own ceilings and a daemon-wide budget (calls per hour,
+  input tokens per 30 days, concurrent calls) that only you can activate, and that a rule's new version cannot reset.
+- **`judge test`** tries an active judge on the daemon's own synthetic event, never one of yours, at most ten times an
+  hour per version. `doctor` reports each kind, the active budget and its reservations.
+- **Agents** can propose judges and budgets, prepare a kind's enablement, test a judge and turn a kind off. They can
+  never approve, see or set a judge's key, or decide a held event; the `agentcomms-events` skill says so.
+
+The `agentcomms-events` skill also no longer says the daemon is unpublished: when its tools are missing, it tells you
+to register `npx -y @agentcomms/events-daemon mcp` with your client.
+
+**What is not in it yet.** Laya, the model that would run inside the daemon, is listed but refused as not available
+yet. The desktop app comes in a later release.
+
+**Upgrading.** Nothing changes for rules without a judge, or for Gmail, Slack, Resend or WhatsApp. On its first start,
+0.17.0 upgrades the event database in place, and your rules, targets and records carry over; going back to 0.16.0
+after that is not supported. To use a judge, follow the
+[README's Judges section](packages/events-daemon/README.md#judges).
+
 ## 0.16.0
 
 **Local events: `agent-events` watches the Gmail, Slack, Resend and WhatsApp accounts you connected and, when an event
