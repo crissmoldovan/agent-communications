@@ -105,7 +105,18 @@
     { "id": "e9-fixed-synthetic-judge-input" },
     { "id": "e9-judge-key-rotate-current-generation" },
     { "id": "e9-mcp-kind-enable-no-active-pointer" },
-    { "id": "e9-pending-rule-judge-origin" }
+    { "id": "e9-pending-rule-judge-origin" },
+    { "id": "e11-provider-match-authority" },
+    { "id": "e11-envelope-provenance" },
+    { "id": "e11-range-token-cap" },
+    { "id": "e11-wrong-type-score" },
+    { "id": "e11-host-drift-before-byte" },
+    { "id": "e11-journal-exactness" },
+    { "id": "e11-refusal-content-free" },
+    { "id": "e11-late-hold-response" },
+    { "id": "e11-corpus-integrity-allowlist" },
+    { "id": "e11-response-fixture-pinning" },
+    { "id": "e11-corpus-manifest-pairing" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -212,7 +223,18 @@
     { "id": "e9-fixed-synthetic-judge-input" },
     { "id": "e9-judge-key-rotate-current-generation" },
     { "id": "e9-mcp-kind-enable-no-active-pointer" },
-    { "id": "e9-pending-rule-judge-origin" }
+    { "id": "e9-pending-rule-judge-origin" },
+    { "id": "e11-provider-match-authority" },
+    { "id": "e11-envelope-provenance" },
+    { "id": "e11-range-token-cap" },
+    { "id": "e11-wrong-type-score" },
+    { "id": "e11-host-drift-before-byte" },
+    { "id": "e11-journal-exactness" },
+    { "id": "e11-refusal-content-free" },
+    { "id": "e11-late-hold-response" },
+    { "id": "e11-corpus-integrity-allowlist" },
+    { "id": "e11-response-fixture-pinning" },
+    { "id": "e11-corpus-manifest-pairing" }
   ],
   "cases": [
     {
@@ -1471,6 +1493,146 @@
         "test": "E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached"
       },
       "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e11-provider-match-authority",
+      "task": "E11",
+      "coverage": ["e11-provider-match-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-provider-match-authority",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-envelope-provenance",
+      "task": "E11",
+      "coverage": ["e11-envelope-provenance"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-envelope-provenance",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-range-token-cap",
+      "task": "E11",
+      "coverage": ["e11-range-token-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-range-token-cap",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-wrong-type-score",
+      "task": "E11",
+      "coverage": ["e11-wrong-type-score"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-wrong-type-score",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-host-drift-before-byte",
+      "task": "E11",
+      "coverage": ["e11-host-drift-before-byte"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-host-drift-before-byte",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-journal-exactness",
+      "task": "E11",
+      "coverage": ["e11-journal-exactness"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-journal-exactness",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-refusal-content-free",
+      "task": "E11",
+      "coverage": ["e11-refusal-content-free"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-refusal-content-free",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-late-hold-response",
+      "task": "E11",
+      "coverage": ["e11-late-hold-response"],
+      "productionEntry": "packages/events-daemon/src/runtime/expiry.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-late-hold-response",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist",
+      "task": "E11",
+      "coverage": ["e11-corpus-integrity-allowlist"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-corpus-integrity-allowlist",
+        "test": "E11 adversarial corpus integrity: an unrecognised host, key-shaped token, and captured-provider response each fail the allowlist scan"
+      },
+      "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e11-response-fixture-pinning",
+      "task": "E11",
+      "coverage": ["e11-response-fixture-pinning"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-response-fixture-pinning",
+        "test": "E11 adversarial corpus integrity: a missing scripted response fails the exact response inventory"
+      },
+      "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing",
+      "task": "E11",
+      "coverage": ["e11-corpus-manifest-pairing"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-corpus-manifest-pairing",
+        "test": "E11 adversarial corpus integrity: every row, digest, journal and shared manifest pairing is synthetic and exact"
+      },
+      "strictRunner": "judge-adversarial-mutants"
     }
   ]
 }
