@@ -19,7 +19,14 @@ export class EventDomainError extends Error {
   }
 }
 
-export const JUDGE_KINDS = ['typesafe', 'laya', 'local-endpoint'] as const;
+export const JUDGE_KIND_TYPESAFE = 'typesafe' as const;
+export const JUDGE_KIND_LAYA = 'laya' as const;
+export const JUDGE_KIND_LOCAL_ENDPOINT = 'local-endpoint' as const;
+export const JUDGE_KINDS: readonly [
+  typeof JUDGE_KIND_TYPESAFE,
+  typeof JUDGE_KIND_LAYA,
+  typeof JUDGE_KIND_LOCAL_ENDPOINT,
+] = [JUDGE_KIND_TYPESAFE, JUDGE_KIND_LAYA, JUDGE_KIND_LOCAL_ENDPOINT];
 export type JudgeKind = (typeof JUDGE_KINDS)[number];
 
 export function isJudgeKind(value: unknown): value is JudgeKind {

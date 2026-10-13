@@ -1603,6 +1603,102 @@ test('E12 adversarial corpus integrity: a registered helper re-export cannot esc
     [
       'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
       'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+      'packages/events-daemon/test/corpus-helper.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      const parentHelper = join(repositoryRoot, 'packages/events-daemon/test/corpus-helper.ts');
+      await writeFile(
+        join(support, 'judge-adversarial-entry.ts'),
+        "for await (const x of []) /['\"]/u.test(x); export { endpoint } from '../corpus-helper.ts';\n",
+      );
+      await writeFile(parentHelper, "export const endpoint = 'https://customer.example.org';\n");
+      await assert.rejects(
+        async () => {
+          const inventory = await assertAdversarialCorpusFileInventory({ repositoryRoot });
+          assert.ok(
+            inventory.files.includes('packages/events-daemon/test/corpus-helper.ts'),
+            'the dependency-closed inventory follows a registered helper through its parent directory',
+          );
+          assertSyntheticFixtureText({
+            text: await readFile(parentHelper, 'utf8'),
+            file: 'packages/events-daemon/test/corpus-helper.ts',
+            declaredHashes: new Set<string>(),
+            sourcePath: parentHelper,
+          });
+        },
+        /host .* must end/u,
+        'a parent-directory helper carrying a real host remains inside the adversarial scan',
+      );
+    },
+  );
+
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+      'packages/events-daemon/src/corpus-helper.ts',
+    ],
+    async (repositoryRoot) => {
+      const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+      const sourceHelper = join(repositoryRoot, 'packages/events-daemon/src/corpus-helper.ts');
+      await mkdir(join(repositoryRoot, 'packages/events-daemon/src'), { recursive: true });
+      await writeFile(
+        join(support, 'judge-adversarial-entry.ts'),
+        "export { endpoint } from '../../src/corpus-helper.ts';\n",
+      );
+      await writeFile(sourceHelper, "export const endpoint = 'https://customer.example.org';\n");
+      await assert.rejects(
+        async () => {
+          const inventory = await assertAdversarialCorpusFileInventory({ repositoryRoot });
+          assert.ok(
+            inventory.files.includes('packages/events-daemon/src/corpus-helper.ts'),
+            'an arbitrary source helper remains part of the dependency-closed inventory',
+          );
+          assertSyntheticFixtureText({
+            text: await readFile(sourceHelper, 'utf8'),
+            file: 'packages/events-daemon/src/corpus-helper.ts',
+            declaredHashes: new Set<string>(),
+            sourcePath: sourceHelper,
+          });
+        },
+        /host .* must end/u,
+        'a real host cannot escape scanning through an arbitrary production-tree helper',
+      );
+    },
+  );
+
+  const outsideRoot = await mkdtemp(join(tmpdir(), 'events-e12-outside-'));
+  try {
+    await writeFile(join(outsideRoot, 'external.ts'), "export const endpoint = 'synthetic';\n");
+    await withInventoryFixture(
+      [
+        'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+        'packages/events-daemon/test/support/judge-adversarial-entry.ts',
+        'linked-outside/external.ts',
+      ],
+      async (repositoryRoot) => {
+        const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+        await symlink(outsideRoot, join(repositoryRoot, 'linked-outside'), 'dir');
+        await writeFile(
+          join(support, 'judge-adversarial-entry.ts'),
+          "export { endpoint } from '../../../../linked-outside/external.ts';\n",
+        );
+        await assert.rejects(
+          () => assertAdversarialCorpusFileInventory({ repositoryRoot }),
+          /resolves outside the repository/u,
+          'an intermediate directory symlink cannot move a helper dependency outside the repository',
+        );
+      },
+    );
+  } finally {
+    await rm(outsideRoot, { recursive: true, force: true });
+  }
+
+  await withInventoryFixture(
+    [
+      'packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json',
+      'packages/events-daemon/test/support/judge-adversarial-entry.ts',
     ],
     async (repositoryRoot) => {
       const support = join(repositoryRoot, 'packages/events-daemon/test/support');

@@ -1,7 +1,13 @@
 import { CommsError } from '@agentcomms/core';
 import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import { canonicalJudge, canonicalJudgeBudget, JUDGE_BUDGET_ID, JUDGE_KIND_DEFINITIONS } from '../domain/judges.ts';
-import { JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
+import {
+  JUDGE_KIND_LAYA,
+  JUDGE_KIND_LOCAL_ENDPOINT,
+  JUDGE_KIND_TYPESAFE,
+  JUDGE_KINDS,
+  type JudgeKind,
+} from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerRequest, B3OwnerService } from '../operations/b3-contract.ts';
@@ -69,7 +75,7 @@ export class B3OperatorControl implements B3OwnerService {
       request.operation === 'judgeModelStatus' ||
       request.operation === 'removeJudgeModel' ||
       ((request.operation === 'enableJudgeKind' || request.operation === 'disableJudgeKind') &&
-        request.args.kind === 'laya')
+        request.args.kind === JUDGE_KIND_LAYA)
         ? judgeUnavailable(request.operation, request.args)
         : undefined;
     if (unavailable !== undefined) return unavailable;
@@ -183,19 +189,19 @@ export class B3OperatorControl implements B3OwnerService {
 
   judgeKindsList(): readonly (
     | {
-        readonly kind: 'typesafe' | 'local-endpoint';
+        readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
         readonly state: 'disabled' | 'enabled';
         readonly version: number | null;
       }
-    | { readonly kind: 'laya'; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
+    | { readonly kind: typeof JUDGE_KIND_LAYA; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
   )[] {
     return JUDGE_KINDS.map((kind) => {
       const definition = JUDGE_KIND_DEFINITIONS.find((entry) => entry.kind === kind);
       if (definition?.availability === 'unavailable')
-        return { kind: 'laya' as const, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
+        return { kind: JUDGE_KIND_LAYA, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };
       const active = new ImmutableVersions(this.#store.database).activeVersion('judge-kind', kind);
       return {
-        kind: kind as 'typesafe' | 'local-endpoint',
+        kind: kind as typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT,
         state: active === null ? ('disabled' as const) : ('enabled' as const),
         version: active?.version ?? null,
       };
@@ -219,7 +225,7 @@ export class B3OperatorControl implements B3OwnerService {
         .get(available) as { version: number | null };
       if (latest.version !== null) return latest.version;
       const document =
-        available === 'typesafe'
+        available === JUDGE_KIND_TYPESAFE
           ? { id: 'judge-kind:typesafe', kind: available, version: 1, endpoint: 'https://api.typesafe.ai/v1/systemone' }
           : { id: 'judge-kind:local-endpoint', kind: available, version: 1 };
       return new ImmutableVersions(this.#store.database).createJudgeKind(document).version;
@@ -328,7 +334,7 @@ export class B3OperatorControl implements B3OwnerService {
   judgesList(): readonly {
     readonly judgeId: string;
     readonly version: number;
-    readonly kind: 'typesafe' | 'local-endpoint';
+    readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
     readonly provider: string;
     readonly model: string;
     readonly revokedAt: number | null;
@@ -693,11 +699,11 @@ function heldDecision(value: unknown): 'accept' | 'reject' {
   return value;
 }
 
-function availableJudgeKind(kind: string): Exclude<JudgeKind, 'laya'> {
+function availableJudgeKind(kind: string): Exclude<JudgeKind, typeof JUDGE_KIND_LAYA> {
   if (!(JUDGE_KINDS as readonly string[]).includes(kind))
     throw new CommsError('BAD_DATA', 'the judge kind is not recognised');
-  if (kind === 'laya') throw new CommsError('BAD_DATA', 'laya is unavailable until E2');
-  return kind as Exclude<JudgeKind, 'laya'>;
+  if (kind === JUDGE_KIND_LAYA) throw new CommsError('BAD_DATA', 'laya is unavailable until E2');
+  return kind as Exclude<JudgeKind, typeof JUDGE_KIND_LAYA>;
 }
 
 function voided(message: string): CommsError {

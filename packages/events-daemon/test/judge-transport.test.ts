@@ -311,7 +311,7 @@ test('E6: execute requires a final gate in both its type and runtime boundary', 
     instructions: fixture.vectors.typesafe.instructions,
     maxInputTokens: 512,
     maxOutputTokens: 3,
-    hostedApiKey: 'test-hosted-key',
+    hostedApiKey: { generation: 1, material: 'test-hosted-key' },
   };
   const requireGateAtTypeBoundary = () => {
     // @ts-expect-error a transport call cannot omit the synchronous final authority gate
@@ -430,7 +430,7 @@ test('E6-M: TypeSafe refuses an unapproved document model instead of substitutin
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -471,7 +471,7 @@ test('E6-A: TypeSafe uses global-only pinned resolution without a caller address
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -526,7 +526,7 @@ test('E6-A: TypeSafe refuses every non-global resolver answer before TCP', async
             instructions: fixture.vectors.typesafe.instructions,
             maxInputTokens: 512,
             maxOutputTokens: 3,
-            hostedApiKey: 'test-hosted-key',
+            hostedApiKey: { generation: 1, material: 'test-hosted-key' },
           },
           allowAllTransportGates,
         ),
@@ -556,7 +556,7 @@ test('E6-A: TypeSafe refuses a mixed public and private resolver set before TCP'
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -591,7 +591,7 @@ test('E6: the TypeSafe transport pins DNS/TCP/TLS, runs every final gate, and wr
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     {
       finalGate: (phase) => {
@@ -635,7 +635,7 @@ test('E6: a 3xx is refused after exactly one raw request and never followed', as
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -664,7 +664,7 @@ test('E6: streaming response cap destroys the socket before parsing oversized pe
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -691,7 +691,7 @@ test('E6: no response byte can be read before the synchronous write gate', async
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     {
       finalGate: (phase) => {
@@ -759,7 +759,7 @@ test('E6: a phase that exceeds the fixed all-phase deadline produces no request 
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -800,7 +800,7 @@ function countingTransport(clock: { now: () => number }) {
     instructions: fixture.vectors.typesafe.instructions,
     maxInputTokens: 512,
     maxOutputTokens: 3,
-    hostedApiKey: 'test-hosted-key',
+    hostedApiKey: { generation: 1, material: 'test-hosted-key' },
   };
   return { counts, peer, transport, call };
 }
@@ -885,7 +885,7 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
             instructions: fixture.vectors.typesafe.instructions,
             maxInputTokens: 512,
             maxOutputTokens: 3,
-            hostedApiKey: 'test-hosted-key',
+            hostedApiKey: { generation: 1, material: 'test-hosted-key' },
           },
           {
             beforeGate: async (phase) => {
@@ -930,7 +930,7 @@ test('E6: a deadline reached while receiving a response is not accepted as an an
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     { finalGate() {} },
   );

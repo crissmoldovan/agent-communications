@@ -16,7 +16,7 @@ import {
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import { JUDGE_BUDGET_ID } from '../domain/judges.ts';
-import { assertJudgeKindEnabled } from '../domain/lifecycle.ts';
+import { assertJudgeKindEnabled, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { SourceScope } from '../sources/contracts.ts';
@@ -732,25 +732,24 @@ export class ActivationRuntime {
     const intentId = this.#newIntentId();
     const binding = disclosureBindingFor(intentId, document);
     const now = this.#now();
-    const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
+    const plannedAccounts = [
+      ...new Map(points.map((point) => [`${point.source}\u0000${point.accountId}`, point] as const)).values(),
+    ];
     this.#store.immediate(() => {
       this.#assertJudgeActivationLive(document, effect);
       // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
       // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
       // low-resolution clock has not ticked.  This records the ordering needed to distinguish its fresh approval
       // from an old approval that named the removed account.
-      const latestRevocation =
-        plannedAccountIds.length === 0
-          ? undefined
-          : ((
-              this.#store.database
-                .prepare(
-                  `SELECT MAX(revoked_at) AS revoked_at
-                 FROM account_revocations
-                 WHERE account_id IN (${plannedAccountIds.map(() => '?').join(', ')})`,
-                )
-                .get(...plannedAccountIds) as { revoked_at: number | null }
-            ).revoked_at ?? undefined);
+      const latestRevocation = plannedAccounts.reduce<number | undefined>((latest, point) => {
+        const row = this.#store.database
+          .prepare(
+            `SELECT MAX(revoked_at) AS revoked_at FROM account_revocations
+              WHERE account_id = ? AND (source IS NULL OR source = ?)`,
+          )
+          .get(point.accountId, point.source) as { revoked_at: number | null };
+        return row.revoked_at === null ? latest : Math.max(latest ?? row.revoked_at, row.revoked_at);
+      }, undefined);
       const createdAt = Math.max(now, latestRevocation === undefined ? now : latestRevocation + 1);
       this.#store.database
         .prepare(
@@ -829,7 +828,9 @@ export class ActivationRuntime {
           `SELECT 1 AS present
            FROM activation_intents AS planned
            JOIN json_each(planned.required_points) AS point
-           JOIN account_revocations AS revocation ON revocation.account_id = json_extract(point.value, '$.accountId')
+           JOIN account_revocations AS revocation
+             ON revocation.account_id = json_extract(point.value, '$.accountId')
+            AND (revocation.source IS NULL OR revocation.source = COALESCE(json_extract(point.value, '$.source'), 'gmail'))
            WHERE planned.id = ? AND revocation.revoked_at >= planned.created_at
            LIMIT 1`,
         )
@@ -1444,7 +1445,7 @@ export class ActivationRuntime {
       });
     }
     for (const judge of rule.judges) {
-      if (judge.kind === 'typesafe')
+      if (judge.kind === JUDGE_KIND_TYPESAFE)
         await this.#assertObjectSecretReady({ owner: { kind: 'judge', id: judge.judgeId, version: judge.version } });
     }
   }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +71,7 @@ const ASSIGNMENT_OPERATORS = new Set([
 ]);
 const ALLOWED_STRING_CALLS = new Set([
   'this.#values.get(ref)',
+  "'0'.repeat(64)",
   'row.id.slice(0,12)',
   "'x'.repeat(66_000)",
   'JSON.parse(stored.document)',
@@ -133,6 +134,7 @@ const ALLOWED_HELPER_LITERAL_RUNS = new Set([
   '/test/helpers/loopback-seal-preload',
   'authorization_activation_id',
   'endpoint-host-drift-race',
+  'event_secret_generations',
   'judge_budget_reservations',
   'synthetic-boundary-value',
   'OUTPUT_TOKEN_LIMIT_EXCEEDED',
@@ -275,6 +277,7 @@ const ALLOWED_PROPERTY_STRING_READS = new Set([
   'input.command',
   'input.cwd',
   'journal.destination',
+  'judge.judgeId',
   'judge.kind',
   'judge.provider',
   "pathToFileURL(join(root,'test/helpers/loopback-seal-preload.mjs')).href",
@@ -287,6 +290,7 @@ const ALLOWED_PROPERTY_STRING_READS = new Set([
   'mutation.test',
   'mutation.testName',
   'options.host',
+  'owner.digest',
   'process.execPath',
   'process.platform',
   'row.expected.metadataState',
@@ -1466,21 +1470,36 @@ async function supportFilesUnder(directory) {
   return files;
 }
 
-function staticModuleSpecifiers(text, file) {
-  const imports = text.matchAll(/^\s*import\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/gmu);
-  const exports = text.matchAll(
-    /^\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gmu,
-  );
-  const importEquals = text.matchAll(/^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/gmu);
-  if (/\bcreateRequire\b/u.test(text)) assert.fail(`${file}: adversarial helpers must not create CommonJS loaders`);
-  const calledSpecifiers = [];
-  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*([^\r\n)]*)\)/gmu)) {
-    const argument = match[1]?.trim() ?? '';
-    const literal = /^(['"])([^'"]+)\1$/u.exec(argument);
-    if (literal === null) assert.fail(`${file}: adversarial helper module specifiers must be static string literals`);
-    calledSpecifiers.push(literal[2]);
-  }
-  return [...imports, ...exports, ...importEquals].map((match) => match[1]).concat(calledSpecifiers);
+function staticModuleSpecifiers(source, file) {
+  const specifiers = new Set();
+  const addSpecifier = (moduleSpecifier) => {
+    if (moduleSpecifier?.kind !== SyntaxKind.StringLiteral)
+      assert.fail(`${file}: adversarial helper module specifiers must be static string literals`);
+    specifiers.add(moduleSpecifier.text);
+  };
+  const visit = (node) => {
+    if (node.kind === SyntaxKind.Identifier && node.text === 'createRequire')
+      assert.fail(`${file}: adversarial helpers must not create CommonJS loaders`);
+    if (node.kind === SyntaxKind.ImportDeclaration || node.kind === SyntaxKind.ExportDeclaration) {
+      if (node.moduleSpecifier !== undefined) addSpecifier(node.moduleSpecifier);
+    } else if (node.kind === SyntaxKind.ImportEqualsDeclaration) {
+      if (node.moduleReference?.kind === SyntaxKind.ExternalModuleReference)
+        addSpecifier(node.moduleReference.expression);
+    } else if (node.kind === SyntaxKind.ImportType) {
+      addSpecifier(node.argument?.literal);
+    } else if (
+      node.kind === SyntaxKind.CallExpression &&
+      (node.expression?.kind === SyntaxKind.ImportKeyword ||
+        (node.expression?.kind === SyntaxKind.Identifier && node.expression.text === 'require'))
+    ) {
+      if (node.arguments?.length !== 1)
+        assert.fail(`${file}: adversarial helper module specifiers must be static string literals`);
+      addSpecifier(node.arguments[0]);
+    }
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return [...specifiers];
 }
 
 function insideDirectory(directory, path) {
@@ -1488,13 +1507,27 @@ function insideDirectory(directory, path) {
   return child === '' || (!child.startsWith(`..${sep}`) && child !== '..');
 }
 
-async function supportDependency(importer, specifier, supportRoot) {
+async function supportDependency(importer, specifier, repositoryRoot, realRepositoryRoot) {
   if (!specifier.startsWith('.')) return undefined;
   const requested = resolve(dirname(importer), specifier);
-  if (!insideDirectory(supportRoot, requested)) return undefined;
+  assert.equal(
+    insideDirectory(repositoryRoot, requested),
+    true,
+    `${repositoryRelative(repositoryRoot, requested)}: adversarial helper import resolves outside the repository`,
+  );
   const candidates = [requested];
   if (!/\.[A-Za-z0-9]+$/u.test(requested))
-    candidates.push(`${requested}.ts`, `${requested}.mts`, resolve(requested, 'index.ts'));
+    candidates.push(
+      `${requested}.ts`,
+      `${requested}.mts`,
+      `${requested}.js`,
+      `${requested}.mjs`,
+      `${requested}.json`,
+      resolve(requested, 'index.ts'),
+      resolve(requested, 'index.mts'),
+      resolve(requested, 'index.js'),
+      resolve(requested, 'index.mjs'),
+    );
   for (const candidate of candidates) {
     try {
       const metadata = await lstat(candidate);
@@ -1503,27 +1536,88 @@ async function supportDependency(importer, specifier, supportRoot) {
         false,
         `${candidate}: symlinks are not permitted in the adversarial corpus`,
       );
-      if (metadata.isFile()) return candidate;
+      if (metadata.isFile()) {
+        const realCandidate = await realpath(candidate);
+        assert.equal(
+          insideDirectory(realRepositoryRoot, realCandidate),
+          true,
+          `${repositoryRelative(repositoryRoot, candidate)}: adversarial helper import resolves outside the repository`,
+        );
+        return candidate;
+      }
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
-  assert.fail(`${repositoryRelative(REPOSITORY_ROOT, requested)}: imported adversarial helper does not exist`);
+  assert.fail(`${repositoryRelative(repositoryRoot, requested)}: imported adversarial helper does not exist`);
 }
 
-async function dependencyClosedSupportFiles(roots, supportRoot) {
+const INDEPENDENTLY_GUARDED_DEPENDENCIES = new Set([
+  'packages/events-daemon/src/domain/judges.ts',
+  'packages/events-daemon/src/domain/versions.ts',
+  'packages/events-daemon/src/runtime/evaluate.ts',
+  'packages/events-daemon/src/runtime/expiry.ts',
+  'packages/events-daemon/src/runtime/holds.ts',
+  'packages/events-daemon/src/runtime/judge-coordinator.ts',
+  'packages/events-daemon/src/runtime/judge-recovery.ts',
+  'packages/events-daemon/src/runtime/judge-transport.ts',
+  'packages/events-daemon/src/runtime/untrusted.ts',
+  'packages/events-daemon/src/runtime/writer-quiescer.ts',
+  'packages/events-daemon/src/store/database.ts',
+  'packages/events-daemon/src/store/event-secrets.ts',
+  'packages/events-daemon/src/store/records.ts',
+  'test/helpers/loopback-seal-preload.mjs',
+]);
+
+function isIndependentlyGuardedDependency(repositoryRoot, path) {
+  const file = repositoryRelative(repositoryRoot, path);
+  return INDEPENDENTLY_GUARDED_DEPENDENCIES.has(file);
+}
+
+async function dependencyClosedSupportFiles(roots, repositoryRoot) {
   const discovered = new Set(roots);
-  const pending = [...roots];
-  while (pending.length > 0) {
-    const importer = pending.pop();
-    assert.ok(importer, 'the dependency-closure work item exists');
-    const text = await readFile(importer, 'utf8');
-    for (const specifier of staticModuleSpecifiers(text, repositoryRelative(REPOSITORY_ROOT, importer))) {
-      const dependency = await supportDependency(importer, specifier, supportRoot);
-      if (dependency === undefined || discovered.has(dependency)) continue;
-      discovered.add(dependency);
-      pending.push(dependency);
+  const trustByPath = new Map(roots.map((path) => [path, false]));
+  const pending = roots.map((path) => ({ path, trusted: false }));
+  const realRepositoryRoot = await realpath(repositoryRoot);
+  const api = new API({ cwd: repositoryRoot });
+  const openFiles = new Set();
+  try {
+    while (pending.length > 0) {
+      const work = pending.pop();
+      assert.ok(work, 'the dependency-closure work item exists');
+      const { path: importer, trusted } = work;
+      let specifiers = [];
+      if (!importer.toLowerCase().endsWith('.json')) {
+        const apiPath = importer.replaceAll('\\', '/');
+        openFiles.add(apiPath);
+        const snapshot = api.updateSnapshot({ openFiles: [...openFiles] });
+        const project = snapshot.getDefaultProjectForFile(apiPath);
+        assert.ok(project, `${repositoryRelative(repositoryRoot, importer)}: helper has a TypeScript project`);
+        const source = project.program.getSourceFile(apiPath);
+        assert.ok(source, `${repositoryRelative(repositoryRoot, importer)}: helper parses as a source file`);
+        assert.equal(
+          project.program.getSyntacticDiagnostics(apiPath).length,
+          0,
+          `${repositoryRelative(repositoryRoot, importer)}: helper has no syntax error that can evade dependency discovery`,
+        );
+        specifiers = staticModuleSpecifiers(source, repositoryRelative(repositoryRoot, importer));
+      }
+      for (const specifier of specifiers) {
+        const dependency = await supportDependency(importer, specifier, repositoryRoot, realRepositoryRoot);
+        if (dependency === undefined) continue;
+        // Exact production entry points are guarded elsewhere. Their complete relative dependency graph is still
+        // resolved and traversed here, but it is not added to the adversarial fixture manifest or content scan.
+        const dependencyTrusted = trusted || isIndependentlyGuardedDependency(repositoryRoot, dependency);
+        if (!dependencyTrusted) discovered.add(dependency);
+        const previousTrust = trustByPath.get(dependency);
+        if (previousTrust === undefined || (previousTrust && !dependencyTrusted)) {
+          trustByPath.set(dependency, dependencyTrusted);
+          pending.push({ path: dependency, trusted: dependencyTrusted });
+        }
+      }
     }
+  } finally {
+    api.close();
   }
   return [...discovered];
 }
@@ -1540,7 +1634,7 @@ export async function assertAdversarialCorpusFileInventory({ repositoryRoot = RE
     fixtureFilesUnder(fixtureRoot),
     supportFilesUnder(supportRoot),
   ]);
-  const supportFiles = await dependencyClosedSupportFiles(supportRoots, supportRoot);
+  const supportFiles = await dependencyClosedSupportFiles(supportRoots, repositoryRoot);
   const discovered = [...fixtureFiles, ...supportFiles].map((path) => repositoryRelative(repositoryRoot, path)).sort();
   const manifests = fixtureFiles.filter((path) => /^adversarial-.*\.manifest\.json$/iu.test(basename(path)));
   assert.equal(manifests.length, 1, 'the discovered adversarial corpus has exactly one manifest');

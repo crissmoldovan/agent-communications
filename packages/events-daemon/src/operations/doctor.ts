@@ -1,6 +1,11 @@
 import { EventControlClient } from '../control/client.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import type { JudgeKind } from '../domain/lifecycle.ts';
+import type {
+  JUDGE_KIND_LAYA,
+  JUDGE_KIND_LOCAL_ENDPOINT,
+  JUDGE_KIND_TYPESAFE,
+  JudgeKind,
+} from '../domain/lifecycle.ts';
 
 /** The checked binding for contracts/doctor-v1.schema.json. No free-form values cross this operation boundary. */
 export type DoctorSource = 'gmail' | 'slack' | 'resend' | 'whatsapp';
@@ -155,11 +160,11 @@ export interface DoctorReportV2 extends Omit<DoctorReportV1, 'schemaVersion'> {
   readonly judge: {
     readonly kinds: readonly (
       | {
-          readonly kind: 'typesafe' | 'local-endpoint';
+          readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
           readonly state: 'disabled' | 'enabled';
           readonly version: number | null;
         }
-      | { readonly kind: 'laya'; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
+      | { readonly kind: typeof JUDGE_KIND_LAYA; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
     )[];
     readonly budget: { readonly activeVersion: number | null };
     /** Counts only; a doctor report never exposes a work id, request, prompt, event or provider response. */

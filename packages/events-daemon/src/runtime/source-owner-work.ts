@@ -47,6 +47,7 @@ import { assertLiveEventAccount } from './account-fence.ts';
 import type { CutoverFailpoint } from './cutover-failpoint.ts';
 import { EventEvaluator } from './evaluate.ts';
 import { JudgeCoordinator } from './judge-coordinator.ts';
+import type { HostedJudgeCredential } from './judge-transport.ts';
 import type { EventLifecycle } from './lifecycle.ts';
 import { completeSourceReplacementDrain } from './replacements.ts';
 import { recordEventTaint } from './untrusted.ts';
@@ -82,7 +83,7 @@ export interface SourceOwnerWorkOptions {
   readonly now?: (() => number) | undefined;
   /** B3's hosted-key material reaches only the Task-6 request boundary via the Task-7 coordinator. */
   readonly hostedJudgeKeyFor?:
-    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
     | undefined;
   /** Optional D8 crash seam; omitted by production callers. */
   readonly failpoint?: CutoverFailpoint | undefined;

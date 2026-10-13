@@ -373,6 +373,19 @@ export async function runAdversarialCase(
       ],
     });
     versions.createRule(rule);
+    if (row.scenario === 'dns-rebinding') {
+      const owner = store.database
+        .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = 1')
+        .get(judge.judgeId) as { digest: string };
+      store.database
+        .prepare(
+          `INSERT INTO event_secret_generations
+           (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref,
+            lifecycle, expires_at, created_at)
+           VALUES ('judge', ?, 1, 'judge-key', 1, ?, ?, ?, 'current', NULL, ?)`,
+        )
+        .run(judge.judgeId, owner.digest, '0'.repeat(64), Buffer.from('synthetic-reference'), NOW);
+    }
     store.database.exec(
       `INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
        VALUES ('judge-kind', '${judge.kind}', 1, 'kind-e11', ${NOW}),
@@ -481,7 +494,7 @@ export async function runAdversarialCase(
       transport,
       now: () => NOW,
       newId: () => `reservation-e11-${++ids}`,
-      ...(row.scenario === 'dns-rebinding' ? { hostedApiKeyFor: async () => 'synthetic-boundary-value' } : {}),
+      hostedApiKeyFor: async () => ({ generation: 1, material: 'fake-key' }),
     });
     let raceFenceMutated = false;
     const evaluator = new EventEvaluator({

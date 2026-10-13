@@ -592,6 +592,26 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '20' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // Account ids are provider-owned identifiers. A revocation therefore fences the exact discriminated source and
+    // account pair; migrated source-less rows remain a conservative wildcard for every source.
+    version: 21,
+    name: 'event-account-revocation-source-scope-v1',
+    statements: [
+      `CREATE TABLE account_revocations_v21 (
+        source TEXT CHECK (source IS NULL OR source IN ('gmail', 'slack', 'resend', 'whatsapp')),
+        account_id TEXT NOT NULL,
+        revoked_at INTEGER NOT NULL,
+        UNIQUE (source, account_id)
+      ) STRICT`,
+      `INSERT INTO account_revocations_v21 (source, account_id, revoked_at)
+       SELECT NULL, account_id, revoked_at FROM account_revocations`,
+      'DROP TABLE account_revocations',
+      'ALTER TABLE account_revocations_v21 RENAME TO account_revocations',
+      'CREATE INDEX account_revocations_account_source ON account_revocations(account_id, source)',
+      "UPDATE meta SET value = '21' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

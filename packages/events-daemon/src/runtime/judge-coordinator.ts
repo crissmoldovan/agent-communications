@@ -9,6 +9,7 @@ import {
   type MappedValue,
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
   assertJudgeReservationStillInFlight,
@@ -19,7 +20,12 @@ import {
   reserveJudgeWork,
   settleJudgeWork,
 } from './judge-budget.ts';
-import { JudgeTransport, type JudgeTransportResult, prepareJudgeTransportRequest } from './judge-transport.ts';
+import {
+  type HostedJudgeCredential,
+  JudgeTransport,
+  type JudgeTransportResult,
+  prepareJudgeTransportRequest,
+} from './judge-transport.ts';
 import { type EventTaintRecorder, sanitiseSenderFields } from './untrusted.ts';
 
 const QUESTION_NAME = 'decision';
@@ -38,7 +44,7 @@ export interface JudgeCoordinatorOptions {
   readonly newId?: (() => string) | undefined;
   /** B3's secret slot is read only at the hosted request boundary and is never retained here. */
   readonly hostedApiKeyFor?:
-    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
     | undefined;
 }
 
@@ -149,16 +155,23 @@ export class JudgeCoordinator {
 
     // The hosted key is material only at this boundary.  It participates in the exact request bytes, so a rule never
     // reserves the body while the sealed writer later sends a longer Authorization-bearing HTTP request.
-    let hostedApiKey: string | null | undefined;
+    let hostedApiKey: HostedJudgeCredential | null | undefined;
     try {
       hostedApiKey =
-        agentic.judge.kind === 'typesafe'
+        agentic.judge.kind === JUDGE_KIND_TYPESAFE
           ? await this.#hostedApiKeyFor({ judgeId: agentic.judge.judgeId, judgeVersion: agentic.judge.version })
           : undefined;
     } catch {
       return { kind: 'closed', reason: 'hosted-key-unavailable', reservationId: null };
     }
-    if (agentic.judge.kind === 'typesafe' && (typeof hostedApiKey !== 'string' || hostedApiKey.length === 0))
+    if (
+      agentic.judge.kind === JUDGE_KIND_TYPESAFE &&
+      (hostedApiKey === null ||
+        hostedApiKey === undefined ||
+        !Number.isSafeInteger(hostedApiKey.generation) ||
+        hostedApiKey.generation < 1 ||
+        hostedApiKey.material.length === 0)
+    )
       return { kind: 'closed', reason: 'hosted-key-unavailable', reservationId: null };
 
     const call = {
@@ -227,7 +240,19 @@ export class JudgeCoordinator {
       // The sealed transport invokes this synchronous authority recheck directly beside every physical
       // DNS/TCP/TLS/write action; no await can sit between it and that I/O.
       finalGate: () => {
-        assertJudgeReservationStillInFlight({ store: this.#store, reservationId: reservation.id });
+        assertJudgeReservationStillInFlight({
+          store: this.#store,
+          reservationId: reservation.id,
+          ...(prepared.hostedKeyGeneration === null
+            ? {}
+            : {
+                hostedKey: {
+                  judgeId: agentic.judge.judgeId,
+                  judgeVersion: agentic.judge.version,
+                  generation: prepared.hostedKeyGeneration,
+                },
+              }),
+        });
         return undefined;
       },
       preparedRequest: prepared,

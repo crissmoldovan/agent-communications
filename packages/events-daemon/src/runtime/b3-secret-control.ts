@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { SecretStore } from '@agentcomms/core';
 import type { HumanSecret } from '../domain/human-secret.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { canonicalWebhookTarget, secretWebhookUrlDescriptor } from '../domain/webhook-target.ts';
 import {
   type EventSecretMigrationResult,
@@ -315,7 +316,7 @@ export class B3SecretControl {
     const document = this.#database
       .prepare('SELECT document FROM judge_versions WHERE judge_id = ? AND version = ?')
       .get(judgeId, version) as { document: string };
-    if ((JSON.parse(document.document) as { kind?: unknown }).kind !== 'typesafe')
+    if ((JSON.parse(document.document) as { kind?: unknown }).kind !== JUDGE_KIND_TYPESAFE)
       throw new Error('only the hosted judge kind has a credential slot');
     return owner;
   }

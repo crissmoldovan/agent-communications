@@ -197,7 +197,7 @@ test('E6: literal local judges have no DNS rebinding path and every applicable f
         instructions: 'Determine whether this synthetic event needs review.',
         maxInputTokens: 512,
         maxOutputTokens: 2,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -274,7 +274,7 @@ test('E6: every hosted final gate refuses before its next physical network actio
             instructions: 'Determine whether this synthetic event needs review.',
             maxInputTokens: 512,
             maxOutputTokens: 2,
-            hostedApiKey: 'test-hosted-key',
+            hostedApiKey: { generation: 1, material: 'test-hosted-key' },
           },
           {
             finalGate: (phase) => {
@@ -320,7 +320,7 @@ test('E6: a hosted globally reachable address can never drift to a private answe
     instructions: 'Determine whether this synthetic event needs review.',
     maxInputTokens: 512,
     maxOutputTokens: 2,
-    hostedApiKey: 'test-hosted-key',
+    hostedApiKey: { generation: 1, material: 'test-hosted-key' },
   };
   assert.deepEqual(await transport.execute(request, allowAllTransportGates), {
     kind: 'answer',

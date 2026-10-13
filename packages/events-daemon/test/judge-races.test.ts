@@ -3,14 +3,17 @@ import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { canonicalJson, type SecretStore, TaintStore } from '@agentcomms/core';
 import { gmailMessageReceivedV1, whatsappMessageReceivedV1 } from '@agentcomms/events';
+import { HumanSecret } from '../src/domain/human-secret.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { assertLiveEventAccount, purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
+import { B3SecretControl } from '../src/runtime/b3-secret-control.ts';
 import { commitHeldDecisionOutbox, StaleDecisionError } from '../src/runtime/decisions.ts';
 import { EventEvaluator } from '../src/runtime/evaluate.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
 import { claimHeldDecision, expireHeldDecisions, HoldResolver } from '../src/runtime/holds.ts';
 import { JudgeCoordinator } from '../src/runtime/judge-coordinator.ts';
+import { JudgeTestControl } from '../src/runtime/judge-test.ts';
 import { JudgeTransport } from '../src/runtime/judge-transport.ts';
 import { removeTarget } from '../src/runtime/revocations.ts';
 import { type EventTaintRecorder, recordEventTaint } from '../src/runtime/untrusted.ts';
@@ -961,3 +964,181 @@ test('E12 judge race: paused held resolution loses to target, subscriber, judge,
     'paused purge races close every socket, database and asynchronous handle on every path',
   );
 });
+
+test('E12 judge race: hosted-key rotation during DNS refuses the retired generation before any request byte', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const resourcesBefore = lastingResources();
+  const stateDir = await shortTempDir('events-e12-judge-key-dns-race-');
+  const store = await openEventDatabase({ stateDir });
+  const quiescer = testWriterQuiescer();
+  const hostedJudge = {
+    judgeId: 'judge-e12-key-race',
+    version: 1,
+    kind: 'typesafe' as const,
+    provider: 'typesafe' as const,
+    model: 'jev-1.13.0' as const,
+    endpoint: 'https://api.typesafe.ai/v1/systemone' as const,
+    promptTemplate: 'typesafe-jev-noul-v1',
+    protocol: 'noul' as const,
+  };
+  let resumeDns: ((addresses: string[]) => void) | undefined;
+  let dnsEntered: (() => void) | undefined;
+  const pausedDns = new Promise<void>((resolve) => {
+    dnsEntered = resolve;
+  });
+  const requests: Buffer[] = [];
+  let tcpConnections = 0;
+  try {
+    await selectEventSecretStore(store.database, 'file');
+    const secrets = await openEventSecretStore({
+      database: store.database,
+      paths: store.paths,
+      configDir: '/synthetic/config',
+      stores: { file: new MemorySecretStore() },
+    });
+    const cipher = new EventRecordCipher(store.database, secrets, quiescer);
+    const versions = new ImmutableVersions(store.database);
+    versions.createTarget(target);
+    versions.createJudge(hostedJudge);
+    versions.createJudgeKind({
+      id: 'judge-kind:typesafe',
+      kind: 'typesafe',
+      version: 1,
+      endpoint: hostedJudge.endpoint,
+    });
+    versions.createJudgeBudget({
+      budgetId: 'judge-budget',
+      version: 1,
+      global: { callsPerRollingHour: 10, inputTokensPerRolling30Days: 20_000, concurrency: 1 },
+      providers: [
+        { provider: 'typesafe', callsPerRollingHour: 10, inputTokensPerRolling30Days: 20_000, concurrency: 1 },
+      ],
+    });
+    versions.createRule({
+      ...heldRule({ onUncertain: 'no-match' }),
+      ruleId: 'rule-e12-key-race',
+      agentic: {
+        ...heldRule({ onUncertain: 'no-match' }).agentic,
+        judge: hostedJudge,
+        question: 'Score only the fixed synthetic event.',
+      },
+    });
+    store.database.exec(
+      `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 8 WHERE singleton = 1;
+       UPDATE rule_versions SET state = 'active', approval_id = 'approval-e12-key-race',
+         authorization_activation_id = 'activation-e12-key-race', activated_at = ${STAGED_AT}
+         WHERE rule_id = 'rule-e12-key-race' AND version = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES
+         ('judge-kind', 'typesafe', 1, 'kind-e12-key-race', ${STAGED_AT}),
+         ('judge-budget', 'judge-budget', 1, 'budget-e12-key-race', ${STAGED_AT}),
+         ('rule', 'rule-e12-key-race', 1, 'activation-e12-key-race', ${STAGED_AT});`,
+    );
+    const secretControl = new B3SecretControl({
+      database: store.database,
+      paths: store.paths,
+      secrets,
+      cipher,
+      quiescer,
+    });
+    await secretControl.judgeKeySet({
+      judgeId: hostedJudge.judgeId,
+      version: hostedJudge.version,
+      hidden: HumanSecret.fromTrustedInput('synthetic-generation-one'),
+    });
+    const owner = {
+      kind: 'judge' as const,
+      id: hostedJudge.judgeId,
+      version: hostedJudge.version,
+      digest: (
+        store.database
+          .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ?')
+          .get(hostedJudge.judgeId, hostedJudge.version) as { digest: string }
+      ).digest,
+    };
+    const resultPromise = new JudgeTestControl({
+      store,
+      now: () => STAGED_AT,
+      newId: () => 'reservation-e12-key-race',
+      taint: { record: async () => undefined },
+      hostedApiKeyFor: async () => {
+        const current = (await secrets.readLiveGenerations({ owner, purpose: 'judge-key', cipher }))[0];
+        return current === undefined ? null : { generation: current.generation, material: current.material };
+      },
+      transport: new JudgeTransport({
+        resolver: {
+          lookup: async () => {
+            dnsEntered?.();
+            return new Promise<string[]>((resolve) => {
+              resumeDns = resolve;
+            });
+          },
+        },
+        tcpConnect: async () => {
+          tcpConnections += 1;
+          return {} as never;
+        },
+        tlsConnect: async () => responseSocketForJudgeTest(requests) as never,
+      }),
+    }).test({ judgeId: hostedJudge.judgeId, version: hostedJudge.version });
+
+    await pausedDns;
+    await secretControl.judgeKeyRotate({
+      judgeId: hostedJudge.judgeId,
+      version: hostedJudge.version,
+      hidden: HumanSecret.fromTrustedInput('synthetic-generation-two'),
+    });
+    resumeDns?.(['8.8.8.8']);
+
+    assert.deepEqual(
+      await resultPromise,
+      {
+        kind: 'deferred',
+        judgeId: hostedJudge.judgeId,
+        version: hostedJudge.version,
+        code: 'NETWORK_FENCE_REFUSED',
+        reservationId: 'reservation-e12-key-race',
+      },
+      'a DNS-paused synthetic test refuses after its prepared hosted-key generation is retired',
+    );
+    assert.equal(tcpConnections, 0, 'retired hosted-key authority is refused before a TCP connection starts');
+    assert.equal(requests.length, 0, 'retired hosted-key authority writes no request bytes');
+  } finally {
+    resumeDns?.(['8.8.8.8']);
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the hosted-key DNS race closes every database and asynchronous handle',
+  );
+});
+
+function responseSocketForJudgeTest(requests: Buffer[]) {
+  const listeners = new Map<string, (value?: Buffer | Error) => void>();
+  return {
+    write(bytes: Uint8Array) {
+      requests.push(Buffer.from(bytes));
+      queueMicrotask(() => {
+        listeners.get('data')?.(
+          Buffer.from(
+            'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"answers":{"judge-test":{"type":"noul","noul":0.75}},"model":"jev-1.13.0","usage":{"input_tokens":3,"output_tokens":2}}',
+          ),
+        );
+        listeners.get('end')?.();
+      });
+      return true;
+    },
+    destroy() {},
+    once(event: string, listener: (value?: Buffer | Error) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+    on(event: string, listener: (value?: Buffer | Error) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+  };
+}

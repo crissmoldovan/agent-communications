@@ -131,6 +131,9 @@
     { "id": "e12-disable-all-purge" },
     { "id": "e12-account-rule-revoke" },
     { "id": "e12-derived-parent-revoke" },
+    { "id": "e12-account-source-purge" },
+    { "id": "e12-judge-key-generation-fence" },
+    { "id": "e12-judge-kind-literal-guard" },
     { "id": "e12-audit-matrix" },
     { "id": "e12-static-network-path" },
     { "id": "e12-purge-caller-registry" },
@@ -266,6 +269,9 @@
     { "id": "e12-disable-all-purge" },
     { "id": "e12-account-rule-revoke" },
     { "id": "e12-derived-parent-revoke" },
+    { "id": "e12-account-source-purge" },
+    { "id": "e12-judge-key-generation-fence" },
+    { "id": "e12-judge-kind-literal-guard" },
     { "id": "e12-audit-matrix" },
     { "id": "e12-static-network-path" },
     { "id": "e12-purge-caller-registry" },
@@ -1778,6 +1784,43 @@
       "mutation": {
         "id": "e12-derived-parent-revoke",
         "test": "E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-source-purge",
+      "task": "E12",
+      "coverage": ["e12-account-source-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-source-purge",
+        "test": "E12 account scope: removing Gmail preserves same-id Slack work and its final reservation authority"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-judge-key-generation-fence",
+      "task": "E12",
+      "coverage": ["e12-judge-key-generation-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-judge-key-generation-fence",
+        "test": "E12 judge race: hosted-key rotation during DNS refuses the retired generation before any request byte"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e12-judge-kind-literal-guard",
+      "task": "E12",
+      "coverage": ["e12-judge-kind-literal-guard"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-judge-kind-literal-guard",
+        "test": "E3 scope: static guards analyse each kind literal and each SQL statement independently"
       },
       "strictRunner": "judge-mutants"
     },

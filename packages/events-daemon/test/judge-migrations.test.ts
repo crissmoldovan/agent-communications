@@ -361,7 +361,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '20',
+        '21',
         fixture.name,
       );
       assert.deepEqual(
@@ -378,7 +378,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 20').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21').get() as {
             count: number;
           }
         ).count,
@@ -432,6 +432,44 @@ test('E5: v18 keeps source-owned ledger audit rows when their projection is term
       ],
     );
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database.close();
+  }
+});
+
+test('E12 v21: account revocations gain source scope while legacy rows remain wildcard fences', {
+  skip: WINDOWS_SKIP,
+}, () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    applyMigrations(database, migrationsThrough(20));
+    database
+      .prepare('INSERT INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
+      .run('same-looking-account', 7);
+
+    applyMigrations(database);
+
+    assert.deepEqual(
+      {
+        ...(database
+          .prepare('SELECT source, account_id, revoked_at FROM account_revocations WHERE account_id = ?')
+          .get('same-looking-account') as Record<string, unknown>),
+      },
+      { source: null, account_id: 'same-looking-account', revoked_at: 7 },
+      'v21 preserves an old account-only revocation as a source-less fail-closed row',
+    );
+    database
+      .prepare('INSERT INTO account_revocations (source, account_id, revoked_at) VALUES (?, ?, ?)')
+      .run('gmail', 'same-looking-account', 8);
+    assert.equal(
+      (
+        database
+          .prepare('SELECT COUNT(*) AS count FROM account_revocations WHERE account_id = ?')
+          .get('same-looking-account') as { count: number }
+      ).count,
+      2,
+      'the migrated ledger can retain legacy wildcard and new exact source/account revocations together',
+    );
   } finally {
     database.close();
   }
@@ -618,7 +656,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '20',
+        '21',
       );
     } finally {
       first.close();
@@ -627,7 +665,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 20').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21').get() as {
             count: number;
           }
         ).count,
