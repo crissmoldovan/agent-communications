@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 // @ts-expect-error The verifier is a repository executable with no declaration file.
 import { verifyPhaseEPrerequisites } from '../../../scripts/verify-events-phase-e-prerequisites.mjs';
 import { runStrictMutationChild } from './support/strict-mutation-child.ts';
@@ -13,14 +14,9 @@ async function copiedB3Tree(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'agentcomms-e13-b3-tree-'));
   await Promise.all([
     cp(join(ROOT, 'packages/events-daemon/src'), join(root, 'packages/events-daemon/src'), { recursive: true }),
-    cp(join(ROOT, 'packages/events-daemon/test/fixtures'), join(root, 'packages/events-daemon/test/fixtures'), {
-      recursive: true,
-    }),
-    cp(
-      join(ROOT, 'packages/events-daemon/test/b3-consumer-contract.test.ts'),
-      join(root, 'packages/events-daemon/test/b3-consumer-contract.test.ts'),
-    ),
+    cp(join(ROOT, 'packages/events-daemon/test'), join(root, 'packages/events-daemon/test'), { recursive: true }),
     cp(join(ROOT, 'scripts'), join(root, 'scripts'), { recursive: true }),
+    cp(join(ROOT, 'test/helpers'), join(root, 'test/helpers'), { recursive: true }),
     cp(join(ROOT, 'capabilities.json'), join(root, 'capabilities.json')),
     cp(join(ROOT, 'package.json'), join(root, 'package.json')),
   ]);
@@ -36,6 +32,60 @@ async function copiedB3Tree(): Promise<string> {
   return root;
 }
 
+interface HermeticReleaseChild {
+  readonly calls: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function shellLiteral(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+async function hermeticReleaseChild(root: string): Promise<HermeticReleaseChild> {
+  const sandbox = join(root, '.release-child');
+  const home = join(sandbox, 'home');
+  const temporary = join(sandbox, 'tmp');
+  const path = join(sandbox, 'bin');
+  const calls = join(sandbox, 'tool-calls');
+  await Promise.all([
+    mkdir(home, { recursive: true }),
+    mkdir(temporary, { recursive: true }),
+    mkdir(path, { recursive: true }),
+  ]);
+  await Promise.all(
+    ['git', 'npm', 'pnpm', 'npx'].map(async (tool) => {
+      const executable = join(path, tool);
+      await writeFile(
+        executable,
+        `#!/bin/sh\nprintf '%s\\n' ${shellLiteral(tool)} >> ${shellLiteral(calls)}\nexit 97\n`,
+        'utf8',
+      );
+      await chmod(executable, 0o700);
+    }),
+  );
+  const env: NodeJS.ProcessEnv = {
+    HOME: home,
+    TMPDIR: temporary,
+    PATH: path,
+    npm_config_registry: 'http://127.0.0.1:9/',
+    ...(process.platform === 'win32' ? { SystemRoot: 'C:\\Windows' } : {}),
+  };
+  assert.deepEqual(
+    Object.keys(env).sort(),
+    ['HOME', 'PATH', 'TMPDIR', 'npm_config_registry', ...(process.platform === 'win32' ? ['SystemRoot'] : [])].sort(),
+    'the release child receives only the hermetic environment allowlist',
+  );
+  return { calls, env };
+}
+
+async function recordedReleaseCalls(path: string): Promise<readonly string[]> {
+  const text = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  return text.split('\n').filter(Boolean);
+}
+
 async function replaceOnce(root: string, file: string, before: string, after: string): Promise<void> {
   const path = join(root, file);
   const source = await readFile(path, 'utf8');
@@ -43,7 +93,11 @@ async function replaceOnce(root: string, file: string, before: string, after: st
   await writeFile(path, source.replace(before, after), 'utf8');
 }
 
-test('E13 final release: verify and direct release retain both Phase-E gates', async () => {
+test('E13 final release: verify and direct release retain both Phase-E gates', {
+  skip:
+    process.platform === 'win32' &&
+    'the hermetic git/npm/pnpm/npx stand-ins are POSIX shell executables, which Windows cannot spawn without a shell',
+}, async () => {
   const rootPackage = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')) as {
     readonly scripts: Readonly<Record<string, string>>;
   };
@@ -58,6 +112,47 @@ test('E13 final release: verify and direct release retain both Phase-E gates', a
       /verify:events-phase-e-tests/u,
       `${script} keeps the strict test gate`,
     );
+  }
+  const fixture = await copiedB3Tree();
+  try {
+    await replaceOnce(
+      fixture,
+      'capabilities.json',
+      'events-daemon.judge-key.rotate',
+      'events-daemon.judge-key.removed-by-e13-executed-gate',
+    );
+    const hermetic = await hermeticReleaseChild(fixture);
+    const release = await runStrictMutationChild({
+      command: process.execPath,
+      args: [
+        '--import',
+        pathToFileURL(join(fixture, 'test/helpers/loopback-seal-preload.mjs')).href,
+        'scripts/release.mjs',
+        '--publish',
+        '--skip-verify',
+      ],
+      cwd: fixture,
+      env: hermetic.env,
+      timeoutMs: 30_000,
+    });
+    assert.notEqual(release.code, 0, 'direct release refuses the damaged copied B3 tree');
+    assert.match(
+      release.output,
+      /B3 human-only exception row exists: events-daemon\.judge-key\.rotate/u,
+      'the required prerequisite gate refuses before any release tool can run',
+    );
+    assert.doesNotMatch(
+      release.output,
+      /Rehearsing a release|Releasing — checking first|npm user:|Publishing /u,
+      'the prerequisite refusal is ordered before release preflight or publication',
+    );
+    assert.deepEqual(
+      await recordedReleaseCalls(hermetic.calls),
+      [],
+      'the prerequisite refusal runs before every hermetic git/npm/pnpm/npx stand-in',
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
   }
   const releaseSource = await readFile(join(ROOT, 'scripts/release.mjs'), 'utf8');
   assert.equal(
@@ -103,26 +198,6 @@ test('E13 final release: the positive B3 tree passes and B3 drift refuses verify
       problems.length > 0,
       true,
       'the required verifier returns a failing result that the statically required verify and release gates cannot bypass',
-    );
-
-    const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const release = await runStrictMutationChild({
-      command: process.execPath,
-      args: ['scripts/release.mjs', '--publish', '--skip-verify'],
-      cwd: fixture,
-      env: environment,
-      timeoutMs: 30_000,
-    });
-    assert.notEqual(release.code, 0, 'direct release refuses the damaged copied B3 tree');
-    assert.match(
-      release.output,
-      /B3 human-only exception row exists: events-daemon\.judge-key\.rotate/u,
-      'direct release reports the damaged B3 prerequisite row',
-    );
-    assert.doesNotMatch(
-      release.output,
-      /Rehearsing a release|Releasing — checking first|npm user:|Publishing /u,
-      'direct release stops before release preflight, registry reads, or publication',
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });

@@ -12,8 +12,9 @@ test('E13 final mutations: every final ship gate has one exact destructive mutat
       'e13-doctor-hold-clock',
       'e13-laya-typed-unavailable',
       'e13-kind-enablement-approval',
+      'e13-owner-judge-wiring',
     ],
-    'Task 13 owns the exact five final gate mutations in append order',
+    'Task 13 owns every final gate mutation in append order',
   );
 });
 
