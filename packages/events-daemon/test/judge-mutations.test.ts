@@ -48,6 +48,7 @@ test('E3 mutation: every prerequisite and scope mutation has exactly one named p
       'e-review-judge-input-envelope',
       'e-review-event-taint-platform',
       'e-review-kind-disable-work-closure',
+      'e-review-kind-disable-keeps-rule-authority',
       'e-review-preio-release-commit',
       'e-review-response-owner-recovery',
       'e-review-valid-mcp-kind-disable-parity',

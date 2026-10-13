@@ -442,6 +442,9 @@
       "id": "e-review-kind-disable-work-closure"
     },
     {
+      "id": "e-review-kind-disable-keeps-rule-authority"
+    },
+    {
       "id": "e-review-preio-release-commit"
     },
     {
@@ -898,6 +901,9 @@
     },
     {
       "id": "e-review-kind-disable-work-closure"
+    },
+    {
+      "id": "e-review-kind-disable-keeps-rule-authority"
     },
     {
       "id": "e-review-preio-release-commit"
@@ -2669,6 +2675,18 @@
       "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
       "mutation": {
         "id": "e-review-kind-disable-work-closure",
+        "test": "E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-kind-disable-keeps-rule-authority",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-keeps-rule-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-keeps-rule-authority",
         "test": "E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing"
       },
       "strictRunner": "judge-mutants"
