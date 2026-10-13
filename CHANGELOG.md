@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run
 on this machine — and match only when the answer clears the rule's threshold.** Conditions on an event's fields can
@@ -22,12 +22,17 @@ today. A judge answers that, inside the same boundary as the rest of `agent-even
 - **Budgets you approve.** Every call counts against the rule's own ceilings and a daemon-wide budget (calls per hour,
   input tokens per 30 days, concurrent calls) that only you can activate, and that a rule's new version cannot reset.
 - **`judge test`** tries an active judge on the daemon's own synthetic event, never one of yours, at most ten times an
-  hour per version. `doctor` reports each kind, the active budget and its reservations.
+  hour per version. `doctor` reports each kind, the active budget and its reservations, how many decisions are held
+  and when the next expires, and a hosted judge whose key is missing.
 - **Agents** can propose judges and budgets, prepare a kind's enablement, test a judge and turn a kind off. They can
   never approve, see or set a judge's key, or decide a held event; the `agentcomms-events` skill says so.
 
 The `agentcomms-events` skill also no longer says the daemon is unpublished: when its tools are missing, it tells you
 to register `npx -y @agentcomms/events-daemon mcp` with your client.
+
+**Fixed.** Since 0.16.0, a Slack or WhatsApp handle copied out of an event into a delivery was recorded under Gmail,
+so a later Slack or WhatsApp send to that handle was not recognised as coming from an event's untrusted content. Each
+handle is now recorded under its own channel, for deliveries and judge inputs alike.
 
 **What is not in it yet.** Laya, the model that would run inside the daemon, is listed but refused as not available
 yet. The desktop app comes in a later release.
