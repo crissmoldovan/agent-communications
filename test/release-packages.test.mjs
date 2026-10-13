@@ -1066,6 +1066,25 @@ test('REL-B1: no public surface of the released daemon still calls it held, unre
   assert.doesNotMatch(manifest.description, /\bheld\b/i, 'the npm description does not call the daemon held');
 });
 
+test('the release guide and the release skill name exactly the packages a tag publishes, in order', async () => {
+  const guide = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
+  const inventory = /`PACKAGES` is what a tag publishes: (.*?), in that order/.exec(guide);
+  assert.ok(inventory, 'the release guide states what a tag publishes');
+  assert.deepEqual(
+    [...inventory[1].matchAll(/`([a-z-]+)`/g)].map((match) => match[1]),
+    [...PACKAGES],
+    'the release guide lists PACKAGES exactly, in order',
+  );
+  const skill = (await readFile(join(ROOT, '.claude', 'skills', 'release', 'SKILL.md'), 'utf8')).replace(/\s+/g, ' ');
+  const today = /in that order — today (.*?) \(`node scripts\/packages\.mjs` prints the list\)/.exec(skill);
+  assert.ok(today, 'the release skill states what a tag publishes today');
+  assert.deepEqual(
+    [...today[1].matchAll(/`@agentcomms\/([a-z-]+)`/g)].map((match) => match[1]),
+    [...PACKAGES],
+    'the release skill lists PACKAGES exactly, in order',
+  );
+});
+
 test('REL-B2: the released daemon keeps its human-only boundary, and the release browser gate proves loopback SSE/CORS', async () => {
   const [readme, release] = await Promise.all([
     readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8'),

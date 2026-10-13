@@ -20,7 +20,7 @@ documentation ends up describing a human in a loop they are not in.
 What guards the release instead is stated rather than implied: the environment accepts `v*` tags and nothing else,
 the tag must match the declared version and still name the commit the run started from, six platform legs must pass
 before the publish job starts — and so must one more on exactly Node 22.12.0, the oldest the packages claim, which
-runs the printed commands a source checkout's registration needs there and the held event service's built status
+runs the printed commands a source checkout's registration needs there and the event service's built status
 command through Node's SQLite module, and one on macOS that runs the event library's vectors plus loopback daemon
 SSE/CORS in Chromium and WebKit (`pnpm verify:browser`) — and every version carries provenance naming the commit and
 the workflow run that built it. If a bad version ever went out, that attestation is what makes it traceable.
@@ -105,8 +105,8 @@ its core's is on the registry, a first version included: published by hand from 
 
 ## The packages
 
-**One list, in `scripts/packages.mjs`, in two widths.** `PACKAGES` is what a tag publishes: `core`, `gmail`,
-`gmail-mcp`, `resend`, `slack`, `whatsapp`, in that order, and what `node scripts/packages.mjs` prints. `PUBLISHABLE`
+**One list, in `scripts/packages.mjs`, in two widths.** `PACKAGES` is what a tag publishes: `core`, `events`,
+`gmail`, `gmail-mcp`, `resend`, `slack`, `whatsapp`, `events-daemon`, in that order, and what `node scripts/packages.mjs` prints. `PUBLISHABLE`
 is every package this repository publishes, in the same order — `PACKAGES` and any package
 [held back from release](#a-package-held-back-from-release). Both are derived from the packages' own manifests
 (`scripts/channels.mjs`), in an order computed from their dependencies, so a new channel or library is on them by
