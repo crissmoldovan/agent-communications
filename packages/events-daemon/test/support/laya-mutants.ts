@@ -145,6 +145,11 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/test/fixtures/laya/manifest-tiny-v1.json',
     'packages/events-daemon/test/fixtures/laya/lock-input/runtime-a-1.0.0.tgz',
     'packages/events-daemon/test/fixtures/laya/lock-input/runtime-b-1.0.0.tgz',
+    'packages/events-daemon/test/fixtures/laya/model-tiny-v1/laya.onnx',
+    'packages/events-daemon/test/fixtures/laya/model-tiny-v1/laya.onnx.data',
+    'packages/events-daemon/test/fixtures/laya/model-tiny-v1/laya_config.json',
+    'packages/events-daemon/test/fixtures/laya/model-tiny-v1/tokenizer/tokenizer.json',
+    'packages/events-daemon/test/fixtures/laya/model-tiny-v1/tokenizer/tokenizer_config.json',
     'test/helpers/loopback-seal-preload.mjs',
   ];
   for (const file of files) await copyFile(root, file);

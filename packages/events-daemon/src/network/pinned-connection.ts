@@ -27,11 +27,15 @@ export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
   readonly resolver?: AddressResolver;
   readonly approvedAddressSetDigest?: string;
+  /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
+  readonly signal?: AbortSignal;
 };
 
 export interface PinnedTcpOptions {
   readonly host: string;
   readonly port: number;
+  /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
+  readonly signal?: AbortSignal;
 }
 
 export interface PinnedTlsOptions {
@@ -39,11 +43,38 @@ export interface PinnedTlsOptions {
   readonly rejectUnauthorized: true;
   readonly servername?: string;
   readonly certificateHost: string;
+  /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
+  readonly signal?: AbortSignal;
 }
 
 export interface OpenPinnedConnectionOptions {
   readonly tcpConnect?: (options: PinnedTcpOptions) => Promise<net.Socket>;
   readonly tlsConnect?: (options: PinnedTlsOptions) => Promise<tls.TLSSocket>;
+}
+
+export class PinnedResponseError extends Error {
+  readonly code:
+    | 'NETWORK_ABORTED'
+    | 'NETWORK_IDLE_TIMEOUT'
+    | 'NETWORK_RESPONSE_TOO_LARGE'
+    | 'NETWORK_RESPONSE_INCOMPLETE'
+    | 'NETWORK_TIMEOUT_INVALID'
+    | 'NETWORK_TOTAL_TIMEOUT';
+
+  constructor(code: PinnedResponseError['code']) {
+    super(`pinned network response refused: ${code}`);
+    this.name = 'PinnedResponseError';
+    this.code = code;
+  }
+}
+
+export interface PinnedResponseStreamOptions {
+  readonly maxBytes: number;
+  readonly onChunk: (chunk: Buffer) => void | Promise<void>;
+  /** Optional values preserve the pre-existing B2 stream behavior for callers that omit them. */
+  readonly signal?: AbortSignal | undefined;
+  readonly idleTimeoutMs?: number | undefined;
+  readonly totalTimeoutMs?: number | undefined;
 }
 
 function hostWithoutBrackets(hostname: string): string {
@@ -85,6 +116,10 @@ function assertPinnedUrl(url: URL): void {
   if (url.hash !== '') throw new AddressPolicyError('network URL fragments are refused');
 }
 
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new PinnedResponseError('NETWORK_ABORTED');
+}
+
 /** Resolves all answers, validates them all, and selects a literal only after the complete set passes. */
 export async function preparePinnedConnection(options: PreparePinnedConnectionOptions): Promise<PinnedConnection> {
   const url = typeof options.url === 'string' ? new URL(options.url) : new URL(options.url.href);
@@ -111,7 +146,7 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   if (url.protocol === 'http:' && !globalOnly && !isSoleApprovedLiteral(options.approvedAddressSet, hostname))
     throw new AddressPolicyError('HTTP requires its one exact approved literal loopback address');
 
-  const answers = await resolveHost(hostname, options.resolver ?? systemAddressResolver);
+  const answers = await resolveHost(hostname, options.resolver ?? systemAddressResolver, { signal: options.signal });
   const vetted = answers.map((answer) => assertAddressAllowed(answer, options));
   const addresses = vetted.map((answer) => answer.address).sort((left, right) => left.localeCompare(right));
   if (addresses.length === 0) throw new AddressPolicyError('resolver returned no vetted addresses');
@@ -155,34 +190,200 @@ export function requestBytesForPinnedConnection(
   ]);
 }
 
+/**
+ * Generates a no-body raw GET for a fixed-purpose caller.  The caller's header
+ * policy is deliberately outside B2; B2 only guarantees that these exact raw
+ * bytes go over a previously pinned connection.
+ */
+export function getRequestBytesForPinnedConnection(
+  connection: PinnedConnection,
+  headers: Readonly<Record<string, string>>,
+): Buffer {
+  const pathname = `${connection.url.pathname}${connection.url.search}` || '/';
+  const supplied = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+  return Buffer.from(
+    `GET ${pathname} HTTP/1.1\r\nHost: ${connection.hostHeader}\r\nConnection: close\r\n${supplied.join('\r\n')}\r\n\r\n`,
+    'latin1',
+  );
+}
+
+/**
+ * Writes one already-bounded raw request and collects a close-delimited raw
+ * response under a caller-supplied byte ceiling.  It opens no connection and
+ * performs no HTTP parsing, redirecting, proxying, or retrying.
+ */
+export function streamPinnedResponse(
+  socket: net.Socket | tls.TLSSocket,
+  request: Uint8Array,
+  maxBytes: number,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  return streamPinnedResponseTo(socket, request, {
+    maxBytes,
+    onChunk: (chunk) => {
+      chunks.push(Buffer.from(chunk));
+    },
+  }).then(() => Buffer.concat(chunks));
+}
+
+/** Streams one bounded raw response without retaining its bytes in memory. */
+export function streamPinnedResponseTo(
+  socket: net.Socket | tls.TLSSocket,
+  request: Uint8Array,
+  options: PinnedResponseStreamOptions,
+): Promise<void> {
+  const { maxBytes, onChunk, signal } = options;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new PinnedResponseError('NETWORK_RESPONSE_TOO_LARGE');
+  for (const deadline of [options.idleTimeoutMs, options.totalTimeoutMs]) {
+    if (deadline !== undefined && (!Number.isSafeInteger(deadline) || deadline < 1))
+      throw new PinnedResponseError('NETWORK_TIMEOUT_INVALID');
+  }
+  return new Promise((resolve, reject) => {
+    let total = 0;
+    let terminal: Error | null | undefined;
+    let ended = false;
+    let pending = Promise.resolve();
+    let idleTimer: NodeJS.Timeout | undefined;
+    let totalTimer: NodeJS.Timeout | undefined;
+    const onError = (error: Error) => fail(error);
+    const onAbort = () => fail(signal === undefined ? new PinnedResponseError('NETWORK_ABORTED') : abortReason(signal));
+    const clearTimers = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      if (totalTimer !== undefined) clearTimeout(totalTimer);
+    };
+    const resetIdleDeadline = () => {
+      if (options.idleTimeoutMs === undefined) return;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => fail(new PinnedResponseError('NETWORK_IDLE_TIMEOUT')), options.idleTimeoutMs);
+    };
+    const cleanup = () => {
+      clearTimers();
+      signal?.removeEventListener('abort', onAbort);
+      socket.off('error', onError);
+    };
+    const finish = () => {
+      if (terminal !== undefined) return;
+      terminal = null;
+      cleanup();
+      void pending.then(() => resolve());
+    };
+    const fail = (error: Error) => {
+      if (terminal !== undefined) return;
+      terminal = error;
+      cleanup();
+      socket.destroy();
+      void pending.then(() => reject(error));
+    };
+    socket.once('error', onError);
+    if (signal?.aborted === true) {
+      fail(new PinnedResponseError('NETWORK_ABORTED'));
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    resetIdleDeadline();
+    if (options.totalTimeoutMs !== undefined)
+      totalTimer = setTimeout(() => fail(new PinnedResponseError('NETWORK_TOTAL_TIMEOUT')), options.totalTimeoutMs);
+    socket.on('data', (chunk: Buffer) => {
+      if (terminal !== undefined) return;
+      resetIdleDeadline();
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        fail(new PinnedResponseError('NETWORK_RESPONSE_TOO_LARGE'));
+        return;
+      }
+      socket.pause();
+      pending = pending
+        .then(() => onChunk(Buffer.from(chunk)))
+        .then(
+          () => {
+            if (terminal === undefined) socket.resume();
+            if (ended) finish();
+          },
+          (error: unknown) => fail(error instanceof Error ? error : new Error('raw pinned response sink failed')),
+        );
+    });
+    socket.once('end', () => {
+      ended = true;
+      void pending.then(() => finish());
+    });
+    socket.once('close', () => {
+      if (terminal === undefined) fail(new PinnedResponseError('NETWORK_RESPONSE_INCOMPLETE'));
+    });
+    try {
+      socket.write(request);
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error('raw pinned request write failed'));
+    }
+  });
+}
+
 /** Opens the selected literal TCP peer. Callers place their final authority fence immediately before this call. */
 export function connectPinnedTcp(options: PinnedTcpOptions): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted === true) {
+      reject(abortReason(options.signal));
+      return;
+    }
     const socket = net.connect({ host: options.host, port: options.port });
-    socket.once('error', reject);
     installErrorSink(socket);
-    socket.once('connect', () => {
-      socket.off('error', reject);
+    const cleanup = () => {
+      options.signal?.removeEventListener('abort', onAbort);
+      socket.off('error', onError);
+      socket.off('connect', onConnect);
+    };
+    const fail = (error: Error) => {
+      cleanup();
+      socket.destroy();
+      reject(error);
+    };
+    const onError = (error: Error) => fail(error);
+    const onAbort = () =>
+      fail(options.signal === undefined ? new PinnedResponseError('NETWORK_ABORTED') : abortReason(options.signal));
+    const onConnect = () => {
+      cleanup();
       resolve(socket);
-    });
+    };
+    socket.once('error', onError);
+    socket.once('connect', onConnect);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
 /** Starts TLS only over the already-pinned TCP socket. Callers fence immediately before this ClientHello. */
 export function connectPinnedTls(options: PinnedTlsOptions): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted === true) {
+      options.socket.destroy();
+      reject(abortReason(options.signal));
+      return;
+    }
     const socket = tls.connect({
       socket: options.socket,
       rejectUnauthorized: options.rejectUnauthorized,
       ...(options.servername === undefined ? {} : { servername: options.servername }),
       checkServerIdentity: (_name, certificate) => tls.checkServerIdentity(options.certificateHost, certificate),
     });
-    socket.once('error', reject);
     installErrorSink(socket);
-    socket.once('secureConnect', () => {
-      socket.off('error', reject);
+    const cleanup = () => {
+      options.signal?.removeEventListener('abort', onAbort);
+      socket.off('error', onError);
+      socket.off('secureConnect', onSecureConnect);
+    };
+    const fail = (error: Error) => {
+      cleanup();
+      socket.destroy();
+      reject(error);
+    };
+    const onError = (error: Error) => fail(error);
+    const onAbort = () =>
+      fail(options.signal === undefined ? new PinnedResponseError('NETWORK_ABORTED') : abortReason(options.signal));
+    const onSecureConnect = () => {
+      cleanup();
       resolve(socket);
-    });
+    };
+    socket.once('error', onError);
+    socket.once('secureConnect', onSecureConnect);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

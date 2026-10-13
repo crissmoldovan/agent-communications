@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "task": 4,
+  "owners": [{ "id": "task-4" }],
+  "section5": [
+    {
+      "id": "e2-pinned-runtime-fetch-and-model-resume",
+      "owner": "task-4",
+      "test": "E2 laya model download: resumes only a rehashed exact Content-Range"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d11-2279-2299-pinned-resumable-model-download",
+      "owner": "task-4",
+      "test": "E2 laya model download: promotes only after five tiny files verify"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-model-final-promotion-fence",
+      "owner": "task-4",
+      "test": "E2 laya model download: rechecks its final lifecycle fence before promotion"
+    }
+  ],
+  "fixtures": [{ "path": "task-4.json", "owner": "task-4" }],
+  "externalSources": [
+    {
+      "id": "rfc9110-redirect-range",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+      "fetchedAt": "2026-10-12T18:33:46Z",
+      "immutable": "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a",
+      "fact": "§15.4.8: on a 307 a user agent MUST NOT change the request method if it redirects automatically; §15.4.3/§15.4.2: 302 and 301 may historically change POST to GET (GET is unaffected); §10.2.2: Location is a URI reference and may be relative; §14.2 Range and §14.1 range units (\"bytes\"); §14.4: Content-Range = range-unit SP (incl-range \"/\" (complete-length / \"*\") / \"*/\" complete-length), and a 206 or 416 carries it; §15.3.7: a client MUST inspect a 206 response's Content-Range to learn what part is enclosed and whether more requests are needed, and a server may send fewer bytes than asked; §15.5.17: 416 Range Not Satisfiable; §13.1.5: If-Range makes a server ignore Range unless the validator matches; §7.2: a user agent sends Host (or :authority).",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-onnx-resolve-lfs",
+      "url": "https://huggingface.co/receptron/laya-onnx/resolve/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya.onnx.data",
+      "fetchedAt": "2026-10-12T18:33:46Z",
+      "immutable": "68f27dfe5a27a54fb2b1fefc432f43f972e90868",
+      "fact": "HEAD at the hub answers 302 with Location on host us.aws.cdn.hf.co (a signed, short-lived URL), x-repo-commit 68f27dfe5a27a54fb2b1fefc432f43f972e90868, x-linked-size 1685258240 and x-linked-etag \"487746363a8da57bcadb4345352997d22a0fb90d70aa22c6856668d023242aba\" (the manifest's size and SHA-256), accept-ranges bytes. At the CDN target a GET with Range: bytes=0-15 answers 206 with content-range \"bytes 0-15/1685258240\", content-length 16 and accept-ranges bytes; a HEAD without Range answers 200 with content-length 1685258240. The CDN's own etag (\"b06b05a0a887610c53a917603bb6986d8018400a2ec99158ac1cc944b55a24ed\") is not the file's SHA-256.",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-onnx-resolve-small",
+      "url": "https://huggingface.co/receptron/laya-onnx/resolve/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json",
+      "fetchedAt": "2026-10-12T18:33:46Z",
+      "immutable": "68f27dfe5a27a54fb2b1fefc432f43f972e90868",
+      "fact": "a non-LFS file answers 307 with a relative Location on the same host (/api/resolve-cache/models/receptron/laya-onnx/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json plus a query), then 200 with 369 bytes whose SHA-256 is 5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561 (the manifest's value).",
+      "reviewer": "coordinator"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-fetcher-runtime-origin",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: refuses a non-registry runtime URL before a request",
+      "testPattern": "E2 fetcher: refuses a non-registry runtime URL before a request",
+      "before": "if (!isExactRegistryTarballUrl(runtimePackage)) throw new LayaFetchError('RUNTIME_ORIGIN');",
+      "after": "if (false) throw new LayaFetchError('RUNTIME_ORIGIN');"
+    },
+    {
+      "id": "e2-fetcher-optional-header",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: refuses an optional request header before network I/O",
+      "testPattern": "E2 fetcher: refuses an optional request header before network I/O",
+      "before": "if (!allowed.has(name)) throw new LayaFetchError('REQUEST_HEADER');",
+      "after": "if (false) throw new LayaFetchError('REQUEST_HEADER');"
+    },
+    {
+      "id": "e2-fetcher-redirect-limit",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: refuses the sixth redirect hop",
+      "testPattern": "E2 fetcher: refuses the sixth redirect hop",
+      "before": "if (redirects >= MAX_REDIRECTS) throw new LayaFetchError('REDIRECT_LIMIT');",
+      "after": "if (false) throw new LayaFetchError('REDIRECT_LIMIT');"
+    },
+    {
+      "id": "e2-fetcher-global-address",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: refuses a private redirect target before connecting",
+      "testPattern": "E2 fetcher: refuses a private redirect target before connecting",
+      "before": "const vetted = answers.map((answer) => assertAddressAllowed(answer, { addressMode: 'global-only' }));",
+      "after": "const vetted = answers.map((answer) => ({ address: answer }));"
+    },
+    {
+      "id": "e2-model-resume-range",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: resumes only a rehashed exact Content-Range",
+      "testPattern": "E2 laya model download: resumes only a rehashed exact Content-Range",
+      "before": "let current = await partialSize(path);",
+      "after": "let current = 0;"
+    },
+    {
+      "id": "e2-model-final-promotion-fence",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: rechecks its final lifecycle fence before promotion",
+      "testPattern": "E2 laya model download: rechecks its final lifecycle fence before promotion",
+      "before": "await this.#assertCurrent('promotion', options.signal);",
+      "after": "void this.#assertCurrent;"
+    },
+    {
+      "id": "e2-fetcher-runtime-no-redirect",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: refuses a runtime redirect before another request",
+      "testPattern": "E2 fetcher: refuses a runtime redirect before another request",
+      "before": "if (!allowRedirects) throw new LayaFetchError('REDIRECT');",
+      "after": "if (false) throw new LayaFetchError('REDIRECT');"
+    },
+    {
+      "id": "e2-model-required-lifecycle-fence",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: requires the lifecycle fence before any artifact action",
+      "testPattern": "E2 laya model download: requires the lifecycle fence before any artifact action",
+      "before": "if (options.fence === undefined) throw new LayaModelDownloadError('LIFECYCLE_FENCE');",
+      "after": "if (false) throw new LayaModelDownloadError('LIFECYCLE_FENCE');"
+    },
+    {
+      "id": "e2-model-promotion-artifact-lock",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: disable landing after its check cannot leave a promoted model",
+      "testPattern": "E2 laya model download: disable landing after its check cannot leave a promoted model",
+      "before": "return this.#fence.withArtifactLock(async () => {",
+      "after": "return (async <T>(work: () => Promise<T>): Promise<T> => work())(async () => {"
+    },
+    {
+      "id": "e2-fetcher-abort-signal",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: abort signal destroys a stalled sealed peer with a typed result",
+      "testPattern": "E2 fetcher: abort signal destroys a stalled sealed peer with a typed result",
+      "before": "const deadline = new FetchDeadline(signal, this.#totalTimeoutMs);",
+      "after": "const deadline = new FetchDeadline(new AbortController().signal, this.#totalTimeoutMs);"
+    },
+    {
+      "id": "e2-fetcher-idle-deadline",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: aborts a sealed peer that sends no bytes at idle deadline",
+      "testPattern": "E2 fetcher: aborts a sealed peer that sends no bytes at idle deadline",
+      "before": "idleTimeoutMs: this.#idleTimeoutMs,",
+      "after": "idleTimeoutMs: undefined,"
+    },
+    {
+      "id": "e2-fetcher-total-deadline",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: aborts a responding peer at total deadline",
+      "testPattern": "E2 fetcher: aborts a responding peer at total deadline",
+      "before": "const deadline = new FetchDeadline(signal, this.#totalTimeoutMs);",
+      "after": "const deadline = new FetchDeadline(signal, DEFAULT_TOTAL_TIMEOUT_MS);"
+    },
+    {
+      "id": "e2-fetcher-tls-phase-signal",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: forwards abort into the TLS handshake primitive",
+      "testPattern": "E2 laya model download: forwards abort into the TLS handshake primitive",
+      "before": "() => this.#tlsConnect({ socket: tcp, ...connection.tls, signal: deadline.signal }),",
+      "after": "() => this.#tlsConnect({ socket: tcp, ...connection.tls }),"
+    },
+    {
+      "id": "e2-fetcher-connect-deadline",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/fetcher.ts",
+      "testFile": "packages/events-daemon/test/laya-fetcher.test.ts",
+      "testName": "E2 fetcher: total deadline reaches the TCP connector before it opens",
+      "testPattern": "E2 fetcher: total deadline reaches the TCP connector before it opens",
+      "before": "() => this.#tcpConnect({ host: connection.address, port: connection.port, signal: deadline.signal }),",
+      "after": "() => this.#tcpConnect({ host: connection.address, port: connection.port }),"
+    },
+    {
+      "id": "e2-model-sink-post-await-signal",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: rechecks an abort after its lifecycle fence awaits",
+      "testPattern": "E2 laya model download: rechecks an abort after its lifecycle fence awaits",
+      "before": "await this.#assertCurrent('retry', fetchSignal);\n            abortIfNeeded(fetchSignal);\n            if (current === 0 && !wrote) {",
+      "after": "await this.#assertCurrent('retry', fetchSignal);\n            if (current === 0 && !wrote) {"
+    },
+    {
+      "id": "e2-pinned-response-pending-sink",
+      "kind": "production",
+      "owner": "task-4",
+      "source": "packages/events-daemon/src/network/pinned-connection.ts",
+      "testFile": "packages/events-daemon/test/network/pinned-connection.test.ts",
+      "testName": "E2 pinned stream: abort waits for its pending sink callback",
+      "testPattern": "E2 pinned stream: abort waits for its pending sink callback",
+      "before": "void pending.then(() => reject(error));",
+      "after": "reject(error);"
+    }
+  ]
+}

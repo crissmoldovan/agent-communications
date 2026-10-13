@@ -2,7 +2,7 @@ import dns from 'node:dns';
 import { AddressPolicyError, parseIpLiteral } from './address-policy.ts';
 
 export interface AddressResolver {
-  lookup(hostname: string): Promise<readonly string[]>;
+  lookup(hostname: string, options?: { readonly signal?: AbortSignal | undefined }): Promise<readonly string[]>;
 }
 
 /** The production resolver deliberately has no cache and asks Node for every address on every call. */
@@ -17,13 +17,14 @@ export const systemAddressResolver: AddressResolver = {
 export async function resolveHost(
   hostname: string,
   resolver: AddressResolver = systemAddressResolver,
+  options: { readonly signal?: AbortSignal | undefined } = {},
 ): Promise<readonly string[]> {
   try {
     return [parseIpLiteral(hostname).address];
   } catch (error) {
     if (!(error instanceof AddressPolicyError)) throw error;
   }
-  const answers = await resolver.lookup(hostname);
+  const answers = await resolver.lookup(hostname, options);
   if (answers.length === 0) throw new AddressPolicyError(`resolver returned no addresses for ${hostname}`);
   return answers;
 }

@@ -7,8 +7,10 @@ import {
   connectPinnedTcp,
   connectPinnedTls,
   openPinnedConnection,
+  PinnedResponseError,
   preparePinnedConnection,
   requestBytesForPinnedConnection,
+  streamPinnedResponseTo,
 } from '../../src/network/pinned-connection.ts';
 import { startLoopbackReceiver } from '../support/loopback-receiver.ts';
 import { WINDOWS_SKIP } from '../support/short-temp.ts';
@@ -202,6 +204,61 @@ test('NET-B2: handshaken pinned TLS keeps an error sink after its handshake list
     });
   } finally {
     tlsModule.connect = originalConnect;
+  }
+});
+
+test('E2 pinned stream: abort waits for its pending sink callback', async () => {
+  const controller = new AbortController();
+  const socket = new EventEmitter() as EventEmitter & {
+    write(bytes: Uint8Array): boolean;
+    destroy(): void;
+    pause(): void;
+    resume(): void;
+  };
+  let releaseSink!: () => void;
+  const sinkBlocked = new Promise<void>((resolve) => {
+    releaseSink = resolve;
+  });
+  let sinkEntered!: () => void;
+  const sinkEnteredPromise = new Promise<void>((resolve) => {
+    sinkEntered = resolve;
+  });
+  socket.write = () => {
+    queueMicrotask(() => socket.emit('data', Buffer.from('pending sink', 'utf8')));
+    return true;
+  };
+  socket.destroy = () => undefined;
+  socket.pause = () => undefined;
+  socket.resume = () => undefined;
+  const stream = streamPinnedResponseTo(socket as unknown as tls.TLSSocket, Buffer.from('request', 'utf8'), {
+    maxBytes: 1024,
+    signal: controller.signal,
+    onChunk: async () => {
+      sinkEntered();
+      await sinkBlocked;
+    },
+  });
+  void stream.catch(() => undefined);
+
+  try {
+    await sinkEnteredPromise;
+    controller.abort(new PinnedResponseError('NETWORK_ABORTED'));
+    const state = await Promise.race([
+      stream.then(
+        () => 'settled' as const,
+        () => 'settled' as const,
+      ),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 20)),
+    ]);
+    assert.equal(state, 'blocked', 'an abort must wait for the active sink callback before stream settlement');
+    releaseSink();
+    await assert.rejects(
+      () => stream,
+      (error: unknown) => error instanceof PinnedResponseError && error.code === 'NETWORK_ABORTED',
+    );
+  } finally {
+    releaseSink();
+    await Promise.allSettled([stream]);
   }
 });
 
