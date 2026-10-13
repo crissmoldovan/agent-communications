@@ -141,7 +141,12 @@
     { "id": "e12-held-purge-race" },
     { "id": "e12-hold-claim-expiry-call" },
     { "id": "e12-hold-api-expiry-call" },
-    { "id": "e12-hold-resolution-expiry-call" }
+    { "id": "e12-hold-resolution-expiry-call" },
+    { "id": "e13-required-release-gate" },
+    { "id": "e13-b3-capability-row" },
+    { "id": "e13-doctor-hold-clock" },
+    { "id": "e13-laya-typed-unavailable" },
+    { "id": "e13-kind-enablement-approval" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -279,7 +284,12 @@
     { "id": "e12-held-purge-race" },
     { "id": "e12-hold-claim-expiry-call" },
     { "id": "e12-hold-api-expiry-call" },
-    { "id": "e12-hold-resolution-expiry-call" }
+    { "id": "e12-hold-resolution-expiry-call" },
+    { "id": "e13-required-release-gate" },
+    { "id": "e13-b3-capability-row" },
+    { "id": "e13-doctor-hold-clock" },
+    { "id": "e13-laya-typed-unavailable" },
+    { "id": "e13-kind-enablement-approval" }
   ],
   "cases": [
     {
@@ -1919,6 +1929,66 @@
         "test": "E12 final hold-resolution expiry caller commits terminal purge before reporting stale"
       },
       "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e13-required-release-gate",
+      "task": "E13",
+      "coverage": ["e13-required-release-gate"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-final-release.test.ts",
+      "mutation": {
+        "id": "e13-required-release-gate",
+        "test": "E13 final release: verify and direct release retain both Phase-E gates"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-b3-capability-row",
+      "task": "E13",
+      "coverage": ["e13-b3-capability-row"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-final-release.test.ts",
+      "mutation": {
+        "id": "e13-b3-capability-row",
+        "test": "E13 final release: the positive B3 tree passes and B3 drift refuses verify and release before preflight"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-doctor-hold-clock",
+      "task": "E13",
+      "coverage": ["e13-doctor-hold-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-doctor-hold-clock",
+        "test": "E13 final doctor reports kind, budget, reservations, hold clocks, a missing key and typed Laya unavailability"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-laya-typed-unavailable",
+      "task": "E13",
+      "coverage": ["e13-laya-typed-unavailable"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-laya-typed-unavailable",
+        "test": "E13 final doctor reports kind, budget, reservations, hold clocks, a missing key and typed Laya unavailability"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-kind-enablement-approval",
+      "task": "E13",
+      "coverage": ["e13-kind-enablement-approval"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-kind-enablement-approval",
+        "test": "E13 release gate: every judge kind remains unusable until a person-approved enablement creates its pointer"
+      },
+      "strictRunner": "judge-final-mutants"
     }
   ]
 }

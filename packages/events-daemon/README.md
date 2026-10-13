@@ -250,8 +250,8 @@ judges, and the deliveries, dry-run records and stream entries bound to them, ar
 name its judges stay, but cannot call them; turning the kind back on needs a new approval. `disable-all` stops judges
 along with everything else.
 
-`doctor` shows each kind's state, the active budget version and its reservations, and Laya as not available yet,
-all without content.
+`doctor` shows each kind's state, the active budget version and its reservations, how many decisions are held and
+when the next one expires, any hosted judge whose key is missing, and Laya as not available yet, all without content.
 
 ## For desktop and tool builders
 
@@ -259,8 +259,9 @@ The data-only control contract is
 [`b3-control-v1.schema.json`](src/operations/contracts/b3-control-v1.schema.json). Its content-free
 request, result and error vectors are in [`test/fixtures/b3-control-contract-v1`](test/fixtures/b3-control-contract-v1),
 and the terminal approval-preview vectors are in [`test/fixtures/b3-approval-preview-v1`](test/fixtures/b3-approval-preview-v1).
-It covers every capability a desktop app may call, and never contains a secret value. Its doctor result is the closed
-[`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json).
+It covers every B3 capability a desktop app may call, and never contains a secret value. Its frozen doctor result is
+the closed [`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json); the released daemon reports the
+additive Phase-E [`doctor-v2.schema.json`](src/operations/contracts/doctor-v2.schema.json).
 
 ## Licence
 

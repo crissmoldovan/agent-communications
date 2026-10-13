@@ -648,11 +648,29 @@ export async function projectE9Doctor(input: DoctorProjectionInput): Promise<Doc
   const reservations = [...reservationCounts.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([state, count]) => ({ state, count }));
+  const holdClocks = input.database
+    .prepare(
+      `SELECT count(*) AS count,
+              min(hold_created_at) AS oldest_created_at,
+              min(hold_expires_at) AS next_expires_at
+         FROM decisions
+        WHERE outcome = 'hold'`,
+    )
+    .get() as { count: number; oldest_created_at: number | null; next_expires_at: number | null };
   return assertDoctorReportV2({
     ...report,
     schemaVersion: 'doctor-v2',
     judgeBoundary: [{ kind: JUDGE_KIND_LAYA, code: 'E2_REQUIRED', phase: 'E2' }],
-    judge: { kinds, budget: { activeVersion: budget?.version ?? null }, reservations },
+    judge: {
+      kinds,
+      budget: { activeVersion: budget?.version ?? null },
+      reservations,
+      holds: {
+        count: holdClocks.count,
+        oldestCreatedAt: holdClocks.oldest_created_at,
+        nextExpiresAt: holdClocks.next_expires_at,
+      },
+    },
   });
 }
 

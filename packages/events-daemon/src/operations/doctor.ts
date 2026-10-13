@@ -172,6 +172,12 @@ export interface DoctorReportV2 extends Omit<DoctorReportV1, 'schemaVersion'> {
       readonly state: 'reserved' | 'in-flight' | 'settled' | 'released';
       readonly count: number;
     }[];
+    /** Content-free retention visibility; no decision, event, rule, prompt or provider field crosses doctor. */
+    readonly holds: {
+      readonly count: number;
+      readonly oldestCreatedAt: number | null;
+      readonly nextExpiresAt: number | null;
+    };
   };
 }
 

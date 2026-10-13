@@ -54,7 +54,8 @@ unavailable result (`E2_REQUIRED`). Report that state.
   fixed synthetic event, never caller content, at most ten times an hour per version. Its answer is not a rule's
   decision.
 - **Tighten at once.** `events_judge_kind_disable` turns a kind off immediately and needs no approval.
-- **Keys stay with the person.** Never ask for, read or relay a hosted judge's API key.
+- **Keys stay with the person.** Never ask for, read or relay a hosted judge's API key, and never invent one.
+- **Prepared is not active.** Never invent a local endpoint, and never call a prepared kind, budget or rule active.
 - Do not substitute a target test, a local endpoint or another tool for a judge.
 
 ## Approval handoff

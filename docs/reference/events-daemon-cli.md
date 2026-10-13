@@ -42,7 +42,7 @@ Scripts should read these rather than parse output.
 | [`resume`](#agent-events-resume) | resume operational work retained by pause |
 | [`disable-all`](#agent-events-disable-all) | disable collection, advance the global generation and purge B1 work |
 | [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
-| [`doctor`](#agent-events-doctor) | report content-free lineage validation, pending source retry health, recovery and global switch health |
+| [`doctor`](#agent-events-doctor) | report content-free lineage, retry, recovery, judge authority, hold-clock and global switch health |
 | [`approval`](#agent-events-approval) | view the authoritative pending disclosure approval |
 | [`catalogue`](#agent-events-catalogue) | inspect the local event catalogue |
 | [`sources`](#agent-events-sources) | inspect configured event sources |
@@ -122,7 +122,7 @@ agent-events enable-all [options]
 
 ### `agent-events doctor`
 
-report content-free lineage validation, pending source retry health, recovery and global switch health
+report content-free lineage, retry, recovery, judge authority, hold-clock and global switch health
 
 ```
 agent-events doctor [options]
