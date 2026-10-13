@@ -44,7 +44,7 @@ Scripts should read these rather than parse output.
 | [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
 | [`doctor`](#agent-events-doctor) | report content-free lineage validation, pending source retry health, recovery and global switch health |
 | [`approval`](#agent-events-approval) | view the authoritative pending disclosure approval |
-| [`catalogue`](#agent-events-catalogue) | inspect the held local event catalogue |
+| [`catalogue`](#agent-events-catalogue) | inspect the local event catalogue |
 | [`sources`](#agent-events-sources) | inspect configured event sources |
 | [`source`](#agent-events-source) | inspect one configured event source |
 | [`rules`](#agent-events-rules) | inspect immutable local event rule versions |
@@ -148,7 +148,7 @@ agent-events approval view [options] <approval-id>
 
 ### `agent-events catalogue`
 
-inspect the held local event catalogue
+inspect the local event catalogue
 
 ```
 agent-events catalogue [options] [command]
@@ -531,7 +531,7 @@ agent-events judge kind disable [options] <kind>
 
 ### `agent-events judge model`
 
-use typed unavailable Laya model controls until Phase E2
+local Laya model controls, which answer that Laya is not available yet
 
 ```
 agent-events judge model [options] [command]
