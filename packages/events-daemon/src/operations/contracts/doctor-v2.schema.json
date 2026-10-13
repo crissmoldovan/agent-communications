@@ -70,10 +70,12 @@
     "judge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kinds", "budget", "reservations"],
+      "required": ["kinds", "budget", "reservations", "holds"],
       "properties": {
         "kinds": {
           "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
           "items": {
             "oneOf": [
               {
@@ -84,7 +86,18 @@
                   "kind": { "enum": ["typesafe", "local-endpoint"] },
                   "state": { "enum": ["disabled", "enabled"] },
                   "version": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] }
-                }
+                },
+                "oneOf": [
+                  {
+                    "properties": { "state": { "const": "disabled" }, "version": { "type": "null" } }
+                  },
+                  {
+                    "properties": {
+                      "state": { "const": "enabled" },
+                      "version": { "type": "integer", "minimum": 1 }
+                    }
+                  }
+                ]
               },
               {
                 "type": "object",
@@ -97,7 +110,28 @@
                 }
               }
             ]
-          }
+          },
+          "allOf": [
+            {
+              "contains": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "typesafe" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "local-endpoint" } }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "laya" } } },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
         },
         "budget": {
           "type": "object",
@@ -115,6 +149,16 @@
               "state": { "enum": ["reserved", "in-flight", "settled", "released"] },
               "count": { "type": "integer", "minimum": 0 }
             }
+          }
+        },
+        "holds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "oldestCreatedAt", "nextExpiresAt"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "oldestCreatedAt": { "type": ["integer", "null"] },
+            "nextExpiresAt": { "type": ["integer", "null"] }
           }
         }
       }

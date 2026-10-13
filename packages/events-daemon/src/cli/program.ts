@@ -209,7 +209,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ['enable-all', 'report the standing approval required before collection can be enabled', enableAll],
     [
       'doctor',
-      'report content-free lineage validation, pending source retry health, recovery and global switch health',
+      'report content-free lineage, retry, recovery, judge authority, hold-clock and global switch health',
       doctor,
     ],
   ] as const) {

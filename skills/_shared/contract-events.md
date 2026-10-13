@@ -25,7 +25,8 @@ enveloped regardless of a pending target's representation.
 
 Every judge kind is off until a person enables it. A model may propose a judge version or a judge budget and prepare a
 kind's enablement, but only a person approves them. It may test an active judge only on the daemon's fixed synthetic
-event, and may turn a kind off at once. Laya is not available in this release: its controls return their typed
+event, and may turn a kind off at once. It never invents an endpoint or key, and never treats a prepared kind,
+budget or rule as active. Laya is not available in this release: its controls return their typed
 unavailable result. Report that boundary plainly. Do not try to work around it with a target test, a local endpoint, a
 pending document or another tool.
 

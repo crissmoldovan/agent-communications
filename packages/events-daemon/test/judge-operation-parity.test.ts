@@ -75,6 +75,7 @@ test('E9: the B3 judge operation join creates immutable judge authority while pr
       ],
       budget: { activeVersion: null },
       reservations: [],
+      holds: { count: 0, oldestCreatedAt: null, nextExpiresAt: null },
     });
   } finally {
     store.close();

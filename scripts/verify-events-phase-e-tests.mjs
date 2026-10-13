@@ -64,6 +64,12 @@ const STRICT_RUNNERS = Object.freeze({
     collection: 'JUDGE_ADVERSARIAL_MUTATIONS',
     helper: 'expectJudgeAdversarialMutationToFail',
   },
+  'judge-final-mutants': {
+    test: 'packages/events-daemon/test/judge-final-mutations.test.ts',
+    support: 'packages/events-daemon/test/support/judge-final-mutants.ts',
+    collection: 'JUDGE_FINAL_MUTATIONS',
+    helper: 'expectJudgeFinalMutationToFail',
+  },
 });
 
 /** E owns these rows rather than allowing a mutable manifest to define which completed-task guards matter. */
@@ -204,6 +210,11 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e12-hold-claim-expiry-call',
   'e12-hold-api-expiry-call',
   'e12-hold-resolution-expiry-call',
+  'e13-required-release-gate',
+  'e13-b3-capability-row',
+  'e13-doctor-hold-clock',
+  'e13-laya-typed-unavailable',
+  'e13-kind-enablement-approval',
 ]);
 
 const auditRows = (category, rows) => rows.map(([id, owner]) => Object.freeze({ category, id, owner }));
