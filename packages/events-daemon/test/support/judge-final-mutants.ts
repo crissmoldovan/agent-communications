@@ -51,9 +51,9 @@ export const JUDGE_FINAL_MUTATIONS: readonly JudgeFinalMutation[] = [
   {
     id: 'e13-laya-typed-unavailable',
     source: 'packages/events-daemon/src/runtime/b3-doctor-projection.ts',
-    before:
-      "if (kind === 'laya') return { kind: 'laya' as const, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };",
-    after: "if (kind === 'laya') return { kind: 'laya' as const, state: 'unavailable' as const };",
+    // Task 12's fix names the kind through the canonical registry constant; the mutant still drops the typed code.
+    before: "      return { kind: JUDGE_KIND_LAYA, state: 'unavailable' as const, code: 'E2_REQUIRED' as const };",
+    after: "      return { kind: JUDGE_KIND_LAYA, state: 'unavailable' as const };",
     test: 'packages/events-daemon/test/judge-final-e2e.test.ts',
     testName:
       'E13 final doctor reports kind, budget, reservations, hold clocks, a missing key and typed Laya unavailability',
