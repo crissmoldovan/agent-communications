@@ -244,7 +244,7 @@ export function commitHeldDecisionOutbox(
   input: HeldDecisionResolutionCommitInput,
   failpoint?: (point: DecisionFailpoint) => void,
 ): void {
-  store.immediate(() => {
+  const expired = store.immediate(() => {
     const database = store.database;
     const dbNow = sqliteTransactionNow(database);
     const held = database
@@ -272,7 +272,7 @@ export function commitHeldDecisionOutbox(
     if (held.hold_expires_at === null || held.hold_expires_at <= dbNow) {
       // Equality belongs to expiry even when the resolver acquired its lease just before this transaction.
       expireHeldDecisionsInTransaction(database);
-      throw new StaleDecisionError('PROJECTION_GONE');
+      return true;
     }
     if (held.whatsapp_message_id !== null) {
       if (input.whatsappVisibilityVersion === undefined) throw new StaleDecisionError('PROJECTION_GONE');
@@ -381,5 +381,9 @@ export function commitHeldDecisionOutbox(
       .run(input.eventId, input.ruleId, input.ruleVersion);
     failpoint?.('after-projection-purge');
     failpoint?.('before-commit');
+    return false;
   });
+  // Throw only after the IMMEDIATE transaction commits the terminal expiry. Throwing inside its callback would roll
+  // back the purge and leave the stale held ciphertext and resolver claim live.
+  if (expired) throw new StaleDecisionError('PROJECTION_GONE');
 }

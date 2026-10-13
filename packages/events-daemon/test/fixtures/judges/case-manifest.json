@@ -1,5 +1,10 @@
 {
   "version": 1,
+  "audit": {
+    "matrixVersion": 1,
+    "covers": "Tasks 3-9 and 11",
+    "deferred": "Task 10"
+  },
   "guards": [
     { "id": "task-1-canonical-documents" },
     { "id": "task-2-durable-schema" },
@@ -116,7 +121,24 @@
     { "id": "e11-late-hold-response" },
     { "id": "e11-corpus-integrity-allowlist" },
     { "id": "e11-response-fixture-pinning" },
-    { "id": "e11-corpus-manifest-pairing" }
+    { "id": "e11-corpus-manifest-pairing" },
+    { "id": "e12-target-remove-purge" },
+    { "id": "e12-subscriber-remove-purge" },
+    { "id": "e12-judge-remove-purge" },
+    { "id": "e12-account-remove-readd-purge" },
+    { "id": "e12-whatsapp-hide-purge" },
+    { "id": "e12-rule-disable-purge" },
+    { "id": "e12-disable-all-purge" },
+    { "id": "e12-account-rule-revoke" },
+    { "id": "e12-derived-parent-revoke" },
+    { "id": "e12-audit-matrix" },
+    { "id": "e12-static-network-path" },
+    { "id": "e12-purge-caller-registry" },
+    { "id": "e12-corpus-dependency-closure" },
+    { "id": "e12-held-purge-race" },
+    { "id": "e12-hold-claim-expiry-call" },
+    { "id": "e12-hold-api-expiry-call" },
+    { "id": "e12-hold-resolution-expiry-call" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -234,7 +256,24 @@
     { "id": "e11-late-hold-response" },
     { "id": "e11-corpus-integrity-allowlist" },
     { "id": "e11-response-fixture-pinning" },
-    { "id": "e11-corpus-manifest-pairing" }
+    { "id": "e11-corpus-manifest-pairing" },
+    { "id": "e12-target-remove-purge" },
+    { "id": "e12-subscriber-remove-purge" },
+    { "id": "e12-judge-remove-purge" },
+    { "id": "e12-account-remove-readd-purge" },
+    { "id": "e12-whatsapp-hide-purge" },
+    { "id": "e12-rule-disable-purge" },
+    { "id": "e12-disable-all-purge" },
+    { "id": "e12-account-rule-revoke" },
+    { "id": "e12-derived-parent-revoke" },
+    { "id": "e12-audit-matrix" },
+    { "id": "e12-static-network-path" },
+    { "id": "e12-purge-caller-registry" },
+    { "id": "e12-corpus-dependency-closure" },
+    { "id": "e12-held-purge-race" },
+    { "id": "e12-hold-claim-expiry-call" },
+    { "id": "e12-hold-api-expiry-call" },
+    { "id": "e12-hold-resolution-expiry-call" }
   ],
   "cases": [
     {
@@ -1633,6 +1672,210 @@
         "test": "E11 adversarial corpus integrity: every row, digest, journal and shared manifest pairing is synthetic and exact"
       },
       "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e12-target-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-target-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/revocations.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-target-remove-purge",
+        "test": "E12 purge closure: target remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-subscriber-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-subscriber-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-subscriber-remove-purge",
+        "test": "E12 purge closure: subscriber remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-judge-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-judge-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-judge-remove-purge",
+        "test": "E12 purge closure: judge remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-remove-readd-purge",
+      "task": "E12",
+      "coverage": ["e12-account-remove-readd-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-remove-readd-purge",
+        "test": "E12 purge closure: account remove and re-add use the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge",
+      "task": "E12",
+      "coverage": ["e12-whatsapp-hide-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/whatsapp-visibility.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-whatsapp-hide-purge",
+        "test": "E12 purge closure: WhatsApp hide uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-rule-disable-purge",
+      "task": "E12",
+      "coverage": ["e12-rule-disable-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/revocations.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-rule-disable-purge",
+        "test": "E12 purge closure: rule disable uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-disable-all-purge",
+      "task": "E12",
+      "coverage": ["e12-disable-all-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/lifecycle.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-disable-all-purge",
+        "test": "E12 purge closure: disable all uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-rule-revoke",
+      "task": "E12",
+      "coverage": ["e12-account-rule-revoke"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-rule-revoke",
+        "test": "E12 purge closure: single-account rule revoke uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-derived-parent-revoke",
+      "task": "E12",
+      "coverage": ["e12-derived-parent-revoke"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-derived-parent-revoke",
+        "test": "E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-audit-matrix",
+      "task": "E12",
+      "coverage": ["e12-audit-matrix"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-audit-matrix",
+        "test": "E12 scope: the audit matrix and explicit Task 10 deferral are structural, not manifest-defined"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-static-network-path",
+      "task": "E12",
+      "coverage": ["e12-static-network-path"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-static-network-path",
+        "test": "E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-purge-caller-registry",
+      "task": "E12",
+      "coverage": ["e12-purge-caller-registry"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-purge-caller-registry",
+        "test": "E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-corpus-dependency-closure",
+      "task": "E12",
+      "coverage": ["e12-corpus-dependency-closure"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e12-corpus-dependency-closure",
+        "test": "E12 adversarial corpus integrity: a registered helper re-export cannot escape dependency-closed scanning"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-held-purge-race",
+      "task": "E12",
+      "coverage": ["e12-held-purge-race"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-held-purge-race",
+        "test": "E12 judge race: paused held resolution loses to target, subscriber, judge, account re-add, WhatsApp hide and expiry purges"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-claim-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-claim-expiry-call",
+        "test": "E12 hold claim expiry caller terminalises through its exact production operation"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-api-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-api-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-api-expiry-call",
+        "test": "E12 hold expiry API caller terminalises through its exact production operation"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-resolution-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-resolution-expiry-call",
+        "test": "E12 final hold-resolution expiry caller commits terminal purge before reporting stale"
+      },
+      "strictRunner": "judge-mutants"
     }
   ]
 }
