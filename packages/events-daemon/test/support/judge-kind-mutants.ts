@@ -18,7 +18,8 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
   {
     id: 'e1-canonical-documents',
     file: 'domain/judges.ts',
-    before: "if (judge.provider !== 'typesafe') return fail('a typesafe judge names the TypeSafe Jev adapter');",
+    before:
+      "if (judge.provider !== JUDGE_KIND_TYPESAFE) return fail('a typesafe judge names the TypeSafe Jev adapter');",
     after: "if (false) return fail('a typesafe judge names the TypeSafe Jev adapter');",
     testFile: 'judge-documents.test.ts',
     testName: 'E1: judge documents are closed discriminated forms with a concrete local score pointer',

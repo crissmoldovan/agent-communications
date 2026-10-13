@@ -270,6 +270,8 @@ export async function expectJudgeTask4MutationToFail(mutation: JudgeTask4Mutatio
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
     await cp(join(repositoryRoot, 'scripts'), join(root, 'scripts'), { recursive: true });
+    // The copied scripts import the canonical judge-kind registry by its repository path.
+    await cp(join(packageRoot, 'src'), join(root, 'packages', 'events-daemon', 'src'), { recursive: true });
     await rewriteImports(root);
     const args = [
       '--import',
