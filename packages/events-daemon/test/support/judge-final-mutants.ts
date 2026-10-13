@@ -14,7 +14,7 @@ export interface JudgeFinalMutation {
   readonly killingAssertion: string;
 }
 
-/** Task 13's five final ship gates, each removed once and owned by one exact production-path assertion. */
+/** Task 13's final ship gates, each removed once and owned by one exact production-path assertion. */
 export const JUDGE_FINAL_MUTATIONS: readonly JudgeFinalMutation[] = [
   {
     id: 'e13-required-release-gate',
@@ -27,7 +27,7 @@ export const JUDGE_FINAL_MUTATIONS: readonly JudgeFinalMutation[] = [
     after: 'void runLoud;',
     test: 'packages/events-daemon/test/judge-final-release.test.ts',
     testName: 'E13 final release: verify and direct release retain both Phase-E gates',
-    killingAssertion: 'direct release invokes the prerequisite gate exactly once before preflight',
+    killingAssertion: 'the required prerequisite gate refuses before any release tool can run',
   },
   {
     id: 'e13-b3-capability-row',
@@ -75,6 +75,16 @@ export const JUDGE_FINAL_MUTATIONS: readonly JudgeFinalMutation[] = [
       'E13 release gate: every judge kind remains unusable until a person-approved enablement creates its pointer',
     killingAssertion: 'cannot be used before an approved enablement writes its active pointer',
   },
+  {
+    id: 'e13-owner-judge-wiring',
+    source: 'packages/events-daemon/src/runtime/scheduler.ts',
+    before: '      admit: (occurrence) => evaluator.admitGmailOccurrence(occurrence),',
+    after: "      admit: async () => 'terminal',",
+    test: 'packages/events-daemon/test/judge-final-e2e.test.ts',
+    testName:
+      'E13 final owner E2E: Gmail source reaches a local judge match through control approvals and owner restart',
+    killingAssertion: 'the owner-level match reaches the production judge coordinator exactly once',
+  },
 ];
 
 const packageRoot = join(import.meta.dirname, '..', '..');
@@ -103,6 +113,7 @@ async function copyMutationTree(root: string): Promise<void> {
   await Promise.all([
     mkdir(copiedPackage, { recursive: true }),
     mkdir(join(root, 'packages/events'), { recursive: true }),
+    mkdir(join(root, 'packages/gmail/test/support'), { recursive: true }),
     mkdir(join(root, 'test'), { recursive: true }),
   ]);
   await Promise.all([
@@ -110,6 +121,12 @@ async function copyMutationTree(root: string): Promise<void> {
     cp(join(packageRoot, 'test'), join(copiedPackage, 'test'), { recursive: true }),
     cp(join(packageRoot, 'package.json'), join(copiedPackage, 'package.json')),
     cp(join(repositoryRoot, 'packages/events/package.json'), join(root, 'packages/events/package.json')),
+    cp(join(repositoryRoot, 'packages/gmail/src'), join(root, 'packages/gmail/src'), { recursive: true }),
+    cp(
+      join(repositoryRoot, 'packages/gmail/test/support/fake-google.ts'),
+      join(root, 'packages/gmail/test/support/fake-google.ts'),
+    ),
+    cp(join(repositoryRoot, 'packages/gmail/package.json'), join(root, 'packages/gmail/package.json')),
     cp(join(repositoryRoot, 'scripts'), join(root, 'scripts'), { recursive: true }),
     cp(join(repositoryRoot, 'test/helpers'), join(root, 'test/helpers'), { recursive: true }),
     cp(join(repositoryRoot, 'capabilities.json'), join(root, 'capabilities.json')),
@@ -118,6 +135,7 @@ async function copyMutationTree(root: string): Promise<void> {
   ]);
   await symlink(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
   await symlink(join(packageRoot, 'node_modules'), join(copiedPackage, 'node_modules'), 'dir');
+  await symlink(join(repositoryRoot, 'packages/gmail/node_modules'), join(root, 'packages/gmail/node_modules'), 'dir');
 }
 
 function assertOneNamedResult(

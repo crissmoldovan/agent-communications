@@ -146,7 +146,8 @@
     { "id": "e13-b3-capability-row" },
     { "id": "e13-doctor-hold-clock" },
     { "id": "e13-laya-typed-unavailable" },
-    { "id": "e13-kind-enablement-approval" }
+    { "id": "e13-kind-enablement-approval" },
+    { "id": "e13-owner-judge-wiring" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -289,7 +290,8 @@
     { "id": "e13-b3-capability-row" },
     { "id": "e13-doctor-hold-clock" },
     { "id": "e13-laya-typed-unavailable" },
-    { "id": "e13-kind-enablement-approval" }
+    { "id": "e13-kind-enablement-approval" },
+    { "id": "e13-owner-judge-wiring" }
   ],
   "cases": [
     {
@@ -1989,6 +1991,19 @@
         "test": "E13 release gate: every judge kind remains unusable until a person-approved enablement creates its pointer"
       },
       "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-owner-judge-wiring",
+      "task": "E13",
+      "coverage": ["e13-owner-judge-wiring"],
+      "productionEntry": "packages/events-daemon/src/runtime/scheduler.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-owner-judge-wiring",
+        "test": "E13 final owner E2E: Gmail source reaches a local judge match through control approvals and owner restart"
+      },
+      "strictRunner": "judge-final-mutants",
+      "network": true
     }
   ]
 }

@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { type SecretStore, TaintStore } from '@agentcomms/core';
+import { openCore, type SecretStore, TaintStore } from '@agentcomms/core';
 import { gmailMessageReceivedV1 } from '@agentcomms/events';
+import { assertLoopbackSeal, loopbackSealAttempts } from '../../../test/helpers/loopback-seal-preload.mjs';
+import { resolveEndpoints } from '../../gmail/src/auth/endpoints.ts';
+import { buildAuthUrl, exchangeCode, newPkce } from '../../gmail/src/auth/oauth.ts';
+import { SCOPES } from '../../gmail/src/auth/scopes.ts';
+import { clientSecretRef, refreshTokenRef } from '../../gmail/src/auth/session.ts';
+import { GMAIL_CALLER } from '../../gmail/src/caller.ts';
+import { GmailContext } from '../../gmail/src/context.ts';
+import { createGmailEventSource } from '../../gmail/src/operations/events.ts';
+import { DRAFT_SEND_PATH, startFakeGoogle } from '../../gmail/test/support/fake-google.ts';
+import { EventControlClient } from '../src/control/client.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { projectE9Doctor } from '../src/runtime/b3-doctor-projection.ts';
 import { DryRunDispatcher } from '../src/runtime/dispatcher.ts';
@@ -12,18 +23,320 @@ import { JudgeCoordinator } from '../src/runtime/judge-coordinator.ts';
 import { JudgeKinds } from '../src/runtime/judge-kinds.ts';
 import { JudgeTransport } from '../src/runtime/judge-transport.ts';
 import { assertObjectSecretReady } from '../src/runtime/object-secret-readiness.ts';
+import { startEventOwner } from '../src/runtime/owner.ts';
 import { type EventTaintRecorder, recordEventTaint } from '../src/runtime/untrusted.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
+import { startLoopbackReceiver } from './support/loopback-receiver.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
+
+assertLoopbackSeal();
+
+const refusedNetwork = loopbackSealAttempts();
 
 const NOW = 1_800_000_000_000;
 const ACCOUNT = 'ibx_E13AAAAAAAAAAAA';
 const RULE_ID = 'rule-e13-final';
 const JUDGE_ID = 'judge-e13-final';
 const TARGET_ID = 'target-e13-final';
+const TEST_CLIENT_ID = 'e13-client.apps.googleusercontent.com';
+const TEST_CLIENT_SECRET = 'e13-test-client-secret-not-a-real-credential';
+
+function ownerIds(outcome: 'match' | 'hold') {
+  const suffix = outcome === 'match' ? 'match' : 'hold';
+  return {
+    accountId: outcome === 'match' ? 'ibx_E13MATCHAAAAAAAA' : 'ibx_E13HOLDAAAAAAAAA',
+    ruleId: `rule-e13-owner-${suffix}`,
+    judgeId: `judge-e13-owner-${suffix}`,
+    targetId: `target-e13-owner-${suffix}`,
+  } as const;
+}
+
+async function startSystemOneFake(value: number) {
+  const requests: Buffer[] = [];
+  const receiver = await startLoopbackReceiver((socket) => {
+    let request = Buffer.alloc(0);
+    let answered = false;
+    socket.on('data', (chunk: Buffer) => {
+      if (answered) return;
+      request = Buffer.concat([request, chunk]);
+      const boundary = request.indexOf('\r\n\r\n');
+      if (boundary < 0) return;
+      const header = request.subarray(0, boundary).toString('utf8');
+      const length = Number(/\r\nContent-Length: ([0-9]+)\r\n/iu.exec(`\r\n${header}\r\n`)?.[1] ?? '0');
+      const complete = boundary + 4 + length;
+      if (request.length < complete) return;
+      answered = true;
+      requests.push(request.subarray(0, complete));
+      const body = Buffer.from(
+        JSON.stringify({
+          answers: { decision: { type: 'noul', noul: value } },
+          model: 'e13-owner-model',
+          usage: { input_tokens: 9, output_tokens: 1 },
+        }),
+      );
+      socket.end(
+        Buffer.concat([
+          Buffer.from(
+            `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n`,
+          ),
+          body,
+        ]),
+      );
+    });
+  });
+  return { ...receiver, requests };
+}
+
+async function ownerFixture(outcome: 'match' | 'hold') {
+  // One clock near real time for the owner, the Gmail fake and stored timestamps: parts of the owner read SQLite's
+  // clock, and the file's synthetic future NOW made a fresh delivery look long past its retention.
+  const ownerNow = Date.now();
+  const root = await shortTempDir(`events-e13-owner-${outcome}-`);
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  const ids = ownerIds(outcome);
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify({ version: 1, secrets: { store: 'file' } })}\n`);
+  const email = `owner-${outcome}@example.test`;
+  const subject = `Synthetic owner ${outcome} event`;
+  const google = await startFakeGoogle({
+    clientId: TEST_CLIENT_ID,
+    clientSecret: TEST_CLIENT_SECRET,
+    now: () => ownerNow,
+    accounts: [
+      {
+        sub: `e13-owner-${outcome}-subject`,
+        email,
+        profile: { historyId: '201' },
+        history: {
+          pages: {
+            first: {
+              historyId: '202',
+              history: [
+                {
+                  id: '202',
+                  messagesAdded: [{ message: { id: `message-e13-owner-${outcome}`, threadId: 'thread-e13-owner' } }],
+                },
+              ],
+            },
+          },
+        },
+        messages: {
+          [`message-e13-owner-${outcome}`]: {
+            id: `message-e13-owner-${outcome}`,
+            threadId: 'thread-e13-owner',
+            labelIds: ['INBOX'],
+            internalDate: String(ownerNow),
+            snippet: subject,
+            payload: {
+              partId: '',
+              mimeType: 'text/plain',
+              headers: [
+                { name: 'From', value: 'Synthetic Sender <sender@example.test>' },
+                { name: 'Subject', value: subject },
+              ],
+              body: { size: 0 },
+            },
+          },
+        },
+      },
+    ],
+  });
+  google.server.on('error', () => undefined);
+  google.server.on('connection', (socket) => socket.on('error', () => undefined));
+  let systemOne: Awaited<ReturnType<typeof startSystemOneFake>> | undefined;
+  try {
+    systemOne = await startSystemOneFake(outcome === 'match' ? 0.75 : 0.45);
+    const env: NodeJS.ProcessEnv = {
+      AGENT_COMMS_CONFIG_DIR: configDir,
+      AGENT_COMMS_GOOGLE_ROOT_URL: google.url,
+      HOME: configDir,
+      USERPROFILE: configDir,
+      NO_COLOR: '1',
+      AGENT_COMMS_CLIENT_CLI_DIRS: '',
+      AGENT_COMMS_UPDATE_CHECK: 'off',
+    };
+    const core = openCore({ env, caller: GMAIL_CALLER, now: () => new Date(ownerNow) });
+    const endpoints = resolveEndpoints(env);
+    const client = { clientId: TEST_CLIENT_ID, clientSecret: TEST_CLIENT_SECRET };
+    const redirectUri = 'http://127.0.0.1:5123/';
+    const pkce = newPkce();
+    const authUrl = buildAuthUrl({
+      client,
+      endpoints,
+      redirectUri,
+      scopes: [SCOPES.gmailModify],
+      state: 'e13-state',
+      codeChallenge: pkce.challenge,
+    });
+    const code = new URL(google.consent(authUrl)).searchParams.get('code');
+    assert.equal(typeof code, 'string', 'the repository Gmail fake issues one synthetic authorisation code');
+    const tokens = await exchangeCode({
+      client,
+      endpoints,
+      code: code as string,
+      codeVerifier: pkce.verifier,
+      redirectUri,
+    });
+    const secrets = await core.secrets('file');
+    await secrets.set(clientSecretRef('default'), TEST_CLIENT_SECRET);
+    await secrets.set(refreshTokenRef(ids.accountId), tokens.refreshToken);
+    await core.config.update((config) => ({
+      ...config,
+      secrets: { store: 'file' },
+      clients: {
+        ...config.clients,
+        default: {
+          provider: 'gmail',
+          clientId: TEST_CLIENT_ID,
+          secretRef: clientSecretRef('default'),
+          addedAt: new Date(ownerNow).toISOString(),
+        },
+      },
+      inboxes: {
+        ...config.inboxes,
+        [`owner-${outcome}`]: {
+          id: ids.accountId,
+          provider: 'gmail',
+          email,
+          sub: `e13-owner-${outcome}-subject`,
+          identity: 'oidc',
+          client: 'default',
+          tier: 'read',
+          contacts: false,
+          grantedScopes: [SCOPES.gmailModify],
+          secretRef: refreshTokenRef(ids.accountId),
+          internalDomains: [],
+          createdAt: new Date(ownerNow).toISOString(),
+        },
+      },
+    }));
+    const selected = await openEventDatabase({ stateDir });
+    try {
+      await selectEventSecretStore(selected.database, 'file');
+    } finally {
+      selected.close();
+    }
+    const startOwner = () =>
+      startEventOwner({
+        stateDir,
+        configDir,
+        tickMs: 60_000,
+        pollIntervalMs: 60_000,
+        now: () => ownerNow,
+        gmailSourceFor: async ({ alias }) =>
+          createGmailEventSource({ alias, context: new GmailContext({ core, env }) }),
+      });
+    return { root, stateDir, ids, subject, google, systemOne, startOwner };
+  } catch (error) {
+    await systemOne?.close();
+    await google.close();
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function approveOwnerIntent(control: EventControlClient, prepared: unknown, description: string): Promise<void> {
+  assert.equal(
+    typeof (prepared as { readonly approvalId?: unknown }).approvalId,
+    'string',
+    `${description} returns an approval id from the production owner`,
+  );
+  const approvalId = (prepared as { readonly approvalId: string }).approvalId;
+  const challenge = await control.request('approve-challenge', { approvalId });
+  assert.equal(typeof challenge, 'string', `${description} obtains its challenge through the owner control protocol`);
+  const completed = (await control.request('approve', { approvalId, answer: challenge })) as {
+    readonly status?: unknown;
+  };
+  assert.equal(completed.status, 'completed', `${description} completes through the owner control protocol`);
+}
+
+async function activateOwnerRule(
+  control: EventControlClient,
+  setup: Awaited<ReturnType<typeof ownerFixture>>,
+  onUncertain: 'no-match' | 'hold',
+): Promise<void> {
+  const target = { targetId: setup.ids.targetId, version: 1, kind: 'dry-run' as const, retentionMs: 3_600_000 };
+  const judge = {
+    judgeId: setup.ids.judgeId,
+    version: 1,
+    kind: 'local-endpoint' as const,
+    provider: 'ollama',
+    model: 'e13-owner-model',
+    endpoint: `http://127.0.0.1:${setup.systemOne.port}/v1/systemone`,
+    approvedAddressSet: ['127.0.0.1'] as const,
+    promptTemplate: 'ollama-noul-v1',
+    protocol: 'noul' as const,
+  };
+  await control.request('target-add', { document: target });
+  await control.request('addJudge', { document: judge });
+  await approveOwnerIntent(
+    control,
+    await control.request('enableJudgeKind', { kind: 'local-endpoint' }),
+    'local-endpoint kind enablement',
+  );
+  await approveOwnerIntent(
+    control,
+    await control.request('updateBudget', {
+      document: {
+        budgetId: 'judge-budget',
+        version: 1,
+        global: { callsPerRollingHour: 10, inputTokensPerRolling30Days: 10_000, concurrency: 1 },
+        providers: [
+          { provider: 'ollama', callsPerRollingHour: 10, inputTokensPerRolling30Days: 10_000, concurrency: 1 },
+        ],
+      },
+    }),
+    'judge budget activation',
+  );
+  const document = {
+    ruleId: setup.ids.ruleId,
+    version: 1,
+    source: {
+      channel: 'gmail' as const,
+      accountIds: [setup.ids.accountId],
+      options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+    },
+    event: { type: 'gmail.message.received' as const, version: 1 },
+    condition: { path: '/subject', op: 'exists' as const },
+    agentic: {
+      judge,
+      question: 'Does this synthetic owner event require attention?',
+      inputs: ['/subject'],
+      threshold: 0.5,
+      onUncertain,
+      callsPerRollingHour: 10,
+      inputTokensPerRolling30Days: 10_000,
+      concurrency: 1,
+      maxInputTokens: 10_000,
+      maxOutputTokens: 64,
+    },
+    mapping: { subject: { $path: '/subject' } },
+    targets: [target],
+    subscribers: [],
+    judges: [],
+    deliveryRateCap: 10,
+    retention: {
+      ingestMs: 60_000,
+      holdMs: 60_000,
+      deliveryMs: 3_600_000,
+      dryrunMs: 3_600_000,
+      sseReplayMs: 60_000,
+      deadLetterMs: 60_000,
+      decisionMetadataMs: 60_000,
+    },
+  };
+  await control.request('rule-create', { document });
+  await approveOwnerIntent(
+    control,
+    await control.request('rule-enable', { ruleId: document.ruleId, version: 1 }),
+    'agentic rule activation',
+  );
+  await approveOwnerIntent(control, await control.request('enable-all'), 'global event enablement');
+}
 
 class MemorySecretStore implements SecretStore {
   readonly kind = 'file' as const;
@@ -196,6 +509,22 @@ function exactRequestBody(request: Buffer): unknown {
   const boundary = request.indexOf('\r\n\r\n');
   assert.notEqual(boundary, -1, 'the sealed HTTP request has one header/body boundary');
   return JSON.parse(request.subarray(boundary + 4).toString('utf8')) as unknown;
+}
+
+function assertOwnerJudgeRequest(request: Buffer, subject: string, description: string): void {
+  const body = exactRequestBody(request) as { readonly state?: unknown };
+  assert.equal(typeof body.state, 'string', `${description} sends one typed System One state string`);
+  assert.deepEqual(
+    { ...body, state: JSON.parse(body.state as string) },
+    {
+      model: 'e13-owner-model',
+      questions: {
+        decision: { instructions: 'Does this synthetic owner event require attention?', type: 'noul' },
+      },
+      state: { inputs: [{ pointer: '/subject', value: subject }], version: 1 },
+    },
+    `${description} sends only the approved Gmail subject inside the fixed judge envelope`,
+  );
 }
 
 async function evaluate(
@@ -559,4 +888,125 @@ test('E13 release gate: every judge kind remains unusable until a person-approve
     store.close();
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test('E13 final owner E2E: Gmail source reaches a local judge match through control approvals and owner restart', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const before = lastingResources();
+  refusedNetwork.length = 0;
+  const setup = await ownerFixture('match');
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
+  try {
+    owner = await setup.startOwner();
+    const control = new EventControlClient({ stateDir: setup.stateDir, clientName: 'events-e13-owner-match' });
+    await activateOwnerRule(control, setup, 'no-match');
+    // As the Phase D owner E2E does: polling, evaluation, delivery and its dispatch take more than one tick.
+    for (let index = 0; index < 4; index += 1) await owner.tick();
+    assert.equal(
+      setup.systemOne.requests.length,
+      1,
+      'the owner-level match reaches the production judge coordinator exactly once',
+    );
+    assertOwnerJudgeRequest(
+      setup.systemOne.requests[0] ?? Buffer.alloc(0),
+      setup.subject,
+      'the production owner match',
+    );
+    const delivered = (await control.request('dryrun-list')) as readonly { readonly state?: string }[];
+    assert.equal(delivered.length, 1, 'the matched owner path reaches its local dry-run target');
+
+    await owner.stop();
+    owner = undefined;
+    owner = await setup.startOwner();
+    const restarted = new EventControlClient({
+      stateDir: setup.stateDir,
+      clientName: 'events-e13-owner-match-restart',
+    });
+    await owner.tick();
+    assert.equal(
+      ((await restarted.request('dryrun-list')) as readonly unknown[]).length,
+      1,
+      'stopping and starting the owner preserves the matched local delivery',
+    );
+    assert.equal(
+      setup.systemOne.requests.length,
+      1,
+      'the restarted owner does not re-judge the already terminal Gmail event',
+    );
+    assert.equal(
+      setup.google.requests.filter((request) => request.path.endsWith(DRAFT_SEND_PATH)).length,
+      0,
+      'the owner-level judge flow never reaches Gmail send',
+    );
+    assert.deepEqual(refusedNetwork, [], 'the sealed owner-level match makes no non-loopback network attempt');
+  } finally {
+    await owner?.stop();
+    await setup.systemOne.close();
+    await setup.google.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(lastingResources(), before, 'the owner-level match closes every owner, server, socket and timer');
+});
+
+test('E13 final owner E2E: Gmail source reaches a durable local-judge hold through control approvals and owner restart', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const before = lastingResources();
+  refusedNetwork.length = 0;
+  const setup = await ownerFixture('hold');
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
+  try {
+    owner = await setup.startOwner();
+    const control = new EventControlClient({ stateDir: setup.stateDir, clientName: 'events-e13-owner-hold' });
+    await activateOwnerRule(control, setup, 'hold');
+    await owner.tick();
+    assert.equal(setup.systemOne.requests.length, 1, 'the owner-level hold reaches the production judge exactly once');
+    assertOwnerJudgeRequest(setup.systemOne.requests[0] ?? Buffer.alloc(0), setup.subject, 'the production owner hold');
+    const held = (await control.request('heldList')) as {
+      readonly kind: string;
+      readonly decisions: readonly { readonly decisionId: string }[];
+    };
+    assert.deepEqual(
+      { kind: held.kind, count: held.decisions.length },
+      { kind: 'held-list', count: 1 },
+      'the production owner control protocol exposes one content-free held decision',
+    );
+    assert.equal(
+      ((await control.request('deliveriesList')) as readonly unknown[]).length,
+      0,
+      'the held owner path creates no target delivery',
+    );
+
+    await owner.stop();
+    owner = undefined;
+    owner = await setup.startOwner();
+    const restarted = new EventControlClient({ stateDir: setup.stateDir, clientName: 'events-e13-owner-hold-restart' });
+    const afterRestart = (await restarted.request('heldList')) as { readonly decisions: readonly unknown[] };
+    assert.equal(
+      afterRestart.decisions.length,
+      1,
+      'stopping and starting the production owner preserves the durable hold',
+    );
+    await owner.tick();
+    assert.equal(
+      setup.systemOne.requests.length,
+      1,
+      'the restarted owner does not re-ask the judge for an already held Gmail event',
+    );
+    assert.equal(
+      setup.google.requests.filter((request) => request.path.endsWith(DRAFT_SEND_PATH)).length,
+      0,
+      'the owner-level hold flow never reaches Gmail send',
+    );
+    assert.deepEqual(refusedNetwork, [], 'the sealed owner-level hold makes no non-loopback network attempt');
+  } finally {
+    await owner?.stop();
+    await setup.systemOne.close();
+    await setup.google.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(lastingResources(), before, 'the owner-level hold closes every owner, server, socket and timer');
 });
