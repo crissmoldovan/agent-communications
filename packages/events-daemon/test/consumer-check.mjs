@@ -1,7 +1,7 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -151,6 +151,13 @@ if (process.platform !== 'win32') {
         clientInfo: { name: 'packed-consumer', version: '0' },
       });
       assert.equal(initialized.result.protocolVersion, '2025-03-26');
+      // The server names the version that is actually installed, read from that installed package's own manifest.
+      const installed = JSON.parse(await readFile(join(dist, '..', 'package.json'), 'utf8'));
+      assert.deepEqual(
+        initialized.result.serverInfo,
+        { name: 'agent-events', version: installed.version },
+        'the packed daemon MCP server reports the installed package version',
+      );
       mcp.notify('notifications/initialized', {});
       const status = await mcp.request('tools/call', { name: 'events_status', arguments: {} });
       assert.equal(status.result.structuredContent.owner, 'running');
