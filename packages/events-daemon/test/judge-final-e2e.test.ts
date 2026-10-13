@@ -42,7 +42,7 @@ const RULE_ID = 'rule-e13-final';
 const JUDGE_ID = 'judge-e13-final';
 const TARGET_ID = 'target-e13-final';
 const TEST_CLIENT_ID = 'e13-client.apps.googleusercontent.com';
-const TEST_CLIENT_SECRET = 'e13-test-client-secret-not-a-real-credential';
+const TEST_CLIENT_SECRET = 'test-e13-client-secret';
 
 function ownerIds(outcome: 'match' | 'hold') {
   const suffix = outcome === 'match' ? 'match' : 'hold';
