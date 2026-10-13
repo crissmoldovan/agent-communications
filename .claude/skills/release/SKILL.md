@@ -6,7 +6,8 @@ description: Use when publishing this repository's packages to npm, cutting a ve
 # Releasing agent-communications
 
 Every package in `scripts/packages.mjs` goes to npm together, in that order — today `@agentcomms/core`,
-`@agentcomms/gmail`, `@agentcomms/gmail-mcp`, `@agentcomms/resend`, `@agentcomms/slack` and `@agentcomms/whatsapp`
+`@agentcomms/events`, `@agentcomms/gmail`, `@agentcomms/gmail-mcp`, `@agentcomms/resend`, `@agentcomms/slack`,
+`@agentcomms/whatsapp` and `@agentcomms/events-daemon`
 (`node scripts/packages.mjs` prints the list). That file is the one list, derived from the channels' manifests: the
 workflow, the local script, `sync-versions`, `verify:packages` and the licence notices all read it, and a test fails if
 a publishable package is missing.
