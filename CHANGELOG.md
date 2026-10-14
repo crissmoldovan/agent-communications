@@ -26,6 +26,9 @@ Rejected recipient values are no longer copied into prepare errors, and Gmail's 
 envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
 record, over MCP and `send status --json`.
 
+**Fixed.** A Slack sign-in listener now closes its loopback server if the sign-in expires before the listener can
+record that it started, so the port is released immediately instead of remaining occupied until the listener timeout.
+
 ## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run

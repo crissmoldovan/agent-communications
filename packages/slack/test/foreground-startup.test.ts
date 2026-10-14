@@ -9,16 +9,12 @@ test('abort in the real listen callback owns completion rejection before startup
     import assert from 'node:assert/strict';
     import fs from 'node:fs/promises';
     import { syncBuiltinESMExports } from 'node:module';
-    import { Server, createServer } from 'node:net';
+    import { Server } from 'node:net';
     import { join } from 'node:path';
     import { setImmediate as turn } from 'node:timers/promises';
     import { newHarness, TEST_CLIENT_ID } from ${JSON.stringify(new URL('./support/harness.ts', import.meta.url).href)};
     import { startSignIn } from ${JSON.stringify(new URL('../src/operations/signin.ts', import.meta.url).href)};
     const harness = await newHarness();
-    const probe = createServer();
-    await new Promise(done => probe.listen(0, 'localhost', done));
-    const port = probe.address().port;
-    await new Promise(done => probe.close(done));
     const controller = new AbortController();
     let settled;
     let intercepted = false;
@@ -47,7 +43,7 @@ test('abort in the real listen callback owns completion rejection before startup
       register(_id, completion) { settled = completion; },
     }});
     await assert.rejects(startSignIn(context, {
-      alias: 'acme', mode: 'read', clientId: TEST_CLIENT_ID, port, detached: false,
+      alias: 'acme', mode: 'read', clientId: TEST_CLIENT_ID, port: 51000, detached: false,
     }), { name: 'AbortError' });
     await settled;
     await turn();

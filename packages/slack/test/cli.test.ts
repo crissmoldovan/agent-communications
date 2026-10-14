@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { chmod, readdir, readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, test } from 'node:test';
@@ -373,20 +372,10 @@ test('all five shared path options are applied before command dispatch', async (
   assert.match(empty.stderr, /non-empty directory/);
 });
 
-/** A port nothing is listening on right now. Slack needs one fixed in advance, so the tests must choose too. */
+/** Deterministic manifest ports; the test harness binds listeners to OS-assigned port 0. */
+let nextManifestPort = 41_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  /*
-   * `localhost`, the same host the listener binds — not `127.0.0.1`.
-   *
-   * On this machine `localhost` resolves to `::1` first. Probing IPv4 and then binding IPv6 checks one address
-   * family and uses the other, so a port free on the first can already be held on the second by another test
-   * file running concurrently. It showed up as a rare, unrepeatable failure in two unrelated tests.
-   */
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 /**

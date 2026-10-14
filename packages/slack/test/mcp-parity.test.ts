@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, test } from 'node:test';
@@ -149,13 +148,10 @@ async function cliError(harness: Harness, argv: string[], read?: FakeFetch): Pro
   return envelope.error as Failure;
 }
 
-/** A port nothing is listening on right now — on `localhost`, the host the listener binds. */
+/** Deterministic manifest ports; the test harness binds listeners to OS-assigned port 0. */
+let nextManifestPort = 43_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 let strays: number[] = [];

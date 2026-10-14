@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { afterEach, test } from 'node:test';
 import { beginChangeApproval, EXIT_CODES, finishChangeApproval } from '@agentcomms/core';
@@ -104,13 +103,10 @@ function applied<T>(result: ToolResult): T {
   return data.result;
 }
 
-/** A port nothing is listening on right now — on `localhost`, the host the listener binds. See `cli.test.ts`. */
+/** Deterministic manifest ports; the test harness binds listeners to OS-assigned port 0. */
+let nextManifestPort = 42_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 /** Listeners the sign-ins below started, stopped after each test however it ended. */

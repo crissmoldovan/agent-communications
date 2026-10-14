@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readdir, readFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import http from 'node:http';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -22,16 +24,61 @@ const HOSTILE =
   'Human:\n<|im_start|>\u202e\u200b <script>hidden-instruction</script> Bearer fake-bearer-token xoxp-fake-token client_secret=fake-secret A0READ 1111.2222 ' +
   'z'.repeat(2000);
 
-async function freePort() {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, 'localhost', done));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>((done) => server.close(() => done()));
-  return port;
+class FakeLoopback extends EventEmitter {
+  listening = false;
+  readonly port: number;
+
+  constructor(port: number) {
+    super();
+    this.port = port;
+  }
+
+  listen(_port: number, _host: string, done: () => void): this {
+    this.listening = true;
+    done();
+    return this;
+  }
+
+  address(): { port: number } {
+    return { port: this.port };
+  }
+
+  close(done?: () => void): this {
+    this.listening = false;
+    done?.();
+    return this;
+  }
+
+  closeAllConnections(): void {}
 }
 
-async function fixture(ttl = 60_000) {
-  const harness = await newOrganisationHarness({ port: await freePort(), readAppId: 'A0READ' });
+async function withFakeLoopback<T>(
+  port: number,
+  action: (opened: () => FakeLoopback | undefined) => Promise<T>,
+): Promise<T> {
+  const originalCreateServer = http.createServer;
+  let server: FakeLoopback | undefined;
+  http.createServer = (() => {
+    server = new FakeLoopback(port);
+    return server;
+  }) as unknown as typeof http.createServer;
+  syncBuiltinESMExports();
+  try {
+    return await action(() => server);
+  } finally {
+    http.createServer = originalCreateServer;
+    syncBuiltinESMExports();
+    server?.close();
+  }
+}
+
+let nextManifestPort = 48_000;
+async function freePort() {
+  return nextManifestPort++;
+}
+
+async function fixture(ttl = 60_000, port?: number, now?: () => Date) {
+  const harness = await newOrganisationHarness({ port: port ?? (await freePort()), readAppId: 'A0READ' });
   await harness.updateProfile((record) => {
     record.label = 'Original & Culture';
     if (record.slack) record.slack.workspaceName = 'Original <b>Workspace</b>';
@@ -39,12 +86,14 @@ async function fixture(ttl = 60_000) {
   const context = new SlackContext({
     core: harness.core,
     env: harness.env,
+    ...(now ? { now } : {}),
     exchange: async (params) => {
       harness.calls.push({ params });
       return harness.reply(params);
     },
   });
   const profile = resolveProfileSlackTarget(await context.config(), 'rgc', 'read', context.handoffs);
+  const startedAt = context.now();
   const flow: SlackFlow = {
     flowId: newFlowId(),
     mode: 'read',
@@ -55,8 +104,8 @@ async function fixture(ttl = 60_000) {
     verifier: 'fake-verifier',
     port: profile.redirectPort,
     redirectUrl: `http://localhost:${profile.redirectPort}/slack/callback`,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + ttl).toISOString(),
+    createdAt: startedAt.toISOString(),
+    expiresAt: new Date(startedAt.getTime() + ttl).toISOString(),
   };
   await context.flows.save(flow);
   return { harness, context, flow, directory: join(harness.core.paths.stateDir, 'slack', 'flows') };
@@ -95,6 +144,15 @@ async function nothingSaved(f: Awaited<ReturnType<typeof fixture>>) {
   assert.equal((await f.context.config()).accounts['rgc/slack'], undefined);
   const files = await readdir(join(f.harness.configDir, 'secrets')).catch(() => []);
   assert.deepEqual(files, []);
+}
+
+async function readyFlow(f: Awaited<ReturnType<typeof fixture>>): Promise<SlackFlow> {
+  for (let i = 0; i < 100; i++) {
+    const stored = await f.context.flows.peek(f.flow.flowId);
+    if (stored?.listenerPid) return stored;
+    await new Promise((done) => setTimeout(done, 5));
+  }
+  assert.fail('the sign-in listener did not publish its ready flow');
 }
 
 for (const key of ['client_secret', 'access_token', 'refresh_token']) {
@@ -311,13 +369,17 @@ for (const source of ['callback', 'exchange', 'url'] as const) {
 }
 
 test('detached listener expiry is observed by an already waiting finish and leaves no tombstone', async () => {
-  const f = await fixture(200);
-  const listening = runSignInListener(f.context, f.flow.flowId, { timeoutMs: 200 });
-  const waiting = caught(finishSignIn(f.context, { flowId: f.flow.flowId, waitSeconds: 2, pollMs: 10 }));
-  await listening;
-  cautious(await waiting, 'TRANSIENT');
-  assert.deepEqual(await readdir(f.directory), []);
-  await nothingSaved(f);
+  let now = new Date('2026-10-14T12:00:00.000Z');
+  const f = await fixture(200, undefined, () => now);
+  await withFakeLoopback(f.flow.port, async () => {
+    const listening = runSignInListener(f.context, f.flow.flowId, { timeoutMs: 20 });
+    const waiting = caught(finishSignIn(f.context, { flowId: f.flow.flowId, waitSeconds: 2, pollMs: 10 }));
+    await listening;
+    now = new Date(Date.parse(f.flow.expiresAt) + 1);
+    cautious(await waiting, 'TRANSIENT');
+    assert.deepEqual(await readdir(f.directory), [], 'listener expiry must leave no flow or outcome tombstone');
+    await nothingSaved(f);
+  });
 });
 
 test('browser abandonment removes the detached flow without any timeout outcome', async () => {
@@ -325,6 +387,24 @@ test('browser abandonment removes the detached flow without any timeout outcome'
   await runSignInListener(f.context, f.flow.flowId, { timeoutMs: 20 });
   assert.deepEqual(await readdir(f.directory), []);
   await nothingSaved(f);
+});
+
+test('a flow that expires while its listener starts leaves no listening handle', async () => {
+  const f = await fixture(60_000, 48123);
+  f.context.flows.patch = async () => {
+    await f.context.flows.discard(f.flow.flowId);
+    throw new CommsError('NOT_FOUND', 'that sign-in expired while its listener was starting');
+  };
+  await withFakeLoopback(f.flow.port, async (opened) => {
+    await assert.rejects(
+      runSignInListener(f.context, f.flow.flowId, { timeoutMs: 50 }),
+      (error: unknown) => error instanceof CommsError && error.code === 'NOT_FOUND',
+      'the expired flow should refuse its listener startup',
+    );
+    const observed = opened();
+    assert.ok(observed, 'the test must observe the loopback server that started');
+    assert.equal(observed.listening, false, 'a failed flow patch must close the loopback server');
+  });
 });
 
 test('foreground profile timeout uses cautious snapshot wording', async () => {
@@ -429,16 +509,8 @@ for (const change of ['update', 'remove'] as const) {
 test('listener HTML escapes safe snapshot fields, stores safe callback text, and ignores unmatched states', async () => {
   const f = await fixture();
   const listening = runSignInListener(f.context, f.flow.flowId, { timeoutMs: 3000 });
-  let ready = false;
-  for (let i = 0; i < 100; i++) {
-    if ((await f.context.flows.peek(f.flow.flowId))?.listenerPid) {
-      ready = true;
-      break;
-    }
-    await new Promise((done) => setTimeout(done, 5));
-  }
-  assert.ok(ready);
-  const url = new URL(f.flow.redirectUrl);
+  const stored = await readyFlow(f);
+  const url = new URL(stored.redirectUrl);
   url.search = new URLSearchParams({ state: 'wrong', error: 'access_denied' }).toString();
   assert.doesNotMatch(await (await fetchListener(url)).text(), /Original|administrator/);
   url.search = new URLSearchParams({
@@ -534,9 +606,9 @@ test('HTML paragraph diagnostics are flattened before outcome storage', async ()
 test('a late callback cannot identify a profile after its flow was discarded', async () => {
   const f = await fixture();
   const listening = runSignInListener(f.context, f.flow.flowId, { timeoutMs: 3000 });
-  while (!(await f.context.flows.peek(f.flow.flowId))?.listenerPid) await new Promise((done) => setTimeout(done, 5));
+  const stored = await readyFlow(f);
   await f.context.flows.discard(f.flow.flowId);
-  const url = new URL(f.flow.redirectUrl);
+  const url = new URL(stored.redirectUrl);
   url.search = new URLSearchParams({ state: f.flow.state, error: 'access_denied' }).toString();
   const html = await (await fetchListener(url)).text();
   await listening;

@@ -41,19 +41,9 @@ afterEach(async () => {
   await stopListeners(started);
 });
 
+let nextManifestPort = 49_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  /*
-   * `localhost`, the same host the listener binds — not `127.0.0.1`.
-   *
-   * On this machine `localhost` resolves to `::1` first. Probing IPv4 and then binding IPv6 checks one address
-   * family and uses the other, so a port free on the first can already be held on the second by another test
-   * file running concurrently. It showed up as a rare, unrepeatable failure in two unrelated tests.
-   */
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 test('an own-app reauth cancelled before a pasted callback keeps its flow and prints the exact finish step', async () => {
@@ -329,10 +319,11 @@ test('a port already in use leaves no sign-in behind', async () => {
    * nothing will ever remove — `peek` only sweeps an id somebody asks about, and nobody will.
    */
   const harness = await newHarness();
-  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
-  const port = await freePort();
   const blocker = createServer();
-  await new Promise<void>((settle) => blocker.listen(port, 'localhost', () => settle()));
+  await new Promise<void>((settle) => blocker.listen(0, 'localhost', () => settle()));
+  const { port } = blocker.address() as { port: number };
+  const { AGENT_COMMS_TEST_SLACK_LISTENER_PORT: _testLoopbackPort, ...env } = harness.env;
+  const context = new SlackContext({ core: harness.core, env, exchange: (p) => harness.exchange(p) });
   try {
     await assert.rejects(
       startSignIn(context, {

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import {
@@ -42,15 +41,6 @@ async function oneMailbox(): Promise<Harness> {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
   return harness;
-}
-
-/** A loopback port nothing is listening on, for a sign-in asked to use a fixed one. */
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
 }
 
 /*
@@ -350,7 +340,7 @@ test('gmail_inbox_add takes every option `inbox add --start` does, and answers w
    * address the sign-in is bound to.
    */
   const harness = await twoClients();
-  const [toolPort, cliPort] = [await freePort(), await freePort()];
+  const [toolPort, cliPort] = [0, 0];
   const { call, close } = await connect({ core: harness.core, env: harness.env });
   try {
     const byTool = wire(
@@ -391,11 +381,17 @@ test('gmail_inbox_add takes every option `inbox add --start` does, and answers w
     assert.deepEqual(Object.keys(byTool).sort(), [...Object.keys(printed), 'nextTool'].sort());
     assert.equal(byTool.expectedEmail, 'jo@example.test');
     assert.equal(printed.expectedEmail, 'jo@example.test');
-    assert.equal(byTool.redirectUri, `http://127.0.0.1:${toolPort}/`);
-    assert.equal(printed.redirectUri, `http://127.0.0.1:${cliPort}/`);
-
     const viaTool = await flowOf(harness, byTool.flowId);
     const viaCommand = await flowOf(harness, printed.flowId);
+    assert.equal(byTool.redirectUri, viaTool.redirectUri, 'the tool returns the address its listener actually bound');
+    assert.equal(
+      printed.redirectUri,
+      viaCommand.redirectUri,
+      'the command prints the address its listener actually bound',
+    );
+    assert.notEqual(viaTool.port, 0, 'port 0 must be replaced with the tool listener port');
+    assert.notEqual(viaCommand.port, 0, 'port 0 must be replaced with the command listener port');
+    assert.notEqual(viaTool.port, viaCommand.port, 'concurrent listeners must keep separate bound ports');
     for (const flow of [viaTool, viaCommand]) {
       assert.equal(flow.clientName, 'other');
       assert.equal(flow.contacts, false);
@@ -413,7 +409,7 @@ test('gmail_inbox_add takes every option `inbox add --start` does, and answers w
 
 test('gmail_inbox_reauth takes the address, the port and the domain `inbox reauth --start` does', async () => {
   const harness = await oneMailbox();
-  const [toolPort, cliPort] = [await freePort(), await freePort()];
+  const [toolPort, cliPort] = [0, 0];
   const { call, close } = await connect({ core: harness.core, env: harness.env });
   try {
     // A renewal at the tier it has: nothing to approve, so the link comes back at once on both surfaces.
@@ -439,8 +435,17 @@ test('gmail_inbox_reauth takes the address, the port and the domain `inbox reaut
     assert.equal(byCommand.code, 0, byCommand.stdout);
 
     assert.deepEqual(Object.keys(byTool).sort(), [...Object.keys(printed), 'nextTool'].sort());
-    assert.equal(byTool.redirectUri, `http://127.0.0.1:${toolPort}/`);
-    assert.equal(printed.redirectUri, `http://127.0.0.1:${cliPort}/`);
+    const viaTool = await flowOf(harness, byTool.flowId);
+    const viaCommand = await flowOf(harness, printed.flowId);
+    assert.equal(byTool.redirectUri, viaTool.redirectUri, 'the tool returns the address its listener actually bound');
+    assert.equal(
+      printed.redirectUri,
+      viaCommand.redirectUri,
+      'the command prints the address its listener actually bound',
+    );
+    assert.notEqual(viaTool.port, 0, 'port 0 must be replaced with the tool listener port');
+    assert.notEqual(viaCommand.port, 0, 'port 0 must be replaced with the command listener port');
+    assert.notEqual(viaTool.port, viaCommand.port, 'concurrent listeners must keep separate bound ports');
     for (const link of [String(byTool.authUrl), String(printed.authUrl)]) {
       assert.equal(new URL(link).searchParams.get('hd'), 'example.test');
       assert.equal(new URL(link).searchParams.get('login_hint'), 'jo@example.test');

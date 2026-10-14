@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import { canonicalSseSubscriber, type SseSubscriberDocument } from '../domain/sse-subscriber.ts';
 import { installErrorSink } from '../network/error-sink.ts';
@@ -28,6 +29,8 @@ export interface SseServerOptions {
   readonly fence?: ((request: ActiveDisclosableRequest) => Promise<unknown>) | undefined;
   readonly visibilityGate?: SseFrameVisibilityGate | undefined;
   readonly hasConcreteWhatsAppVisibilityFence?: boolean | undefined;
+  /** Test seam: an already-bound loopback server, so its ephemeral port is never released and reacquired. */
+  readonly listener?: Server | undefined;
 }
 
 export interface SseBearerMaterial {
@@ -39,6 +42,8 @@ export interface SseBearerMaterial {
 
 export interface SseServer {
   readonly authority: Readonly<{ host: '127.0.0.1' | '::1'; port: number }>;
+  /** The listener's actual bound address, for health checks and tests: it must equal the persisted authority. */
+  boundAddress(): AddressInfo | string | null;
   close(): Promise<void>;
   rotate(input: Readonly<{ subscriberId: string; subscriberVersion: number; generation: number }>): void;
   writeLive(
@@ -65,6 +70,19 @@ interface LiveConnection {
 
 function expectedHost(authority: SseSubscriberDocument['authority']): string {
   return authority.host === '::1' ? `[::1]:${authority.port}` : `${authority.host}:${authority.port}`;
+}
+
+function assertInjectedListener(listener: Server, authority: SseSubscriberDocument['authority']): void {
+  if (!listener.listening) throw new Error('the injected SSE listener is not listening');
+  const address = listener.address();
+  if (
+    address === null ||
+    typeof address === 'string' ||
+    address.address !== authority.host ||
+    address.port !== authority.port
+  ) {
+    throw new Error('the injected SSE listener is not bound to the subscriber exact loopback authority');
+  }
 }
 
 function pathFor(subscriberId: string): string {
@@ -125,7 +143,11 @@ class LoopbackSseServer implements SseServer {
   readonly #streams: SubscriberStreams;
   readonly #replay: StreamReplay;
   readonly #server: Server;
+  readonly #ownsServer: boolean;
   readonly #connections = new Set<LiveConnection>();
+  readonly #requestListener = (request: IncomingMessage, response: ServerResponse) =>
+    void this.#handle(request, response);
+  readonly #connectionListener = (socket: Socket) => installErrorSink(socket);
   #preflightCount = 0;
 
   private constructor(options: SseServerOptions, subscriber: PersistedSubscriber) {
@@ -142,14 +164,18 @@ class LoopbackSseServer implements SseServer {
       visibilityGate: options.visibilityGate,
       hasConcreteWhatsAppVisibilityFence: options.hasConcreteWhatsAppVisibilityFence,
     });
-    this.#server = createServer((request, response) => void this.#handle(request, response));
-    installErrorSink(this.#server);
-    this.#server.on('connection', (socket) => installErrorSink(socket));
+    this.#ownsServer = options.listener === undefined;
+    this.#server = options.listener ?? createServer();
+    this.#server.on('request', this.#requestListener);
+    if (this.#ownsServer) installErrorSink(this.#server);
+    this.#server.on('connection', this.#connectionListener);
   }
 
   static async start(options: SseServerOptions): Promise<LoopbackSseServer> {
     const subscriber = readSubscriber(options);
+    if (options.listener !== undefined) assertInjectedListener(options.listener, subscriber.document.authority);
     const result = new LoopbackSseServer(options, subscriber);
+    if (!result.#ownsServer) return result;
     await new Promise<void>((resolve, reject) => {
       result.#server.once('error', reject);
       result.#server.listen(subscriber.document.authority.port, subscriber.document.authority.host, () => {
@@ -164,8 +190,15 @@ class LoopbackSseServer implements SseServer {
     return this.#subscriber.document.authority;
   }
 
+  boundAddress(): AddressInfo | string | null {
+    return this.#server.address();
+  }
+
   async close(): Promise<void> {
     for (const connection of this.#connections) connection.close();
+    this.#server.off('request', this.#requestListener);
+    this.#server.off('connection', this.#connectionListener);
+    if (!this.#ownsServer) return;
     await new Promise<void>((resolve, reject) =>
       this.#server.close((error) => (error === undefined ? resolve() : reject(error))),
     );
