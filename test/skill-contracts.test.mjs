@@ -233,8 +233,10 @@ test('every channel contract says a command for a person is the one a result giv
       // The first outcome: the command itself, handed over as given.
       /Hand it over exactly as given/,
       /Never write one yourself/,
-      // The second: words to type, on Windows.
-      /words as JSON/,
+      // Windows: the labelled PowerShell path, then the inert words fallback when no safe line is proven.
+      /labelled \*\*PowerShell\*\*/,
+      /call operator/,
+      /words as (?:inert )?JSON/,
       /C:\\Program Files/,
       // The third: none here, said, and no command put in its place.
       /not locatable here/,

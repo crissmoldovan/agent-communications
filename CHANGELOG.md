@@ -26,6 +26,36 @@ Rejected recipient values are no longer copied into prepare errors, and Gmail's 
 envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
 record, over MCP and `send status --json`.
 
+**The core installer now manages the events MCP server.** `agentcomms mcp install --server events --client <client>`
+and `comms_server_install` with `channel: "events"` register `@agentcomms/events-daemon` through the same preview and
+approval flow as the channel servers. Listing, updating, doctor repairs and pruning now include it too. The service is
+derived from its `agentcommsPackage` declaration, so adding a service no longer requires another server list in core;
+channel account pins, read-only narrowing and warnings about rival servers remain channel-only.
+
+Why: the 0.16.0 and 0.17.0 instructions made people add `npx -y @agentcomms/events-daemon mcp` to each client by
+hand, outside the managed install and update path.
+
+**Windows handoffs with the default Node installation are pasteable in PowerShell.** When Node lives under
+`C:\Program Files`, a safe handoff is now printed as a line beginning with PowerShell's `&`, with every word
+single-quoted and the result labelled “PowerShell”. Inner single quotes are doubled. A command whose words cannot be
+proved safe in that form still uses the inert JSON fallback.
+
+Why: the absolute Node path needs quoting; earlier releases therefore reduced the most common Windows handoff to a
+list of words to retype even though PowerShell has a safe, explicit call-operator form.
+
+**Managed installs now provide owned CLI shims.** After a managed install or registration update, `agentcomms`,
+`agent-gmail`, `agent-slack`, `agent-resend`, `agent-whatsapp` or `agent-events` is written to `~/.local/bin` on
+macOS/Linux. The shim starts that managed runtime with the locator's Node and entry; updates repoint it, prune removes
+it with the runtime, and `doctor` reports a missing, stale or foreign shim. Existing or changed files are never
+overwritten or deleted. A symlinked bin directory works, while a parent redirected during an operation is refused
+before the mutation. When the directory is not on `PATH`, the install result shows how to prepend it for the current
+shell and edits no profile. Windows shims are not offered yet: `.cmd` forwarding makes `cmd.exe` re-parse arguments,
+so the result keeps giving the full-path command or labelled PowerShell `&` line instead.
+
+Why: managed registrations already install a complete CLI runtime, but people still had to find or globally install
+the command separately for ordinary terminal use. Windows needs a forwarding format that preserves argument
+boundaries before it can offer the same convenience safely.
+
 ## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run

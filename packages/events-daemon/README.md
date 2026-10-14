@@ -112,8 +112,10 @@ approval preview then shows exactly what changes.
 
 ## Agents and approvals
 
-`agent-events mcp` serves the same operations to a coding agent over MCP. Register it with your client as you would
-any MCP server, with `npx -y @agentcomms/events-daemon mcp` as the command. The
+`agent-events mcp` serves the same operations to a coding agent over MCP. Register it through the core's managed
+installer — for example, `agentcomms mcp install --server events --client claude-code` — or call
+`comms_server_install` with `channel: "events"` from the core MCP server. The same preview-and-approval flow used for
+channel servers applies, and the result tells you to restart the client. The
 [`agentcomms-events` skill](../../skills/agentcomms-events/SKILL.md) tells an agent how to use it.
 
 - **An agent can:** read the catalogue and your rules, propose rules, targets, judges and a judge budget, test a rule

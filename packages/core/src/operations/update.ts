@@ -1,13 +1,22 @@
 import { corruptStubOf, type StoredApproval, stateOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
-import { CHANNELS, type Channel, channelLabel, channelServer, requireChannelManifest } from '../channel-servers.ts';
+import {
+  CHANNELS,
+  isChannel,
+  requireChannelManifest,
+  SERVERS,
+  type ServerId,
+  serverFacts,
+  serverLabel,
+} from '../channel-servers.ts';
 import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { type CliHandoffs, type Handoff, handoffChoices, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
+import { type ManagedShimWriteResult, managedShimPath, managedShimsSupported } from '../managed-shims.ts';
 import { type RegisteredServer, scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
 import {
   clientCliSearch,
@@ -35,7 +44,7 @@ import { compareVersions, isBehind, isVersion, npmGlobalPackages, npmInstallGlob
 import { launcherOf, registrationVersion } from '../registrations.ts';
 import { changeUpdateCheck, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
-import { channelProduct } from './servers.ts';
+import { serverProduct, withManagedShim } from './servers.ts';
 
 /**
  * Bringing a machine to the latest release, from a terminal (`agentcomms update`) or a chat (`comms_update`).
@@ -54,18 +63,15 @@ import { channelProduct } from './servers.ts';
  */
 
 /**
- * The packages this suite publishes, whose latest releases an update reads: every channel's, from the manifests, and
- * every package a channel's server is run through by `npx` when that is another one — Gmail's `gmail-mcp`.
+ * The packages this suite publishes, whose latest releases an update reads: every declared server owner's, from the
+ * channel and service declarations, and every package a server is run through by `npx` when that is another one —
+ * Gmail's `gmail-mcp`.
  */
-const CHANNEL_PACKAGES: readonly string[] = Object.freeze(
-  CHANNELS.map((channel) => channelServer(channel).packageName),
-);
+const OWNER_PACKAGES: readonly string[] = Object.freeze(SERVERS.map((server) => serverFacts(server).packageName));
 const SERVER_PACKAGES: readonly string[] = Object.freeze(
-  CHANNELS.map((channel) => channelServer(channel).npxPackage).filter((name) => !CHANNEL_PACKAGES.includes(name)),
+  SERVERS.map((server) => serverFacts(server).npxPackage).filter((name) => !OWNER_PACKAGES.includes(name)),
 );
-const PUBLISHED_NAMES: readonly string[] = Object.freeze(
-  [...new Set([...CHANNEL_PACKAGES, ...SERVER_PACKAGES])].sort(),
-);
+const PUBLISHED_NAMES: readonly string[] = Object.freeze([...new Set([...OWNER_PACKAGES, ...SERVER_PACKAGES])].sort());
 
 /**
  * What an update does outside this process, each replaceable: a test hands in stand-ins, and nothing it runs reads
@@ -91,11 +97,11 @@ export interface UpdateRequest {
   noVerify?: boolean | undefined;
 }
 
-/** One client's registration of one channel's server. */
+/** One client's registration of one declared server. */
 export interface RegistrationItem {
   kind: 'registration';
-  channel: Channel;
-  /** The package the entry starts: the channel's, or for Gmail started through npx, `@agentcomms/gmail-mcp`. */
+  channel: ServerId;
+  /** The package the entry starts: the owner's, or for Gmail started through npx, `@agentcomms/gmail-mcp`. */
   package: string;
   client: string;
   name: string;
@@ -117,7 +123,7 @@ export interface RegistrationItem {
 /** The managed runtime of one package at the latest release: behind when a registration the update moves needs it. */
 export interface RuntimeItem {
   kind: 'runtime';
-  channel: Channel;
+  channel: ServerId;
   package: string;
   /** The newest runtime of this package on disk, or null when there is none. */
   version: string | null;
@@ -152,7 +158,7 @@ export interface UpdateReport {
 export type UpdateStep =
   | {
       kind: 'runtime';
-      channel: Channel;
+      channel: ServerId;
       package: string;
       version: string;
       path: string;
@@ -161,7 +167,7 @@ export type UpdateStep =
     }
   | {
       kind: 'registration';
-      channel: Channel;
+      channel: ServerId;
       client: string;
       name: string;
       scope: 'user';
@@ -177,6 +183,7 @@ export type UpdateStep =
       /** Where the entry it replaced was saved. */
       backupPath?: string | undefined;
       warnings?: string[] | undefined;
+      shim?: ManagedShimWriteResult | undefined;
     }
   | {
       kind: 'global';
@@ -222,14 +229,14 @@ interface Inspection {
   globals: GlobalItem[];
 }
 
-function narrowingArgs(channel: Channel, narrowing: Narrowing): string[] {
-  return channelServer(channel).serverArgs({ client: 'json', ...narrowing });
+function narrowingArgs(server: ServerId, narrowing: Narrowing): string[] {
+  return serverFacts(server).serverArgs({ client: 'json', ...narrowing });
 }
 
-/** Every registration of every channel's server, as the core's `channels` finds them — nothing an `env` holds. */
-function registrations(servers: readonly RegisteredServer[]): { channel: Channel; server: RegisteredServer }[] {
-  return CHANNELS.flatMap((channel) =>
-    servers.filter((server) => isProductServer(server, channelServer(channel))).map((server) => ({ channel, server })),
+/** Every registration of every declared server, as the core's `channels` finds them — nothing an `env` holds. */
+function registrations(servers: readonly RegisteredServer[]): { channel: ServerId; server: RegisteredServer }[] {
+  return SERVERS.flatMap((channel) =>
+    servers.filter((server) => isProductServer(server, serverFacts(channel))).map((server) => ({ channel, server })),
   );
 }
 
@@ -277,11 +284,13 @@ async function latestReleases(
  * have no line to paste: the reasons below give it with `handoffSentence`, which shows it as words then.
  */
 function installHandoff(item: RegistrationItem, handoffs: CliHandoffs): Handoff {
-  const facts = channelServer(item.channel);
+  const facts = serverFacts(item.channel);
   const words = ['mcp', 'install', '--client', item.client];
   if (item.name !== facts.defaultServerName) words.push('--name', item.name);
   words.push(...item.narrowing, '--force');
-  return handoffs.of(item.channel, words);
+  return isChannel(item.channel)
+    ? handoffs.of(item.channel, words)
+    : handoffs.core(['mcp', 'install', '--server', item.channel, ...words.slice(2)]);
 }
 
 /**
@@ -346,8 +355,8 @@ async function runtimesNeeded(
   managed: readonly RegistrationItem[],
 ): Promise<RuntimeItem[]> {
   const needed: RuntimeItem[] = [];
-  for (const channel of CHANNELS) {
-    const packageName = channelServer(channel).packageName;
+  for (const channel of SERVERS) {
+    const packageName = serverFacts(channel).packageName;
     const version = latest[packageName];
     if (version === undefined) continue;
     if (!managed.some((item) => item.channel === channel && item.launcher === 'managed')) continue;
@@ -371,7 +380,7 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   const handoffs = requireHandoffs(core, deps.platform).withRegistrations(scan.servers);
   const unreadable: UnreadableConfig[] = [...scan.unreadable];
   const found = registrations(scan.servers).map(({ channel, server }) => {
-    const facts = channelServer(channel);
+    const facts = serverFacts(channel);
     const narrowing = facts.narrowingOf(server.args);
     return {
       channel,
@@ -404,9 +413,9 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
    * can reach npm before that channel's first publish — and asking about it would stop the update for everyone who
    * does not use it.
    */
-  const wanted = new Set<string>([channelServer('core').packageName]);
+  const wanted = new Set<string>([serverFacts('core').packageName]);
   for (const entry of found) {
-    wanted.add(channelServer(entry.channel).packageName);
+    wanted.add(serverFacts(entry.channel).packageName);
     wanted.add(entry.package);
   }
   for (const name of Object.keys(installed)) wanted.add(name);
@@ -436,7 +445,7 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
       name: entry.server.name,
       scope: entry.server.scope ?? 'user',
       path: entry.server.path,
-      launcher: launcherOf(entry.server, channelServer(entry.channel)),
+      launcher: launcherOf(entry.server, serverFacts(entry.channel)),
       version: entry.version,
       latest: latest[entry.package] ?? '',
       narrowing: narrowingArgs(entry.channel, entry.narrowing),
@@ -469,8 +478,8 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
     candidates.map((candidate) => candidate.item),
   );
   behind.push(...needed);
-  for (const channel of CHANNELS) {
-    const packageName = channelServer(channel).packageName;
+  for (const channel of SERVERS) {
+    const packageName = serverFacts(channel).packageName;
     const version = latest[packageName];
     if (version === undefined || (await reusableRuntime(core.paths.dataDir, packageName, version)) === null) continue;
     upToDate.push({
@@ -525,7 +534,7 @@ export async function updateCheck(
   return report;
 }
 
-const CORE_PACKAGE = channelServer('core').packageName;
+const CORE_PACKAGE = serverFacts('core').packageName;
 
 /**
  * One registration: its channel, its client, its scope, the file it is in and its name. Two copies of it in one file —
@@ -538,7 +547,7 @@ const CORE_PACKAGE = channelServer('core').packageName;
  * and every call there was told to restart the client — which starts the same old code.
  */
 const registrationKey = (entry: {
-  channel: Channel;
+  channel: ServerId;
   client: string;
   scope: 'user' | 'project';
   path: string;
@@ -623,7 +632,7 @@ export function updateCheckFindings(
       });
   const globals = items.filter((item): item is GlobalItem => item.kind === 'global');
   const global = CHANNELS.filter((channel) => {
-    const name = channelServer(channel).packageName;
+    const name = serverFacts(channel).packageName;
     return globals.some((item) => item.package === name && atLatest(installed.has(name) ? item.latest : item.version));
   });
   // What an update did not settle is still behind: a step that failed, or something left for a person.
@@ -643,6 +652,8 @@ interface RegistrationStep {
   install: PlannedInstall;
   /** Where the entry goes and what it starts, as the preview says it: see `entryDestination`. */
   destination: string;
+  /** The managed package CLI shim this registration writes or repoints. */
+  shim?: string | undefined;
 }
 
 interface Planned {
@@ -661,7 +672,7 @@ interface Planned {
  * What a registration may reach, as the preview of `mcp install` says it, in the channel's words: "pinned to the
  * mailbox …", "not pinned: it reaches every workspace on this machine". Empty for the core, which reaches no account.
  */
-function reachOf(channel: Channel, narrowing: Narrowing): string {
+function reachOf(channel: ServerId, narrowing: Narrowing): string {
   const own = pinOption(channel);
   if (own === undefined || own === 'readOnly') return '';
   const noun = accountNoun(channel);
@@ -681,17 +692,19 @@ function reachOf(channel: Channel, narrowing: Narrowing): string {
  */
 function registrationEffects(step: RegistrationStep): string[] {
   const { item } = step;
-  const reach = reachOf(item.channel, channelServer(item.channel).narrowingOf(item.narrowing));
-  const entry = `registers the ${channelLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
+  const reach = reachOf(item.channel, serverFacts(item.channel).narrowingOf(item.narrowing));
+  const entry = `registers the ${serverLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
   // Where it goes and what it starts, as `mcp install` says it (#46): in the digest, so a claim from an environment
   // that resolves another config file or another command is another update.
-  return item.launcher === 'npx'
-    ? [
-        entry,
-        step.destination,
-        `${item.client} will fetch ${item.package}@${item.latest} from npm each time it starts "${item.name}"`,
-      ]
-    : [entry, step.destination];
+  const effects = [entry, step.destination];
+  if (step.shim)
+    effects.push(`writes or repoints the owned CLI shim at ${step.shim}; a foreign file there is left unchanged`);
+  if (item.launcher === 'npx') {
+    effects.push(
+      `${item.client} will fetch ${item.package}@${item.latest} from npm each time it starts "${item.name}"`,
+    );
+  }
+  return effects;
 }
 
 /** Every step as the sentences a person reads, in the order the steps are taken. */
@@ -736,7 +749,7 @@ async function planRegistrations(
     if (seen.has(key)) continue;
     seen.add(key);
     const launcher = item.launcher as Launcher;
-    const product = await channelProduct(item.channel, launcher, item.latest);
+    const product = await serverProduct(item.channel, launcher, item.latest);
     const options: InstallOptions = {
       client: item.client as SupportedClient,
       name: item.name,
@@ -766,6 +779,14 @@ async function planRegistrations(
       options,
       install: plannedInstall(preflight),
       destination: entryDestination(item.client, preflight.target, preflight.command, context.env),
+      ...(launcher === 'managed' && managedShimsSupported(context)
+        ? {
+            shim: managedShimPath(
+              { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform },
+              product.binary,
+            ),
+          }
+        : {}),
     });
   }
   return { steps, manual };
@@ -920,20 +941,24 @@ function whatBecameOf(stored: StoredApproval | null): string {
   return states[record.state] ?? `it is ${JSON.stringify(record.state)}, a state this version does not know`;
 }
 
-/** The product a runtime of `packageName` is installed as: the channel whose package it is. */
+/** The product a runtime of `packageName` is installed as: the declared server whose package it is. */
 function runtimeProduct(packageName: string, version: string): Promise<McpProduct> {
-  const channel = CHANNELS.find((each) => channelServer(each).packageName === packageName);
-  if (channel === undefined) throw new CommsError('UNEXPECTED', `${packageName} is not a channel's package`);
-  return channelProduct(channel, 'managed', version);
+  const channel = SERVERS.find((each) => serverFacts(each).packageName === packageName);
+  if (channel === undefined) throw new CommsError('UNEXPECTED', `${packageName} is not a declared server package`);
+  return serverProduct(channel, 'managed', version);
 }
 
 /**
- * Every channel's `mcp prune`, as a person runs it at a terminal: each located among this machine's registrations, and
- * for one that is not, why — never a bare name (CUE-403).
+ * Every declared server's `mcp prune`, as a person runs it at a terminal: each channel command is located among this
+ * machine's registrations, and each service uses core — never a bare name (CUE-403).
  */
 function pruneCommands(handoffs: CliHandoffs): string {
   return handoffChoices(
-    CHANNELS.map((channel) => handoffs.of(channel, ['mcp', 'prune'])),
+    SERVERS.map((channel) =>
+      isChannel(channel)
+        ? handoffs.of(channel, ['mcp', 'prune'])
+        : handoffs.core(['mcp', 'prune', '--server', channel]),
+    ),
     'none of their commands is locatable here:',
     { conjunction: 'and' },
   );
@@ -995,14 +1020,16 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
     try {
       // The pins the plan checked the install's own keep-the-pin rule arrives at, given outright: the entry is written
       // with exactly those whatever it finds to replace now, and says nothing of keeping what it was told.
-      const pins = channelServer(item.channel).narrowingOf(item.narrowing);
+      const pins = serverFacts(item.channel).narrowingOf(item.narrowing);
       // Held to what the plan found — the file, the client CLI, the entry replaced and the command it starts — so
       // nothing is looked for again and registered in its place.
-      const result = await mcpInstall(context, product, { ...options, ...pins }, install);
-      if (!result.applied) {
-        steps.push({ ...base, outcome: 'failed', detail: result.notApplied ?? 'nothing was registered' });
+      const installed = await mcpInstall(context, product, { ...options, ...pins }, install);
+      if (!installed.applied) {
+        steps.push({ ...base, outcome: 'failed', detail: installed.notApplied ?? 'nothing was registered' });
         continue;
       }
+      // The entry moved, so its owned CLI shim moves with it, as `mcp install` moves it.
+      const result = await withManagedShim(context, product, installed);
       steps.push({
         ...base,
         outcome: 'registered',
@@ -1010,6 +1037,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
         ...(result.verifyDetail !== undefined ? { detail: result.verifyDetail } : {}),
         ...(result.backupPath !== undefined ? { backupPath: result.backupPath } : {}),
         ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+        ...(result.shim !== undefined ? { shim: result.shim } : {}),
       });
     } catch (error) {
       steps.push({ ...base, outcome: 'failed', detail: message(error) });

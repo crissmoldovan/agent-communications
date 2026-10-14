@@ -1,7 +1,6 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ChannelEntry } from './channel-manifest.ts';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { normalizePathOptionWords } from './cli-runtime.ts';
 import { quoteCommand, quotedText } from './command-line.ts';
@@ -58,16 +57,19 @@ class PrintedCommand {
   readonly #entry: string;
   /** The words, as the program is to receive them: this Node, its flags, the entry, then the CLI's own words. */
   readonly words: readonly string[];
-  /** The line to paste; null when one of the words has no printing that every Windows shell passes on alike. */
+  /** The line to paste; null when no supported common or labelled shell rendering is safe. */
   readonly line: string | null;
   readonly platform: NodeJS.Platform;
+  readonly shell?: 'powershell' | undefined;
 
   constructor(gate: typeof GATE, words: readonly string[], platform: NodeJS.Platform, entry: string) {
     if (gate !== GATE) throw new TypeError('a printed command is made by locateCliCommand, and only there');
     this.#entry = entry;
     this.words = Object.freeze([...words]);
-    this.line = quoteCommand(this.words, platform).line;
+    const quoted = quoteCommand(this.words, platform);
+    this.line = quoted.line;
     this.platform = platform;
+    if (quoted.shell !== undefined) this.shell = quoted.shell;
     Object.freeze(this);
   }
 
@@ -102,10 +104,20 @@ export interface CliCommandCaller {
   readonly packageName: string;
 }
 
+/** The manifest facts the locator needs for any declared suite CLI, including a non-channel service. */
+export interface CliCommandTarget {
+  readonly packageName: string;
+  readonly manifest: {
+    readonly channel?: string | undefined;
+    readonly label: string;
+    readonly binary: string;
+  };
+}
+
 export interface CliCommandRequest {
   readonly caller: CliCommandCaller;
   /** The product whose CLI is to run, as core's snapshot of the manifests has it. */
-  readonly target: ChannelEntry;
+  readonly target: CliCommandTarget;
   /** The CLI's own words: its subcommand and arguments, never the program. */
   readonly words: readonly string[];
   /** The suite directories the command reads or writes, each pinned to its value in `paths`; no other is. */
@@ -386,7 +398,14 @@ export function locateCliCommand(
   }
 
   // Another product: every registration of it, each checked as a file on disk; the best of those that pass.
-  const facts = registrationFactsOf(target);
+  const channelTarget = CHANNEL_SNAPSHOT.find((entry) => entry.packageName === target.packageName);
+  if (channelTarget === undefined) {
+    return fail(
+      'direction',
+      `${target.packageName} is not a channel package this locator can find through a registration`,
+    );
+  }
+  const facts = registrationFactsOf(channelTarget);
   const notUsed: RegistrationNotUsed[] = [];
   const usable: {
     server: RegisteredServer;
@@ -467,7 +486,7 @@ export function locateCliCommand(
  * CLI or the manifest's bin for the command it declares — as a readable file inside its package.
  */
 function buildCommand(
-  target: ChannelEntry,
+  target: CliCommandTarget,
   found: Found,
   words: readonly string[],
   runtime: NodeRuntime,
@@ -496,9 +515,7 @@ function buildCommand(
     // Exactly the source CLI, and never a build beside it: a checkout with no build, or a stale one, runs its source.
     entry = join(found.root, 'src', 'cli.ts');
   } else {
-    const declared = found.manifest.agentcomms;
-    const binary =
-      typeof declared === 'object' && declared !== null ? (declared as Record<string, unknown>).binary : undefined;
+    const binary = declaredBinary(found.manifest);
     const bin = found.manifest.bin;
     const path =
       binary === target.manifest.binary &&
@@ -532,13 +549,27 @@ function buildCommand(
 }
 
 /**
+ * The command a package declares for itself: a channel's in its `agentcomms` field, a service's in `agentcommsPackage`
+ * (D14). A library declares none, and no package declares both: the registry refuses one that does.
+ */
+function declaredBinary(manifest: Record<string, unknown>): unknown {
+  const channel = manifest.agentcomms;
+  if (typeof channel === 'object' && channel !== null) return (channel as Record<string, unknown>).binary;
+  const service = manifest.agentcommsPackage;
+  if (typeof service === 'object' && service !== null && (service as Record<string, unknown>).kind === 'service') {
+    return (service as Record<string, unknown>).binary;
+  }
+  return undefined;
+}
+
+/**
  * The target's package a registration's files lead to, or null: a script it starts, real or as written when it is
  * gone, inside the package (or inside the product's own server wrapper, which depends on it); or, for the product's
  * own command, the package that command links into or that npm installed beside it.
  */
 function registeredPackage(
   files: { scripts: readonly string[]; command: string | null },
-  target: ChannelEntry,
+  target: CliCommandTarget,
   facts: RegistrationFacts,
 ): Found | null {
   for (const script of files.scripts) {
@@ -572,7 +603,7 @@ function registeredPackage(
 /** The target's package that `file` is in — directly, or through the product's server wrapper, which depends on it. */
 function packageAround(
   file: string,
-  target: ChannelEntry,
+  target: CliCommandTarget,
   facts: RegistrationFacts,
 ): { root: string; manifest: Record<string, unknown> } | null {
   const real = realpathOfExisting(file);
@@ -630,7 +661,7 @@ function notRegistered(notUsed: readonly RegistrationNotUsed[], version: string)
 }
 
 function notLocated(
-  target: ChannelEntry,
+  target: CliCommandTarget,
   version: string,
   reason: CliNotLocatedReason,
   detail: string,

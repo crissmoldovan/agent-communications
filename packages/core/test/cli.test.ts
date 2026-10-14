@@ -1817,8 +1817,7 @@ test(
   },
 );
 
-test('on Windows a program whose path needs quotes leaves no line, and is shown as words with `&` named (CUE-403)', () => {
-  // Quoted, a program is a string to PowerShell, not a command; `&` would run it there, and cmd.exe does not accept it.
+test('on Windows a program whose path needs quotes gets a labelled PowerShell line when every word is safe (CUE-410)', () => {
   const spaced = quoteCommand(
     [
       'C:\\Program Files\\nodejs\\node.exe',
@@ -1828,22 +1827,61 @@ test('on Windows a program whose path needs quotes leaves no line, and is shown 
     ],
     'win32',
   );
-  assert.equal(spaced.line, null);
-  assert.match(inlineQuoted(spaced), /^`\["C:\\\\Program Files\\\\nodejs\\\\node\.exe",/);
-  assert.match(inlineQuoted(spaced), /the program's path needs quotes, .*in PowerShell, `&` before the program\)$/);
-  assert.match(quotedText(spaced), /in PowerShell, `&` before the program\)$/);
+  const line =
+    "& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\jo\\AppData\\Roaming\\npm\\node_modules\\@agentcomms\\core\\dist\\cli.mjs' 'approve' 'ap_1'";
+  assert.equal(spaced.line, line, "a spaced Node path is invoked with PowerShell's call operator");
+  assert.equal(spaced.shell, 'powershell', 'the renderer records that the line is PowerShell-specific');
+  assert.equal(inlineQuoted(spaced), `\`${line}\` (PowerShell)`, 'an inline result names the required shell');
+  assert.equal(quotedText(spaced), `PowerShell:\n${line}`, 'a standalone result labels the PowerShell line');
+
+  const singleQuote = quoteCommand(["C:\\Program Files\\O'Brien\\node.exe", "it's.mjs"], 'win32');
+  assert.equal(
+    singleQuote.line,
+    "& 'C:\\Program Files\\O''Brien\\node.exe' 'it''s.mjs'",
+    'PowerShell single quotes inside a word are doubled',
+  );
+
+  const unsafe = quoteCommand(['C:\\Program Files\\nodejs\\node.exe', 'line\nbreak'], 'win32');
+  assert.equal(unsafe.line, null, 'a control character keeps the inert-JSON fallback');
+  assert.match(quotedText(unsafe), /^\[/, 'the unsafe command is shown as inert JSON');
+  for (const word of ['50%', '$x&whoami&', 'a&b']) {
+    const mixed = quoteCommand(['C:\\Program Files\\nodejs\\node.exe', word], 'win32');
+    assert.equal(
+      mixed.line,
+      null,
+      `${JSON.stringify(word)} failing the common-shell proof keeps inert JSON beside a spaced program`,
+    );
+  }
+  const embeddedDoubleQuote = quoteCommand(['C:\\Program Files\\nodejs\\node.exe', 'say "hi"'], 'win32');
+  assert.equal(
+    embeddedDoubleQuote.line,
+    null,
+    'an embedded double quote that the legacy native boundary cannot prove safe keeps inert JSON',
+  );
 
   const bare = quoteCommand(
     ['C:\\hostedtoolcache\\windows\\node\\22.16.0\\x64\\node.exe', 'D:\\a\\cli.mjs', 'approve', 'ap_1'],
     'win32',
   );
-  assert.equal(bare.line, 'C:\\hostedtoolcache\\windows\\node\\22.16.0\\x64\\node.exe D:\\a\\cli.mjs approve ap_1');
+  assert.equal(
+    bare.line,
+    'C:\\hostedtoolcache\\windows\\node\\22.16.0\\x64\\node.exe D:\\a\\cli.mjs approve ap_1',
+    'a common-shell-safe command keeps its existing line',
+  );
 
   // Another word with no common quoting keeps its own explanation.
   const other = quoteCommand(['agentcomms', 'approve', '50%'], 'win32');
-  assert.match(inlineQuoted(other), /cannot be quoted the same way for cmd\.exe and for PowerShell/);
+  assert.match(
+    inlineQuoted(other),
+    /cannot be quoted the same way for cmd\.exe and for PowerShell/,
+    'an unsafe argument with a bare program keeps the common-shell explanation',
+  );
   // POSIX quotes any program.
-  assert.equal(quoteCommand(['/opt/node js/bin/node', 'cli.mjs'], 'linux').line, "'/opt/node js/bin/node' cli.mjs");
+  assert.equal(
+    quoteCommand(['/opt/node js/bin/node', 'cli.mjs'], 'linux').line,
+    "'/opt/node js/bin/node' cli.mjs",
+    'POSIX keeps its existing single-quote renderer',
+  );
 });
 
 test(
@@ -1859,10 +1897,14 @@ test(
       for (const program of [[process.execPath, script], [join(dir, 'argdump.cmd')]]) {
         const command = quoteCommand([...program, ...words], 'win32');
         if (command.line === null) {
-          // Only a program path that needs quotes may take the JSON form here.
-          assert.ok(programNeedsQuotesForTest(program[0] as string), `${shell.name}: ${quotedText(command)}`);
+          assert.match(
+            quotedText(command),
+            /^\[/,
+            `${shell.name}: a word PowerShell cannot safely forward stays inert JSON`,
+          );
           continue;
         }
+        if (command.shell === 'powershell' && shell.name === 'cmd.exe') continue;
         const out = join(dir, `absolute-${runs++}.json`);
         const result = shell.run(command.line, { ...env, ARGDUMP_OUT: out });
         assert.deepEqual(dumped(out), words, `${shell.name}, ${program[0]}: ${command.line}\n${result.stderr}`);
@@ -1871,11 +1913,6 @@ test(
     assert.ok(runs >= 2, 'the absolute .cmd program at the least, from cmd.exe and Windows PowerShell');
   },
 );
-
-/** Whether `shellCommand` would quote this program on Windows — the one reason an absolute program has no line. */
-function programNeedsQuotesForTest(program: string): boolean {
-  return quoteCommand([program], 'win32').line === null;
-}
 
 test(
   'Windows shell runs keep sentinel data literal and leave the parent environment unchanged on success and refusal',

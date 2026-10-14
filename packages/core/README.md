@@ -12,7 +12,7 @@ this package's MCP server, which installs those for an agent.
 
 ```sh
 npx @agentcomms/core paths      # where config, state and downloads live
-npx @agentcomms/core doctor     # Node version, directory permissions, secret store
+npx @agentcomms/core doctor     # Node version, directories, secret store, registrations and managed CLI shims
 npx @agentcomms/core audit tail # mailbox writes, Slack prepares and posts, and every step of a change, newest last (no bodies, no secrets)
 npx @agentcomms/core approvals list
 npx @agentcomms/core approve <id>  # approve a change at your terminal: run the command the result gives, as given
@@ -21,6 +21,7 @@ npx @agentcomms/core attach        # which files may be attached: the folders, y
 npx @agentcomms/core attach roots add ~/Documents/outgoing  # allow another folder (a change you approve)
 npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
+npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
 npx @agentcomms/core update --later  # not now: nothing stops for the update until midnight (a change you approve)
 npx @agentcomms/core update --auto off  # no daily update check on this machine (a change you approve); --auto on
@@ -42,9 +43,17 @@ A command that loosens something or cannot be undone — `policy chat`, `attach 
 `mcp install`, `mcp prune`, `update`, `secrets migrate`, `names migrate` — shows the change first (`policy confirm`,
 `attach roots remove` and `attach deny add` tighten, so they apply at once). At a terminal you approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
-`agent-gmail` and `agent-slack` register and prune their own servers through the same change, so an approval
+Every channel CLI, and the declared events service through core, registers and prunes its server through the same change, so an approval
 `comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
 request, and the other way round.
+
+A managed install also writes the package's CLI shim in `~/.local/bin` on macOS/Linux. It starts that managed runtime
+with the locator's Node and entry. Updates repoint an owned shim, prune removes it with the runtime, and `doctor`
+reports one that is missing, stale or foreign. A foreign file is never overwritten or removed; a symlinked bin
+directory works, but a directory redirected during an operation is refused before the mutation. If the directory is
+not on `PATH`, the install result shows how to prepend it for the current shell without editing a profile. Windows
+shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse caller arguments; use the full-path
+command or the labelled PowerShell `&` line the result provides.
 
 ## The core MCP server
 
@@ -53,8 +62,8 @@ is the one registration that cannot come from chat. After a restart of the clien
 
 | Tool | What it does |
 |---|---|
-| `comms_channels_available` | which servers exist — core, Gmail, Slack — which are installed and at which version, and which clients start each |
-| `comms_server_install` | register the Gmail, Slack or core server with a client; the server appears once the client restarts |
+| `comms_channels_available` | which declared servers exist — core, Gmail, Resend, Slack, WhatsApp and events — which are installed and at which version, and which clients start each |
+| `comms_server_install` | register a declared channel or service server with a client; the server appears once the client restarts |
 | `comms_server_prune` | remove the managed runtimes old releases left behind; `dryRun` lists them |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `later` puts the daily check's stop off until midnight, `auto` turns the check on or off |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |

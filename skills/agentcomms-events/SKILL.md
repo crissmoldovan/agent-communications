@@ -14,8 +14,9 @@ Read [the contract](references/contract.md) first. It is the boundary: this skil
 keeps every proposal disabled, and gives human-only work back to a person.
 
 If no `events_*` tools are available, the events MCP server is not registered with this client. Say so: the person
-registers `npx -y @agentcomms/events-daemon mcp` as an MCP server. Then stop: do not substitute another tool, and do
-not describe a rule as active.
+registers it through the managed core path — `agentcomms mcp install --server events --client <client>` at a terminal,
+or `comms_server_install` with `channel: "events"` from a chat — and restarts the client. Then stop: do not substitute
+another tool, and do not describe a rule as active.
 
 ## Safe workflow
 

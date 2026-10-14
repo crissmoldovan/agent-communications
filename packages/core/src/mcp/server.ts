@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { waitCallOptions } from '../approval-wait-surface.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
-import { CHANNELS } from '../channel-servers.ts';
+import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
@@ -248,7 +248,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Check this machine',
       description:
-        'Check this machine: Node, the directories, the configuration, account names, the secret store, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
+        'Check this machine: Node, the directories, the configuration, account names, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
       inputSchema: {},
       annotations: readsLocal,
     },
@@ -588,7 +588,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         { oxford: true },
       )} — with an MCP client, and prove it starts. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. \`print\` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its \`details\`. The new server appears after the client is restarted — tell the person.`,
       inputSchema: {
-        channel: z.enum(CHANNELS as [string, ...string[]]).describe('which server'),
+        channel: z.enum(SERVERS as [string, ...string[]]).describe('which server'),
         client: z.enum(CLIENTS as [string, ...string[]]).describe('which MCP client to register it with'),
         // Checked here, so a client sees the rule in the schema, and again by the change itself: the name is quoted
         // in the preview the person approves, and a name that reads like a pin makes that preview lie.
@@ -601,7 +601,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           .string()
           .optional()
           .describe(
-            'any channel but the core: serve this one account, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack',
+            'a channel server that declares accounts: serve this one, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack',
           ),
         inbox: z
           .string()
@@ -632,7 +632,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     async (args) => {
       try {
         const install = serverInstallChange(core, env, {
-          channel: args.channel as (typeof CHANNELS)[number],
+          channel: args.channel as (typeof SERVERS)[number],
           client: args.client as (typeof CLIENTS)[number],
           name: args.name,
           account: args.account,
@@ -670,9 +670,9 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove unused runtimes',
       description:
-        'Remove a channel’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
+        'Remove a declared server’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
       inputSchema: {
-        channel: z.enum(CHANNELS as [string, ...string[]]).describe('whose runtimes'),
+        channel: z.enum(SERVERS as [string, ...string[]]).describe('whose runtimes'),
         dryRun: z.boolean().optional().describe('only say what would be removed'),
         includePrinted: z
           .boolean()
@@ -688,7 +688,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       change(
         () =>
           serverPruneChange(core, env, {
-            channel: args.channel as (typeof CHANNELS)[number],
+            channel: args.channel as (typeof SERVERS)[number],
             dryRun: args.dryRun,
             includePrinted: args.includePrinted,
             processes: options.processes,

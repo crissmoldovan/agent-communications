@@ -1,4 +1,4 @@
-import { channelLabel } from './channel-servers.ts';
+import { serverLabel } from './channel-servers.ts';
 import { isDangerous } from './chars.ts';
 import { paint } from './cli-runtime.ts';
 import { type CliHandoffs, handoffSentence } from './handoffs.ts';
@@ -425,6 +425,12 @@ export function renderInstall(result: InstallResult, color: boolean): string {
     );
   }
   if (result.backupPath) lines.push(`The entry it replaced was saved to ${result.backupPath}.`);
+  if (result.shim && result.shim.status !== 'foreign') {
+    lines.push(`CLI shim ${result.shim.status}: ${result.shim.path}.`);
+  }
+  if (result.shimFailure) lines.push(paint(color, 'yellow', `CLI shim failed: ${result.shimFailure}.`));
+  if (result.shimNotice) lines.push(paint(color, 'yellow', result.shimNotice));
+  if (result.shim?.pathNotice) lines.push(result.shim.pathNotice);
   // A check that ran and failed is not one that was skipped: "Not checked" for both read as "probably fine".
   if (result.verification === 'passed') lines.push(paint(color, 'green', `Checked: ${result.verifyDetail}`));
   else if (result.verification === 'failed') {
@@ -456,6 +462,8 @@ export function renderPrune(result: PruneResult, color: boolean): string {
   if (result.refused) lines.push(paint(color, 'yellow', `Nothing removed: ${result.refused}.`));
   const verb = result.dryRun ? 'Would remove' : 'Removed';
   for (const item of result.removed) lines.push(paint(color, 'green', `${verb} ${item.version}: ${item.path}`));
+  for (const path of result.shims.removed) lines.push(paint(color, 'green', `${verb} CLI shim: ${path}`));
+  for (const path of result.shims.kept) lines.push(`Kept foreign CLI shim: ${path}`);
   for (const item of result.kept) lines.push(`Kept ${item.version} (${item.reason}): ${item.path}`);
   if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
   return lines.join('\n');
@@ -479,7 +487,7 @@ function describeItem(item: UpdateItem): string {
     item.version === null
       ? 'pins no release'
       : `${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
-  return `${channelLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${item.launcher}, ${version}${pins})`;
+  return `${serverLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${item.launcher}, ${version}${pins})`;
 }
 
 export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): string {
@@ -534,6 +542,9 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
         if (step.verification === 'passed') lines.push(`  Checked: ${step.detail}`);
         else if (step.verification === 'failed') lines.push(paint(color, 'red', `  Failed to start: ${step.detail}`));
         else lines.push(paint(color, 'yellow', `  Not checked: ${step.detail ?? 'skipped'}`));
+        if (step.shim && step.shim.status !== 'foreign')
+          lines.push(`  CLI shim ${step.shim.status}: ${step.shim.path}.`);
+        if (step.shim?.pathNotice) lines.push(`  ${step.shim.pathNotice}`);
         for (const warning of step.warnings ?? []) lines.push(`  ${warning}`);
       } else {
         lines.push(

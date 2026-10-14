@@ -102,10 +102,10 @@ npx -y @agentcomms/core mcp install --client claude-code   # or codex, cursor, g
 
 At a terminal it shows what it will register and asks you to type `yes`. Restart the client, and ask your agent to
 set things up: it can see which servers exist and where each is registered (`comms_channels_available`), register
-the Gmail and Slack servers (`comms_server_install`), bring every server to the latest release (`comms_update`),
-remove old runtimes (`comms_server_prune`), migrate names or secrets, and show or change the change policy
-(`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent screen, and
-a server it registers appears only once the client is restarted.
+the channel servers and the local events service (`comms_server_install`), bring every server to the latest release
+(`comms_update`), remove old runtimes (`comms_server_prune`), migrate names or secrets, and show or change the change
+policy (`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent
+screen, and a server it registers appears only once the client is restarted.
 
 **It keeps itself up to date.** Once a day the machine asks npm whether a newer release is out; when one is, every
 server and command stops first — "Hang on a minute, there's an update. Let's update first." — and your agent asks
@@ -121,9 +121,17 @@ details.
 `chat` change policy your yes in the conversation approves it; under `confirm` you run, in your own terminal, the
 approve command the result gives, and type the code it shows. Run it exactly as given: it names this installation's
 own Node and CLI file, with its folders pinned, so it needs nothing on your PATH — and on Windows with Node under
-`C:\Program Files` it comes as words to type, each quoted for your shell. `agentcomms policy confirm` (core installed
-globally) sets that policy, and moving back to `chat` needs the code too. No tool approves a change, and none applies
-a change it did not plan itself.
+`C:\Program Files` it comes as a line labelled for PowerShell, beginning with `&`. Words that cannot be represented
+safely still come as inert JSON to type. `agentcomms policy confirm` (core installed globally) sets that policy, and
+moving back to `chat` needs the code too. No tool approves a change, and none applies a change it did not plan itself.
+
+**Managed installs also put their CLI on your PATH-ready route on macOS and Linux.** A managed `mcp install` writes
+the package's command into `~/.local/bin`, using the managed runtime's located Node and entry. An update repoints it;
+prune removes it with that runtime. A file the installation did not write is never overwritten, and every mutation
+stays inside the real directory resolved at the start. When the directory is not already on `PATH`, the result shows
+how to add it to the current shell and does not edit a profile. Windows shims are not offered yet: `.cmd` forwarding
+makes `cmd.exe` re-parse arguments and can turn metacharacters into commands. On Windows, use the full-path command
+or the labelled PowerShell `&` line the result provides.
 [Core MCP tool reference](docs/reference/core-mcp-tools.md).
 
 ### Or package by package

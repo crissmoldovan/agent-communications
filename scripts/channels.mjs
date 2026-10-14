@@ -86,6 +86,7 @@ export function readDeclarations(root = ROOT) {
   );
   libraries.sort(byDirectory);
   services.sort(byDirectory);
+  assertUniqueServerBinaries(channels, services);
   const wrappers = wrappersOf(channels);
   const undeclared = plain.filter(({ directory }) => !Object.hasOwn(wrappers, directory)).sort(byDirectory);
   const held = holds
@@ -93,6 +94,23 @@ export function readDeclarations(root = ROOT) {
     .sort(byDirectory);
   assertSkillPrefixes(channels, services);
   return { channels, libraries, services, held, undeclared };
+}
+
+/** A generated CLI shim has one unambiguous, path-free command name across every declared server. */
+function assertUniqueServerBinaries(channels, services) {
+  const seen = new Map();
+  for (const entry of [
+    ...channels.map(({ directory, manifest }) => ({ directory, binary: manifest.binary })),
+    ...services.map(({ directory, declaration }) => ({ directory, binary: declaration.binary })),
+  ]) {
+    const earlier = seen.get(entry.binary);
+    if (earlier !== undefined) {
+      throw new Error(
+        `packages/${entry.directory}/package.json: server binary ${JSON.stringify(entry.binary)} is already declared by packages/${earlier}/package.json`,
+      );
+    }
+    seen.set(entry.binary, entry.directory);
+  }
 }
 
 /** Every package under `root/packages` that declares a channel: `readDeclarations(root).channels`. */
@@ -207,8 +225,8 @@ function readService(root, directory, packageJson) {
   if (packageJson.name !== `${SCOPE}/${directory}`) {
     throw new Error(`${where}: a service's package is ${SCOPE}/${directory}`);
   }
-  if (typeof declaration.binary !== 'string' || declaration.binary.trim() === '') {
-    throw new Error(`${where}: "agentcommsPackage".binary must be a non-empty string`);
+  if (typeof declaration.binary !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(declaration.binary)) {
+    throw new Error(`${where}: "agentcommsPackage".binary must be a safe command basename`);
   }
   if (packageJson.bin === null || typeof packageJson.bin !== 'object' || Array.isArray(packageJson.bin)) {
     throw new Error(`${where}: a service's package.json "bin" must map its declared binary`);

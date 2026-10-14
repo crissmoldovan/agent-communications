@@ -1,5 +1,5 @@
 import type { ChannelEntry, ChannelManifest } from './channel-manifest.ts';
-import { type BuiltInChannel, CHANNEL_SNAPSHOT } from './channels.generated.ts';
+import { type BuiltInChannel, CHANNEL_SNAPSHOT, SERVICE_SNAPSHOT } from './channels.generated.ts';
 import { CommsError } from './errors.ts';
 import type { InstallOptions, McpProduct, Narrowing } from './mcp-install.ts';
 import { rivalPackageWarnings, rivalWordWarnings } from './other-servers.ts';
@@ -32,10 +32,19 @@ import { rivalPackageWarnings, rivalWordWarnings } from './other-servers.ts';
  */
 export type Channel = string;
 
+/** A channel or service server's stable name in the managed-server registry. */
+export type ServerId = string;
+
 export type { BuiltInChannel };
 
 /** Every channel in core's snapshot, the core first. */
 export const CHANNELS: readonly Channel[] = Object.freeze(CHANNEL_SNAPSHOT.map((entry) => entry.manifest.channel));
+
+/** Every declared MCP server, channels first and then services, with no separate hand-kept list. */
+export const SERVERS: readonly ServerId[] = Object.freeze([
+  ...CHANNELS,
+  ...SERVICE_SNAPSHOT.map((entry) => entry.declaration.server.defaultName),
+]);
 
 /** Everything about a server except the version being installed and where its code lives. */
 export type ServerFacts = Omit<McpProduct, 'version' | 'moduleUrl'>;
@@ -126,6 +135,30 @@ export const CHANNEL_SERVERS: Readonly<Record<BuiltInChannel, ServerFacts>> = Ob
   >,
 );
 
+/** Service server facts, derived from each service package's declaration. */
+export const SERVICE_SERVERS: Readonly<Record<string, ServerFacts>> = Object.freeze(
+  Object.fromEntries(
+    SERVICE_SNAPSHOT.map(({ packageName, declaration }) => [
+      declaration.server.defaultName,
+      {
+        packageName,
+        binary: declaration.binary,
+        defaultServerName: declaration.server.defaultName,
+        npxPackage: packageName,
+        npxArgs: ['mcp'],
+        serverArgs: () => [],
+        narrowingOf: () => ({}),
+      },
+    ]),
+  ),
+);
+
+/** All managed servers, derived from channel manifests and service declarations. */
+export const SERVERS_BY_ID: Readonly<Record<string, ServerFacts>> = Object.freeze({
+  ...CHANNEL_SERVERS,
+  ...SERVICE_SERVERS,
+});
+
 /** How each server is named to a person: in a preview, and in what a tool returns. */
 export const CHANNEL_LABELS: Readonly<Record<BuiltInChannel, string>> = Object.freeze(
   Object.fromEntries(CHANNEL_SNAPSHOT.map((entry) => [entry.manifest.channel, entry.manifest.label])) as Record<
@@ -133,6 +166,14 @@ export const CHANNEL_LABELS: Readonly<Record<BuiltInChannel, string>> = Object.f
     string
   >,
 );
+
+/** Labels for every managed server; a service declares its public server name. */
+export const SERVER_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  ...CHANNEL_LABELS,
+  ...Object.fromEntries(
+    SERVICE_SNAPSHOT.map(({ declaration }) => [declaration.server.defaultName, declaration.server.defaultName]),
+  ),
+});
 
 /** A channel's manifest, from core's snapshot. */
 export function channelManifest(channel: string): ChannelManifest | undefined {
@@ -143,9 +184,25 @@ export function isChannel(value: unknown): value is Channel {
   return typeof value === 'string' && (CHANNELS as readonly string[]).includes(value);
 }
 
+/** Whether a word identifies any channel or service server in this release. */
+export function isServer(value: unknown): value is ServerId {
+  return typeof value === 'string' && SERVERS.includes(value);
+}
+
+/** Whether a declared server belongs to a channel or a service. */
+export function serverKind(server: ServerId): 'channel' | 'service' {
+  if (!isServer(server)) throw notAServer(server);
+  return isChannel(server) ? 'channel' : 'service';
+}
+
 /** Refuses a word that is not a channel of this release, naming the ones that are. */
 function notAChannel(value: unknown): CommsError {
   return new CommsError('USAGE', `"${String(value)}" is not a channel`, { hint: `One of: ${CHANNELS.join(', ')}.` });
+}
+
+/** Refuses a word that is not a declared server of this release. */
+function notAServer(value: unknown): CommsError {
+  return new CommsError('USAGE', `"${String(value)}" is not a server`, { hint: `One of: ${SERVERS.join(', ')}.` });
 }
 
 /** A channel's server facts, by its word; refused for a word that is not a channel. */
@@ -158,6 +215,18 @@ export function channelServer(channel: Channel): ServerFacts {
 export function channelLabel(channel: Channel): string {
   if (!isChannel(channel)) throw notAChannel(channel);
   return CHANNEL_LABELS[channel as BuiltInChannel];
+}
+
+/** A channel or service's server facts, by its declared server name. */
+export function serverFacts(server: ServerId): ServerFacts {
+  if (!isServer(server)) throw notAServer(server);
+  return SERVERS_BY_ID[server] as ServerFacts;
+}
+
+/** How a channel or service server is named to a person. */
+export function serverLabel(server: ServerId): string {
+  if (!isServer(server)) throw notAServer(server);
+  return SERVER_LABELS[server] as string;
 }
 
 /** A channel's manifest, by its word; refused for a word that is not a channel. */

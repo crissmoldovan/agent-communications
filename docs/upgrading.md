@@ -28,9 +28,9 @@ npx -y @agentcomms/core@latest update           # one change for every step, app
 ```
 
 `--check` (`check: true` from a chat) reads the npm registry and this computer and asks nobody. It lists every client
-registration of the core's and every channel's server — Gmail, Slack, Resend and WhatsApp — pinned to an older
-release, the managed runtimes those will need, and the `@agentcomms` packages installed globally, each with the
-version it has and the latest. It asks the registry only about the packages this computer uses.
+registration of the core's, every channel's server — Gmail, Slack, Resend and WhatsApp — and the events service,
+pinned to an older release, the managed runtimes those will need, and the `@agentcomms` packages installed globally,
+each with the version it has and the latest. It asks the registry only about the packages this computer uses.
 
 Without `--check` it prepares one change and shows every step of it: each registration registered again at the latest
 release under the name, client, scope, launcher and pins it has now; each runtime it installs; each
@@ -39,6 +39,14 @@ type `yes` (or, under the `confirm` change policy, the code it shows); an agent 
 and calls again with it — `--approval <id>`, or `approvalId` — once you have agreed. The approval is for those steps at
 those versions: a release published in between is a different change, and is refused. With nothing behind, it says
 so and prepares nothing.
+
+Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
+same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign
+file unchanged. A symlinked bin directory works; if it is redirected while an operation is in progress, the mutation
+is refused. If the directory is not on `PATH`, the result gives a line for the current shell; it never edits a shell
+profile. `doctor` reports a missing, stale or foreign shim, and prune removes an unchanged owned shim when it removes
+the runtime it starts. Windows shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse arguments;
+use the full-path command or labelled PowerShell `&` line the result provides.
 
 It never widens an entry. The pins it keeps are exactly the ones the entry has; an entry whose pins it cannot carry
 over as they are — one registered for a single project, one written by hand, one pinned to an account since renamed,
@@ -76,8 +84,9 @@ release is out:
   brought this command to the latest release; otherwise it says what is left and exits non-zero. Later puts it off;
   cancel does nothing. Anything without a terminal — a script, an agent, `--json` — exits `11` (`UPDATE_REQUIRED`),
   naming this installation's own `update` and `update --later` commands — its Node and core's CLI file, its folders
-  pinned — to run exactly as given; on Windows with Node under `C:\Program Files` they come as words to type. A
-  command whose release is installed globally while an
+  pinned — to run exactly as given; on Windows with Node under `C:\Program Files` they come as a line labelled for
+  PowerShell, beginning with its `&` call operator. A word that cannot be represented safely still comes as inert JSON
+  to type yourself. A command whose release is installed globally while an
   older copy of it runs — from npx's cache, or a project's own install — stops the same way, and says to run the
   installed one.
 

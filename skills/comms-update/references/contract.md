@@ -65,12 +65,16 @@ folders than the ones the approval is in. The same holds for the commands an upd
 and `update --later` — and for a repair that names another product's command: core finds that one among the
 servers registered with the person's clients, at this exact release, or says it is not locatable here.
 
-- Where no line pastes safely into every Windows shell — on a default Windows install Node's own path, under
-  `C:\Program Files`, needs quotes — the result gives the command's words as JSON, with what to do: the person
-  types them, each quoted for their shell. Say so; do not turn them into a line yourself.
+- On a default Windows install, where Node under `C:\Program Files` needs quoting, a safe result gives a line
+  labelled **PowerShell**, beginning with its `&` call operator. Hand it over with that shell label. If any word
+  cannot be represented safely even there, the result instead gives the command's words as inert JSON and says the
+  person types them, each quoted for their shell. Say so; do not turn that JSON into a line yourself.
 - Where the result says the command is **not locatable here**, there is no command to give: say which product and
   release it names, and that the person installs or updates it the way they usually do, then tries again. Do not
   offer `npx`, a global install or a tool in its place.
+- A managed install may also report an owned CLI shim in `~/.local/bin` on macOS or Linux. Hand over its PATH note as
+  written; do not edit a shell profile. Windows deliberately has no managed shim yet because `.cmd` forwarding makes
+  `cmd.exe` re-parse caller arguments: use only the result's full-path command or labelled PowerShell `&` line.
 
 ## 6. Where an approval stands, how long it lasts, and a no.
 
