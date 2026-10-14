@@ -27,7 +27,8 @@ agent-events run                     # in a terminal you keep open: the owner of
 cleanly on `agent-events stop` or when the terminal closes. There is no background service or autostart in this
 release; the desktop app will supervise it later. Its state lives in an owner-only directory. A state directory so
 deep that its control socket's path would pass the system limit (103 bytes on macOS, 107 on Linux) is refused, with
-a hint to pin a shorter one.
+a hint to pin a shorter one. `agent-events --version` (or `-V`) prints the installed daemon version; a subcommand's
+`--version <number>` continues to select an immutable rule, target, subscriber or judge version.
 
 ## A first rule: Gmail into the dry-run log
 
@@ -148,7 +149,9 @@ The third kind, **`laya`**, runs the Laya model inside the daemon. It is not ava
 list` shows it as unavailable, and a judge naming it is refused.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
-turns one on. To ask Jev about received mail:
+turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing
+a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later become active. To
+ask Jev about received mail:
 
 ```bash
 # 1. turn the kind on: you approve its exact enablement at this terminal

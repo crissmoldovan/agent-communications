@@ -41,7 +41,10 @@ export class B3OperatorControl implements B3OwnerService {
   readonly #activations:
     | Pick<
         ActivationRuntime,
-        'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+        | 'prepareJudgeBudget'
+        | 'prepareJudgeKind'
+        | 'cancelForJudgeKindInTransaction'
+        | 'cancelForRevocationInTransaction'
       >
     | undefined;
   readonly #judgeTest: Pick<JudgeTestControl, 'test'> | undefined;
@@ -54,7 +57,10 @@ export class B3OperatorControl implements B3OwnerService {
     readonly activations?:
       | Pick<
           ActivationRuntime,
-          'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+          | 'prepareJudgeBudget'
+          | 'prepareJudgeKind'
+          | 'cancelForJudgeKindInTransaction'
+          | 'cancelForRevocationInTransaction'
         >
       | undefined;
     readonly judgeTest?: Pick<JudgeTestControl, 'test'> | undefined;
@@ -244,12 +250,12 @@ export class B3OperatorControl implements B3OwnerService {
   }
 
   async removeJudge(judgeId: string): Promise<{ readonly judgeId: string; readonly removed: true }> {
-    await this.#activations?.cancelForRevocation({ judgeId });
     return this.#store.immediate(() => {
       const rows = this.#store.database
         .prepare('SELECT version FROM judge_versions WHERE judge_id = ? AND revoked_at IS NULL ORDER BY version')
         .all(judgeId) as Array<{ version: number }>;
       if (rows.length === 0) throw new CommsError('NOT_FOUND', 'the judge has no live version to remove');
+      this.#activations?.cancelForRevocationInTransaction({ judgeId });
       const revokedAt = this.#now();
       const removedVersions = new Set(rows.map((row) => row.version));
       for (const row of rows) {

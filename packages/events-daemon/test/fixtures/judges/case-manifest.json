@@ -464,6 +464,21 @@
     },
     {
       "id": "e-review-exact-deadline-socket-disposal"
+    },
+    {
+      "id": "e-review-kind-disable-enable-all"
+    },
+    {
+      "id": "e-review-revoked-judge-activation"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure"
     }
   ],
   "mutations": [
@@ -925,6 +940,21 @@
     },
     {
       "id": "e-review-exact-deadline-socket-disposal"
+    },
+    {
+      "id": "e-review-kind-disable-enable-all"
+    },
+    {
+      "id": "e-review-revoked-judge-activation"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure"
     }
   ],
   "cases": [
@@ -2777,6 +2807,66 @@
       },
       "strictRunner": "judge-transport-mutants",
       "network": true
+    },
+    {
+      "id": "e-review-kind-disable-enable-all",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-enable-all"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-enable-all",
+        "test": "E4 review: kind disable cancels enable-all when any bound active rule uses that judge kind"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-revoked-judge-activation",
+      "task": "E4",
+      "coverage": ["e-review-revoked-judge-activation"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-revoked-judge-activation",
+        "test": "E4 review: a pending agentic rule cannot activate after its embedded judge is revoked"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority",
+      "task": "E4",
+      "coverage": ["e-review-prepare-bound-rule-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-bound-rule-authority",
+        "test": "E4 review: prepare rechecks bound rule authority inside the intent insertion transaction after awaited setup"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent",
+      "task": "E4",
+      "coverage": ["e-review-prepare-plan-before-intent"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-plan-before-intent",
+        "test": "E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure",
+      "task": "E4",
+      "coverage": ["e-review-prepare-plan-after-disclosure"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-plan-after-disclosure",
+        "test": "E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes"
+      },
+      "strictRunner": "judge-mutants"
     }
   ]
 }

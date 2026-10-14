@@ -54,7 +54,9 @@ unavailable result (`E2_REQUIRED`). Report that state.
 - **Test only with the daemon's event.** `events_judge_test` asks one active judge version about the daemon's own
   fixed synthetic event, never caller content, at most ten times an hour per version. Its answer is not a rule's
   decision.
-- **Tighten at once.** `events_judge_kind_disable` turns a kind off immediately and needs no approval.
+- **Tighten at once.** `events_judge_kind_disable` turns a kind off immediately, needs no approval, and cancels a
+  pending global enablement that captured a rule of that kind. A removed judge also cancels its pending rule
+  activations; never describe a rule that embeds a revoked judge as activatable.
 - **Keys stay with the person.** Never ask for, read or relay a hosted judge's API key, and never invent one.
 - **Prepared is not active.** Never invent a local endpoint, and never call a prepared kind, budget or rule active.
 - Do not substitute a target test, a local endpoint or another tool for a judge.

@@ -133,10 +133,12 @@ const JUDGE_SURFACE_RESULTS: Readonly<Record<string, unknown>> = {
     { kind: 'laya', state: 'unavailable', code: 'E2_REQUIRED' },
     { kind: 'local-endpoint', state: 'disabled', version: null },
   ],
+  // capabilities.json drives this row with `--version 2`, so a subcommand's own version reaching the operation is
+  // proved by a value no default could supply.
   'events-daemon.judge.test': {
     kind: 'refused',
     judgeId: 'judge-1',
-    version: 1,
+    version: 2,
     code: 'JUDGE_AUTHORITY_CHANGED',
   },
   'events-daemon.judge-model.status': FROZEN_E2_RESULT,
@@ -240,7 +242,7 @@ function mutationParityControl(store: Awaited<ReturnType<typeof openEventDatabas
       prepareJudgeBudget: async () => prepared('judge-budget'),
       prepareJudgeKind: async () => prepared('judge-kind'),
       cancelForJudgeKindInTransaction: () => 0,
-      cancelForRevocation: async () => undefined,
+      cancelForRevocationInTransaction: () => 0,
     },
   });
   return {

@@ -664,7 +664,7 @@ test('E12 purge closure: judge remove uses the production participant', { skip: 
     const control = new B3OperatorControl({
       store: setup.store,
       ports: { quiescer: { withShared: async (work: () => unknown) => work() } } as never,
-      activations: { cancelForRevocation: async () => undefined } as never,
+      activations: { cancelForRevocation: async () => undefined, cancelForRevocationInTransaction: () => 0 } as never,
       now: () => NOW + 1,
     });
     await control.handle({ operation: 'removeJudge', args: { judgeId: judge.judgeId } });

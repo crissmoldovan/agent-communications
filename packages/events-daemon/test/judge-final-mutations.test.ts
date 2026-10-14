@@ -18,11 +18,15 @@ test('E13 final mutations: every final ship gate has one exact destructive mutat
   );
 });
 
-test('E13 final mutations: every copied-tree mutant is killed by its one named final assertion', {
-  skip: WINDOWS_SKIP,
-}, async (context) => {
+test('E13 final mutations: every runnable copied-tree mutant is killed by its named final assertion', async (context) => {
   for (const mutation of JUDGE_FINAL_MUTATIONS) {
-    await expectJudgeFinalMutationToFail(mutation);
-    context.diagnostic(`${mutation.id}: ${mutation.testName} -> ${mutation.killingAssertion}`);
+    if (!WINDOWS_SKIP || mutation.id === 'e13-required-release-gate') {
+      await expectJudgeFinalMutationToFail(mutation);
+      context.diagnostic(`${mutation.id}: ${mutation.testName} -> ${mutation.killingAssertion}`);
+      continue;
+    }
+    context.diagnostic(
+      `${mutation.id}: WINDOWS_SKIP: its named database/owner test requires the release's POSIX local-service runtime`,
+    );
   }
 });

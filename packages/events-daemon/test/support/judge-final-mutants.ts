@@ -19,15 +19,11 @@ export const JUDGE_FINAL_MUTATIONS: readonly JudgeFinalMutation[] = [
   {
     id: 'e13-required-release-gate',
     source: 'scripts/release.mjs',
-    before: `runLoud(process.execPath, [
-  '--experimental-strip-types',
-  '--disable-warning=ExperimentalWarning',
-  'scripts/verify-events-phase-e-prerequisites.mjs',
-]);`,
-    after: 'void runLoud;',
+    before: "await requirePhaseEGate('Phase-E prerequisite gate', verifyPhaseEPrerequisites);",
+    after: 'void verifyPhaseEPrerequisites;',
     test: 'packages/events-daemon/test/judge-final-release.test.ts',
     testName: 'E13 final release: verify and direct release retain both Phase-E gates',
-    killingAssertion: 'the required prerequisite gate refuses before any release tool can run',
+    killingAssertion: 'no release tool runs before the gate refuses',
   },
   {
     id: 'e13-b3-capability-row',
@@ -110,6 +106,9 @@ function tapSummary(output: string, label: 'tests' | 'pass' | 'fail', value: num
 
 async function copyMutationTree(root: string): Promise<void> {
   const copiedPackage = join(root, 'packages/events-daemon');
+  // Directory symlinks on every platform, as every other mutation tree here: through a Windows junction, pnpm's
+  // workspace links do not resolve.
+  const directoryLinkType = 'dir';
   await Promise.all([
     mkdir(copiedPackage, { recursive: true }),
     mkdir(join(root, 'packages/events'), { recursive: true }),
@@ -133,9 +132,13 @@ async function copyMutationTree(root: string): Promise<void> {
     cp(join(repositoryRoot, 'package.json'), join(root, 'package.json')),
     cp(join(repositoryRoot, 'pnpm-lock.yaml'), join(root, 'pnpm-lock.yaml')),
   ]);
-  await symlink(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), 'dir');
-  await symlink(join(packageRoot, 'node_modules'), join(copiedPackage, 'node_modules'), 'dir');
-  await symlink(join(repositoryRoot, 'packages/gmail/node_modules'), join(root, 'packages/gmail/node_modules'), 'dir');
+  await symlink(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), directoryLinkType);
+  await symlink(join(packageRoot, 'node_modules'), join(copiedPackage, 'node_modules'), directoryLinkType);
+  await symlink(
+    join(repositoryRoot, 'packages/gmail/node_modules'),
+    join(root, 'packages/gmail/node_modules'),
+    directoryLinkType,
+  );
 }
 
 function assertOneNamedResult(

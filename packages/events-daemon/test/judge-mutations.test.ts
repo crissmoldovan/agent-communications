@@ -54,6 +54,11 @@ test('E3 mutation: every prerequisite and scope mutation has exactly one named p
       'e-review-valid-mcp-kind-disable-parity',
       'e-review-b3-capability-row-removal',
       'e-review-b3-capability-operation',
+      'e-review-kind-disable-enable-all',
+      'e-review-revoked-judge-activation',
+      'e-review-prepare-bound-rule-authority',
+      'e-review-prepare-plan-before-intent',
+      'e-review-prepare-plan-after-disclosure',
     ],
     'the strict gate mutation runner owns the exact immutable mutation inventory',
   );

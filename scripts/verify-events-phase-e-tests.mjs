@@ -225,6 +225,11 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e13-doctor-hold-clock',
   'e13-laya-typed-unavailable',
   'e13-kind-enablement-approval',
+  'e-review-kind-disable-enable-all',
+  'e-review-revoked-judge-activation',
+  'e-review-prepare-bound-rule-authority',
+  'e-review-prepare-plan-before-intent',
+  'e-review-prepare-plan-after-disclosure',
 ]);
 
 const auditRows = (category, rows) => rows.map(([id, owner]) => Object.freeze({ category, id, owner }));

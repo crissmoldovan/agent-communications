@@ -128,7 +128,7 @@ test('E9 operator control creates immutable subscriber and judge versions while 
             } as never;
           },
           cancelForJudgeKindInTransaction: () => 0,
-          cancelForRevocation: async () => undefined,
+          cancelForRevocationInTransaction: () => 0,
         },
       });
       assert.deepEqual(

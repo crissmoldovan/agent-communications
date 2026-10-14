@@ -1821,9 +1821,9 @@
       "mcp": "events_target_test",
       "status": "both",
       "operation": "targetTest",
-      "argv": ["target-1", "--version", "1"],
-      "args": { "targetId": "target-1", "targetVersion": 1 },
-      "expect": { "targetId": "target-1", "targetVersion": 1 }
+      "argv": ["target-1", "--version", "2"],
+      "args": { "targetId": "target-1", "targetVersion": 2 },
+      "expect": { "targetId": "target-1", "targetVersion": 2 }
     },
     {
       "id": "events-daemon.target.resume",
@@ -1949,9 +1949,9 @@
       "mcp": "events_judge_test",
       "status": "both",
       "operation": "judgeTest",
-      "argv": ["judge-1", "--version", "1"],
-      "args": { "judgeId": "judge-1", "version": 1 },
-      "expect": { "judgeId": "judge-1", "version": 1 }
+      "argv": ["judge-1", "--version", "2"],
+      "args": { "judgeId": "judge-1", "version": 2 },
+      "expect": { "judgeId": "judge-1", "version": 2 }
     },
     {
       "id": "events-daemon.budget.show",
