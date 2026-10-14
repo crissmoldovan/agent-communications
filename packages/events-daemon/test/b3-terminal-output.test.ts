@@ -12,6 +12,7 @@ import {
   terminalSafeJson,
 } from '../src/cli/program.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures/b3-control-contract-v1');
@@ -66,7 +67,12 @@ test('D13: the CLI writes a stored rule document to the terminal without its bid
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-terminal-output-');
-  const owner = await startEventOwner({ stateDir, now: () => 1_000, tickMs: 60_000 });
+  const owner = await startEventOwner({
+    stateDir,
+    configDir: await emptyConfigDir(stateDir),
+    now: () => 1_000,
+    tickMs: 60_000,
+  });
   try {
     const target = await requestDocument('target-add-result');
     assert.equal((await cli(stateDir, ['target', 'add', JSON.stringify(target)])).code, 0);
@@ -116,7 +122,12 @@ test('D13: a daemon error that quotes a document reaches the terminal with its b
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-terminal-error-');
-  const owner = await startEventOwner({ stateDir, now: () => 1_000, tickMs: 60_000 });
+  const owner = await startEventOwner({
+    stateDir,
+    configDir: await emptyConfigDir(stateDir),
+    now: () => 1_000,
+    tickMs: 60_000,
+  });
   try {
     assert.equal(
       (await cli(stateDir, ['target', 'add', JSON.stringify(await requestDocument('target-add-result'))])).code,

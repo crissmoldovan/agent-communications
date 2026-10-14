@@ -40,6 +40,33 @@ export async function assertLiveEventAccount(
   });
 }
 
+/** One connected account a rule may name: its source, its stable id, and the name it was connected under. */
+export interface ConnectedEventAccount {
+  readonly source: SourceOptions['channel'];
+  readonly accountId: string;
+  readonly account: string;
+}
+
+/**
+ * Every connected account a rule may name, loaded afresh: Gmail's inboxes by their stable `ibx_…` id and the other
+ * channels' accounts by their `acc_…` id, each beside the name a person knows it by. What `sources list` shows, so
+ * a first rule's account id can be read from it before any rule is active (CUE-474).
+ */
+export async function connectedEventAccounts(
+  config: Pick<ConfigStore, 'load'>,
+): Promise<readonly ConnectedEventAccount[]> {
+  const current = await config.load();
+  const found: ConnectedEventAccount[] = [];
+  for (const [account, inbox] of Object.entries(current.inboxes))
+    if (inbox.provider === 'gmail') found.push({ source: 'gmail', accountId: inbox.id, account });
+  for (const [account, entry] of Object.entries(current.accounts))
+    if (entry.platform === 'slack' || entry.platform === 'resend' || entry.platform === 'whatsapp')
+      found.push({ source: entry.platform, accountId: entry.id, account });
+  return found.sort((left, right) =>
+    `${left.source}\u0000${left.account}`.localeCompare(`${right.source}\u0000${right.account}`),
+  );
+}
+
 /** The current stable ids for one source, loaded afresh at the boundary. */
 export async function liveEventAccountIds(
   config: Pick<ConfigStore, 'load'>,

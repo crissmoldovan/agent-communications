@@ -230,7 +230,10 @@ export class B3TargetTestControl {
            )`,
       )
       .get(targetId, targetVersion) as { document: string; enabled: number; switch_generation: number } | undefined;
-    if (row === undefined || row.enabled !== 1) return refuse('the exact target version is not live');
+    if (row === undefined) return refuse('the exact target version is not live');
+    // A first rule is often approved before collection is switched on; say which step is missing (CUE-475).
+    if (row.enabled !== 1)
+      return refuse('collection is switched off: switch it on with enable-all first, or approve without the test');
     if (selectorKind === 'active') {
       const active = this.#store.database
         .prepare(

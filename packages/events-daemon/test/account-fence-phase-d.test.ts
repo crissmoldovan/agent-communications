@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
-import { assertLiveEventAccount, liveEventAccountIds, purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
+import {
+  assertLiveEventAccount,
+  connectedEventAccounts,
+  liveEventAccountIds,
+  purgeRemovedAccountWork,
+} from '../src/runtime/account-fence.ts';
 import { removeTarget } from '../src/runtime/revocations.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -91,6 +96,33 @@ function seedWhatsAppState(
     )
     .run(accountId, ruleId);
 }
+
+test('CUE-474: every connected account a rule may name is listed by source, stable id and the name it was connected under', async () => {
+  const config = {
+    load: async () => ({
+      inboxes: {
+        'acme/gmail': { id: 'ibx_gmail', provider: 'gmail' },
+        'acme/elsewhere': { id: 'ibx_other', provider: 'outlook' },
+      },
+      accounts: {
+        'acme/slack': { id: 'acc_slack', platform: 'slack' },
+        'acme/resend': { id: 'acc_resend', platform: 'resend' },
+        'acme/whatsapp': { id: 'acc_whatsapp', platform: 'whatsapp' },
+        'acme/teams': { id: 'acc_teams', platform: 'teams' },
+      },
+    }),
+  };
+  assert.deepEqual(
+    await connectedEventAccounts(config as never),
+    [
+      { source: 'gmail', accountId: 'ibx_gmail', account: 'acme/gmail' },
+      { source: 'resend', accountId: 'acc_resend', account: 'acme/resend' },
+      { source: 'slack', accountId: 'acc_slack', account: 'acme/slack' },
+      { source: 'whatsapp', accountId: 'acc_whatsapp', account: 'acme/whatsapp' },
+    ],
+    'only accounts an event source reads are listed, each by the id a rule names and the name a person knows',
+  );
+});
 
 test('D9: live-account checks select the source-specific core registry entry and fail closed on a cross-channel id', async () => {
   const config = {

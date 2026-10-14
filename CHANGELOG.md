@@ -3,6 +3,45 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A first events rule now works in the order the README gives, and `agentcomms doctor` stops warning about commands
+that are fine.** These are the four problems found while trying 0.18.0 on a real machine. Nothing breaks and there is
+nothing to migrate.
+
+**Approving a rule no longer ends when its optional target test cannot run** (CUE-475). `agent-events approve` offers
+to test each pending target before you approve. Before collection was switched on, that test was refused as "the exact
+target version is not live", and the approval stopped without asking for its challenge, leaving the rule pending. The
+refusal now says what is off: `collection is switched off: switch it on with enable-all first, or approve without the
+test`. Any refused test is printed as `{"test":"not run","reason":…}`, and the approval goes on to its challenge. The
+README now switches collection on before the rule's approval.
+
+Why: in the README's order, `rule enable`, `approve`, then `enable-all`, a first rule's target test could never pass.
+A person who accepted the offered test lost the approval, even though declining the test was always allowed.
+
+**`agent-events sources list` names every connected account a rule can use** (CUE-474). Before any rule was active it
+returned an empty list, so the README step that sends you there to find an account id found nothing. Each connected
+Gmail inbox and Slack, Resend or WhatsApp account is now listed with its source, its stable `accountId` and the name it
+was connected under (`account`), whether or not a rule uses it yet. Accounts a rule is collecting from still carry
+their `cursorScope`; the others show `null`. The MCP tool `events_sources_list` returns the same rows. The README's
+last step now also says `dryrun show <record-id>` prints a record that `dryrun list` names.
+
+Why: a first rule needs the inbox's stable id (`ibx_…`), and nothing else in the events CLI showed it.
+
+**`agentcomms doctor` no longer warns that a working command is missing** (CUE-473). A managed runtime carries other
+channels' packages as dependencies, and doctor counted those copies as runtimes of their own: on a machine with Gmail,
+Slack and events installed, `agent-resend` and `agent-whatsapp` were reported as having no command on PATH, though
+neither was installed. Doctor, `update` and `prune` now count a runtime as a package's own only when its name says so
+or its manifest pins that package.
+
+Why: a warning about something you never installed sends you looking for a fault that is not there.
+
+**Tests.** A core approval-wait test that could fail on a slow Windows runner waits for every open wait's first look
+before breaking the one under test (CUE-472). The events owner tests now start with an empty configuration directory
+instead of reading the developer's own `~/.config`. The events CLI's control client now follows the environment the
+CLI is given, not `process.env`, so a test with its own state directory is never answered by an event service running
+on the machine.
+
 ## 0.18.0
 
 **`agentcomms` now installs, updates and repairs the events server like the channel servers, and a managed install

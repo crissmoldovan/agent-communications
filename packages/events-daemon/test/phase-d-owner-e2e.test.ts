@@ -9,6 +9,7 @@ import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
@@ -128,12 +129,62 @@ test('D-C: an owner behind the wall clock leaves unexpired Resend received and s
   }
 });
 
+test('CUE-474: before any rule is active, sources list names each connected account a first rule can use', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('aev-sources-connected-');
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  await mkdir(configDir, { recursive: true });
+  const config = emptyConfig();
+  config.inboxes['acme/gmail'] = {
+    id: 'ibx_AAAAAAAAAAAAAAAA',
+    provider: 'gmail',
+    email: 'sources-connected@example.test',
+    identity: 'oidc',
+    client: 'sources-connected-client',
+    tier: 'read',
+    contacts: false,
+    grantedScopes: [],
+    secretRef: 'gmail:none:ibx_AAAAAAAAAAAAAAAA',
+    internalDomains: [],
+    createdAt: '2026-10-14T00:00:00.000Z',
+  };
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
+  try {
+    const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+    try {
+      const control = new EventControlClient({ stateDir, clientName: 'events-daemon-sources-connected-test' });
+      const gmail = { source: 'gmail', accountId: 'ibx_AAAAAAAAAAAAAAAA', account: 'acme/gmail', cursorScope: null };
+      assert.deepEqual(
+        await control.request('sources-list'),
+        [
+          { source: 'gmail', accounts: [gmail] },
+          { source: 'resend', accounts: [] },
+          { source: 'slack', accounts: [] },
+          { source: 'whatsapp', accounts: [] },
+        ],
+        'the connected mailbox is listed, with no cursor scope until a rule reads it',
+      );
+      assert.deepEqual(
+        await control.request('source-show', { source: 'gmail' }),
+        { source: 'gmail', accounts: [gmail] },
+        'source show lists it too',
+      );
+    } finally {
+      await owner.stop();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('D7: a normal Phase-D owner registers all sources and exposes their content-free state', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-d7-owner-');
   try {
-    const owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+    const owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     try {
       const control = new EventControlClient({ stateDir, clientName: 'events-daemon-phase-d-owner-test' });
       assert.deepEqual(await control.request('sources-list'), [

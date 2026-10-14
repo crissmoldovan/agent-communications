@@ -17,6 +17,7 @@ import {
 } from '../src/runtime/b3-doctor-projection.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const FORBIDDEN = [
@@ -296,7 +297,7 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
       store.close();
     }
     try {
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(

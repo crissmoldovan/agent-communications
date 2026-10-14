@@ -59,7 +59,7 @@ import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worke
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
-import { assertLiveEventAccount } from './account-fence.ts';
+import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
 import { projectE9Doctor } from './b3-doctor-projection.ts';
@@ -1461,6 +1461,7 @@ async function startOwnerWithLock(
           request,
           ownerB3Service,
           doctorReport,
+          () => connectedEventAccounts(core.config),
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1505,6 +1506,7 @@ async function handleControl(
   request: AuthenticatedControlRequest,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
+  connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1550,9 +1552,14 @@ async function handleControl(
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
     case OWNER_CONTROL_WIRES.sourcesList:
-      return sourceRows(database, sourceRegistry);
+      return sourceRows(database, sourceRegistry, await connectedAccounts());
     case OWNER_CONTROL_WIRES.sourceShow:
-      return sourceShow(database, sourceRegistry, requiredText(request.args.source, 'source'));
+      return sourceShow(
+        database,
+        sourceRegistry,
+        requiredText(request.args.source, 'source'),
+        await connectedAccounts(),
+      );
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow:
@@ -1665,9 +1672,15 @@ function createTarget(database: Awaited<ReturnType<typeof openEventDatabase>>, d
   return domain(() => new ImmutableVersions(database.database).createTarget(document as never));
 }
 
+/**
+ * Each source's accounts: the scopes active rules read, and every connected account a rule may name, which has no
+ * cursor scope until a rule reads it. Each carries the name it was connected under, so a person, or an agent writing
+ * a first rule, can tell `ibx_…` from `ibx_…` (CUE-474).
+ */
 function sourceRows(
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   sourceRegistry: LocalEventSourceRegistry,
+  connected: readonly ConnectedEventAccount[] = [],
 ): unknown[] {
   const rows = database.database
     .prepare("SELECT document FROM rule_versions WHERE state IN ('active', 'superseded')")
@@ -1698,9 +1711,16 @@ function sourceRows(
       }
     }
   }
-  const ordered = [...scopes.values()].sort((left, right) =>
-    `${left.source}\u0000${left.accountId}\u0000${left.cursorScope}`.localeCompare(
-      `${right.source}\u0000${right.accountId}\u0000${right.cursorScope}`,
+  const nameOf = new Map(connected.map((entry) => [`${entry.source}\u0000${entry.accountId}`, entry.account]));
+  const accounts: { source: string; accountId: string; account: string | null; cursorScope: string | null }[] = [
+    ...scopes.values(),
+  ].map((scope) => ({ ...scope, account: nameOf.get(`${scope.source}\u0000${scope.accountId}`) ?? null }));
+  for (const entry of connected)
+    if (!accounts.some((row) => row.source === entry.source && row.accountId === entry.accountId))
+      accounts.push({ source: entry.source, accountId: entry.accountId, account: entry.account, cursorScope: null });
+  const ordered = accounts.sort((left, right) =>
+    `${left.source}\u0000${left.accountId}\u0000${left.cursorScope ?? ''}`.localeCompare(
+      `${right.source}\u0000${right.accountId}\u0000${right.cursorScope ?? ''}`,
     ),
   );
   return sourceRegistry.sources().map((source) => ({
@@ -1713,13 +1733,14 @@ function sourceShow(
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   sourceRegistry: LocalEventSourceRegistry,
   source: string,
+  connected: readonly ConnectedEventAccount[] = [],
 ): unknown {
   if (!sourceRegistry.sources().includes(source as Parameters<LocalEventSourceRegistry['require']>[0]))
     throw new CommsError('NOT_FOUND', 'the requested source is not configured');
   return {
     source,
     accounts: (
-      sourceRows(database, sourceRegistry).find((row) => (row as { source: string }).source === source) as {
+      sourceRows(database, sourceRegistry, connected).find((row) => (row as { source: string }).source === source) as {
         accounts: unknown[];
       }
     ).accounts,

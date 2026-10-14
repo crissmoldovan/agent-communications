@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { lstat, readFile, rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 type OwnerModule = typeof import('../src/runtime/owner.ts');
@@ -95,8 +96,9 @@ test('CTRL-B1: only one foreground owner opens the event database and a graceful
   if (!ownerRuntime || !clientRuntime || !pathsRuntime) return;
 
   const stateDir = await shortTempDir('aev-owner-');
+  const configDir = await emptyConfigDir(stateDir);
   try {
-    const owner = await ownerRuntime.startEventOwner({ stateDir });
+    const owner = await ownerRuntime.startEventOwner({ stateDir, configDir });
     try {
       assert.equal(owner.status().owner, 'running');
       if (process.platform !== 'win32') {
@@ -104,7 +106,10 @@ test('CTRL-B1: only one foreground owner opens the event database and a graceful
         assert.equal((await lstat(paths.controlSocket)).mode & 0o077, 0, 'the Unix socket is owner-only');
         assert.equal((await lstat(paths.controlToken)).mode & 0o077, 0, 'the control token is owner-only');
       }
-      await assert.rejects(() => ownerRuntime.startEventOwner({ stateDir }), /already owns|already running/i);
+      await assert.rejects(
+        () => ownerRuntime.startEventOwner({ stateDir, configDir }),
+        /already owns|already running/i,
+      );
       const client = new clientRuntime.EventControlClient({ stateDir, clientName: 'events-daemon-owner-test' });
       assert.deepEqual(await client.request('status'), owner.status());
       assert.deepEqual(await client.request('pause'), {
