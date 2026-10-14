@@ -72,12 +72,10 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
 - **A "no" said in the chat is not seen.** The server cannot read the conversation. When the person says no, the
   skills tell the agent to revoke the approval at once; an agent that does not leaves an approval waiting for a yes in
   the chat usable for the rest of its ten minutes.
-- **A send's own recipients and subject come back as the agent wrote them.** A prepare result's `expect`, the
-  recipients and subject in a send's result, and the recipients `audit tail` recorded repeat what the preparing agent
-  wrote, outside the untrusted-content envelope: they are its own words, shown to the person and sent back to send.
-  When the agent copied them from mail — a reply's subject, an address found in a message — what that mail's sender
-  wrote comes back with them. An approval as a status, a wait, a list, a revoke or a cancel shows it carries them
-  inside the envelope.
+- **A plain address is syntax, not identity.** Prepare, send, approval and audit results leave an address outside the
+  untrusted-content envelope only when it matches the channel's strict address grammar. This says that it is safe to
+  display as an address; it does not say who owns it or that mail which supplied it was trustworthy. Subjects and
+  every non-plain sender-controlled field are sanitised and enveloped.
 - **A send whose provider never answered may have gone.** Its outcome is reported as unknown, and the process that
   claimed it may still record a late result; nothing reconciles it but looking in Sent or the channel.
 - **Under the default `chat` policy, a message that asks you to reply to its own sender with private data** is

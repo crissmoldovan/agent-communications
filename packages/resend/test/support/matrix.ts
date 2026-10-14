@@ -34,7 +34,6 @@ interface World {
   context: ResendContext;
   clock: MatrixClock;
   approvalId: string;
-  expect: Record<string, unknown>;
   notFound(action: string, surface?: { name: string }): Promise<ReadonlyArray<readonly [string, string]>>;
   fault(): void;
   asked(): number;
@@ -121,7 +120,6 @@ async function world(row: string): Promise<World> {
     context,
     clock,
     approvalId: prepared.approvalId,
-    expect: prepared.expect as unknown as Record<string, unknown>,
     notFound: async (action, surface) => {
       if (action === 'claim' || surface?.name === 'resend_send_status') {
         // Both name the account: another account's send is not theirs to find, nor another kind's approval.
@@ -164,7 +162,7 @@ async function execute(w: World, approvalId: string, pinned?: string): Promise<O
   const result = await tool(
     w,
     'resend_send_execute',
-    { ...(pinned ? {} : { account: ACCOUNT }), approvalId, expect: w.expect },
+    { ...(pinned ? {} : { account: ACCOUNT }), approvalId },
     pinned ? { pinned } : {},
   );
   return observeTool(result, sendsOf(w) - before);

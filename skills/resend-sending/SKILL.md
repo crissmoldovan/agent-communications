@@ -18,8 +18,7 @@ agent-resend's own rule, not the key's (Resend has no read-only key), and it hol
 ```sh
 agent-resend send prepare --account acme/resend --from "Acme <hello@acme.test>" --to sam@partner.test \
   --subject "Your invoice" --text "Hi Sam, the invoice is attached." --attach ./invoice.pdf
-agent-resend send execute <approvalId> --account acme/resend \
-  --expect-to sam@partner.test --expect-cc none --expect-bcc none --expect-subject "Your invoice"
+agent-resend send execute <approvalId> --account acme/resend
 agent-resend send status <approvalId> --account acme/resend
 ```
 
@@ -93,9 +92,9 @@ sent for the rest of its ten minutes.
 
 ## 4. Send, once
 
-`resend_send_execute` takes the approval id and `expect` — the To, Cc and Bcc lists and the subject **exactly as the
-preview showed them** (at the CLI, `--expect-to`, `--expect-cc`, `--expect-bcc` with `none` for an empty list, and
-`--expect-subject`). If any of it is not what was approved, nothing is sent.
+`resend_send_execute` takes the approval id. The approval supplies the exact To, Cc and Bcc lists, subject and body;
+do not copy the prepare result's display-safe field echoes back into the call. Legacy callers may still supply
+`expect` (or all four CLI `--expect-*` options), and every supplied value must match exactly or nothing is sent.
 
 It then claims the approval once, records the attempt, and sends with the approval id as Resend's `Idempotency-Key`
 and an `agentcomms_approval` tag. The result names Resend's id for the email, `state` (`sent`, or `scheduled`), and

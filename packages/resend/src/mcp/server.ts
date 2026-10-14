@@ -523,7 +523,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     {
       title: 'Send a prepared email',
       description:
-        'Send a prepared email, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. `expect` restates the recipients and subject shown. Never call it again for an email whose outcome is unknown: use `resend_send_status`.',
+        'Send by approval id the email bound by resend_send_prepare, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. Pass the approval id; legacy callers may also pass expect, which must still match exactly. Never call it again for an email whose outcome is unknown: use resend_send_status.',
       inputSchema: {
         ...accountArg,
         approvalId: z.string().describe('the approval `resend_send_prepare` returned'),
@@ -534,7 +534,8 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
             bcc: z.array(z.string()),
             subject: z.string(),
           })
-          .describe('the recipients and subject the preview showed'),
+          .optional()
+          .describe('legacy exact check for recipients and subject; otherwise read from the approval'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -542,11 +543,14 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
       async (args: {
         account?: string | undefined;
         approvalId: string;
-        expect: { to: string[]; cc: string[]; bcc: string[]; subject: string };
+        expect?: { to: string[]; cc: string[]; bcc: string[]; subject: string } | undefined;
       }) => {
         // Another account's approval is refused by `executeSend` itself, before the record is touched.
         const name = await resolve(args.account);
-        return executeSend(context, name, { approvalId: args.approvalId, expect: args.expect });
+        return executeSend(context, name, {
+          approvalId: args.approvalId,
+          ...(args.expect === undefined ? {} : { expect: args.expect }),
+        });
       },
     ),
   );

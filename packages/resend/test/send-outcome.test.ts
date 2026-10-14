@@ -48,7 +48,7 @@ async function prepared(over: Partial<SendInput> = {}) {
   await harness.addAccount({ name: 'acme/resend', mode: 'send' });
   const context = harness.context();
   const approval = await prepareSend(context, 'acme/resend', { ...message, ...over });
-  const send = () => executeSend(context, 'acme/resend', { approvalId: approval.approvalId, expect: approval.expect });
+  const send = () => executeSend(context, 'acme/resend', { approvalId: approval.approvalId });
   const state = async () => asV2(await harness.core.approvals.get(approval.approvalId))?.state;
   return { context, approval, send, state };
 }

@@ -284,7 +284,7 @@ agent-resend send prepare [options]
 
 ### `agent-resend send execute`
 
-send a prepared email, once. Refuses unless the approval, the content and the recipients all match
+send a prepared email by approval id; optional legacy expectations are checked exactly
 
 ```
 agent-resend send execute [options] <approvalId>
@@ -293,10 +293,10 @@ agent-resend send execute [options] <approvalId>
 | Option | What it does | Default |
 |---|---|---|
 | `--account <name>` | which account, as `organisation/resend` | — |
-| `--expect-to <addresses>` | the To list you believe it goes to, comma-separated, or none | — |
-| `--expect-cc <addresses>` | the Cc list, or none | — |
-| `--expect-bcc <addresses>` | the Bcc list, or none | — |
-| `--expect-subject <subject>` | the subject | — |
+| `--expect-to <addresses>` | legacy exact check: To list, comma-separated, or none | — |
+| `--expect-cc <addresses>` | legacy exact check: Cc list, or none | — |
+| `--expect-bcc <addresses>` | legacy exact check: Bcc list, or none | — |
+| `--expect-subject <subject>` | legacy exact check: subject | — |
 
 ### `agent-resend send status`
 

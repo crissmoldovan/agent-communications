@@ -594,21 +594,30 @@ is out: update first, or put it off (the stop names both commands) Â· 64 usage Â
     );
 
   accountOption(send.command('execute <approvalId>'))
-    .description('send a prepared email, once. Refuses unless the approval, the content and the recipients all match')
-    .requiredOption('--expect-to <addresses>', 'the To list you believe it goes to, comma-separated, or none')
-    .requiredOption('--expect-cc <addresses>', 'the Cc list, or none')
-    .requiredOption('--expect-bcc <addresses>', 'the Bcc list, or none')
-    .requiredOption('--expect-subject <subject>', 'the subject')
+    .description('send a prepared email by approval id; optional legacy expectations are checked exactly')
+    .option('--expect-to <addresses>', 'legacy exact check: To list, comma-separated, or none')
+    .option('--expect-cc <addresses>', 'legacy exact check: Cc list, or none')
+    .option('--expect-bcc <addresses>', 'legacy exact check: Bcc list, or none')
+    .option('--expect-subject <subject>', 'legacy exact check: subject')
     .action(
       act(async (context, _options, approvalId: string, flags: Options) => {
+        const expectation = [flags.expectTo, flags.expectCc, flags.expectBcc, flags.expectSubject];
+        const hasExpect = expectation.some((value) => value !== undefined);
+        if (hasExpect && expectation.some((value) => value === undefined)) {
+          throw new CommsError('USAGE', 'give all four --expect-* options together, or leave all four out');
+        }
         const sent = await executeSend(context, String(flags.account), {
           approvalId,
-          expect: {
-            to: expectList(flags.expectTo, '--expect-to'),
-            cc: expectList(flags.expectCc, '--expect-cc'),
-            bcc: expectList(flags.expectBcc, '--expect-bcc'),
-            subject: String(flags.expectSubject),
-          },
+          ...(hasExpect
+            ? {
+                expect: {
+                  to: expectList(flags.expectTo, '--expect-to'),
+                  cc: expectList(flags.expectCc, '--expect-cc'),
+                  bcc: expectList(flags.expectBcc, '--expect-bcc'),
+                  subject: String(flags.expectSubject),
+                },
+              }
+            : {}),
         });
         writeResult(sent, output(), renderSent, streams);
       }),

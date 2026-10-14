@@ -73,7 +73,8 @@ Three policies, per mailbox:
 
 Under `chat` the server cannot see your conversation, so what it guarantees is narrower and it says
 so plainly: nothing is sent without a prepare step for **exactly** that content, within ten minutes,
-once, with matching recipients and subject, under the rate caps, and audited. Whether the agent
+once, with the approval id binding the recipients and subject, under the rate caps, and audited. Send echoes use the
+channel's safe field form rather than handing sender-controlled prose back bare. Whether the agent
 actually showed you the preview — and revoked it when you said no — is between you and your agent,
 which is why `confirm` exists. Under `confirm` the agent learns that you approved by waiting
 (`gmail_send_wait`), never by asking, and every result says where its approval stands; a send whose

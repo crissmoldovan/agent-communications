@@ -171,7 +171,7 @@ async function oneDecision(w: World, times: { approveAt: number; waitAt: number;
   // What follows names the person's command and the wait, so nobody has to relay the approval.
   locatedGmailLine(prepared.nextStep, ['approve', prepared.approvalId]);
   assert.match(prepared.nextStep, /gmail_send_wait/);
-  const send = { inbox: 'work', draftId, approvalId: prepared.approvalId, expect: prepared.expect };
+  const send = { inbox: 'work', approvalId: prepared.approvalId };
 
   // The agent tries once before the person has decided: refused for a person outside the chat, and told how to learn.
   const early = refusal(await w.call('gmail_draft_send', send));
@@ -260,9 +260,7 @@ test('an internal recipient whose domain alone was seen does not taint, and a ch
     const sent = body<{ sentMessageId: string }>(
       await w.call('gmail_draft_send', {
         inbox: 'work',
-        draftId,
         approvalId: prepared.approvalId,
-        expect: prepared.expect,
       }),
     );
     assert.ok(sent.sentMessageId);
@@ -360,9 +358,7 @@ test('a prior send whose outcome is unknown does not block preparing the identic
     const first = body<Preparation>(await w.call('gmail_send_prepare', { inbox: 'work', draftId }));
     // Gmail answers the send with a 500 before acting on it: this call cannot know whether it was sent.
     w.harness.google.failNext(DRAFT_SEND_PATH, 1, 500);
-    const unknown = refusal(
-      await w.call('gmail_draft_send', { inbox: 'work', draftId, approvalId: first.approvalId, expect: first.expect }),
-    );
+    const unknown = refusal(await w.call('gmail_draft_send', { inbox: 'work', approvalId: first.approvalId }));
     assert.equal(unknown.code, 'SEND_OUTCOME_UNKNOWN');
     // The lease runs out: the record is final as unknown.
     w.clock.at += SENDING_LEASE_MS + 1000;

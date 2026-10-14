@@ -2492,7 +2492,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
 
   // The one place mail can leave, and it takes two calls on purpose: one that shows what would go, one that sends
   // exactly that. A model that has read the preview to the user can complete the second; a model that has not cannot,
-  // because it does not have the approval id, the recipients or the subject the first call returned.
+  // because it does not have the approval id the first call returned.
   if (!options.readOnly) {
     /** What became of the approvals an earlier release prepared, when the call retired them; ids only. */
     const legacyDrainSchema = z
@@ -2549,7 +2549,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             .describe(
               'cache-malformed or cache-write-failed: the lookalike check could not rely on Sent, and escalated',
             ),
-          expect: expectationSchema,
+          expect: expectationSchema.describe(
+            'display-safe recipients and subject; do not copy this back into gmail_draft_send',
+          ),
           digest: z.string(),
           expiresAt: z.string(),
           nextStep: z.string(),
@@ -2572,12 +2574,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Send an approved draft',
         description:
-          'Send a draft that gmail_send_prepare has prepared and the user has approved. You must pass the recipients and subject you believe you are sending to: if they are not what the draft says, nothing is sent. Any edit to the draft since the preview voids the approval. This is irreversible — mail cannot be recalled. Call it only after the user has seen the preview and said yes in this conversation.',
+          'Send the draft bound to an approval from gmail_send_prepare. Pass the approval id after the user has seen the preview and approved it. Legacy callers may also pass draftId and expect; when supplied, each must still match exactly. Any edit since the preview voids the approval. This is irreversible — mail cannot be recalled.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
-          draftId: z.string().min(1),
+          draftId: z.string().min(1).optional().describe('legacy exact check; otherwise read from the approval'),
           approvalId: z.string().min(1).describe('from gmail_send_prepare'),
-          expect: expectationSchema.describe('what you believe you are sending; checked against the draft'),
+          expect: expectationSchema
+            .optional()
+            .describe('legacy exact check for recipients and subject; otherwise read from the approval'),
         }),
         outputSchema: z.object({
           inbox: z.string(),
@@ -2716,7 +2720,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             // A wrong code is counted against the record's own attempt limit, in constant time, inside the store.
             await finishApproval(context, approvalId, typed?.code ?? '', 'elicitation');
           }
-          const result = await executeSend(context, alias, { draftId, approvalId, expect });
+          const result = await executeSend(context, alias, {
+            approvalId,
+            ...(draftId === undefined ? {} : { draftId }),
+            ...(expect === undefined ? {} : { expect }),
+          });
           return reply({ ...result, threadId: result.threadId ?? null, verified: result.verified });
         } catch (error) {
           return fail(error);

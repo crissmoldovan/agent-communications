@@ -69,7 +69,6 @@ async function prepared(setup: Awaited<ReturnType<typeof world>>) {
     executeSend(setup.context, 'work', {
       draftId: setup.draftId,
       approvalId: approval.approvalId,
-      expect: approval.expect,
     });
   const state = async () => asV2(await setup.harness.core.approvals.get(approval.approvalId))?.state;
   return { approval, send, state };

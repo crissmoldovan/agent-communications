@@ -54,7 +54,7 @@ async function world() {
       }),
   });
   const approval = await prepareSend(context, 'acme/resend', message);
-  const send = () => executeSend(context, 'acme/resend', { approvalId: approval.approvalId, expect: approval.expect });
+  const send = () => executeSend(context, 'acme/resend', { approvalId: approval.approvalId });
   const state = async () => asV2(await h.core.approvals.get(approval.approvalId))?.state;
   const attempts = () => h.fake.requests.filter((r) => r.method === 'POST' && r.path === '/emails').length;
   return { harness: h, send, state, attempts, waits, now: () => now };

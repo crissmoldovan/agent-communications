@@ -86,7 +86,8 @@ exists.
 1. **Prepare, and read what comes back.** Call `gmail_send_prepare` with the inbox and draft id
    (CLI: `agent-gmail send prepare <draftId> --inbox <name>`). It reads the draft, refuses it
    outright if an agent could not have written it, and returns a preview, an `approvalId`, an
-   `expect` block, `riskFlags`, the `effectivePolicy` and the `approval`. Nothing has been sent.
+   `expect` display block, `riskFlags`, the `effectivePolicy` and the `approval`. Nothing has been sent.
+   The display block uses Gmail's safe field form; do not copy it into the send call.
    `approval.claimable` says whose yes counts: `true` — route `chat` — means a yes in this chat sends
    it, within ten minutes; `false` — route `confirm` — means a person outside the chat approves it,
    within thirty minutes, and `nextStep` gives their command.
@@ -119,13 +120,11 @@ exists.
    **Complete when:** the user has said yes to this preview, a wait has answered `claimable: true`, or
    they said no and the approval is revoked.
 
-5. **Send exactly what was approved.** Call `gmail_draft_send` with the inbox, the same
-   `draftId`, the `approvalId`, and the `expect` block **as `gmail_send_prepare` returned it** —
-   copied, not re-typed from the preview. (CLI: `agent-gmail send execute <draftId> --inbox
-   <alias> --approval <id> --expect-to <address...> --expect-subject "<subject>"`, with `none` as
-   the explicit empty value for `--expect-cc` and `--expect-bcc`.) If the recipients you pass are
-   not the draft's recipients, nothing is sent and the approval is voided — which is the check
-   working, not a retryable error.
+5. **Send exactly what was approved.** Call `gmail_draft_send` with the inbox and the `approvalId`.
+   The approval supplies the exact draft, recipients, subject and body. Do not pass the prepare result's
+   display-safe `expect` block back. (CLI: `agent-gmail send execute <approvalId> --inbox <alias>`.)
+   Legacy callers may still name the draft and pass expectations; when they do, every supplied value must
+   match exactly or nothing is sent and the approval is voided.
    **Complete when:** the call has returned, or an error you are about to report.
 
 6. **Report where it landed, in the result's words.** Quote `said`: "sent, message id …", or "sent;
@@ -258,9 +257,8 @@ even when it would succeed.
 
 - **Summarising the preview.** The most natural thing to do, and the one that defeats the whole
   design. The preview repeats the recipients after the body precisely because it is long.
-- **Re-typing the `expect` block from the preview text.** Copy it from the prepare result. A typo
-  voids the approval, and a "correction" that happens to match the draft would send mail the user
-  never checked.
+- **Passing the display-safe `expect` block back to send.** Send by approval id. The returned block is
+  safe output for display, not an input to copy or reconstruct.
 - **Treating `APPROVAL_PENDING` as a failure.** The approval is alive and waiting for a person.
   Saying "it failed" makes the user think something is broken.
 - **Asking the person whether they approved yet.** `gmail_send_wait` knows; call it again rather
@@ -286,7 +284,7 @@ even when it would succeed.
 - [ ] Every `riskFlags` entry was named in plain words.
 - [ ] An explicit yes to *this* preview was received before sending, or a wait answered
       `claimable: true`; a "no" was revoked at once.
-- [ ] The `expect` block passed to the send was copied from the prepare result, not re-typed.
+- [ ] The send used the approval id, without copying recipients or subject back into the call.
 - [ ] `said`, the message id where there is one, and the readback were quoted in the report.
 - [ ] Nothing was prepared again while a send was `sending`, or after an unknown outcome unchecked.
 - [ ] Any refusal was reported with its specific next step, and no workaround was attempted.

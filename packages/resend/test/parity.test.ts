@@ -253,7 +253,6 @@ test('sending: the same preview, the same execute, the same status from both sur
       await call('resend_send_execute', {
         account: 'acme/resend',
         approvalId: fromTool.approvalId,
-        expect: fromTool.expect,
       }),
     );
     // Resend's own id, and the approval's, differ between two sends as they should — in the approval object too.
@@ -342,7 +341,6 @@ test('cancelling a scheduled email: the same from both, including the approval f
         await call('resend_send_execute', {
           account: 'acme/resend',
           approvalId: prepared.approvalId,
-          expect: prepared.expect,
         }),
       ).resendId;
     };
@@ -386,7 +384,6 @@ test('a scheduled send Resend accepted without an id: the command and the tool s
       await call('resend_send_execute', {
         account: 'acme/resend',
         approvalId: viaTool.approvalId,
-        expect: viaTool.expect,
       }),
     );
     assert.equal(tool.said, 'accepted (scheduled); the provider returned no id');
@@ -438,7 +435,6 @@ test('an outcome Resend left uncertain is the same SEND_OUTCOME_UNKNOWN from bot
       await call('resend_send_execute', {
         account: 'acme/resend',
         approvalId: viaTool.approvalId,
-        expect: viaTool.expect,
       }),
     );
     const viaCli = await prepared();
