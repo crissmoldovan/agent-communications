@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 
 export const LISTENER_REGISTRY_ENV = 'AGENT_COMMS_TEST_LISTENER_REGISTRY';
 export const LISTENER_TEST_FILE_ENV = 'AGENT_COMMS_TEST_FILE';
@@ -26,6 +28,41 @@ function running(pid: number): boolean {
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+/** The command line a running process was started with, or null when there is none to read. */
+async function commandLineOf(pid: number): Promise<string | null> {
+  try {
+    const { stdout } =
+      process.platform === 'win32'
+        ? await execFileAsync(
+            'powershell.exe',
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+            ],
+            { windowsHide: true },
+          )
+        : await execFileAsync('ps', ['-o', 'args=', '-p', String(pid)]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a registered listener is still running: its PID is, and that PID is still `oauth-listen` for its flow. A PID
+ * is only a number, and Windows hands a finished process's to the next one quickly, so a PID that answers may be
+ * another process's by the end of the suite: neither counted as a leak nor ever stopped in the listener's name.
+ */
+async function stillListening(entry: RegisteredListener): Promise<boolean> {
+  if (!running(entry.pid)) return false;
+  const line = (await commandLineOf(entry.pid)) ?? '';
+  return line.includes('oauth-listen') && line.includes(entry.flowId);
+}
+
 export async function registeredListeners(): Promise<RegisteredListener[]> {
   let text: string;
   try {
@@ -51,11 +88,17 @@ export async function registeredListeners(): Promise<RegisteredListener[]> {
 }
 
 export async function liveRegisteredListeners(): Promise<RegisteredListener[]> {
-  return (await registeredListeners()).filter((entry) => running(entry.pid));
+  const listeners = await registeredListeners();
+  const live = await Promise.all(listeners.map(stillListening));
+  return listeners.filter((_, index) => live[index]);
 }
 
 export async function stopRegisteredListeners(listeners: readonly RegisteredListener[]): Promise<void> {
-  for (const { pid } of listeners) {
+  // Only a process that is still the listener is signalled: its PID may be another process's by now.
+  const listening = (await Promise.all(listeners.map(stillListening))).flatMap((live, index) =>
+    live ? [listeners[index] as RegisteredListener] : [],
+  );
+  for (const { pid } of listening) {
     try {
       process.kill(pid, 'SIGTERM');
     } catch {
@@ -63,10 +106,13 @@ export async function stopRegisteredListeners(listeners: readonly RegisteredList
     }
   }
   const deadline = Date.now() + 5_000;
-  while (listeners.some(({ pid }) => running(pid)) && Date.now() < deadline) {
+  while (listening.some(({ pid }) => running(pid)) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  for (const { pid } of listeners.filter(({ pid }) => running(pid))) {
+  const left = (await Promise.all(listening.map(stillListening))).flatMap((live, index) =>
+    live ? [listening[index] as RegisteredListener] : [],
+  );
+  for (const { pid } of left) {
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
@@ -74,7 +120,7 @@ export async function stopRegisteredListeners(listeners: readonly RegisteredList
     }
   }
   const killedDeadline = Date.now() + 1_000;
-  while (listeners.some(({ pid }) => running(pid)) && Date.now() < killedDeadline) {
+  while (left.some(({ pid }) => running(pid)) && Date.now() < killedDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
