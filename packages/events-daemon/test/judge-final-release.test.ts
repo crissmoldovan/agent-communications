@@ -28,7 +28,8 @@ function releaseToolPreloadUrl(root: string, recordFile: string): string {
 
 async function copiedB3Tree(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'agentcomms-e13-b3-tree-'));
-  const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  // Directory symlinks on every platform, Windows included: through a junction, pnpm's workspace links do not resolve
+  // there, and every production module then fails to load.
   await Promise.all([
     cp(join(ROOT, 'packages/events-daemon/src'), join(root, 'packages/events-daemon/src'), { recursive: true }),
     cp(join(ROOT, 'packages/events-daemon/test'), join(root, 'packages/events-daemon/test'), { recursive: true }),
@@ -39,11 +40,11 @@ async function copiedB3Tree(): Promise<string> {
   ]);
   await mkdir(join(root, 'packages/events-daemon'), { recursive: true });
   await cp(join(ROOT, 'packages/events-daemon/package.json'), join(root, 'packages/events-daemon/package.json'));
-  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), directoryLinkType);
+  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), 'dir');
   await symlink(
     join(ROOT, 'packages/events-daemon/node_modules'),
     join(root, 'packages/events-daemon/node_modules'),
-    directoryLinkType,
+    'dir',
   );
   await writeFile(join(root, 'scripts/packages.mjs'), "export const PACKAGES = []; export const SCOPE = '@fixture';\n");
   return root;
@@ -147,6 +148,11 @@ test('E13 final release: verify and direct release retain both Phase-E gates', a
       release.output,
       /B3 human-only exception row exists: events-daemon\.judge-key\.rotate/u,
       'the required prerequisite gate refuses before any release tool can run',
+    );
+    assert.doesNotMatch(
+      release.output,
+      /cannot load prerequisite production module/u,
+      'the copied tree loads every production module, so the damaged row is what refuses it',
     );
     assert.doesNotMatch(
       release.output,
