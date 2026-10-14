@@ -845,15 +845,52 @@ test('E6: a final gate that reaches the all-phase deadline lets no later phase o
     let now = 0;
     const { counts, peer, transport, call } = countingTransport({ now: () => now });
     const result = await transport.execute(call, {
-      finalGate: (phase) => {
+      finalGate: (phase, assertBeforeTransition) => {
         if (phase === blocked) now = 20_000;
+        assertBeforeTransition?.();
       },
     });
     assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'), `${blocked} times out`);
-    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1);
-    assert.equal(counts.tcp, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
-    assert.equal(counts.tls, blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1);
-    assert.deepEqual(peer.writes, []);
+    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the final deadline`);
+    assert.equal(
+      counts.tcp,
+      blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+      `${blocked}: no TCP starts after the final deadline`,
+    );
+    assert.equal(
+      counts.tls,
+      blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+      `${blocked}: no TLS starts after the final deadline`,
+    );
+    assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the final deadline`);
+  }
+});
+
+test('E6: a gate whose commit runs past the all-phase deadline starts no network action after it', async () => {
+  for (const blocked of ['dns', 'tcp', 'tls', 'write'] as const) {
+    let now = 0;
+    const { counts, peer, transport, call } = countingTransport({ now: () => now });
+    const result = await transport.execute(call, {
+      finalGate: (phase, assertBeforeTransition) => {
+        assertBeforeTransition?.();
+        // Its own check passed; the transition it commits then takes the clock past the deadline.
+        if (phase === blocked) now = 20_000;
+      },
+    });
+    // A hosted judge's DNS gate has committed the attempt in flight by then, so the refusal is post-I/O and settles.
+    assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', false), `${blocked}: refused after its gate`);
+    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the deadline`);
+    assert.equal(
+      counts.tcp,
+      blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+      `${blocked}: no TCP starts after the deadline`,
+    );
+    assert.equal(
+      counts.tls,
+      blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+      `${blocked}: no TLS starts after the deadline`,
+    );
+    assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the deadline`);
   }
 });
 
@@ -864,6 +901,7 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
       let resolverCalls = 0;
       let tcpCalls = 0;
       let tlsCalls = 0;
+      const finalGatePhases: string[] = [];
       const peer = respondingSocket(`HTTP/1.1 200 OK\r\n\r\n${fixture.vectors.typesafe.response}`);
       const transport = new JudgeTransport({
         resolver: {
@@ -901,15 +939,31 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
             beforeGate: async (phase) => {
               if (phase === blocked) now = 20_000;
             },
-            finalGate() {},
+            finalGate(phase) {
+              finalGatePhases.push(phase);
+            },
           },
         ),
         refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'),
+        `${blocked}: an awaited gate that expires refuses with the all-phase deadline code`,
       );
-      assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1);
-      assert.equal(tcpCalls, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
-      assert.equal(tlsCalls, blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1);
-      assert.deepEqual(peer.writes, []);
+      assert.deepEqual(
+        finalGatePhases,
+        (['dns', 'tcp', 'tls', 'write'] as const).slice(0, ['dns', 'tcp', 'tls', 'write'].indexOf(blocked)),
+        `${blocked}: an expired awaited phase never reaches the durable final gate`,
+      );
+      assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the awaited deadline`);
+      assert.equal(
+        tcpCalls,
+        blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+        `${blocked}: no TCP starts after the awaited deadline`,
+      );
+      assert.equal(
+        tlsCalls,
+        blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+        `${blocked}: no TLS starts after the awaited deadline`,
+      );
+      assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the awaited deadline`);
     }
   }
 });
@@ -1126,7 +1180,7 @@ const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-dns-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'dns');",
+    before: "this.#finalGate(hooks, 'dns', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1134,7 +1188,7 @@ const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-tcp-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'tcp');",
+    before: "this.#finalGate(hooks, 'tcp', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1142,7 +1196,7 @@ const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-tls-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'tls');",
+    before: "this.#finalGate(hooks, 'tls', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1150,7 +1204,7 @@ const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-write-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'write');",
+    before: "this.#finalGate(hooks, 'write', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1159,13 +1213,13 @@ const transportMutations: readonly TransportMutation[] = [
     id: 'e6-write-gate-adjacency',
     file: 'runtime/judge-transport.ts',
     before: `      await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);
       const response = boundedResponse(socket);`,
     after: `      const response = boundedResponse(socket);
       await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);`,
     testFile: 'judge-transport.test.ts',
@@ -1214,20 +1268,17 @@ const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-post-gate-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `      this.#finalGate(hooks, 'dns');
-      assertBeforeDeadline(deadline, this.#clock);`,
-    after: `      this.#finalGate(hooks, 'dns');`,
+    before: `    assertBeforeDeadline(deadline, this.#clock);
+    let decision: unknown;`,
+    after: '    let decision: unknown;',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: an awaited gate that crosses the all-phase deadline stops that phase and every later phase',
   },
   {
     id: 'e6-final-gate-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `      this.#finalGate(hooks, 'write');
-      assertBeforeDeadline(deadline, this.#clock);
-      socket.write(request);`,
-    after: `      this.#finalGate(hooks, 'write');
-      socket.write(request);`,
+    before: '      decision = hooks.finalGate(phase, () => assertBeforeDeadline(deadline, this.#clock));',
+    after: '      decision = hooks.finalGate(phase);',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: a final gate that reaches the all-phase deadline lets no later phase or byte through',
   },

@@ -361,7 +361,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '21',
+        '22',
         fixture.name,
       );
       assert.deepEqual(
@@ -378,7 +378,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 22').get() as {
             count: number;
           }
         ).count,
@@ -656,7 +656,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '21',
+        '22',
       );
     } finally {
       first.close();
@@ -665,7 +665,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 22').get() as {
             count: number;
           }
         ).count,
@@ -989,6 +989,65 @@ test('E9 v20: an upgraded v19 synthetic reservation with no new authority bindin
       if (gate) networkAttempts += 1;
     }, /synthetic judge test authority is unavailable/u);
     assert.equal(networkAttempts, 0, 'the migration-era reservation is refused before a transport attempt');
+  } finally {
+    database.close();
+  }
+});
+
+test('E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('PRAGMA foreign_keys = ON');
+    applyMigrations(database, migrationsThrough(21));
+    seedJudgeAuthority(database);
+    insertSourceReservation(database, {
+      id: 'legacy-released-attempt',
+      workId: 'legacy-released-work',
+      accountId: 'account-a',
+      eventId: 'judge-migration-event-a',
+      state: 'released',
+    });
+    insertSourceReservation(database, {
+      id: 'legacy-in-flight-attempt',
+      workId: 'legacy-in-flight-work',
+      accountId: 'account-b',
+      eventId: 'judge-migration-event-b',
+      state: 'in-flight',
+    });
+
+    applyMigrations(database);
+
+    assert.throws(
+      () =>
+        database
+          .prepare("UPDATE judge_budget_reservations SET state = 'reserved' WHERE id = 'legacy-released-attempt'")
+          .run(),
+      /invalid judge reservation state transition/u,
+      'an upgraded released attempt remains terminal',
+    );
+    assert.throws(
+      () =>
+        database
+          .prepare("UPDATE judge_budget_reservations SET state = 'released' WHERE id = 'legacy-in-flight-attempt'")
+          .run(),
+      /invalid judge reservation state transition/u,
+      'an upgraded in-flight attempt can settle but can never release',
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT id, state FROM judge_budget_reservations
+            WHERE id IN ('legacy-released-attempt', 'legacy-in-flight-attempt')
+            ORDER BY id`,
+        )
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        { id: 'legacy-in-flight-attempt', state: 'in-flight' },
+        { id: 'legacy-released-attempt', state: 'released' },
+      ],
+      'both failed legacy transitions leave their rows unchanged',
+    );
   } finally {
     database.close();
   }

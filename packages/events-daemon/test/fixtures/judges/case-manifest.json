@@ -88,6 +88,18 @@
       "id": "e5-v1-literal-judge-kinds"
     },
     {
+      "id": "e5-released-retry-new-attempt"
+    },
+    {
+      "id": "e5-released-terminal-transition"
+    },
+    {
+      "id": "e5-inflight-never-releases"
+    },
+    {
+      "id": "e5-inflight-at-physical-io"
+    },
+    {
       "id": "e6-reference-date"
     },
     {
@@ -562,6 +574,18 @@
     },
     {
       "id": "e5-v1-literal-judge-kinds"
+    },
+    {
+      "id": "e5-released-retry-new-attempt"
+    },
+    {
+      "id": "e5-released-terminal-transition"
+    },
+    {
+      "id": "e5-inflight-never-releases"
+    },
+    {
+      "id": "e5-inflight-at-physical-io"
     },
     {
       "id": "e6-reference-date"
@@ -1281,6 +1305,55 @@
         "test": "E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS"
       },
       "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-released-retry-new-attempt",
+      "task": "E5",
+      "coverage": ["e5-released-retry-new-attempt"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-released-retry-new-attempt",
+        "test": "E5 attempt ledger: a released attempt stays terminal while one retry row owns and counts the logical work"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-released-terminal-transition",
+      "task": "E5",
+      "coverage": ["e5-released-terminal-transition"],
+      "productionEntry": "packages/events-daemon/src/store/migrations.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e5-released-terminal-transition",
+        "test": "E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-inflight-never-releases",
+      "task": "E5",
+      "coverage": ["e5-inflight-never-releases"],
+      "productionEntry": "packages/events-daemon/src/store/migrations.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e5-inflight-never-releases",
+        "test": "E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-inflight-at-physical-io",
+      "task": "E5",
+      "coverage": ["e5-inflight-at-physical-io"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e5-inflight-at-physical-io",
+        "test": "E7 attempt boundary: work stays reserved before first physical I/O and post-gate failure settles"
+      },
+      "strictRunner": "judge-task5-mutants",
+      "network": true
     },
     {
       "id": "e6-reference-date",
@@ -2274,7 +2347,7 @@
       "id": "e11-host-drift-before-byte",
       "task": "E11",
       "coverage": ["e11-host-drift-before-byte"],
-      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
       "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
       "mutation": {
         "id": "e11-host-drift-before-byte",

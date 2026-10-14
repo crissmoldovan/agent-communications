@@ -486,6 +486,232 @@ test('E7: pause fences reserved judge I/O and completed-response decision writes
   }
 });
 
+test('E7 attempt boundary: work stays reserved before first physical I/O and post-gate failure settles', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  {
+    const setup = await fixture(11434);
+    const observed: { beforeExecute?: string; beforeTcpGate?: string } = {};
+    try {
+      class RefuseBeforeTcpTransport extends JudgeTransport {
+        override async execute(...input: Parameters<JudgeTransport['execute']>) {
+          observed.beforeExecute = (
+            setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string }
+          ).state;
+          const [call, hooks] = input;
+          return super.execute(call, {
+            ...hooks,
+            beforeGate: async (phase) => {
+              if (phase !== 'tcp') return;
+              observed.beforeTcpGate = (
+                setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string }
+              ).state;
+              throw new Error('crash-before-first-physical-io');
+            },
+          });
+        }
+      }
+      const evaluator = evaluatorFor(
+        setup,
+        new RefuseBeforeTcpTransport({
+          tcpConnect: async () => {
+            throw new Error('the pre-I/O refusal must not connect');
+          },
+        }),
+        productionTaintRecorder(setup.stateDir),
+      );
+      const admission = await evaluator.admit({
+        event: setup.event,
+        eventId: setup.event.id,
+        ruleId: 'rule-e7',
+        ruleVersion: 1,
+        stagedAt: NOW,
+      });
+      assert.deepEqual(
+        observed,
+        { beforeExecute: 'reserved', beforeTcpGate: 'reserved' },
+        'the coordinator leaves the attempt reserved through every pre-I/O await',
+      );
+      assert.equal(admission, 'pending', 'a refusal before the first physical I/O keeps the projection retryable');
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT state, concurrency_owned FROM judge_budget_reservations')
+            .get() as object),
+        },
+        { state: 'released', concurrency_owned: 0 },
+        'the pre-I/O crash releases without a rolling charge',
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const setup = await fixture(11434);
+    const observed: { beforeExecute?: string; atTcp?: string } = {};
+    try {
+      class CrashAtTcpTransport extends JudgeTransport {
+        override async execute(...input: Parameters<JudgeTransport['execute']>) {
+          observed.beforeExecute = (
+            setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string }
+          ).state;
+          return super.execute(...input);
+        }
+      }
+      const evaluator = evaluatorFor(
+        setup,
+        new CrashAtTcpTransport({
+          tcpConnect: async () => {
+            observed.atTcp = (
+              setup.store.database.prepare('SELECT state FROM judge_budget_reservations').get() as { state: string }
+            ).state;
+            throw new Error('crash-after-first-physical-io');
+          },
+        }),
+        productionTaintRecorder(setup.stateDir),
+      );
+      assert.equal(
+        await evaluator.admit({
+          event: setup.event,
+          eventId: setup.event.id,
+          ruleId: 'rule-e7',
+          ruleVersion: 1,
+          stagedAt: NOW,
+        }),
+        'terminal',
+        'a failure after the physical I/O gate closes the work pessimistically',
+      );
+      assert.deepEqual(
+        observed,
+        { beforeExecute: 'reserved', atTcp: 'in-flight' },
+        'the first physical action observes the just-committed in-flight state',
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT state, actual_input_tokens, concurrency_owned FROM judge_budget_reservations')
+            .get() as object),
+        },
+        { state: 'settled', actual_input_tokens: null, concurrency_owned: 0 },
+        'the post-I/O crash charges the estimate and frees concurrency exactly once',
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const setup = await fixture(11434);
+    try {
+      class DeadlineAfterGateTransport extends JudgeTransport {
+        override async execute(...input: Parameters<JudgeTransport['execute']>) {
+          const [, hooks] = input;
+          hooks.finalGate('tcp');
+          return { kind: 'refused' as const, code: 'NETWORK_DEADLINE_EXCEEDED' as const, preIo: true };
+        }
+      }
+      const evaluator = evaluatorFor(setup, new DeadlineAfterGateTransport(), productionTaintRecorder(setup.stateDir));
+      assert.equal(
+        await evaluator.admit({
+          event: setup.event,
+          eventId: setup.event.id,
+          ruleId: 'rule-e7',
+          ruleVersion: 1,
+          stagedAt: NOW,
+        }),
+        'terminal',
+        'a refusal reported after the durable I/O gate settles instead of attempting an invalid release',
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT state, actual_input_tokens, concurrency_owned FROM judge_budget_reservations')
+            .get() as object),
+        },
+        { state: 'settled', actual_input_tokens: null, concurrency_owned: 0 },
+        'the post-gate deadline charges the estimate and frees concurrency exactly once',
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('E7 attempt boundary: a pre-I/O gate stall past the deadline releases without a charge or terminal decision', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture(11434);
+  let transportNow = 0;
+  let tcpCalls = 0;
+  try {
+    class StallBeforeTcpTransport extends JudgeTransport {
+      override async execute(...input: Parameters<JudgeTransport['execute']>) {
+        const [call, hooks] = input;
+        return super.execute(call, {
+          ...hooks,
+          beforeGate: async (phase) => {
+            if (phase === 'tcp') transportNow = 20_000;
+          },
+        });
+      }
+    }
+    const evaluator = evaluatorFor(
+      setup,
+      new StallBeforeTcpTransport({
+        tcpConnect: async () => {
+          tcpCalls += 1;
+          throw new Error('the expired pre-I/O gate must not connect');
+        },
+        clock: {
+          now: () => transportNow,
+          setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+          clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+        },
+      }),
+      productionTaintRecorder(setup.stateDir),
+    );
+
+    assert.equal(
+      await evaluator.admit({
+        event: setup.event,
+        eventId: setup.event.id,
+        ruleId: 'rule-e7',
+        ruleVersion: 1,
+        stagedAt: NOW,
+      }),
+      'pending',
+      'a deadline refusal before the first physical action leaves the projection retryable',
+    );
+    assert.equal(tcpCalls, 0, 'the stalled attempt emits no physical TCP I/O');
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare('SELECT state, actual_input_tokens, concurrency_owned FROM judge_budget_reservations')
+          .get() as object),
+      },
+      { state: 'released', actual_input_tokens: null, concurrency_owned: 0 },
+      'the stalled pre-I/O attempt releases without a rolling charge',
+    );
+    assert.equal(
+      (setup.store.database.prepare('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count,
+      0,
+      'the pre-I/O refusal creates no terminal decision',
+    );
+    assert.equal(
+      (setup.store.database.prepare('SELECT COUNT(*) AS count FROM ingest_rules').get() as { count: number }).count,
+      1,
+      'the pre-I/O refusal retains the projection for a new attempt',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
 test('E7: admission reserves the full HTTP request before transport can refuse it', {
   skip: WINDOWS_SKIP,
 }, async () => {

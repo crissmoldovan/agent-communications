@@ -111,6 +111,10 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'e5-double-settle',
   'e5-owner-start-recovery',
   'e5-v1-literal-judge-kinds',
+  'e5-released-retry-new-attempt',
+  'e5-released-terminal-transition',
+  'e5-inflight-never-releases',
+  'e5-inflight-at-physical-io',
   'e6-reference-date',
   'e6-header-allowlist',
   'e6-single-line-hosted-key',
@@ -242,7 +246,7 @@ export const PHASE_E_AUDIT_MATRIX = Object.freeze([
     ['hosted-key-read-to-transport-gates', 'e12-judge-key-generation-fence'],
     ['decrypt-evaluate-to-reservation', 'e7-settlement-token'],
     ['taint-flush-to-reservation', 'e7-taint-before-reserve'],
-    ['authority-read-to-in-flight', 'e6-write-final-gate'],
+    ['authority-read-to-in-flight', 'e5-inflight-at-physical-io'],
     ['dns-gate-to-lookup', 'e6-dns-final-gate'],
     ['tcp-gate-to-connect', 'e6-tcp-final-gate'],
     ['tls-gate-to-handshake', 'e6-tls-final-gate'],
@@ -367,7 +371,7 @@ export const PHASE_E_AUDIT_MATRIX = Object.freeze([
   ]),
 ]);
 
-const PHASE_E_AUDIT_MATRIX_SHA256 = '81974f7a8d9cf2a8d783f42718227380a201cae40e06c186728ff55e9ac7cdf1';
+const PHASE_E_AUDIT_MATRIX_SHA256 = '9eea5ef6f645a1faf543263df80b10b0b5fa500b5ed48f54033e18a8a3d80e41';
 const REQUIRED_CORPUS_ROWS = Object.freeze(
   PHASE_E_AUDIT_MATRIX.filter((row) => row.category === 'corpus-case').map((row) => row.id),
 );

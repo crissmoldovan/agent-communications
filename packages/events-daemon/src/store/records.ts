@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { JudgeKind } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
-import { WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
+import { type WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
 import { type AadComponent, encodeAad } from './aad.ts';
 import {
   decryptPackedRecord,

@@ -10,10 +10,9 @@ import {
   type PendingRuleJudgeTestAuthority,
 } from './b3-pending-rule-judge-test.ts';
 import {
-  assertJudgeReservationStillInFlight,
-  beginJudgeTransport,
+  finalizeJudgeTransportRefusal,
   JudgeBudgetError,
-  releaseJudgeWork,
+  JudgeReservationIoGate,
   reserveJudgeTest,
   settleJudgeWork,
 } from './judge-budget.ts';
@@ -268,30 +267,23 @@ export class JudgeTestControl {
     } catch (error) {
       return refusal(input.judgeId, input.version, error);
     }
-    try {
-      if (!beginJudgeTransport({ store: this.#store, reservationId: reservation.id, now: this.#now() }))
-        return { kind: 'refused', judgeId: input.judgeId, version: input.version, code: 'JUDGE_AUTHORITY_CHANGED' };
-    } catch (error) {
-      return refusal(input.judgeId, input.version, error);
-    }
+    const ioGate = new JudgeReservationIoGate({
+      store: this.#store,
+      reservationId: reservation.id,
+      judgeKind: authority.judge.kind,
+      now: this.#now,
+      ...(prepared.hostedKeyGeneration === null
+        ? {}
+        : {
+            hostedKey: {
+              judgeId: authority.judge.judgeId,
+              judgeVersion: authority.judge.version,
+              generation: prepared.hostedKeyGeneration,
+            },
+          }),
+    });
     const result = await this.#transport.execute(call, {
-      finalGate: () => {
-        assertJudgeReservationStillInFlight({
-          store: this.#store,
-          reservationId: reservation.id,
-          now: this.#now(),
-          ...(prepared.hostedKeyGeneration === null
-            ? {}
-            : {
-                hostedKey: {
-                  judgeId: authority.judge.judgeId,
-                  judgeVersion: authority.judge.version,
-                  generation: prepared.hostedKeyGeneration,
-                },
-              }),
-        });
-        return undefined;
-      },
+      finalGate: ioGate.finalGate,
       preparedRequest: prepared,
     });
     if (result.kind === 'answer') {
@@ -311,17 +303,7 @@ export class JudgeTestControl {
         reservationId: reservation.id,
       };
     }
-    if (result.preIo) {
-      releaseJudgeWork({ store: this.#store, reservationId: reservation.id, now: this.#now(), beforeIo: true });
-      return {
-        kind: 'deferred',
-        judgeId: input.judgeId,
-        version: input.version,
-        code: result.code,
-        reservationId: reservation.id,
-      };
-    }
-    settleJudgeWork({
+    finalizeJudgeTransportRefusal({
       store: this.#store,
       reservationId: reservation.id,
       result:
@@ -332,6 +314,7 @@ export class JudgeTestControl {
             : 'transport-failure',
       now: this.#now(),
     });
+    if (ioGate.firstGateError !== undefined) return refusal(input.judgeId, input.version, ioGate.firstGateError);
     return {
       kind: 'deferred',
       judgeId: input.judgeId,

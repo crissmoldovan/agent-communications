@@ -11,7 +11,7 @@
     "packages/events-daemon/test/support/writer-quiescer.ts"
   ],
   "corpus": "adversarial-v1.jsonl",
-  "sha256": "1da176f3b48fc75aab0d309d959ee7fd94273a7447ccc9d60fe1d3e11dec5098",
+  "sha256": "e4a8883dece2ea6163d833bb3cda1858d561e6c01e8c67a3686b0dfd01b3bddb",
   "journal": "adversarial-v1.journal.json",
   "journalSha256": "ed4b2ad51c96416c75a16de31736889e4511a03b57a7e71d7d914148674807e5",
   "cases": [
@@ -133,7 +133,7 @@
     },
     {
       "id": "host-drift-write-fence-refusal",
-      "sha256": "d25cfba4e1b07580e9bd6794473a22f509331295cd96c7fb744a7e598f26c437"
+      "sha256": "c05d9a1a9d722242c7bc87de84b69337896fc939768d1bce05656c57226b74d3"
     },
     {
       "id": "dns-rebinding-refusal",

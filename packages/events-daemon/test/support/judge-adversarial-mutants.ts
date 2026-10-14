@@ -86,9 +86,9 @@ export const JUDGE_ADVERSARIAL_MUTATIONS: readonly JudgeAdversarialMutation[] = 
   },
   {
     id: 'e11-host-drift-before-byte',
-    source: 'packages/events-daemon/src/runtime/judge-coordinator.ts',
-    before: '        assertJudgeReservationStillInFlight({',
-    after: '        ((_: unknown): void => undefined)({',
+    source: 'packages/events-daemon/src/runtime/judge-budget.ts',
+    before: '    assertJudgeReservationStillInFlight({',
+    after: '    ((_: unknown): void => undefined)({',
     test: 'packages/events-daemon/test/judge-adversarial-corpus.test.ts',
     testName:
       'E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes',

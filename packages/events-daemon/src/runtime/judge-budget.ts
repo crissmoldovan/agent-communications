@@ -4,11 +4,13 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { CanonicalJudgeBudgetDocument, CanonicalJudgeDocument, JudgeBudgetLimits } from '../domain/judges.ts';
 import { canonicalJudge, JUDGE_BUDGET_ID } from '../domain/judges.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { JudgeWorkScope } from '../store/records.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { assertPendingRuleJudgeTestAuthority } from './b3-pending-rule-judge-test.ts';
+import type { JudgeTransportPhase } from './judge-transport.ts';
 
 export const JUDGE_MAX_REQUEST_BYTES: number = 65_536;
 export const JUDGE_CALL_WINDOW_MS: number = 60 * 60 * 1000;
@@ -506,7 +508,7 @@ function readReservationForSourceWork(
       .prepare(
         `SELECT * FROM judge_budget_reservations
           WHERE work_id = ? AND work_scope = 'source-owned' AND source = ? AND account_id = ?
-            AND event_id = ? AND rule_id = ? AND rule_version = ?`,
+            AND event_id = ? AND rule_id = ? AND rule_version = ? AND state IN ('reserved', 'in-flight')`,
       )
       .get(workId, scope.source, scope.accountId, scope.eventId, scope.ruleId, scope.ruleVersion) as
       | StoredReservation
@@ -668,8 +670,7 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
     if (!sameCanonical(limits, input.limits))
       refusal('JUDGE_AUTHORITY_CHANGED', 'the supplied limits differ from the immutable rule authority');
     const prior = readReservationForSourceWork(input.store.database, input.workId, input.scope);
-    if (prior?.state === 'reserved' || prior?.state === 'in-flight')
-      refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');
+    if (prior !== null) refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');
     assertReservationLimits(input.store.database, {
       scope: input.scope,
       budget,
@@ -679,20 +680,6 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
       now: input.now,
       adding: true,
     });
-    if (prior?.state === 'released') {
-      input.store.database
-        .prepare(
-          `UPDATE judge_budget_reservations
-           SET estimated_input_tokens = ?, actual_input_tokens = NULL, state = 'reserved', concurrency_owned = 1,
-               reserved_at = ?, in_flight_at = NULL, settled_at = NULL, released_at = NULL, switch_generation = ?
-           WHERE id = ? AND state = 'released' AND concurrency_owned = 0`,
-        )
-        .run(estimate, input.now, input.switchGeneration, prior.id);
-      const reactivated = readReservation(input.store.database, prior.id);
-      if (reactivated === null || reactivated.state !== 'reserved')
-        refusal('JUDGE_AUTHORITY_CHANGED', 'the released judge work could not be re-reserved');
-      return reservationView(reactivated);
-    }
     return insertReservation(input.store.database, { ...input, judge, budgetVersion: budget.version, estimate });
   });
 }
@@ -761,6 +748,8 @@ export function beginJudgeTransport(input: {
   readonly store: EventDatabase;
   readonly reservationId: string;
   readonly now: number;
+  readonly hostedKey?: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined;
+  readonly assertBeforeTransition?: (() => void) | undefined;
 }): boolean {
   let refused = false;
   let refusalError: unknown;
@@ -769,12 +758,16 @@ export function beginJudgeTransport(input: {
     if (row === null || row.state !== 'reserved') return false;
     try {
       const authority = assertReservationAuthority(input.store.database, row, input.now);
-      const scope = sourceScope(row) ?? {
-        scope: 'synthetic-test' as const,
-        testWorkId: row.test_work_id as string,
-        judgeId: row.judge_id,
-        judgeVersion: row.judge_version,
-      };
+      const source = sourceScope(row);
+      const scope =
+        source ??
+        ({
+          scope: 'synthetic-test' as const,
+          testWorkId: row.test_work_id as string,
+          judgeId: row.judge_id,
+          judgeVersion: row.judge_version,
+        } satisfies SyntheticJudgeWork);
+      if (source !== null) assertSourceReservationBoundary(input.store.database, source, row.switch_generation);
       assertReservationLimits(input.store.database, {
         scope,
         budget: authority.budget,
@@ -784,6 +777,8 @@ export function beginJudgeTransport(input: {
         now: input.now,
         adding: false,
       });
+      assertHostedKeyGeneration(input.store.database, row, input.hostedKey);
+      input.assertBeforeTransition?.();
     } catch (error) {
       releaseReservationInTransaction(input.store.database, row.id, input.now);
       refused = true;
@@ -805,6 +800,81 @@ export function beginJudgeTransport(input: {
 }
 
 /**
+ * Couples the durable I/O transition to the sealed transport's synchronous gate. Hosted work enters at DNS; a
+ * literal-loopback judge has no DNS action and enters at TCP. Every later gate rechecks the complete live authority.
+ */
+export class JudgeReservationIoGate {
+  readonly #store: EventDatabase;
+  readonly #reservationId: string;
+  readonly #judgeKind: CanonicalJudgeDocument['kind'];
+  readonly #now: () => number;
+  readonly #hostedKey: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined;
+  #entered = false;
+  #firstGateError: unknown | undefined;
+
+  constructor(input: {
+    readonly store: EventDatabase;
+    readonly reservationId: string;
+    readonly judgeKind: CanonicalJudgeDocument['kind'];
+    readonly now: () => number;
+    readonly hostedKey?: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined;
+  }) {
+    this.#store = input.store;
+    this.#reservationId = input.reservationId;
+    this.#judgeKind = input.judgeKind;
+    this.#now = input.now;
+    this.#hostedKey = input.hostedKey;
+  }
+
+  get firstGateError(): unknown | undefined {
+    return this.#firstGateError;
+  }
+
+  finalGate = (phase: JudgeTransportPhase, assertBeforeTransition?: () => void): undefined => {
+    const firstPhysicalPhase: JudgeTransportPhase = this.#judgeKind === JUDGE_KIND_TYPESAFE ? 'dns' : 'tcp';
+    if (!this.#entered) {
+      if (phase !== firstPhysicalPhase) {
+        assertBeforeTransition?.();
+        return undefined;
+      }
+      let deadlineRefused = false;
+      try {
+        if (
+          !beginJudgeTransport({
+            store: this.#store,
+            reservationId: this.#reservationId,
+            now: this.#now(),
+            ...(this.#hostedKey === undefined ? {} : { hostedKey: this.#hostedKey }),
+            assertBeforeTransition: () => {
+              try {
+                assertBeforeTransition?.();
+              } catch (error) {
+                deadlineRefused = true;
+                throw error;
+              }
+            },
+          })
+        )
+          refusal('JUDGE_AUTHORITY_CHANGED', 'the judge reservation was lost before physical I/O');
+      } catch (error) {
+        if (!deadlineRefused) this.#firstGateError = error;
+        throw error;
+      }
+      this.#entered = true;
+      return undefined;
+    }
+    assertJudgeReservationStillInFlight({
+      store: this.#store,
+      reservationId: this.#reservationId,
+      now: this.#now(),
+      ...(this.#hostedKey === undefined ? {} : { hostedKey: this.#hostedKey }),
+    });
+    assertBeforeTransition?.();
+    return undefined;
+  };
+}
+
+/**
  * The synchronous final transport/decision fence.  It reuses the one reservation authority reader rather than
  * manufacturing a second reservation path, and is safe to call immediately beside each Task-6 I/O action.
  */
@@ -818,27 +888,33 @@ export function assertJudgeReservationInFlightInTransaction(
   if (row === null || row.state !== 'in-flight' || row.concurrency_owned !== 1)
     refusal('JUDGE_AUTHORITY_CHANGED', 'the judge reservation is no longer in flight');
   assertReservationAuthority(database, row, now);
-  if (hostedKey !== undefined) {
-    if (row.judge_id !== hostedKey.judgeId || row.judge_version !== hostedKey.judgeVersion)
-      refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key does not belong to this reservation');
-    const current = database
-      .prepare(
-        `SELECT 1 AS present
-           FROM event_secret_generations AS generation
-           JOIN judge_versions AS judge
-             ON judge.judge_id = generation.owner_id AND judge.version = generation.owner_version
-          WHERE generation.owner_kind = 'judge' AND generation.purpose = 'judge-key'
-            AND generation.owner_id = ? AND generation.owner_version = ? AND generation.generation = ?
-            AND generation.lifecycle = 'current' AND generation.owner_digest = judge.digest
-            AND judge.revoked_at IS NULL`,
-      )
-      .get(hostedKey.judgeId, hostedKey.judgeVersion, hostedKey.generation);
-    if (current === undefined)
-      refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key generation is no longer current');
-  }
+  assertHostedKeyGeneration(database, row, hostedKey);
   const scope = sourceScope(row);
   if (scope === null) return;
   assertSourceReservationBoundary(database, scope, row.switch_generation);
+}
+
+function assertHostedKeyGeneration(
+  database: DatabaseSync,
+  row: StoredReservation,
+  hostedKey: Readonly<{ judgeId: string; judgeVersion: number; generation: number }> | undefined,
+): void {
+  if (hostedKey === undefined) return;
+  if (row.judge_id !== hostedKey.judgeId || row.judge_version !== hostedKey.judgeVersion)
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key does not belong to this reservation');
+  const current = database
+    .prepare(
+      `SELECT 1 AS present
+         FROM event_secret_generations AS generation
+         JOIN judge_versions AS judge
+           ON judge.judge_id = generation.owner_id AND judge.version = generation.owner_version
+        WHERE generation.owner_kind = 'judge' AND generation.purpose = 'judge-key'
+          AND generation.owner_id = ? AND generation.owner_version = ? AND generation.generation = ?
+          AND generation.lifecycle = 'current' AND generation.owner_digest = judge.digest
+          AND judge.revoked_at IS NULL`,
+    )
+    .get(hostedKey.judgeId, hostedKey.judgeVersion, hostedKey.generation);
+  if (current === undefined) refusal('JUDGE_AUTHORITY_CHANGED', 'the hosted judge key generation is no longer current');
 }
 
 function assertSourceReservationBoundary(
@@ -873,39 +949,26 @@ export function assertJudgeReservationStillInFlight(input: {
   });
 }
 
-function releaseReservationInTransaction(
-  database: DatabaseSync,
-  reservationId: string,
-  now: number,
-  mayReleaseInFlight = false,
-): boolean {
+function releaseReservationInTransaction(database: DatabaseSync, reservationId: string, now: number): boolean {
   return (
     database
       .prepare(
         `UPDATE judge_budget_reservations
          SET state = 'released', concurrency_owned = 0, released_at = ?
-         WHERE id = ? AND concurrency_owned = 1
-           AND state != 'settled' AND state != 'released'
-           AND state = CASE WHEN ? = 1 THEN state ELSE 'reserved' END`,
+         WHERE id = ? AND concurrency_owned = 1 AND state = 'reserved'`,
       )
-      .run(now, reservationId, mayReleaseInFlight ? 1 : 0).changes === 1
+      .run(now, reservationId).changes === 1
   );
 }
 
-/**
- * Pre-I/O loss is free: a reserved call releases normally.  `beforeIo` is an intentionally narrow transport proof
- * that lets a final fence refusal release the just-marked in-flight row too, because no DNS, TCP, TLS, or raw write
- * was entered and therefore there is no provider work to charge.
- */
+/** Pre-I/O loss is free. Only a provisional reserved attempt may enter the terminal released state. */
 export function releaseJudgeWork(input: {
   readonly store: EventDatabase;
   readonly reservationId: string;
   readonly now: number;
-  /** Set only by JudgeTransport when it proved no DNS, TCP, TLS, or raw write has begun. */
-  readonly beforeIo?: true | undefined;
 }): boolean {
   return input.store.immediate(() =>
-    releaseReservationInTransaction(input.store.database, input.reservationId, input.now, input.beforeIo === true),
+    releaseReservationInTransaction(input.store.database, input.reservationId, input.now),
   );
 }
 
@@ -1008,6 +1071,33 @@ export function settleJudgeWork(input: SettleJudgeWorkInput): boolean {
       testFailpoint: input.testFailpoint,
     }),
   );
+}
+
+/**
+ * Closes a refused transport from the durable boundary state, not from the transport's advisory `preIo` flag. A
+ * refusal that reached the synchronous physical-I/O gate is already in flight and must settle pessimistically;
+ * every earlier refusal is still reserved and releases without a rolling charge.
+ */
+export function finalizeJudgeTransportRefusal(input: {
+  readonly store: EventDatabase;
+  readonly reservationId: string;
+  readonly result: Exclude<JudgeSettlementResult, 'completed'>;
+  readonly now: number;
+}): 'released' | 'settled' | null {
+  return input.store.immediate(() => {
+    const row = readReservation(input.store.database, input.reservationId);
+    if (row === null) return null;
+    if (row.state === 'released' || row.state === 'settled') return row.state;
+    if (row.state === 'reserved')
+      return releaseReservationInTransaction(input.store.database, row.id, input.now) ? 'released' : null;
+    return settleReservationInTransaction(input.store.database, {
+      reservationId: row.id,
+      result: input.result,
+      now: input.now,
+    })
+      ? 'settled'
+      : null;
+  });
 }
 
 /** Used only by the shared recovery closure; no other module may reimplement these state transitions. */

@@ -1,7 +1,7 @@
 import type net from 'node:net';
 import type tls from 'node:tls';
 import { APPROVED_TYPESAFE_MODELS } from '../domain/judges.ts';
-import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { type JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { validateLocalEndpoint } from '../network/local-endpoint.ts';
 import {
   addressSetDigest,
@@ -77,10 +77,11 @@ export interface JudgeTransportCall {
 export interface JudgeTransportHooks {
   readonly beforeGate?: ((phase: JudgeTransportPhase) => Promise<void>) | undefined;
   /**
-   * Synchronous and physically adjacent to the DNS/TCP/TLS/write action. It returns nothing: a gate that returns a value,
+   * Synchronous and physically adjacent to the DNS/TCP/TLS/write action. The transport-supplied assertion belongs
+   * inside the gate immediately before its durable I/O transition. It returns nothing: a gate that returns a value,
    * a promise above all, has not finished deciding and refuses the phase.
    */
-  readonly finalGate: (phase: JudgeTransportPhase) => undefined;
+  readonly finalGate: (phase: JudgeTransportPhase, assertBeforeTransition?: () => void) => undefined;
   /** A coordinator may serialize once for admission and pass those exact bytes to the sealed writer. */
   readonly preparedRequest?: PreparedJudgeTransportRequest | undefined;
 }
@@ -351,11 +352,13 @@ export class JudgeTransport {
     let enteredIo = false;
     try {
       await this.#beforeGate(hooks, 'dns');
-      this.#finalGate(hooks, 'dns');
-      assertBeforeDeadline(deadline, this.#clock);
+      this.#finalGate(hooks, 'dns', deadline);
       // A literal local endpoint reaches this preparation without DNS. Hosted judges use a hostname, so resolving it
       // is the first physical action and any later refusal is conservatively post-I/O.
       enteredIo = call.judge.kind === JUDGE_KIND_TYPESAFE;
+      // The gate's commit can carry it past the deadline: the clock is read once more, with nothing between this and
+      // the action. A refusal here is post-I/O when the gate committed the attempt in flight, and settles as one.
+      assertBeforeDeadline(deadline, this.#clock);
       const connection = await beforeDeadline(
         preparePinnedConnection(
           call.judge.kind === JUDGE_KIND_TYPESAFE
@@ -377,9 +380,9 @@ export class JudgeTransport {
       assertBeforeDeadline(deadline, this.#clock);
 
       await this.#beforeGate(hooks, 'tcp');
-      this.#finalGate(hooks, 'tcp');
-      assertBeforeDeadline(deadline, this.#clock);
+      this.#finalGate(hooks, 'tcp', deadline);
       enteredIo = true;
+      assertBeforeDeadline(deadline, this.#clock);
       const tcp = await beforeDeadline(
         this.#tcpConnect({ host: connection.address, port: connection.port }),
         deadline,
@@ -390,7 +393,7 @@ export class JudgeTransport {
       socket = tcp;
       if (connection.useTls) {
         await this.#beforeGate(hooks, 'tls');
-        this.#finalGate(hooks, 'tls');
+        this.#finalGate(hooks, 'tls', deadline);
         assertBeforeDeadline(deadline, this.#clock);
         socket = await beforeDeadline(
           this.#tlsConnect({ socket: tcp, ...connection.tls }),
@@ -402,7 +405,7 @@ export class JudgeTransport {
       }
 
       await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);
       const response = boundedResponse(socket);
@@ -436,14 +439,16 @@ export class JudgeTransport {
   }
 
   /**
-   * At every call site only the synchronous deadline check stands between this gate and the physical B2 network action;
-   * no await may be inserted between them.
+   * The deadline is checked after the awaited preparation and again inside the durable production gate immediately
+   * before its state transition. No await may be inserted between this gate and the physical B2 network action.
    */
-  #finalGate(hooks: JudgeTransportHooks, phase: JudgeTransportPhase): void {
+  #finalGate(hooks: JudgeTransportHooks, phase: JudgeTransportPhase, deadline: number): void {
+    assertBeforeDeadline(deadline, this.#clock);
     let decision: unknown;
     try {
-      decision = hooks.finalGate(phase);
-    } catch {
+      decision = hooks.finalGate(phase, () => assertBeforeDeadline(deadline, this.#clock));
+    } catch (error) {
+      if (error instanceof DeadlineExceeded) throw error;
       throw new FenceRefused();
     }
     if (decision !== undefined) {
