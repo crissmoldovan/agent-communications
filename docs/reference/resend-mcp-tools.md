@@ -31,7 +31,7 @@ has no read-only key. No tool adds a key, and no tool approves.
 | [`resend_metrics`](#resend_metrics) | Delivery, bounce and complaint counts for a range of days; the last 7 by default. |
 | [`resend_suppressions`](#resend_suppressions) | Addresses Resend will not send to, and why (bounce, complaint, manual). |
 | [`resend_send_prepare`](#resend_send_prepare) | Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. |
-| [`resend_send_execute`](#resend_send_execute) | Send a prepared email, once, after the person approved its preview. |
+| [`resend_send_execute`](#resend_send_execute) | Send by approval id the email bound by resend_send_prepare, once, after the person approved its preview. |
 | [`resend_send_status`](#resend_send_status) | What happened to a send: the approval, the local record, and its current `outcome` as Resend’s own last event reports it. |
 | [`resend_send_wait`](#resend_send_wait) | Wait for an approval — a send or a change — to be usable or finished, and say where it stands: pending (with `claimable` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked or corrupt. |
 | [`resend_scheduled_list`](#resend_scheduled_list) | Emails waiting to be sent later, among the most recent 300 sent, and whether this machine scheduled each. |
@@ -210,7 +210,7 @@ Build an email and return the exact preview — every recipient, BCC included, t
 
 ### `resend_send_execute`
 
-Send a prepared email, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. `expect` restates the recipients and subject shown. Never call it again for an email whose outcome is unknown: use `resend_send_status`.
+Send by approval id the email bound by resend_send_prepare, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. Pass the approval id; legacy callers may also pass expect, which must still match exactly. Never call it again for an email whose outcome is unknown: use resend_send_status.
 
 *writes · destructive*
 
@@ -218,7 +218,7 @@ Send a prepared email, once, after the person approved its preview. Under `confi
 |---|---|---|---|
 | `account` | string | no | which account, as `organisation/resend` |
 | `approvalId` | string | **yes** | the approval `resend_send_prepare` returned |
-| `expect` | object | **yes** | the recipients and subject the preview showed |
+| `expect` | object | no | legacy exact check for recipients and subject; otherwise read from the approval |
 
 ### `resend_send_status`
 

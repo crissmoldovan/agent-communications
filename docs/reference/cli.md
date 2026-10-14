@@ -512,20 +512,20 @@ agent-gmail send prepare [options] <draftId>
 
 ### `agent-gmail send execute`
 
-send it — only with an approval, and only to the recipients that approval names
+send it by approval id; legacy callers may also pass a draft id and --approval
 
 ```
-agent-gmail send execute [options] <draftId>
+agent-gmail send execute [options] <id>
 ```
 
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
-| `--approval <id>` | the approval from `send prepare` | — |
-| `--expect-to <address...>` | who you believe this goes to; `none` for nobody | — |
-| `--expect-subject <subject>` | the subject you believe it has; `none` for an empty one | — |
-| `--expect-cc <address...>` | who you believe is copied; `none` for nobody | `["none"]` |
-| `--expect-bcc <address...>` | who you believe is blind-copied; `none` for nobody | `["none"]` |
+| `--approval <id>` | legacy form: the approval when <id> is the draft id | — |
+| `--expect-to <address...>` | legacy exact check: To recipients; `none` for nobody | — |
+| `--expect-subject <subject>` | legacy exact check: subject; `none` for an empty one | — |
+| `--expect-cc <address...>` | legacy exact check: Cc recipients; `none` for nobody | — |
+| `--expect-bcc <address...>` | legacy exact check: Bcc recipients; `none` for nobody | — |
 
 ### `agent-gmail send list`
 

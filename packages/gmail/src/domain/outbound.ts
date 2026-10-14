@@ -11,6 +11,7 @@ import {
 } from '@agentcomms/core';
 import type { RawMessage, SendAsAddress } from '../gmail-api/transport.ts';
 import { type GmailHeader, headerValue, headerValues, readParts } from './mime.ts';
+import { type FieldEnvelope, wrapField } from './untrusted-fields.ts';
 
 /**
  * What `send prepare` needs to know about a draft before anyone is asked to approve it.
@@ -229,8 +230,8 @@ export async function analyseDraft(options: {
       : Buffer.from(attachment.text ?? '', 'utf8');
     if (bytes.length === 0) {
       refusals.push({
-        reason: `the attachment "${attachment.filename ?? '(unnamed)'}" has no readable content`,
-        detail: 'an attachment whose bytes cannot be read cannot be bound to the approval',
+        reason: 'an attachment has no readable content',
+        detail: `${attachment.filename ?? '(unnamed)'} cannot be bound to the approval because its bytes cannot be read`,
       });
     }
     attachments.push({
@@ -288,9 +289,11 @@ export async function analyseDraft(options: {
 }
 
 /** The one error for a draft an agent may not send, carrying every reason rather than only the first. */
-export function unsendable(refusals: readonly Unsendable[]): CommsError {
+export function unsendable(refusals: readonly Unsendable[], envelope: FieldEnvelope): CommsError {
   return new CommsError('UNSENDABLE_HTML', `this draft cannot be sent by an agent: ${refusals[0]?.reason}`, {
     hint: 'Review it and send it from Gmail. An agent may only send what it could have written itself.',
-    details: { refusals: refusals.map((refusal) => `${refusal.reason} (${refusal.detail})`) },
+    details: {
+      refusals: refusals.map((refusal) => wrapField(`${refusal.reason} (${refusal.detail})`, 'send-refusal', envelope)),
+    },
   });
 }

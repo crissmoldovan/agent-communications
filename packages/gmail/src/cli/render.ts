@@ -751,21 +751,7 @@ export function renderSendPreparation(result: SendPreparation, color: boolean, h
  * only `send execute` sends, through `executeSend`, with the person's approval.
  */
 function sendExecuteWords(result: SendPreparation): string[] {
-  const recipients = (flag: string, values: readonly string[]) => [flag, ...(values.length > 0 ? values : ['none'])];
-  return [
-    'send',
-    'execute',
-    result.draftId,
-    '--inbox',
-    result.inbox,
-    '--approval',
-    result.approvalId,
-    ...recipients('--expect-to', result.expect.to),
-    ...recipients('--expect-cc', result.expect.cc),
-    ...recipients('--expect-bcc', result.expect.bcc),
-    '--expect-subject',
-    result.expect.subject || 'none',
-  ];
+  return ['send', 'execute', result.approvalId, '--inbox', result.inbox];
 }
 
 export function renderSent(result: SendResult, color: boolean): string {

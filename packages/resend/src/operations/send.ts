@@ -14,6 +14,7 @@ import {
   integrityRefusal,
   type LegacyDrainReport,
   type MessagePreview,
+  newBoundary,
   ownerOf,
   type PublicApprovalView,
   publicApproval,
@@ -30,6 +31,7 @@ import {
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
 import { resendRequest, sendThrottleOf, throttledRefusal, type WriteOutcome } from '../api/client.ts';
 import { APPROVAL_TAG, closedPermit, type FetchLike, spendOn } from '../api/guard.ts';
+import { addressField, type Envelope, wrapField } from '../compose/inbound.ts';
 import {
   type BuiltMessage,
   buildMessage,
@@ -123,11 +125,46 @@ export interface SendResult {
 }
 
 /**
+ * A caller may hand back the canonical expectation it kept, or the display-safe `expect` that prepare returned. The
+ * latter is accepted only when it is byte-for-byte this approval's field rendering under the boundary it carries, the
+ * way Gmail accepts its own; then the claim compares the raw binding. Anything else is passed on as given, so an
+ * invented or edited envelope still mismatches and the send is refused.
+ */
+function canonicalSuppliedExpectation(
+  supplied: Expectation,
+  bound: Expectation,
+  account: string,
+  id: string,
+): Expectation {
+  const boundary = /^<untrusted-content boundary="([A-Za-z0-9_-]+)" field="subject"/.exec(supplied.subject)?.[1];
+  if (boundary === undefined) return supplied;
+  const displayed = expectationFields(bound, { boundary, account, id });
+  const same = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+  return displayed.subject === supplied.subject &&
+    same(displayed.to, supplied.to) &&
+    same(displayed.cc, supplied.cc) &&
+    same(displayed.bcc, supplied.bcc)
+    ? bound
+    : supplied;
+}
+
+/**
  * A used approval, as Resend's own surfaces refuse it (design 2026-10-05 §D2, the used-send row): Resend accepted the
  * email — which is not that it went, since one may be scheduled, bounce or be cancelled — and never "sent". The words
  * `resend_send_wait` shows for it too, core's for every provider.
  */
 const ACCEPTED_BY_RESEND: UsedSaid = (usedAt) => `accepted by Resend at ${usedAt}`;
+
+/** A send's recipients and subject as Resend may return them: display-safe, never the raw approval binding. */
+function expectationFields(expect: Expectation, envelope: Envelope): Expectation {
+  return {
+    to: expect.to.map((address) => addressField(address, 'to', envelope)),
+    cc: expect.cc.map((address) => addressField(address, 'cc', envelope)),
+    bcc: expect.bcc.map((address) => addressField(address, 'bcc', envelope)),
+    subject: wrapField(expect.subject, 'subject', envelope),
+  };
+}
 
 /**
  * A send's approval as the one account that may use it, classified under its lock as the claim would classify it
@@ -458,7 +495,11 @@ export async function prepareSend(context: ResendContext, name: string, input: S
     effectivePolicy: effective,
     riskFlags: study.flags,
     reach,
-    expect: record.expect,
+    expect: expectationFields(record.expect, {
+      boundary: newBoundary(),
+      account: name,
+      id: record.approvalId,
+    }),
     expiresAt: record.expiresAt,
     nextStep:
       effective === 'confirm'
@@ -472,8 +513,8 @@ export async function prepareSend(context: ResendContext, name: string, input: S
                 wait === undefined ? '' : `; learn when they have with ${wait}`
               }.`,
             { instead: 'Show the preview to the user; they approve it at their own terminal.' },
-          )} You cannot approve this yourself. Then execute it with the same approval id and the recipients and subject shown.`
-        : 'Show the preview to the user verbatim and wait for an explicit yes. Then execute it with the same approval id and the recipients and subject shown above.',
+          )} You cannot approve this yourself. Then execute it with the same approval id.`
+        : 'Show the preview to the user verbatim and wait for an explicit yes. Then execute it with the same approval id.',
     approval: await context.core.approvals.approvalOf(record),
     ...(legacyDrain === undefined ? {} : { legacyDrain }),
   };
@@ -660,7 +701,7 @@ function acceptedSaid(withId: boolean, scheduledAt: string | null): string {
 export async function executeSend(
   context: ResendContext,
   name: string,
-  options: { approvalId: string; expect: Expectation },
+  options: { approvalId: string; expect?: Expectation | undefined },
 ): Promise<SendResult> {
   // First, as every claim does: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
@@ -694,7 +735,7 @@ async function claimAndSend(
   context: ResendContext,
   named: NamedAccount,
   name: string,
-  options: { approvalId: string; expect: Expectation },
+  options: { approvalId: string; expect?: Expectation | undefined },
   known: ApprovalRecord,
   _seen: ApprovalObject,
   legacyDrain: LegacyDrainReport | undefined,
@@ -724,7 +765,10 @@ async function claimAndSend(
       contentDigest: digest,
       inboxId: named.account.id,
       inboxSub: named.account.userId,
-      expect: options.expect,
+      expect:
+        options.expect === undefined
+          ? known.expect
+          : canonicalSuppliedExpectation(options.expect, known.expect, name, known.approvalId),
     },
     {
       pendingHint: `${approveAndWaitSentence(
@@ -953,10 +997,11 @@ async function claimAndSend(
       state: message.scheduledAt ? 'scheduled' : 'sent',
       scheduledAt: message.scheduledAt,
       said: acceptedSaid(resendId !== undefined, message.scheduledAt),
-      to: claimed.expect.to,
-      cc: claimed.expect.cc,
-      bcc: claimed.expect.bcc,
-      subject: claimed.expect.subject,
+      ...expectationFields(claimed.expect, {
+        boundary: newBoundary(),
+        account: name,
+        id: options.approvalId,
+      }),
       ...(unrecorded.length > 0 ? { note: unrecorded.join('; ') } : {}),
       approval: approval ?? (await approvalNow(context, options.approvalId, named.account.id, claimedApproval)),
       ...(legacyDrain === undefined ? {} : { legacyDrain }),
@@ -988,6 +1033,16 @@ export interface SendStatus {
   outcome: CurrentOutcome | null;
   /** The answer, in words. */
   verdict: string;
+}
+
+/** A stored send as a result may show it: canonical recipients stay addresses; its subject is always prose. */
+function sendSummaryFields(summary: SendSummary | null, envelope: Envelope): SendSummary | null {
+  if (summary === null) return null;
+  return {
+    ...summary,
+    recipients: summary.recipients.map((address) => addressField(address, 'recipient', envelope)),
+    ...(summary.subject === undefined ? {} : { subject: wrapField(summary.subject, 'subject', envelope) }),
+  };
 }
 
 const CANNOT_READ = 'this key can only send, so it cannot read what Resend did with the email';
@@ -1036,9 +1091,17 @@ export async function sendStatus(context: ResendContext, name: string, approvalI
       throw error;
     });
   const stored = seen?.stored ?? null;
+  const envelope = { boundary: newBoundary(), account: name, id: approvalId };
   // Shown as the look classified it, what a sender wrote only inside its envelope (design 2026-10-05 §D8).
-  const approval = seen ? publicApproval(seen.stored, seen.outcome) : null;
-  const base = { account: name, approvalId, approval, local };
+  const approval = seen
+    ? publicApproval(seen.stored, seen.outcome, {
+        wrap: (text, field) =>
+          field === 'subject' || field === 'filename'
+            ? wrapField(text, field, envelope)
+            : addressField(text, field, envelope),
+      })
+    : null;
+  const base = { account: name, approvalId, approval, local: sendSummaryFields(local, envelope) };
   if (!local) {
     return {
       ...base,

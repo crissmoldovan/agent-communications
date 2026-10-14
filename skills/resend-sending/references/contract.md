@@ -60,7 +60,7 @@ terminal.
   "to be safe".
 - What counts as their approval is the account's send policy. Under `chat`, their yes in this
   conversation to that preview: then `resend_send_execute` (CLI: `agent-resend send execute`) with the
-  approval id and the recipients and subject the preview showed sends it, once. Under `confirm` — and
+  approval id sends the exact bound message, once. Under `confirm` — and
   for any email reaching **more than 10 people**, or an address that arrived in mail read here and was
   never written to from here, as a recipient or as the Reply-To, whatever the policy — the same call
   returns `APPROVAL_PENDING`, and the person runs the approve command it gives (§14) at their own

@@ -298,7 +298,6 @@ test('over MCP: read the mail, prepare, execute — nothing goes to the sender�
     const executed = await call('resend_send_execute', {
       account: 'acme/resend',
       approvalId: prepared.approvalId,
-      expect: prepared.expect,
     });
     assert.equal(executed.isError, true);
   } finally {
@@ -499,7 +498,7 @@ test('sent emails show their last event and Message-ID; metrics and suppressions
     subject: 'Hello',
     text: 'Hi',
   });
-  const sent = await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect });
+  const sent = await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId });
   const listed = await listSentEmails(context, 'acme/resend', { limit: 5 });
   assert.ok(listed.available);
   assert.equal(listed.emails[0]?.id, sent.resendId);
@@ -539,7 +538,7 @@ test('a scheduled email from this machine is cancelled at once; one scheduled el
     text: 'Later',
     scheduledAt: at,
   });
-  const ours = await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect });
+  const ours = await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId });
   // One scheduled by the team's own code, not through this machine.
   harness.fake.sent.unshift({
     ...(harness.fake.sent[0] as NonNullable<(typeof harness.fake.sent)[0]>),
@@ -601,7 +600,6 @@ for (const [label, reply, outcome] of [
     });
     const sent = await executeSend(context, 'acme/resend', {
       approvalId: prepared.approvalId,
-      expect: prepared.expect,
     });
     harness.fake.intercept = (request) => (request.path.endsWith('/cancel') ? reply : undefined);
     await assert.rejects(
@@ -631,7 +629,7 @@ test('cancelling an email scheduled elsewhere is approved under the account’s 
     text: 'Later',
     scheduledAt: at,
   });
-  await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect });
+  await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId });
   harness.fake.sent.unshift({
     ...(harness.fake.sent[0] as NonNullable<(typeof harness.fake.sent)[0]>),
     id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',

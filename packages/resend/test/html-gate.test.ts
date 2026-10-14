@@ -160,7 +160,6 @@ test('HTML that shows exactly its text part still prepares and sends', async () 
     assert.match(prepared.preview, /it shows exactly the text above/);
     const sent = await executeSend(harness.context('mcp'), 'acme/resend', {
       approvalId: prepared.approvalId,
-      expect: prepared.expect as never,
     });
     assert.equal(sent.state, 'sent');
     assert.equal(harness.fake.sends().length, 1);

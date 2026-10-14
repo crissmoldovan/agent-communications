@@ -145,6 +145,5 @@ second server.
   Abandoned ones sit `pending` and can still be acted on. Cancel the one you walked away from — and
   any the person said no to, at once: `gmail_send_cancel` (CLI: `agent-gmail send cancel
   <approvalId>`).
-- **Re-typing the `expect` block out of the preview text.** Copy it from the prepare result. A typo
-  voids the approval — annoying but safe. A "fix" that happens to match the draft is worse: it sends
-  mail whose recipients nobody checked against what was shown.
+- **Passing recipients or subject back into the send.** Send by approval id. The approval already binds
+  the exact message, and the prepare result's field echoes are display-safe output rather than send input.

@@ -109,7 +109,7 @@ function bad(message: string, hint?: string): CommsError {
 function address(value: string, field: string): string {
   const trimmed = value.trim();
   if (!ADDRESS.test(trimmed)) {
-    throw bad(`${field}: "${[...trimmed].slice(0, 80).join('')}" is not an email address`, 'Give bare addresses.');
+    throw bad(`${field} contains a value that is not a bare email address`, 'Give bare addresses.');
   }
   return canonicalAddress(trimmed);
 }

@@ -24,7 +24,6 @@ import { createDraft } from '../src/operations/drafts.ts';
 import { prepareSend, type SendPreparation } from '../src/operations/send.ts';
 import {
   assertNoBareCommand,
-  gmailCommand,
   gmailHandoffs,
   gmailInline,
   gmailRetryWords,
@@ -112,14 +111,14 @@ async function cli(
             return {
               inbox,
               approvalId: request.approvalId,
-              draftId: request.draftId,
+              draftId: request.draftId ?? 'draft-from-approval',
               sentMessageId: 'm_parser',
               said: 'sent, message id m_parser',
               threadId: undefined,
-              to: request.expect.to,
-              cc: request.expect.cc,
-              bcc: request.expect.bcc,
-              subject: request.expect.subject,
+              to: request.expect?.to ?? [],
+              cc: request.expect?.cc ?? [],
+              bcc: request.expect?.bcc ?? [],
+              subject: request.expect?.subject ?? 'subject-from-approval',
               verified: null,
               approval: {
                 id: request.approvalId,
@@ -872,23 +871,7 @@ test('the CLI sends only what was prepared, and says so at every step', async ()
   const secondApproval = /\b(ap_[A-Za-z0-9]+)\b/.exec(again.stdout)?.[1] ?? '';
   assert.ok(secondApproval && secondApproval !== approvalId);
 
-  const sent = await cli(harness, [
-    'send',
-    'execute',
-    draftId,
-    '--inbox',
-    'work',
-    '--approval',
-    secondApproval,
-    '--expect-to',
-    'sam@partner.test',
-    '--expect-cc',
-    'none',
-    '--expect-bcc',
-    'none',
-    '--expect-subject',
-    'Tuesday',
-  ]);
+  const sent = await cli(harness, ['send', 'execute', secondApproval, '--inbox', 'work']);
   assert.equal(sent.code, 0, `${sent.stdout}${sent.stderr}`);
   assert.match(sent.stdout, /Sent to sam@partner\.test/);
   assert.match(sent.stdout, /Read back from the mailbox/);
@@ -922,26 +905,16 @@ test('send prepare prints every expectation as shell-safe words for the selected
     assert.equal(prepared.code, 0, prepared.stderr);
     const approvalId = /\b(ap_[A-Za-z0-9]+)\b/.exec(prepared.stdout)?.[1];
     assert.ok(approvalId, prepared.stdout);
-    const words = [
-      'send',
-      'execute',
-      draftId,
-      '--inbox',
-      'work',
-      '--approval',
-      approvalId,
-      '--expect-to',
-      'one@example.test',
-      'two@example.test',
-      '--expect-cc',
-      'copy@example.test',
-      '--expect-bcc',
-      'blind@example.test',
-      '--expect-subject',
-      subject,
-    ];
+    const words = ['send', 'execute', approvalId, '--inbox', 'work'];
+    const command = gmailHandoffs(harness.core.paths, platform).own(words);
+    assert.ok(isCommand(command), JSON.stringify(command));
     // This installation's own `send execute`, located, for the shell asked for (CUE-403).
-    assert.ok(prepared.stdout.includes(`Then: ${gmailCommand(harness.core.paths, words, platform)}`), prepared.stdout);
+    assert.ok(prepared.stdout.includes(`Then: ${commandText(command)}`), prepared.stdout);
+    assert.deepEqual(
+      command.words.slice(-words.length),
+      words,
+      'the pasteable command contains only the approval id and mailbox selector',
+    );
     assertNoBareCommand(prepared.stdout);
   };
 
@@ -959,7 +932,7 @@ test('send execute rendering preserves every subject and every recipient list on
     },
     { to: [], cc: [], bcc: [] },
   ];
-  const harness = await newHarness();
+  const harness = offlineCliHarness();
   for (const platform of ['darwin', 'win32'] as const) {
     for (const subject of subjects) {
       for (const recipients of expectations) {
@@ -986,33 +959,19 @@ test('send execute rendering preserves every subject and every recipient list on
             expiresAt: '2026-10-04T12:00:00.000Z',
           },
         };
-        const list = (flag: string, values: readonly string[]) => [flag, ...(values.length > 0 ? values : ['none'])];
-        const words = [
-          'send',
-          'execute',
-          result.draftId,
-          '--inbox',
-          result.inbox,
-          '--approval',
-          result.approvalId,
-          ...list('--expect-to', recipients.to),
-          ...list('--expect-cc', recipients.cc),
-          ...list('--expect-bcc', recipients.bcc),
-          '--expect-subject',
-          subject || 'none',
-        ];
+        const words = ['send', 'execute', result.approvalId, '--inbox', result.inbox];
         const handoffs = gmailHandoffs(harness.core.paths, platform);
         const command = handoffs.own(words);
         assert.ok(isCommand(command), JSON.stringify(command));
         const rendered = renderSendPreparation(result, false, handoffs);
         assert.ok(rendered.includes(`Then: ${commandText(command)}`), JSON.stringify({ platform, subject, rendered }));
         assertNoBareCommand(rendered);
-        if (platform === 'win32' && ['$(whoami)', '`whoami`', '%PATH%', '"', 'line\nbreak'].includes(subject)) {
-          assert.equal(command.line, null, JSON.stringify({ subject, command }));
-          assert.match(rendered, /Then: \[[^\]]*"send","execute",/);
-        } else if (platform === 'darwin') {
-          assert.notEqual(command.line, null, JSON.stringify({ subject, command }));
-        }
+        assert.deepEqual(
+          command.words.slice(-words.length),
+          words,
+          `the command repeats no sender field: ${JSON.stringify({ subject, recipients })}`,
+        );
+        assert.notEqual(command.line, null, JSON.stringify({ subject, command }));
         if (platform === 'darwin') {
           // The printed words run this checkout's own CLI, folders pinned; parsed in-process, with the send replaced.
           const printedWords = gmailRetryWords(command.line as string);
@@ -1027,15 +986,7 @@ test('send execute rendering preserves every subject and every recipient list on
           assert.deepEqual(parsed, {
             inbox: result.inbox,
             request: {
-              draftId: result.draftId,
               approvalId: result.approvalId,
-              expect: {
-                to: recipients.to,
-                cc: recipients.cc,
-                bcc: recipients.bcc,
-                subject: subject || 'none',
-              },
-              expectSubjectNone: subject === '' || subject === 'none',
             },
           });
         }

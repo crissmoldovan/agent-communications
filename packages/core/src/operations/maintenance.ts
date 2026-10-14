@@ -6,6 +6,7 @@ import type { AuditRecord } from '../audit.ts';
 import { revokeChange } from '../changes.ts';
 import { type Channel, channelServer } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
+import { stripInvisible } from '../chars.ts';
 import { inlineCommand } from '../cli-runtime.ts';
 import { externalCommand } from '../command-brands.ts';
 import { type Config, emptyConfig, hasNames, secretsStoreOf } from '../config.ts';
@@ -17,6 +18,7 @@ import { resolveName } from '../names.ts';
 import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
+import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import {
   countedLatest,
   readUpdateCheck,
@@ -514,6 +516,23 @@ export interface AuditTailOptions {
   limit?: number | undefined;
 }
 
+/** The same strict plain-address grammar the sending channels use for an address returned outside an envelope. */
+const PLAIN_AUDIT_ADDRESS = /^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/i;
+
+function auditRecipient(address: string, record: AuditRecord, boundary: string): string {
+  if (PLAIN_AUDIT_ADDRESS.test(address)) return address;
+  const text = stripInvisible(address).text.slice(0, 500);
+  return wrapUntrusted(
+    text,
+    {
+      field: 'recipient',
+      inbox: record.alias || record.inboxId,
+      ...(record.approvalId === undefined ? {} : { id: record.approvalId }),
+    },
+    boundary,
+  );
+}
+
 export async function auditTail(core: Core, options: AuditTailOptions = {}): Promise<AuditRecord[]> {
   const limit = options.limit ?? 50;
   if (!Number.isInteger(limit) || limit < 1) {
@@ -524,11 +543,17 @@ export async function auditTail(core: Core, options: AuditTailOptions = {}): Pro
   // the returned array instead meant a quiet inbox's history was read as empty whenever a busier one had produced
   // `limit` records since — and raising `--limit` changed the answer, which is the tell. This is what someone asks
   // to find out what was sent from a mailbox.
-  return core.audit.tail({
+  const records = await core.audit.tail({
     limit,
     ...(inboxId ? { inbox: inboxId } : {}),
     ...(options.since ? { since: options.since } : {}),
   });
+  const boundary = newBoundary();
+  return records.map((record) =>
+    record.recipients === undefined
+      ? record
+      : { ...record, recipients: record.recipients.map((address) => auditRecipient(address, record, boundary)) },
+  );
 }
 
 /** Every state a listing can be filtered by: the stored states, and `corrupt` for a record that cannot be used. */

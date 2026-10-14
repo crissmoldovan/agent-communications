@@ -52,7 +52,7 @@ draft**, and `gmail_send_wait` says where an approval stands — no tool approve
 | [`gmail_trash`](#gmail_trash) | Move messages or conversations to the bin, or take them out again with `undo`. |
 | [`gmail_label_create`](#gmail_label_create) | Create a label, or return the one already there. |
 | [`gmail_send_prepare`](#gmail_send_prepare) | Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. |
-| [`gmail_draft_send`](#gmail_draft_send) | Send a draft that gmail_send_prepare has prepared and the user has approved. |
+| [`gmail_draft_send`](#gmail_draft_send) | Send the draft bound to an approval from gmail_send_prepare. |
 | [`gmail_confirm_probe`](#gmail_confirm_probe) | Raise a test approval form carrying a short code, which the user types back. |
 | [`gmail_confirm_client_add`](#gmail_confirm_client_add) | Add an MCP client to the clients the person chose to trust with approval forms, so a send from a `confirm` mailbox can be approved in that client instead of at a terminal. |
 | [`gmail_confirm_client_remove`](#gmail_confirm_client_remove) | Take a client off the clients the person chose to trust with approval forms. |
@@ -554,16 +554,16 @@ Read a draft and return the preview the person must approve, with an approval id
 
 ### `gmail_draft_send`
 
-Send a draft that gmail_send_prepare has prepared and the user has approved. You must pass the recipients and subject you believe you are sending to: if they are not what the draft says, nothing is sent. Any edit to the draft since the preview voids the approval. This is irreversible — mail cannot be recalled. Call it only after the user has seen the preview and said yes in this conversation.
+Send the draft bound to an approval from gmail_send_prepare. Pass the approval id after the user has seen the preview and approved it. Legacy callers may also pass draftId and expect; when supplied, each must still match exactly. Any edit since the preview voids the approval. This is irreversible — mail cannot be recalled.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
-| `draftId` | string | **yes** |  |
+| `draftId` | string | no | legacy exact check; otherwise read from the approval |
 | `approvalId` | string | **yes** | from gmail_send_prepare |
-| `expect` | object | **yes** | what you believe you are sending; checked against the draft |
+| `expect` | object | no | legacy exact check for recipients and subject; otherwise read from the approval |
 
 ### `gmail_confirm_probe`
 

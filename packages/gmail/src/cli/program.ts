@@ -34,7 +34,6 @@ import {
   paint,
   pathOverridesFromCliOptions,
   profileSourcePath,
-  publicApproval,
   refuseRetiredOut,
   refuseUnclaimedApproval,
   renderApprovalWait,
@@ -59,6 +58,7 @@ import type { RegistrationIntent } from '../auth/flows.ts';
 import { TIERS } from '../auth/scopes.ts';
 import { GMAIL_CALLER } from '../caller.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
+import { gmailApprovalView } from '../domain/untrusted-fields.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import {
@@ -385,13 +385,7 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     return text;
   };
 
-  /**
-   * An `--expect-*` list as the caller meant it. `none` is the explicit empty list.
-   *
-   * Explicit, because an omitted flag and an empty one look the same on a command line, and the difference here is
-   * "I know there are no Bcc recipients" versus "I did not think about Bcc" — which is the difference between a
-   * check and a formality.
-   */
+  /** An optional legacy `--expect-*` list as the caller meant it. `none` is the explicit empty list. */
   const expected = (value: unknown): string[] => {
     const list = (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String);
     return list.length === 1 && list[0] === 'none' ? [] : list;
@@ -1290,27 +1284,38 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     );
 
   send
-    .command('execute <draftId>')
-    .description('send it — only with an approval, and only to the recipients that approval names')
+    .command('execute <id>')
+    .description('send it by approval id; legacy callers may also pass a draft id and --approval')
     .requiredOption('--inbox <alias>', 'which mailbox')
-    .requiredOption('--approval <id>', 'the approval from `send prepare`')
-    .requiredOption('--expect-to <address...>', 'who you believe this goes to; `none` for nobody')
-    .requiredOption('--expect-subject <subject>', 'the subject you believe it has; `none` for an empty one')
-    .option('--expect-cc <address...>', 'who you believe is copied; `none` for nobody', ['none'])
-    .option('--expect-bcc <address...>', 'who you believe is blind-copied; `none` for nobody', ['none'])
+    .option('--approval <id>', 'legacy form: the approval when <id> is the draft id')
+    .option('--expect-to <address...>', 'legacy exact check: To recipients; `none` for nobody')
+    .option('--expect-subject <subject>', 'legacy exact check: subject; `none` for an empty one')
+    .option('--expect-cc <address...>', 'legacy exact check: Cc recipients; `none` for nobody')
+    .option('--expect-bcc <address...>', 'legacy exact check: Bcc recipients; `none` for nobody')
     .action(
-      act(async (context, globalOptions, draftId: string, options: Options) => {
-        const expectSubject = String(options.expectSubject);
+      act(async (context, globalOptions, id: string, options: Options) => {
+        const hasExpect = [options.expectTo, options.expectCc, options.expectBcc, options.expectSubject].some(
+          (value) => value !== undefined,
+        );
+        if (hasExpect && (options.expectTo === undefined || options.expectSubject === undefined)) {
+          throw new CommsError('USAGE', '--expect-to and --expect-subject must be given together');
+        }
+        const expectSubject = options.expectSubject === undefined ? undefined : String(options.expectSubject);
+        const legacy = options.approval !== undefined;
         const result = await (deps.executeSend ?? executeSend)(context, String(options.inbox), {
-          draftId,
-          approvalId: String(options.approval),
-          expect: {
-            to: expected(options.expectTo),
-            cc: expected(options.expectCc),
-            bcc: expected(options.expectBcc),
-            subject: expectSubject,
-          },
-          expectSubjectNone: expectSubject === 'none',
+          ...(legacy ? { draftId: id } : {}),
+          approvalId: legacy ? String(options.approval) : id,
+          ...(hasExpect
+            ? {
+                expect: {
+                  to: expected(options.expectTo),
+                  cc: expected(options.expectCc),
+                  bcc: expected(options.expectBcc),
+                  subject: expectSubject as string,
+                },
+                expectSubjectNone: expectSubject === 'none',
+              }
+            : {}),
         });
         writeResult(result, output(), (data) => renderSent(data, globalOptions.color), streams);
       }),
@@ -1356,8 +1361,10 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     .action(
       act(async (context, _globalOptions, approvalId: string) => {
         const stored = await revokeApproval(context, approvalId);
-        // Its public object, as `send wait` shows it: what a sender wrote only inside the envelope (design §D8).
-        const result = publicApproval(stored, await context.core.approvals.outcomeOf(stored));
+        const config = await context.config();
+        const aliases = new Map(Object.entries(config.inboxes).map(([alias, inbox]) => [inbox.id, alias]));
+        // Its public object, through the same Gmail field helpers as `send list` (design §D8; CUE-413).
+        const { approval: result } = gmailApprovalView(stored, await context.core.approvals.outcomeOf(stored), aliases);
         writeResult(
           result,
           output(),

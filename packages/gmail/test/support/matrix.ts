@@ -51,7 +51,6 @@ interface World {
   clock: MatrixClock;
   draftId: string;
   approvalId: string;
-  expect: { to: string[]; cc: string[]; bcc: string[]; subject: string };
   notFound(action: string): Promise<ReadonlyArray<readonly [string, string]>>;
   fault(): void;
   asked(): number;
@@ -171,7 +170,6 @@ async function world(row: string): Promise<World> {
     clock,
     draftId: draft.draftId,
     approvalId: prepared.approvalId,
-    expect: prepared.expect,
     // What each surface must not find: a claim names its mailbox, a pinned server has one, the terminal is Gmail's
     // and approves a send, and an unpinned wait answers for any approval on this machine (D2: unpinned surfaces show
     // every record), so only an id nobody prepared is not found there.
@@ -245,9 +243,7 @@ async function draftSend(w: World, approvalId: string, options: Parameters<typeo
     const before = sendsOf(w);
     const result = await client.call('gmail_draft_send', {
       ...(options.pinned ? {} : { inbox: 'work' }),
-      draftId: w.draftId,
       approvalId,
-      expect: w.expect,
     });
     return observeTool(result, sendsOf(w) - before);
   } finally {
@@ -262,32 +258,16 @@ async function execute(w: World, approvalId: string): Promise<Observation> {
     stdout += String(chunk);
   });
   const before = sendsOf(w);
-  const exit = await run(
-    [
-      'send',
-      'execute',
-      w.draftId,
-      '--inbox',
-      'work',
-      '--approval',
-      approvalId,
-      '--expect-to',
-      ...w.expect.to,
-      '--expect-subject',
-      w.expect.subject,
-      '--json',
-    ],
-    {
-      core: w.harness.core,
-      env: w.harness.env,
-      platform: 'darwin',
-      streams: {
-        stdout: Object.assign(out, { isTTY: false }),
-        stderr: Object.assign(new PassThrough(), { isTTY: false }),
-        stdin: Object.assign(new PassThrough(), { isTTY: false }),
-      },
+  const exit = await run(['send', 'execute', approvalId, '--inbox', 'work', '--json'], {
+    core: w.harness.core,
+    env: w.harness.env,
+    platform: 'darwin',
+    streams: {
+      stdout: Object.assign(out, { isTTY: false }),
+      stderr: Object.assign(new PassThrough(), { isTTY: false }),
+      stdin: Object.assign(new PassThrough(), { isTTY: false }),
     },
-  );
+  });
   const envelope = JSON.parse(stdout) as {
     ok: boolean;
     data?: Record<string, unknown>;

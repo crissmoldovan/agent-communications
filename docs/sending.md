@@ -27,8 +27,8 @@ draft ──► send prepare ──► you read the preview ──► send execu
 
 ```bash
 agent-gmail draft new --inbox acme/gmail --to sam@example.com --subject 'Tuesday' --text 'Works for me.'
-agent-gmail send prepare --inbox acme/gmail --draft <draftId>     # prints the preview, sends nothing
-agent-gmail send execute --inbox acme/gmail --draft <draftId> --approval <approvalId> --expect-to sam@example.com
+agent-gmail send prepare <draftId> --inbox acme/gmail     # prints the preview, sends nothing
+agent-gmail send execute <approvalId> --inbox acme/gmail
 ```
 
 **`prepare` sends nothing.** It reads the draft, refuses it outright if an agent could not have written it, and
@@ -43,8 +43,10 @@ and tries again: at most three more times within 45 seconds. Anything else is ne
 twice and nothing here could tell. Gmail's daily sending limit and a Cloud project's quota are not waited on; the
 refusal names the limit and, when Gmail gives one, when it lifts.
 
-**You must pass what you believe you are sending.** `--expect-to` and friends are checked against the draft. If
-they disagree, nothing is sent.
+**The approval id is enough to send what was approved.** It binds the draft, recipients, subject and body. Existing
+callers may still pass the draft id and `--expect-to` and friends; when supplied, they remain exact checks, and a
+disagreement sends nothing. Prepare and send results are for display: validated addresses may stay plain, while
+subjects and other sender-controlled text are sanitised and returned in the untrusted-content envelope.
 
 ## Policies
 
