@@ -10,6 +10,12 @@ to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`
 headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
 no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
 
+**`agent-events --version` and `agent-events -V` now print the installed daemon version.** A subcommand's
+`--version <number>` still selects that immutable object version.
+
+**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
+a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
+
 **Fixed — agents now send Gmail and Resend mail with the approval id, without copying recipients or subjects back
 into the send call.** The approval already binds the exact message, and copying those fields made text taken from
 mail appear again outside the untrusted-content envelope. Prepare, successful-send and audit results now return each
@@ -25,12 +31,6 @@ and final content checks are unchanged.
 Rejected recipient values are no longer copied into prepare errors, and Gmail's detailed prepare refusals now
 envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
 record, over MCP and `send status --json`.
-
-**`agent-events --version` and `agent-events -V` now print the installed daemon version.** A subcommand's
-`--version <number>` still selects that immutable object version.
-
-**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
-a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
 
 ## 0.17.0
 
