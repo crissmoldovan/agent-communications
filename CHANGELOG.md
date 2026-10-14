@@ -3,6 +3,13 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
+to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
+headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
+no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
+
 ## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run
