@@ -147,7 +147,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     });
   }
 
-  const request = buildAuthorizeUrl({
+  let request = buildAuthorizeUrl({
     clientId: options.clientId,
     mode: options.mode,
     port: options.port,
@@ -188,14 +188,24 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
    * able to complete it and nothing that would ever remove it.
    */
   let listener: StartedSignIn['listener'];
+  let listenerPort = options.port;
   try {
     foreground?.signal.throwIfAborted();
     await context.flows.save(flow);
     foreground?.signal.throwIfAborted();
-    listener =
-      options.detached === false
-        ? await startInProcess(context, flow, options.listenerTimeoutMs, foreground?.signal)
-        : await startDetached(context, flow, options);
+    if (options.detached === false) {
+      const started = await startInProcess(
+        context,
+        flow,
+        options.listenerTimeoutMs,
+        foreground?.signal,
+        testLoopbackPort(context),
+      );
+      listener = started.listener;
+      listenerPort = started.port;
+    } else {
+      listenerPort = await startDetached(context, flow, options);
+    }
     if (foreground?.signal.aborted) {
       await listener?.close();
       foreground.signal.throwIfAborted();
@@ -213,12 +223,23 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     else foregroundSettled?.();
   }
 
+  if (listenerPort !== options.port) {
+    request = buildAuthorizeUrl({
+      clientId: options.clientId,
+      mode: options.mode,
+      port: listenerPort,
+      team: options.expect?.workspaceId ?? options.profile?.workspace,
+      pkce: request.pkce,
+      state: request.state,
+    });
+  }
+
   return {
     flowId: flow.flowId,
     alias: flow.alias,
     mode: flow.mode,
     authUrl: request.url,
-    redirectUrl: flow.redirectUrl,
+    redirectUrl: request.redirectUrl,
     expiresAt: flow.expiresAt,
     ...(listener ? { listener } : {}),
   };
@@ -229,16 +250,25 @@ async function startInProcess(
   flow: SlackFlow,
   timeoutMs?: number,
   signal?: AbortSignal,
-): Promise<StartedSignIn['listener']> {
+  loopbackPort?: number,
+): Promise<{ listener: NonNullable<StartedSignIn['listener']>; port: number }> {
   const loopback = await startLoopback({
     state: flow.state,
-    port: flow.port,
+    port: loopbackPort ?? flow.port,
     timeoutMs: timeoutMs ?? Math.max(1000, Date.parse(flow.expiresAt) - context.now().getTime()),
     about: { alias: flow.alias, mode: flow.mode, reauth: Boolean(flow.expect) },
     failureMessage: flow.profile
       ? (error, description) => listenerFailure(context, flow, error, description)
       : undefined,
   });
+  if (loopback.redirectUrl !== flow.redirectUrl) {
+    try {
+      await context.flows.patch(flow.flowId, { redirectUrl: loopback.redirectUrl });
+    } catch (error) {
+      await loopback.close();
+      throw error;
+    }
+  }
   let cancel: (() => void) | undefined;
   const interrupted = new Promise<never>((_, reject) => {
     if (!signal) return;
@@ -270,7 +300,7 @@ async function startInProcess(
   // Abort can already be observable when listen resolves. Own rejection now, before startup can await cleanup;
   // callers still receive the original result (and its error), never a flattened success promise.
   void result.catch(() => undefined);
-  return { result, close: () => loopback.close() };
+  return { listener: { result, close: () => loopback.close() }, port: loopback.port };
 }
 
 /**
@@ -286,37 +316,43 @@ export async function runSignInListener(
   const flow = await context.flows.get(flowId);
   const loopback = await startLoopback({
     state: flow.state,
-    port: flow.port,
+    port: testLoopbackPort(context) ?? flow.port,
     timeoutMs: options.timeoutMs ?? Math.max(1000, Date.parse(flow.expiresAt) - context.now().getTime()),
     about: { alias: flow.alias, mode: flow.mode, reauth: Boolean(flow.expect) },
     failureMessage: flow.profile
       ? (error, description) => listenerFailure(context, flow, error, description)
       : undefined,
   });
-  await context.flows.patch(flowId, { listenerPid: process.pid });
-
-  // The parent is waiting for exactly this before it prints the link; afterwards the two share only files.
-  process.send?.({ type: 'ready', port: loopback.port });
-  process.disconnect?.();
-
-  const outcome = await loopback.result;
-  await loopback.close();
-  if (outcome.kind === 'code') {
-    await context.flows.recordOutcome(flowId, { code: outcome.code });
-  } else if (outcome.kind === 'denied') {
-    await context.flows.recordOutcome(flowId, {
-      error: outcome.error,
-      ...(outcome.description ? { description: outcome.description } : {}),
+  try {
+    await context.flows.patch(flowId, {
+      listenerPid: process.pid,
+      ...(loopback.redirectUrl === flow.redirectUrl ? {} : { redirectUrl: loopback.redirectUrl }),
     });
-  } else {
-    /*
-     * A timeout ends the flow here, rather than leaving it to "expire on its own" — which files do not do.
-     *
-     * Nobody is coming: this listener held the port for the flow's whole life and saw no redirect. Leaving the
-     * record behind leaves a PKCE verifier on disk until something happens to call `peek` on that exact id, which
-     * nothing ever will.
-     */
-    await context.flows.discard(flowId);
+
+    // The parent is waiting for exactly this before it prints the link; afterwards the two share only files.
+    process.send?.({ type: 'ready', port: loopback.port });
+    process.disconnect?.();
+
+    const outcome = await loopback.result;
+    if (outcome.kind === 'code') {
+      await context.flows.recordOutcome(flowId, { code: outcome.code });
+    } else if (outcome.kind === 'denied') {
+      await context.flows.recordOutcome(flowId, {
+        error: outcome.error,
+        ...(outcome.description ? { description: outcome.description } : {}),
+      });
+    } else {
+      /*
+       * A timeout ends the flow here, rather than leaving it to "expire on its own" — which files do not do.
+       *
+       * Nobody is coming: this listener held the port for the flow's whole life and saw no redirect. Leaving the
+       * record behind leaves a PKCE verifier on disk until something happens to call `peek` on that exact id, which
+       * nothing ever will.
+       */
+      await context.flows.discard(flowId);
+    }
+  } finally {
+    await loopback.close();
   }
 }
 
@@ -325,11 +361,7 @@ export interface ListenerEntry {
   readonly args: readonly string[];
 }
 
-async function startDetached(
-  context: SlackContext,
-  flow: SlackFlow,
-  options: StartOptions,
-): Promise<StartedSignIn['listener']> {
+async function startDetached(context: SlackContext, flow: SlackFlow, options: StartOptions): Promise<number> {
   const entry = options.listenerCommand ?? (await defaultListenerCommand());
 
   /*
@@ -375,15 +407,16 @@ async function startDetached(
     });
   }
 
+  let listenerPort: number;
   try {
-    await new Promise<void>((settle, reject) => {
+    listenerPort = await new Promise<number>((settle, reject) => {
       const timer = setTimeout(
         () => reject(new Error('the sign-in listener did not start within thirty seconds')),
         LISTENER_START_MS,
       );
-      child.once('message', (message: { type?: string; error?: string }) => {
+      child.once('message', (message: { type?: string; error?: string; port?: number }) => {
         clearTimeout(timer);
-        if (message?.type === 'ready') settle();
+        if (message?.type === 'ready' && typeof message.port === 'number') settle(message.port);
         else reject(new Error(message?.error ?? 'the sign-in listener could not start'));
       });
       child.once('error', (error) => {
@@ -411,7 +444,7 @@ async function startDetached(
 
   releaseChannel(child);
   child.unref();
-  return undefined;
+  return listenerPort;
 }
 
 /**
@@ -435,12 +468,22 @@ export function releaseChannel(child: { disconnect(): void }): void {
   }
 }
 
+function testLoopbackPort(context: SlackContext): number | undefined {
+  const raw = context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT;
+  if (raw === undefined) return undefined;
+  const port = Number(raw);
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : undefined;
+}
+
 function listenerEnv(context: SlackContext): NodeJS.ProcessEnv {
-  // Only the two paths. The child re-opens the same config and state as this process and needs nothing else — in
-  // particular no credential, because it never touches one: it receives a code and writes it down.
+  // Only the two paths in production. Tests may also carry the port-zero seam through to the child. It needs no
+  // credential, because it never touches one: it receives a code and writes it down.
   return {
     AGENT_COMMS_CONFIG_DIR: context.core.paths.configDir,
     AGENT_COMMS_STATE_DIR: context.core.paths.stateDir,
+    ...(context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT === undefined
+      ? {}
+      : { AGENT_COMMS_TEST_SLACK_LISTENER_PORT: context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT }),
   };
 }
 

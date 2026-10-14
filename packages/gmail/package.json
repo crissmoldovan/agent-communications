@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
+    "test": "node test/run.mjs"
   },
   "optionalDependencies": {
     "@napi-rs/keyring": "2.1.0"

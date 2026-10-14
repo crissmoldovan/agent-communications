@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readdir, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { test } from 'node:test';
 import {
   type AccountConfig,
@@ -47,12 +46,9 @@ async function migrate(harness: Harness, renames: string[] = []): Promise<void> 
   await migrateNames(harness.core.config, plan);
 }
 
+let nextManifestPort = 44_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 async function redirectTo(authUrl: string): Promise<void> {

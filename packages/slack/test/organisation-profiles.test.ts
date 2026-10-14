@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readdir } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { test } from 'node:test';
 import {
   beginChangeApproval,
@@ -24,12 +23,9 @@ import { newOrganisationHarness, PROFILE_SHA, READ_CLIENT_ID, SEND_CLIENT_ID } f
 /** Slack's own commands, located from this checkout, for the refusals that name one. */
 const HANDOFFS = slackHandoffs();
 
+let nextManifestPort = 46_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, 'localhost', done));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>((done) => server.close(() => done()));
-  return port;
+  return nextManifestPort++;
 }
 
 async function secretFiles(dir: string): Promise<string[]> {
@@ -336,7 +332,11 @@ test('profile read add snapshots the selected app and neutralised display, witho
       sha256: PROFILE_SHA,
     });
     assert.equal(new URL(outcome.result.authUrl).searchParams.get('client_id'), READ_CLIENT_ID);
-    assert.equal(new URL(outcome.result.redirectUrl).port, String(port));
+    assert.equal(
+      outcome.result.redirectUrl,
+      new URL(outcome.result.authUrl).searchParams.get('redirect_uri'),
+      'the returned redirect is the listener address placed in the Slack request',
+    );
     assert.equal(Date.parse(flow.expiresAt) - Date.parse(flow.createdAt), FLOW_TTL_MS);
     assert.deepEqual(harness.calls, []);
     assert.deepEqual(await secretFiles(harness.core.paths.secretsDir), before);

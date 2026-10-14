@@ -1,7 +1,8 @@
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after } from 'node:test';
+import { join, relative } from 'node:path';
+import { after, afterEach, beforeEach } from 'node:test';
 import {
   type ClientConfig,
   type Config,
@@ -18,6 +19,8 @@ import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';
 import { capabilitiesOf, SCOPES } from '../../src/auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../../src/auth/session.ts';
 import { GMAIL_CALLER } from '../../src/caller.ts';
+import { GmailContext } from '../../src/context.ts';
+import { LISTENER_TEST_FILE_ENV, LISTENER_TEST_NAME_ENV } from './detached-listeners.ts';
 import { type FakeGoogle, type FakeGoogleOptions, startFakeGoogle } from './fake-google.ts';
 
 export const TEST_CLIENT_ID = 'test-client.apps.googleusercontent.com';
@@ -66,6 +69,76 @@ export interface Harness {
   }): Promise<InboxConfig>;
 }
 
+const harnesses = new Set<Harness>();
+let activeTest: { file: string; name: string } | undefined;
+
+beforeEach((context) => {
+  const invoked = process.argv[1];
+  const file = invoked ? relative(process.cwd(), invoked).replaceAll('\\', '/') : '<unknown test file>';
+  activeTest = { file, name: context.name };
+  process.env[LISTENER_TEST_FILE_ENV] = file;
+  process.env[LISTENER_TEST_NAME_ENV] = context.name;
+});
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopProcess(pid: number): Promise<void> {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + 5_000;
+  while (processIsRunning(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (!processIsRunning(pid)) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // It stopped between the liveness check and the signal.
+  }
+  const killedDeadline = Date.now() + 1_000;
+  while (processIsRunning(pid) && Date.now() < killedDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function stopHarnessListeners(harness: Harness): Promise<void> {
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const names = await readdir(context.flows.directory).catch(() => []);
+  for (const name of names) {
+    if (!name.endsWith('.json') || name.endsWith('.outcome.json')) continue;
+    const flowId = name.slice(0, -'.json'.length);
+    try {
+      const flow = await context.flows.get(flowId);
+      if (flow.listenerPid && flow.listenerPid !== process.pid) await stopProcess(flow.listenerPid);
+      await context.flows.discard(flowId);
+    } catch {
+      // A finish or expiry removed it before cleanup reached it.
+    }
+  }
+}
+
+afterEach(async () => {
+  try {
+    const made = [...harnesses];
+    harnesses.clear();
+    await Promise.all(made.map(stopHarnessListeners));
+  } finally {
+    activeTest = undefined;
+    delete process.env[LISTENER_TEST_FILE_ENV];
+    delete process.env[LISTENER_TEST_NAME_ENV];
+  }
+});
+
 /** A config directory, a file secret store and a fake Google, torn down when the test file ends. */
 export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harness> {
   const configDir = tempDir();
@@ -89,6 +162,7 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     // The daily update check, off: no test asks the real npm registry, and no call stops for a release the tests did
     // not make. The gate's own tests turn it back on, with a registry and a clock of their own (design 2026-09-28).
     AGENT_COMMS_UPDATE_CHECK: 'off',
+    ...(activeTest ? { [LISTENER_TEST_FILE_ENV]: activeTest.file, [LISTENER_TEST_NAME_ENV]: activeTest.name } : {}),
   };
   const core = openCore({ env, caller: GMAIL_CALLER });
   /*
@@ -177,7 +251,9 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     });
   };
 
-  return { configDir, core, google, endpoints, env, addInbox, connectInbox };
+  const harness = { configDir, core, google, endpoints, env, addInbox, connectInbox };
+  harnesses.add(harness);
+  return harness;
 }
 
 /**

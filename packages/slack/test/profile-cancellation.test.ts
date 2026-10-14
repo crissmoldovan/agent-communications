@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import fs, { readdir } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CommsError, resolveProfileSlackTarget } from '@agentcomms/core';
@@ -13,11 +12,9 @@ import { slackOk } from './support/harness.ts';
 import { fetchListener, LISTENER_COMMAND, running, stopListeners } from './support/listener.ts';
 import { newOrganisationHarness } from './support/organisation.ts';
 
+let nextManifestPort = 47_000;
 async function fixture(platform: NodeJS.Platform = 'darwin', interrupted?: AbortController) {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, 'localhost', done));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>((done) => server.close(() => done()));
+  const port = nextManifestPort++;
   const harness = await newOrganisationHarness({ port, readAppId: 'A0READ' });
   const context = new SlackContext({
     core: harness.core,

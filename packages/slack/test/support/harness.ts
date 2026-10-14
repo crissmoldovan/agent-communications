@@ -151,6 +151,8 @@ export async function newHarness(options: { version?: 1 | 2 } = {}): Promise<Har
     // The daily update check, off: no test asks the real npm registry, and no call stops for a release the tests did
     // not make. The gate's own tests turn it back on, with a registry and a clock of their own (design 2026-09-28).
     AGENT_COMMS_UPDATE_CHECK: 'off',
+    // Keep manifest ports deterministic while every test listener asks the OS for its own bound port.
+    AGENT_COMMS_TEST_SLACK_LISTENER_PORT: '0',
   };
   // With this package's caller, as its CLI and server open core: every command printed is located, never bare.
   const core = openCore({ env, caller: SLACK_CALLER });
