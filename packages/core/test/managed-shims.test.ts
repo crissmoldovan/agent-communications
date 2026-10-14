@@ -8,6 +8,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -301,7 +302,8 @@ test(
     const original = readFileSync(owned.path, 'utf8');
     writeFileSync(join(secondBin, 'agentcomms'), original);
     const swapBin = () => {
-      rmSync(publicBin);
+      // The link itself: Node 24's rmSync refuses a symlink to a directory without `recursive`.
+      unlinkSync(publicBin);
       symlinkSync(secondBin, publicBin, 'dir');
     };
 
@@ -346,7 +348,7 @@ test(
           ...pruning.context,
           hooks: {
             beforeRemove: () => {
-              rmSync(prunePublicBin);
+              unlinkSync(prunePublicBin);
               symlinkSync(pruneSecondBin, prunePublicBin, 'dir');
             },
           },
