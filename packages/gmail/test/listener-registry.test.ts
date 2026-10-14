@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -85,5 +85,37 @@ test('the Gmail listener preload registers a spawned oauth-listen process while 
     else process.env[LISTENER_TEST_FILE_ENV] = previousTestFile;
     if (previousTestName === undefined) delete process.env[LISTENER_TEST_NAME_ENV];
     else process.env[LISTENER_TEST_NAME_ENV] = previousTestName;
+  }
+});
+
+test('a recorded listener PID that another process now holds is neither a leak nor ever stopped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-gmail-listener-reuse-'));
+  const registry = join(directory, 'listeners.jsonl');
+  const previousRegistry = process.env[LISTENER_REGISTRY_ENV];
+  process.env[LISTENER_REGISTRY_ENV] = registry;
+  // Not a listener: what holds a finished listener's PID once Windows has handed it on.
+  const other = spawn(process.execPath, ['--eval', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+  try {
+    assert.ok(other.pid !== undefined, 'the stand-in process started');
+    const entry = {
+      pid: other.pid,
+      flowId: 'flow_reused_pid',
+      testFile: 'test/listener-registry.test.ts',
+      testName: 'a reused PID',
+    };
+    await writeFile(registry, `${JSON.stringify(entry)}\n`);
+    assert.deepEqual(await liveRegisteredListeners(), [], 'a PID running something else is not a live listener');
+    await stopRegisteredListeners([entry]);
+    assert.equal(other.exitCode, null, 'the process that holds the PID now is not stopped in the listener’s name');
+    assert.equal(other.signalCode, null, 'and is sent no signal');
+  } finally {
+    other.kill();
+    await new Promise<void>((resolve) => {
+      if (other.exitCode !== null || other.signalCode !== null) resolve();
+      else other.once('exit', () => resolve());
+    });
+    await rm(directory, { recursive: true, force: true });
+    if (previousRegistry === undefined) delete process.env[LISTENER_REGISTRY_ENV];
+    else process.env[LISTENER_REGISTRY_ENV] = previousRegistry;
   }
 });
