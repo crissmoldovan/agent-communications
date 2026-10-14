@@ -108,7 +108,7 @@ test('SEC-B1: an older binary refuses a database with a migration version it doe
       {
         name: 'Error',
         message:
-          'event database schema version 2 is newer than this agent-events schema version 1; run the newer agent-events',
+          "event database schema version 2 is newer than this release's schema version 1; only the newer release that migrated it can open it",
       },
       'the older binary names both schema versions without opening the newer database',
     );
@@ -140,7 +140,7 @@ test('SEC-B1: the opener refuses a database a newer agent-events migrated, writi
     await assert.rejects(
       openEventDatabase({ stateDir }),
       {
-        message: `event database schema version ${known + 1} is newer than this agent-events schema version ${known}; run the newer agent-events`,
+        message: `event database schema version ${known + 1} is newer than this release's schema version ${known}; only the newer release that migrated it can open it`,
       },
       'the opener refuses the newer database, naming both versions and nothing in it',
     );
@@ -201,7 +201,7 @@ test("SEC-B1: a newer release's database is refused through a read-only connecti
     await assert.rejects(
       openEventDatabase({ stateDir }),
       {
-        message: `event database schema version ${known + 1} is newer than this agent-events schema version ${known}; run the newer agent-events`,
+        message: `event database schema version ${known + 1} is newer than this release's schema version ${known}; only the newer release that migrated it can open it`,
       },
       'the opener refuses the newer database, naming both versions',
     );
@@ -348,7 +348,7 @@ process.stdout.write('ready\\n');`,
     await assert.rejects(
       openEventDatabase({ stateDir }),
       {
-        message: `event database schema version ${known + 1} is newer than this agent-events schema version ${known}; run the newer agent-events`,
+        message: `event database schema version ${known + 1} is newer than this release's schema version ${known}; only the newer release that migrated it can open it`,
       },
       'the writable open lets SQLite recover, then refuses the newer database before agent-events writes to it',
     );
