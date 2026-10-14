@@ -13,13 +13,11 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
-  assertJudgeReservationStillInFlight,
-  beginJudgeTransport,
+  finalizeJudgeTransportRefusal,
   JudgeBudgetError,
   type JudgeReservation,
-  releaseJudgeWork,
+  JudgeReservationIoGate,
   reserveJudgeWork,
-  settleJudgeWork,
 } from './judge-budget.ts';
 import {
   type HostedJudgeCredential,
@@ -232,55 +230,54 @@ export class JudgeCoordinator {
       return { kind: 'closed', reason: code, reservationId: null };
     }
 
-    try {
-      if (!beginJudgeTransport({ store: this.#store, reservationId: reservation.id, now: this.#now() })) {
-        return { kind: 'closed', reason: 'reservation-lost', reservationId: reservation.id };
-      }
-    } catch (error) {
-      if (error instanceof JudgeBudgetError && error.code === 'JUDGE_PAUSED')
-        return { kind: 'deferred', reservationId: reservation.id };
-      return {
-        kind: 'closed',
-        reason:
-          error instanceof Error && 'code' in error ? String((error as JudgeBudgetError).code) : 'authority-changed',
-        reservationId: reservation.id,
-      };
-    }
-
+    const ioGate = new JudgeReservationIoGate({
+      store: this.#store,
+      reservationId: reservation.id,
+      judgeKind: agentic.judge.kind,
+      now: this.#now,
+      ...(prepared.hostedKeyGeneration === null
+        ? {}
+        : {
+            hostedKey: {
+              judgeId: agentic.judge.judgeId,
+              judgeVersion: agentic.judge.version,
+              generation: prepared.hostedKeyGeneration,
+            },
+          }),
+    });
     const result = await this.#transport.execute(call, {
       // The sealed transport invokes this synchronous authority recheck directly beside every physical
       // DNS/TCP/TLS/write action; no await can sit between it and that I/O.
-      finalGate: () => {
-        assertJudgeReservationStillInFlight({
-          store: this.#store,
-          reservationId: reservation.id,
-          ...(prepared.hostedKeyGeneration === null
-            ? {}
-            : {
-                hostedKey: {
-                  judgeId: agentic.judge.judgeId,
-                  judgeVersion: agentic.judge.version,
-                  generation: prepared.hostedKeyGeneration,
-                },
-              }),
-        });
-        return undefined;
-      },
+      finalGate: ioGate.finalGate,
       preparedRequest: prepared,
     });
 
     if (result.kind !== 'answer') {
-      if (result.preIo === true) {
-        releaseJudgeWork({ store: this.#store, reservationId: reservation.id, now: this.#now(), beforeIo: true });
-        return { kind: 'deferred', reservationId: reservation.id };
-      }
       const settlement =
         result.code === 'OUTPUT_TOKEN_LIMIT_EXCEEDED'
           ? 'output-token-limit'
           : result.code === 'NETWORK_DEADLINE_EXCEEDED'
             ? 'timeout'
             : 'unknown';
-      settleJudgeWork({ store: this.#store, reservationId: reservation.id, result: settlement, now: this.#now() });
+      const disposition = finalizeJudgeTransportRefusal({
+        store: this.#store,
+        reservationId: reservation.id,
+        result: settlement,
+        now: this.#now(),
+      });
+      if (ioGate.firstGateError !== undefined) {
+        if (ioGate.firstGateError instanceof JudgeBudgetError && ioGate.firstGateError.code === 'JUDGE_PAUSED')
+          return { kind: 'deferred', reservationId: reservation.id };
+        return {
+          kind: 'closed',
+          reason:
+            ioGate.firstGateError instanceof Error && 'code' in ioGate.firstGateError
+              ? String((ioGate.firstGateError as JudgeBudgetError).code)
+              : 'authority-changed',
+          reservationId: reservation.id,
+        };
+      }
+      if (disposition === 'released') return { kind: 'deferred', reservationId: reservation.id };
       return { kind: 'closed', reason: closedReason(result), reservationId: reservation.id };
     }
 

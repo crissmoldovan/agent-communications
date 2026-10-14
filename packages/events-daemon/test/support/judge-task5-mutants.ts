@@ -41,6 +41,79 @@ const judgeTask5Mutations: readonly JudgeTask5Mutation[] = [
     testName: 'E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS',
     changes: [{ before: judgeKindSqlSource, after: "const JUDGE_KIND_SQL_VALUES = \"'typesafe', 'local-endpoint'\";" }],
   },
+  {
+    id: 'e5-released-retry-new-attempt',
+    source: 'src/runtime/judge-budget.ts',
+    test: 'test/judge-budgets.test.ts',
+    testName:
+      'E5 attempt ledger: a released attempt stays terminal while one retry row owns and counts the logical work',
+    changes: [
+      {
+        before: "AND event_id = ? AND rule_id = ? AND rule_version = ? AND state IN ('reserved', 'in-flight')",
+        after:
+          "AND event_id = ? AND rule_id = ? AND rule_version = ? AND state IN ('reserved', 'in-flight', 'released')",
+      },
+      {
+        before:
+          "if (prior !== null) refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');",
+        after:
+          "if (prior !== null && prior.state !== 'released') refusal('JUDGE_WORK_OWNER_HELD', 'a live judge reservation already owns this source work');",
+      },
+      {
+        before:
+          'return insertReservation(input.store.database, { ...input, judge, budgetVersion: budget.version, estimate });',
+        after:
+          "return prior?.state === 'released'\n      ? reservationView(prior)\n      : insertReservation(input.store.database, { ...input, judge, budgetVersion: budget.version, estimate });",
+      },
+    ],
+    killingAssertion: 'a retry receives a new durable attempt identity',
+  },
+  {
+    id: 'e5-released-terminal-transition',
+    source: 'src/store/migrations.ts',
+    test: 'test/judge-migrations.test.ts',
+    testName: 'E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions',
+    changes: [
+      {
+        before: "OR (OLD.state = 'in-flight' AND NEW.state = 'settled')",
+        after:
+          "OR (OLD.state = 'in-flight' AND NEW.state = 'settled')\n         OR (OLD.state = 'released' AND NEW.state = 'reserved')",
+      },
+    ],
+    killingAssertion: 'an upgraded released attempt remains terminal',
+  },
+  {
+    id: 'e5-inflight-never-releases',
+    source: 'src/store/migrations.ts',
+    test: 'test/judge-migrations.test.ts',
+    testName: 'E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions',
+    changes: [
+      {
+        before: "OR (OLD.state = 'in-flight' AND NEW.state = 'settled')",
+        after: "OR (OLD.state = 'in-flight' AND NEW.state IN ('settled', 'released'))",
+      },
+    ],
+    killingAssertion: 'an upgraded in-flight attempt can settle but can never release',
+  },
+  {
+    id: 'e5-inflight-at-physical-io',
+    source: 'src/runtime/judge-budget.ts',
+    test: 'test/judge-evaluation.test.ts',
+    testName: 'E7 attempt boundary: work stays reserved before first physical I/O and post-gate failure settles',
+    changes: [
+      {
+        before: '    this.#hostedKey = input.hostedKey;',
+        after: `    this.#hostedKey = input.hostedKey;
+    beginJudgeTransport({
+      store: this.#store,
+      reservationId: this.#reservationId,
+      now: this.#now(),
+      ...(this.#hostedKey === undefined ? {} : { hostedKey: this.#hostedKey }),
+    });`,
+      },
+    ],
+    killingAssertion: 'the coordinator leaves the attempt reserved through every pre-I/O await',
+  },
 ];
 
 export const JUDGE_TASK5_MUTATIONS: readonly (JudgeTask5Mutation & { readonly killingAssertion: string })[] =

@@ -14,6 +14,7 @@ import { recoverJudgeWork } from '../../src/runtime/judge-recovery.ts';
 import {
   JudgeTransport,
   type JudgeTransportOptions,
+  type JudgeTransportPhase,
   type JudgeTransportResult,
 } from '../../src/runtime/judge-transport.ts';
 import { type EventTaintRecorder, recordEventTaint } from '../../src/runtime/untrusted.ts';
@@ -210,12 +211,12 @@ function createJournal(): { readonly destination: string; readonly requests: Buf
 
 class ObservedJudgeTransport extends JudgeTransport {
   readonly results: JudgeTransportResult[] = [];
-  readonly #beforeExecute: (() => void) | undefined;
+  readonly #beforeGate: ((phase: JudgeTransportPhase) => (() => void) | undefined) | undefined;
   calls = 0;
 
-  constructor(options: JudgeTransportOptions, beforeExecute?: () => void) {
+  constructor(options: JudgeTransportOptions, beforeGate?: (phase: JudgeTransportPhase) => (() => void) | undefined) {
     super(options);
-    this.#beforeExecute = beforeExecute;
+    this.#beforeGate = beforeGate;
   }
 
   override async execute(
@@ -223,10 +224,21 @@ class ObservedJudgeTransport extends JudgeTransport {
     hooks: Parameters<JudgeTransport['execute']>[1],
   ): Promise<JudgeTransportResult> {
     this.calls += 1;
-    this.#beforeExecute?.();
-    const result = await super.execute(call, hooks);
-    this.results.push(result);
-    return result;
+    let afterExecute: (() => void) | undefined;
+    try {
+      const result = await super.execute(call, {
+        finalGate: hooks.finalGate,
+        preparedRequest: hooks.preparedRequest,
+        beforeGate: async (phase) => {
+          await hooks.beforeGate?.(phase);
+          afterExecute = this.#beforeGate?.(phase) ?? afterExecute;
+        },
+      });
+      this.results.push(result);
+      return result;
+    } finally {
+      afterExecute?.();
+    }
   }
 }
 
@@ -484,7 +496,8 @@ export async function runAdversarialCase(
           : {}),
       },
       row.scenario === 'endpoint-host-drift-race'
-        ? () => {
+        ? (phase) => {
+            if (phase !== 'write') return;
             const stored = eventStore.database
               .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = 1')
               .get(rule.ruleId) as { document: string };
@@ -493,6 +506,11 @@ export async function runAdversarialCase(
             eventStore.database
               .prepare('UPDATE rule_versions SET document = ? WHERE rule_id = ? AND version = 1')
               .run(JSON.stringify(changed), rule.ruleId);
+            return () => {
+              eventStore.database
+                .prepare('UPDATE rule_versions SET document = ? WHERE rule_id = ? AND version = 1')
+                .run(stored.document, rule.ruleId);
+            };
           }
         : undefined,
     );

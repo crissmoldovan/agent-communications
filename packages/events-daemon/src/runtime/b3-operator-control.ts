@@ -3,7 +3,7 @@ import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import { canonicalJudge, canonicalJudgeBudget, JUDGE_BUDGET_ID, JUDGE_KIND_DEFINITIONS } from '../domain/judges.ts';
 import {
   JUDGE_KIND_LAYA,
-  JUDGE_KIND_LOCAL_ENDPOINT,
+  type JUDGE_KIND_LOCAL_ENDPOINT,
   JUDGE_KIND_TYPESAFE,
   JUDGE_KINDS,
   type JudgeKind,

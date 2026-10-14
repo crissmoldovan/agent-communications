@@ -243,7 +243,8 @@ address in `"approvedAddressSet": ["127.0.0.1"]`. It needs no key.
 calls, and the most input and output tokens per call. The daemon-wide budget caps every rule, overall and per
 provider, and a rule cannot raise it. A rule's new version inherits the charges of the versions before it, so a new
 version never resets a budget. `judge test` runs at most ten times an hour per judge version, charged to the overall
-budget.
+budget. A call is charged once it reaches the network: one refused, out of time or cut short before its first
+connection costs nothing, and a retry is a call of its own.
 
 **Turning a kind off.** `agent-events judge kind disable typesafe` takes effect at once: decisions waiting on its
 judges, and the deliveries, dry-run records and stream entries bound to them, are cancelled and purged. Rules that

@@ -1035,7 +1035,9 @@ test('E4 purge closure: kind disable settles in-flight and releases reserved wor
       },
     });
     store.database.exec(
-      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1);",
+      `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+       VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1);`,
     );
     for (const eventId of ['event-e4-reserved', 'event-e4-flight']) {
       store.database
@@ -1262,7 +1264,9 @@ test('E4 purge closure: expiry settles only the expired rule on an event shared 
     versions.createRule(ruleA);
     versions.createRule(ruleB);
     store.database.exec(
-      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1);",
+      `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+       VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1);`,
     );
     store.database
       .prepare(
@@ -1322,7 +1326,8 @@ test('E4 purge closure: retention tightening settles only rule A on an event sha
     versions.createRule(child);
     versions.createRule(ruleB);
     store.database.exec(
-      `INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+      `UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+       INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
          VALUES ('judge-budget', 'judge-budget', 1, NULL, 1), ('judge-kind', 'typesafe', 1, NULL, 1), ('rule', 'rule-e4-a', 1, 'activation-e4-a', 1);
        UPDATE rule_versions
           SET state = 'active', approval_id = 'approval-e4-a', authorization_activation_id = 'activation-e4-a', activated_at = 1

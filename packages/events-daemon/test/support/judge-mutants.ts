@@ -112,8 +112,8 @@ const phaseEGateMutations: readonly JudgeMutation[] = [
   {
     id: 'e7-single-decision-owner',
     source: 'packages/events-daemon/src/runtime/judge-budget.ts',
-    before: "if (prior?.state === 'reserved' || prior?.state === 'in-flight')",
-    after: "if (false && (prior?.state === 'reserved' || prior?.state === 'in-flight'))",
+    before: 'if (prior !== null)',
+    after: 'if (false && prior !== null)',
     test: 'packages/events-daemon/test/judge-evaluation.test.ts',
     testName: 'E7: a concurrent evaluation leaves a live judge work item to its one decision owner',
   },
@@ -269,8 +269,8 @@ const phaseEGateMutations: readonly JudgeMutation[] = [
   {
     id: 'e12-judge-key-generation-fence',
     source: 'packages/events-daemon/src/runtime/judge-budget.ts',
-    before: '  if (hostedKey !== undefined) {',
-    after: '  if (false && hostedKey !== undefined) {',
+    before: '  if (hostedKey === undefined) return;',
+    after: '  if (true) return;',
     test: 'packages/events-daemon/test/judge-races.test.ts',
     testName: 'E12 judge race: hosted-key rotation during DNS refuses the retired generation before any request byte',
     killingAssertion: 'a DNS-paused synthetic test refuses after its prepared hosted-key generation is retired',
@@ -411,12 +411,8 @@ const phaseEGateMutations: readonly JudgeMutation[] = [
   {
     id: 'e-review-preio-release-commit',
     source: 'packages/events-daemon/src/runtime/judge-budget.ts',
-    before: `      releaseReservationInTransaction(input.store.database, row.id, input.now);
-      refused = true;
-      refusalError = error;
-      return false;`,
-    after: `      releaseReservationInTransaction(input.store.database, row.id, input.now);
-      throw error;`,
+    before: "         WHERE id = ? AND concurrency_owned = 1 AND state = 'reserved'`,",
+    after: "         WHERE id = ? AND concurrency_owned = 1 AND state = 'reserved' AND 0 = 1`,",
     test: 'packages/events-daemon/test/pending-rule-judge-test.test.ts',
     testName:
       'E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached',

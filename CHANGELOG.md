@@ -29,6 +29,16 @@ record, over MCP and `send status --json`.
 **Fixed.** A Slack sign-in listener now closes its loopback server if the sign-in expires before the listener can
 record that it started, so the port is released immediately instead of remaining occupied until the listener timeout.
 
+**Fixed.** A judge call that stopped before anything was sent no longer counts against the judge's budget. That covers
+a call refused, out of time or cut short by a crash before its first connection. 0.17.0 marked a call in flight before
+it reached the network, so such a call could be charged as if it had been made. Each try is now an attempt of its own:
+it is in flight only from its first network lookup, a retry is a new attempt, and the rolling and concurrent budgets
+count each attempt once.
+
+**Upgrading.** On its first start, this release moves the event database to schema 22. After that, do not start 0.17.0
+against it: 0.17.0 does not know schema 22. From this release on, `agent-events` refuses a database that a newer release
+has migrated. It names both versions and writes nothing to it.
+
 ## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run
