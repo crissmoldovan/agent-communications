@@ -758,7 +758,7 @@ export function refuseNewerVersion(
   const binaryVersion = migrations.at(-1)?.version ?? 0;
   if (databaseVersion > binaryVersion)
     throw new Error(
-      `event database schema version ${databaseVersion} is newer than this agent-events schema version ${binaryVersion}; run the newer agent-events`,
+      `event database schema version ${databaseVersion} is newer than this release's schema version ${binaryVersion}; only the newer release that migrated it can open it`,
     );
 }
 
@@ -790,12 +790,7 @@ export function applyMigrations(
     version: number;
     name: string;
   }>;
-  const databaseVersion = applied.at(-1)?.version ?? 0;
-  const binaryVersion = migrations.at(-1)?.version ?? 0;
-  if (databaseVersion > binaryVersion)
-    throw new Error(
-      `event database schema version ${databaseVersion} is newer than this agent-events schema version ${binaryVersion}; run the newer agent-events`,
-    );
+  refuseNewerVersion(applied.at(-1)?.version ?? 0, migrations);
   for (const migration of migrations) {
     const recorded = applied.find((entry) => entry.version === migration.version);
     if (recorded) {
