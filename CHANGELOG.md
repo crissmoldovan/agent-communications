@@ -5,27 +5,6 @@ together under one version.
 
 ## Unreleased
 
-**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
-to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
-headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
-no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
-
-**Fixed — agents now send Gmail and Resend mail with the approval id, without copying recipients or subjects back
-into the send call.** The approval already binds the exact message, and copying those fields made text taken from
-mail appear again outside the untrusted-content envelope. Prepare, successful-send and audit results now return each
-channel's safe field shape: a validated address may stay plain, while subjects and any other sender-controlled text
-are sanitised and enveloped. Gmail's `send cancel --json` now uses the same field rules as `send list`, too.
-
-This is additive for existing integrations: Gmail may still be given its bound draft id, and Gmail or Resend may
-still be given `expect`, either as kept or as the display-safe form prepare returned, unchanged; when present, those
-legacy checks must match exactly and refuse the send if they do not. New
-calls need only the approval id (and the mailbox or account on an unpinned surface). The send gate, single-use claim
-and final content checks are unchanged.
-
-Rejected recipient values are no longer copied into prepare errors, and Gmail's detailed prepare refusals now
-envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
-record, over MCP and `send status --json`.
-
 **The core installer now manages the events MCP server.** `agentcomms mcp install --server events --client <client>`
 and `comms_server_install` with `channel: "events"` register `@agentcomms/events-daemon` through the same preview and
 approval flow as the channel servers. Listing, updating, doctor repairs and pruning now include it too. The service is
@@ -55,6 +34,27 @@ so the result keeps giving the full-path command or labelled PowerShell `&` line
 Why: managed registrations already install a complete CLI runtime, but people still had to find or globally install
 the command separately for ordinary terminal use. Windows needs a forwarding format that preserves argument
 boundaries before it can offer the same convenience safely.
+
+**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
+to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
+headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
+no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
+
+**Fixed — agents now send Gmail and Resend mail with the approval id, without copying recipients or subjects back
+into the send call.** The approval already binds the exact message, and copying those fields made text taken from
+mail appear again outside the untrusted-content envelope. Prepare, successful-send and audit results now return each
+channel's safe field shape: a validated address may stay plain, while subjects and any other sender-controlled text
+are sanitised and enveloped. Gmail's `send cancel --json` now uses the same field rules as `send list`, too.
+
+This is additive for existing integrations: Gmail may still be given its bound draft id, and Gmail or Resend may
+still be given `expect`, either as kept or as the display-safe form prepare returned, unchanged; when present, those
+legacy checks must match exactly and refuse the send if they do not. New
+calls need only the approval id (and the mailbox or account on an unpinned surface). The send gate, single-use claim
+and final content checks are unchanged.
+
+Rejected recipient values are no longer copied into prepare errors, and Gmail's detailed prepare refusals now
+envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
+record, over MCP and `send status --json`.
 
 ## 0.17.0
 
