@@ -6,6 +6,7 @@ import { inlineCommand } from './cli-runtime.ts';
 import { externalCommand } from './command-brands.ts';
 import { CommsError, type ErrorCode, EXIT_CODES } from './errors.ts';
 import { appendPrivateLine, replaceFileInPlace, writeFileAtomic } from './fs.ts';
+import { type ManagedShimWriteResult, removeManagedShimsForRuntimes, type writeManagedShim } from './managed-shims.ts';
 import {
   codexServerFromGet,
   displayUrl,
@@ -172,6 +173,15 @@ export interface InstallResult {
   verifyDetail?: string | undefined;
   /** What the product thought worth saying about other servers this client already has registered. */
   warnings: string[];
+  /**
+   * The managed CLI shim written beside this install, absent for npx, local and --print. The operation writes it
+   * (`withManagedShim`), since finding the command takes the locator, which the installer may not import.
+   */
+  shim?: ManagedShimWriteResult | undefined;
+  /** A shim write that failed after the registration outcome was already known. */
+  shimFailure?: string | undefined;
+  /** Why a managed install deliberately offered no shim on this platform. */
+  shimNotice?: string | undefined;
 }
 
 /** Looks for an executable on PATH, the way a shell would. */
@@ -286,6 +296,8 @@ export interface InstallContext {
   core: { paths: { configDir: string; stateDir: string; dataDir: string; secretsDir: string } };
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
   platform?: NodeJS.Platform | undefined;
+  /** Test seam for a filesystem shim failure after a temporary client config has been written. */
+  writeShim?: typeof writeManagedShim | undefined;
 }
 
 /** The complete suite identity every installer-written server registration carries. Downloads are operation-local. */
@@ -1656,6 +1668,8 @@ export interface PruneResult {
   /** Removed — or, with `dryRun`, what would be. */
   removed: { path: string; version: string }[];
   kept: { path: string; version: string; reason: string }[];
+  /** Owned CLI shims removed with those runtimes, and foreign files deliberately kept. */
+  shims: { removed: string[]; kept: string[] };
   /** Why nothing was removed at all, when something stopped the whole run. */
   refused?: string | undefined;
 }
@@ -1773,7 +1787,13 @@ export async function pruneManagedRuntimes(
   } = {},
 ): Promise<PruneResult> {
   const runtimeDir = join(context.core.paths.dataDir, 'runtime');
-  const result: PruneResult = { runtimeDir, dryRun: options.dryRun === true, removed: [], kept: [] };
+  const result: PruneResult = {
+    runtimeDir,
+    dryRun: options.dryRun === true,
+    removed: [],
+    kept: [],
+    shims: { removed: [], kept: [] },
+  };
 
   const candidates: { path: string; version: string; aliases: string[] }[] = [];
   for (const { path, version } of await listManagedRuntimes(context.core.paths.dataDir, product.packageName)) {
@@ -1852,6 +1872,13 @@ export async function pruneManagedRuntimes(
     if (left.length !== handedOut.length) {
       await writeFileAtomic(ledger, left.map((record) => `${JSON.stringify(record)}\n`).join(''));
     }
+  }
+  if (result.removed.length > 0) {
+    result.shims = await removeManagedShimsForRuntimes(
+      { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform },
+      result.removed.map((item) => item.path),
+      { dryRun: result.dryRun },
+    );
   }
   return result;
 }

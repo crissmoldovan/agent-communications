@@ -37,16 +37,19 @@ class ExternalCommand {
   readonly #reason: string;
   /** The words, as the program is to receive them. */
   readonly words: readonly string[];
-  /** The line to paste; null when one of the words has no printing that every Windows shell passes on alike. */
+  /** The line to paste; null when no supported common or labelled shell rendering is safe. */
   readonly line: string | null;
   readonly platform: NodeJS.Platform;
+  readonly shell?: 'powershell' | undefined;
 
   constructor(gate: typeof GATE, words: readonly string[], platform: NodeJS.Platform, reason: string) {
     if (gate !== GATE) throw new TypeError('an external command is made by externalCommand, and only there');
     this.#reason = reason;
     this.words = Object.freeze([...words]);
-    this.line = quoteCommand(this.words, platform).line;
+    const quoted = quoteCommand(this.words, platform);
+    this.line = quoted.line;
     this.platform = platform;
+    if (quoted.shell !== undefined) this.shell = quoted.shell;
     Object.freeze(this);
   }
 

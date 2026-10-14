@@ -7,16 +7,28 @@ import {
   CHANNEL_SERVERS,
   CHANNELS,
   type Channel,
-  channelLabel,
-  channelServer,
   isChannel,
+  isServer,
   requireChannelManifest,
+  SERVERS,
+  type ServerId,
+  serverFacts,
+  serverKind,
+  serverLabel,
 } from '../channel-servers.ts';
 import { accountNoun, hasNarrowing, narrowingOwner, pinOption } from '../channel-words.ts';
+import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
+import {
+  type ManagedShimWriteResult,
+  managedShimPath,
+  managedShimsSupported,
+  managedShimUnsupportedNotice,
+  writeManagedShim,
+} from '../managed-shims.ts';
 import { scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
 import {
   checkServerName,
@@ -44,15 +56,15 @@ import {
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { isBehind } from '../npm.ts';
-import type { PathOverrides } from '../paths.ts';
+import { homeDirectory, type PathOverrides } from '../paths.ts';
 import { launcherOf, registrationPathPins, registrationVersion } from '../registrations.ts';
 import { VERSION } from '../version.ts';
 
 /**
- * Registering, pruning and listing the MCP servers of every channel, from the core.
+ * Registering, pruning and listing every declared channel or service MCP server, from the core.
  *
- * `agentcomms mcp install` registers the core server; `comms_server_install` registers any channel's; and
- * `agent-gmail mcp install` and `agent-slack mcp install` register their own. All four are the one change here, over
+ * `agentcomms mcp install` registers core or a declared service; `comms_server_install` registers any declared
+ * server; and channel CLIs register their own. They are the one change here, over
  * the shared installer (`mcp-install.ts`), and all go through the change flow: registering a server is a loosening in
  * the design's terms (§3.1) — it hands a client a new set of tools — and so is asked for once and applied on the
  * second call with the approval. Printing an entry registers nothing and asks nobody.
@@ -63,7 +75,7 @@ import { VERSION } from '../version.ts';
  * the other — or worse, a channel's own command would register with no approval at all, which is what it did.
  *
  * The version installed is this core's own, or the calling channel's when it passes its product. The packages are
- * released together, at one version, so the core that is asked to install Gmail installs the Gmail of its own release.
+ * released together, at one version, so the core asked to install Gmail or events installs its own release.
  */
 
 export const CLIENTS: readonly SupportedClient[] = Object.freeze([
@@ -112,10 +124,10 @@ const exists = (path: string) =>
  * core depends on none of them. So the channel is looked for beside this core — `packages/gmail` next to
  * `packages/core` in a checkout — and from source when this core runs from source, as the channel CLIs do.
  */
-async function localModuleUrl(channel: Channel): Promise<string> {
+async function localModuleUrl(server: ServerId): Promise<string> {
   const coreRoot = await corePackageRoot();
-  const unscopedName = channelServer(channel).packageName.split('/').at(-1) ?? channel;
-  const root = channel === 'core' ? coreRoot : join(dirname(coreRoot), unscopedName);
+  const unscopedName = serverFacts(server).packageName.split('/').at(-1) ?? server;
+  const root = server === 'core' ? coreRoot : join(dirname(coreRoot), unscopedName);
   const source = join(root, 'src', 'cli.ts');
   const built = join(root, 'dist', 'cli.mjs');
   const fromSource = fileURLToPath(import.meta.url).endsWith('.ts');
@@ -128,7 +140,7 @@ async function localModuleUrl(channel: Channel): Promise<string> {
   }
   throw new CommsError(
     'USAGE',
-    `\`--launcher local\` registers a checkout's own code, and there is no ${channelServer(channel).packageName} beside this one`,
+    `\`--launcher local\` registers a checkout's own code, and there is no ${serverFacts(server).packageName} beside this one`,
     { hint: `Looked in ${root}. Use the managed launcher, or run the install from that checkout.` },
   );
 }
@@ -141,18 +153,27 @@ async function localModuleUrl(channel: Channel): Promise<string> {
  * newer release here is all it takes to register one this core is older than — which is what `agentcomms update` does.
  * `comms_server_install` and every `mcp install` name none, and register their own release as they always have.
  */
+export async function serverProduct(
+  server: ServerId,
+  launcher: Launcher | undefined,
+  version: string = VERSION,
+): Promise<McpProduct> {
+  return {
+    ...serverFacts(server),
+    version,
+    // Only the `local` launcher reads `moduleUrl`, and only it needs a checkout beside this one; the others must not
+    // be refused for the lack of one.
+    moduleUrl: launcher === 'local' ? await localModuleUrl(server) : '',
+  };
+}
+
+/** Backward-compatible name for callers that install a channel server. */
 export async function channelProduct(
   channel: Channel,
   launcher: Launcher | undefined,
   version: string = VERSION,
 ): Promise<McpProduct> {
-  return {
-    ...channelServer(channel),
-    version,
-    // Only the `local` launcher reads `moduleUrl`, and only it needs a checkout beside this one; the others must not
-    // be refused for the lack of one.
-    moduleUrl: launcher === 'local' ? await localModuleUrl(channel) : '',
-  };
+  return serverProduct(channel, launcher, version);
 }
 
 /**
@@ -165,11 +186,11 @@ export async function channelProduct(
  * registered, from the channel; a product for another package would register something else under those words, and
  * the person would have approved a sentence that was not true.
  */
-function ownProduct<P extends Pick<McpProduct, 'packageName'>>(channel: Channel, own: P | undefined): P | undefined {
-  if (own !== undefined && own.packageName !== channelServer(channel).packageName) {
+function ownProduct<P extends Pick<McpProduct, 'packageName'>>(server: ServerId, own: P | undefined): P | undefined {
+  if (own !== undefined && own.packageName !== serverFacts(server).packageName) {
     throw new CommsError(
       'UNEXPECTED',
-      `${own.packageName} is not the ${channelLabel(channel)} server's package, so it cannot register that server`,
+      `${own.packageName} is not the ${serverLabel(server)} server's package, so it cannot register that server`,
     );
   }
   return own;
@@ -178,7 +199,8 @@ function ownProduct<P extends Pick<McpProduct, 'packageName'>>(channel: Channel,
 // ── Install ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ServerInstallRequest {
-  channel: Channel;
+  /** The declared server id. Kept as `channel` for CLI–MCP compatibility with earlier releases. */
+  channel: ServerId;
   client: SupportedClient;
   name?: string | undefined;
   /**
@@ -205,6 +227,11 @@ export type ServerInstallResult = InstallResult & {
   restart: string | null;
 };
 
+export interface ServerInstallDeps {
+  /** The platform whose install behavior is planned; this process's unless a test supplies another. */
+  platform?: NodeJS.Platform | undefined;
+}
+
 /**
  * Refuses what the channel's own `mcp install` has no flag for, rather than ignoring it.
  *
@@ -212,7 +239,7 @@ export type ServerInstallResult = InstallResult & {
  * register a server reaching every workspace for a caller who believed they had pinned it.
  */
 function checkRequest(request: ServerInstallRequest): void {
-  if (!isChannel(request.channel)) {
+  if (!isServer(request.channel)) {
     throw new CommsError('USAGE', `"${String(request.channel)}" is not a channel`, {
       hint: `One of: ${CHANNELS.join(', ')}.`,
     });
@@ -230,7 +257,7 @@ function checkRequest(request: ServerInstallRequest): void {
   // Where the name enters, for every surface — the tool and all three `mcp install` commands — before anything is
   // planned or asked: it is quoted in the preview, so a name that reads as a pin is a preview that lies.
   if (request.name !== undefined) checkServerName(request.name);
-  const label = channelLabel(request.channel);
+  const label = serverLabel(request.channel);
   /*
    * A channel's own names for its pin and its switches, refused on a server that has none — by whose option each is,
    * from the manifests, in the words the refusal always had.
@@ -288,7 +315,7 @@ function checkPin(config: Config, request: ServerInstallRequest): void {
   }
   const { account } = resolveName(config, 'account', pin);
   if (account.platform !== request.channel) {
-    throw new CommsError('USAGE', `"${pin}" is not a ${channelLabel(request.channel)} ${accountNoun(request.channel)}`);
+    throw new CommsError('USAGE', `"${pin}" is not a ${serverLabel(request.channel)} ${accountNoun(request.channel)}`);
   }
 }
 
@@ -312,7 +339,7 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
 }
 
 /**
- * Registering one channel's server with one client, as a change.
+ * Registering one declared server with one client, as a change.
  *
  * The effects are what a person is agreeing to, one sentence each, and everything that decides what the server may
  * reach is in them — which server, which client, under which name, pinned to what, replacing what, started how. The
@@ -332,18 +359,19 @@ export function serverInstallChange(
   env: NodeJS.ProcessEnv,
   request: ServerInstallRequest,
   own?: McpProduct,
+  deps: ServerInstallDeps = {},
 ): GatedChange<ServerInstallResult> {
   checkRequest(request);
   ownProduct(request.channel, own);
-  const context: InstallContext = { env, core };
-  const facts = channelServer(request.channel);
-  const label = channelLabel(request.channel);
+  const context: InstallContext = { env, core, ...(deps.platform === undefined ? {} : { platform: deps.platform }) };
+  const facts = serverFacts(request.channel);
+  const label = serverLabel(request.channel);
   const noun = accountNoun(request.channel);
   const pinName = pinOption(request.channel);
   const switchable = hasNarrowing(request.channel, 'readOnly');
   const name = request.name ?? facts.defaultServerName;
   const launcher = request.launcher ?? 'managed';
-  const productNow = async (): Promise<McpProduct> => own ?? (await channelProduct(request.channel, request.launcher));
+  const productNow = async (): Promise<McpProduct> => own ?? (await serverProduct(request.channel, request.launcher));
   /*
    * What the plan found, for the apply to hold the install to. The install looks at the machine again when it runs,
    * and what it finds then has to be what the plan found — whether it writes or prints, where, what it replaces, and
@@ -413,6 +441,10 @@ export function serverInstallChange(
           `installs ${facts.packageName}@${version} from npm into ${managedRuntimeDir(core.paths.dataDir, facts.packageName, version)}`,
         );
       }
+      if (request.print !== true && launcher === 'managed' && managedShimsSupported(context)) {
+        const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
+        effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
+      }
       return {
         before: config,
         after: config,
@@ -426,11 +458,12 @@ export function serverInstallChange(
     apply: async () => {
       if (planned === undefined)
         throw new CommsError('UNEXPECTED', 'the registration was applied before it was planned');
-      const result = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
+      const installed = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
         async (error) => {
           throw await remedyLocated(error, core);
         },
       );
+      const result = request.print === true ? installed : await withManagedShim(context, planned.product, installed);
       return {
         ...result,
         restart: result.applied
@@ -442,6 +475,67 @@ export function serverInstallChange(
 }
 
 /**
+ * A managed install's CLI shim (CUE-406), once the registration's outcome is known: the command the locator finds in
+ * the runtime the entry starts, written where nothing is or over this installation's own unchanged shim, and never
+ * over anything else. A shim that cannot be written leaves the registration as it went, and says how to repair both.
+ * The installer may not import the locator, so the operation writes it — for `mcp install` and `update` alike.
+ */
+export async function withManagedShim(
+  context: InstallContext,
+  product: McpProduct,
+  installed: InstallResult,
+): Promise<InstallResult> {
+  if (installed.launcher !== 'managed') return installed;
+  const cliEntry = installed.entry.args[0];
+  if (cliEntry === undefined) throw new CommsError('UNEXPECTED', 'the managed entry has no CLI path');
+  const shimContext = { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform };
+  if (!managedShimsSupported(shimContext)) {
+    return { ...installed, shimNotice: managedShimUnsupportedNotice(shimContext) };
+  }
+  const warnings = [...installed.warnings];
+  let shim: ManagedShimWriteResult | undefined;
+  let shimFailure: string | undefined;
+  try {
+    const located = locateCliCommand({
+      caller: { url: pathToFileURL(cliEntry).href, packageName: product.packageName },
+      target: {
+        packageName: product.packageName,
+        manifest: { label: product.defaultServerName, binary: product.binary },
+      },
+      words: [],
+      uses: [],
+      paths: { ...context.core.paths, downloadsDir: context.core.paths.dataDir },
+      platform: context.platform,
+    });
+    if (!located.ok) {
+      throw new CommsError('CONFIG', `the managed CLI command could not be located: ${located.message}`);
+    }
+    shim = await (context.writeShim ?? writeManagedShim)(shimContext, {
+      binary: product.binary,
+      command: located.command.words,
+      entry: located.command.entry,
+    });
+  } catch (error) {
+    shimFailure = error instanceof Error ? error.message : String(error);
+    const path = join(homeDirectory(context.env), '.local', 'bin', product.binary);
+    warnings.push(
+      `The MCP registration ${installed.applied ? 'succeeded' : 'was not changed'}, but the CLI shim at ${path} could not be written (${shimFailure}). Fix that shim directory, then run this managed install again with \`--force\`; the owned registration is replaced without widening it and the shim is repaired.`,
+    );
+  }
+  if (shim?.status === 'foreign') {
+    warnings.push(
+      `${shim.path} already exists but was not written by this installation, so it was left unchanged; move it aside and run this managed install again with \`--force\` to create the CLI shim at that path.`,
+    );
+  }
+  return {
+    ...installed,
+    warnings,
+    ...(shim === undefined ? {} : { shim }),
+    ...(shimFailure === undefined ? {} : { shimFailure }),
+  };
+}
+
+/**
  * A refusal of `mcp install` with its remedy — another install of the same product — said with the command located:
  * the printing package's own, core's, or another product's found among this machine's registrations (CUE-403). The
  * installer says only the words; it may not import the locator.
@@ -449,11 +543,14 @@ export function serverInstallChange(
 async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
   const remedy = installRemedyOf(error);
   if (remedy === undefined || !(error instanceof CommsError)) return error;
-  const channel = CHANNELS.find((each) => channelServer(each).binary === remedy.binary);
-  if (channel === undefined) return error;
+  const server = SERVERS.find((each) => serverFacts(each).binary === remedy.binary);
+  if (server === undefined) return error;
   const maker = await requireHandoffs(core).registered();
+  const handoff = isChannel(server)
+    ? maker.of(server, remedy.words)
+    : maker.core(['mcp', 'install', '--server', server, ...remedy.words.slice(2)]);
   return new CommsError(error.code, error.message, {
-    hint: handoffSentence(maker.of(channel, remedy.words), remedy.say),
+    hint: handoffSentence(handoff, remedy.say),
     ...(error.details === undefined ? {} : { details: error.details }),
     ...(error.cause === undefined ? {} : { cause: error.cause }),
   });
@@ -462,7 +559,8 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
 // ── Prune ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ServerPruneRequest {
-  channel: Channel;
+  /** The declared server id. Kept as `channel` for CLI–MCP compatibility with earlier releases. */
+  channel: ServerId;
   dryRun?: boolean | undefined;
   includePrinted?: boolean | undefined;
   /** For a test: the command lines of the running processes, or null when they cannot be listed. */
@@ -470,7 +568,7 @@ export interface ServerPruneRequest {
 }
 
 /**
- * Removing a channel's unused managed runtimes, as a change.
+ * Removing a declared server's unused managed runtimes, as a change.
  *
  * A dry run is free: it removes nothing. Otherwise the plan is that same dry run, and each runtime it would remove is
  * one effect — the removal cannot be taken back — so the approval is bound to exactly that list; and the removal is
@@ -485,18 +583,18 @@ export function serverPruneChange(
   request: ServerPruneRequest,
   own?: Pick<McpProduct, 'packageName' | 'version'>,
 ): GatedChange<PruneResult> {
-  if (!isChannel(request.channel)) {
+  if (!isServer(request.channel)) {
     throw new CommsError('USAGE', `"${String(request.channel)}" is not a channel`, {
       hint: `One of: ${CHANNELS.join(', ')}.`,
     });
   }
   const context: InstallContext = { env, core };
   const { packageName, version } = ownProduct(request.channel, own) ?? {
-    packageName: channelServer(request.channel).packageName,
+    packageName: serverFacts(request.channel).packageName,
     version: VERSION,
   };
   const product = { packageName, version };
-  const label = channelLabel(request.channel);
+  const label = serverLabel(request.channel);
   const base = {
     includePrinted: request.includePrinted === true,
     ...(request.processes ? { processes: request.processes } : {}),
@@ -512,7 +610,10 @@ export function serverPruneChange(
       return {
         before: config,
         after: config,
-        effects: preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
+        effects: [
+          ...preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
+          ...preview.shims.removed.map((path) => `deletes the owned ${label} CLI shim at ${path}`),
+        ],
         summary: `Remove ${approved.length} unused ${label} runtime${approved.length === 1 ? '' : 's'}`,
       };
     },
@@ -550,7 +651,9 @@ export interface ChannelRegistration {
 }
 
 export interface ChannelAvailability {
-  channel: Channel;
+  /** Stable server id. Kept as `channel` in this compatibility-shaped report. */
+  channel: ServerId;
+  kind: 'channel' | 'service';
   label: string;
   package: string;
   binary: string;
@@ -608,8 +711,8 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
 export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Promise<ChannelsReport> {
   const scan = await scanRegisteredServers(env);
   const channels: ChannelAvailability[] = [];
-  for (const channel of CHANNELS) {
-    const facts = channelServer(channel);
+  for (const channel of SERVERS) {
+    const facts = serverFacts(channel);
     const runtimes = await listManagedRuntimes(core.paths.dataDir, facts.packageName);
     const bin = await whichExecutable(facts.binary, env);
     const onPath = bin ? { path: bin, version: await versionBehind(bin, facts.packageName) } : null;
@@ -632,7 +735,8 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
     }
     channels.push({
       channel,
-      label: channelLabel(channel),
+      kind: serverKind(channel),
+      label: serverLabel(channel),
       package: facts.packageName,
       binary: facts.binary,
       serverName: facts.defaultServerName,

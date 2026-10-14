@@ -114,7 +114,7 @@ Usage — run these with this CLI, each as the words after its program:
   attach deny add <path>        never attach files from a path: applies at once
   attach deny remove <path> [--approval <id>]
                                 take one of your own deny entries away: approved first
-  channels                      which channel servers exist, which are installed, and where they are registered
+  channels                      which declared servers exist, which are installed, and where they are registered
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -127,11 +127,12 @@ Usage — run these with this CLI, each as the words after its program:
   org remove <organisation> [--approval <id>]
                                 forget a profile and the clients it made: approved first
   mcp                           run the core MCP server on stdio (what an MCP client starts)
-  mcp install --client <client> [--name <name>] [--launcher managed|npx|local] [--force]
+  mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
+                                [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
-                                register the core MCP server with a client, and prove it starts
-  mcp prune [--dry-run] [--include-printed] [--approval <id>]
-                                remove the core's managed runtimes that nothing uses
+                                register the core server, or another declared server, and prove it starts
+  mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
+                                remove that server's managed runtimes that nothing uses
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
@@ -207,6 +208,8 @@ function parse(argv: string[]) {
       version: { type: 'boolean', short: 'v', default: false },
       inbox: { type: 'string' },
       account: { type: 'string' },
+      workspace: { type: 'string' },
+      'read-only': { type: 'boolean', default: false },
       since: { type: 'string' },
       limit: { type: 'string' },
       state: { type: 'string' },
@@ -218,6 +221,7 @@ function parse(argv: string[]) {
       yes: { type: 'boolean', default: false },
       approval: { type: 'string' },
       client: { type: 'string' },
+      server: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -691,16 +695,25 @@ export async function main(
             throw usage(`--client must be one of: ${CLIENT_NAMES.join(', ')}`);
           }
           const words = ['mcp', 'install', '--client', values.client];
+          if (values.server) words.push('--server', values.server);
           if (values.name) words.push('--name', values.name);
+          if (values.account) words.push('--account', values.account);
+          if (values.inbox) words.push('--inbox', values.inbox);
+          if (values.workspace) words.push('--workspace', values.workspace);
+          if (values['read-only']) words.push('--read-only');
           if (values.launcher) words.push('--launcher', values.launcher);
           if (values.force) words.push('--force');
           if (values['no-verify']) words.push('--no-verify');
           const result = await gatedChangeAtTerminal(
             core,
             serverInstallChange(core, env, {
-              channel: 'core',
+              channel: values.server ?? 'core',
               client: values.client as SupportedClient,
               name: values.name,
+              account: values.account,
+              inbox: values.inbox,
+              workspace: values.workspace,
+              readOnly: values['read-only'],
               launcher: values.launcher as Launcher | undefined,
               force: values.force,
               print: values.print,
@@ -716,11 +729,12 @@ export async function main(
         }
         if (sub === 'prune') {
           const words = ['mcp', 'prune'];
+          if (values.server) words.push('--server', values.server);
           if (values['include-printed']) words.push('--include-printed');
           const result = await gatedChangeAtTerminal(
             core,
             serverPruneChange(core, env, {
-              channel: 'core',
+              channel: values.server ?? 'core',
               dryRun: values['dry-run'],
               includePrinted: values['include-printed'],
             }),

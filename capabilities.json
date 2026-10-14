@@ -286,6 +286,30 @@
       "expect": { "request.channel": "core" },
       "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
     },
+    {
+      "id": "core.mcp.install.events",
+      "package": "core",
+      "cli": "mcp install",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "operation": "serverInstallChange",
+      "argv": ["--client", "claude-code", "--server", "events"],
+      "args": { "channel": "events", "client": "claude-code" },
+      "expect": { "request.channel": "events" },
+      "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared registration operation."
+    },
+    {
+      "id": "core.mcp.prune.events",
+      "package": "core",
+      "cli": "mcp prune",
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "operation": "serverPruneChange",
+      "argv": ["--server", "events"],
+      "args": { "channel": "events" },
+      "expect": { "request.channel": "events" },
+      "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared prune operation."
+    },
 
     {
       "id": "gmail.client.add",

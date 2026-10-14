@@ -219,10 +219,10 @@ repair — names the Node and the file of the installation that printed it, with
 pinned: `--config-dir`, `--state-dir`, `--data-dir` and `--secrets-dir`, and `--downloads-dir` for one that saves
 files. It runs as pasted, from any folder, with nothing of this suite on your `PATH`. Two cases say so themselves:
 
-- **Words to type.** Where one of its words cannot be written the same way for cmd.exe and both PowerShells, the
-  command comes as words to type: its words in JSON, with what to do — type them, each quoted for your shell. On
-  Windows that is the usual case when Node is installed under `C:\Program Files`, the default, because that path
-  needs quotes; Node from nvm-windows, Volta or a tool cache gives a line to paste.
+- **A PowerShell line, or words to type.** When the absolute Node path needs quotes — including the default
+  `C:\Program Files` install — the command begins with PowerShell's `&`, quotes each word for PowerShell, and labels
+  the line “PowerShell”. Where a word cannot be represented safely in that form, the command instead comes as inert
+  JSON with what to do: type the words, each quoted for your shell.
 - **None here.** A command of another product — Slack's, from core, say — is found among the servers registered
   with your MCP clients, at exactly this release, and never through npx. With no such registration there is no
   command: the result names the product and the release it needs, and says it is not locatable here. Install or
@@ -255,8 +255,14 @@ process resolved, and cannot show the variables or relative values that produced
 command, quoted for your shell. npx may not be installed; an old result may not name its Node; and skills are
 installed separately from the servers, so an agent's skills may still describe the old way.
 
-PATH shims — putting `agentcomms` and the `agent-*` commands on your `PATH` — are a separate follow-up. 0.13.1
-creates, changes and checks none.
+Current managed installs write a CLI shim to `~/.local/bin` on macOS and Linux. The install result says when that
+directory is not on `PATH` and gives a current-shell line to prepend it; it edits no shell profile. Updates repoint
+owned shims, prune removes them with their runtimes, and `doctor` reports a missing, stale or foreign shim. A file
+this installation did not write is never overwritten or removed, and a bin directory redirected during an operation
+is refused before the mutation. Windows shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse
+caller arguments, including shell metacharacters; use the result's full-path command or labelled PowerShell `&` line
+there. This does not repair a bare command printed by 0.13.0 or earlier: use one of the exact-release routes above
+first, then run a current managed install.
 
 ### The client does not see the tools
 

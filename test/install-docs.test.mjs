@@ -223,7 +223,8 @@ test('no document promises that prune keeps whatever any client registers', asyn
 
 test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, at that exact release and never latest (CUE-403)', async () => {
   // Design 2026-10-04, D7: what a person can do with a command 0.13.0 or earlier printed by its bare name, and what
-  // that cannot recover. And D8 and §5: PATH shims are a follow-up, and on Windows a default Node gives words to type.
+  // that cannot recover. CUE-406 adds current managed-install shims, and CUE-410 labels the PowerShell line used for
+  // a default Windows Node; neither changes how a command from 0.13.0 or earlier is recovered.
   const page = await readFile(join(ROOT, 'docs', 'troubleshooting.md'), 'utf8');
   const start = page.indexOf('### A command a result gave you is not found');
   assert.notEqual(start, -1, 'the section is there');
@@ -231,7 +232,7 @@ test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, a
   const section = page.slice(start, end === -1 ? undefined : end);
   const prose = section.replace(/\s+/g, ' ');
 
-  // 0.13.1: the command, the words to type, or none here.
+  // Current results: the command, the inert words fallback, or none here.
   assert.match(prose, /names the Node and the file of the installation that printed it/);
   assert.match(prose, /not locatable here/);
   assert.match(prose, /C:\\Program Files/);
@@ -251,9 +252,14 @@ test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, a
   assert.match(prose, /`comms_paths`.*cannot/);
   assert.match(prose, /npx may not be installed/i);
   assert.match(prose, /may not name its Node/);
-  // PATH shims are not part of this.
-  assert.match(prose, /PATH shims/);
-  assert.match(prose, /follow-up/);
+  // Current managed installs provide shims, without claiming they repair a result from an older release.
+  assert.match(prose, /CLI shim/, 'the guide names the current managed CLI shim');
+  assert.match(prose, /managed install/, 'the guide says which install owns current shims');
+  assert.match(
+    prose,
+    /does not repair a bare command printed by 0\.13\.0 or earlier/,
+    'the current shim does not pretend to repair an old result',
+  );
 });
 
 test('no guide hands a person a bare approve command: they run the one the result gives (CUE-403)', async () => {

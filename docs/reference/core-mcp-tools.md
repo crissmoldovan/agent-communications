@@ -19,7 +19,7 @@ applies a change it did not plan itself.
 | Tool | What it does |
 |---|---|
 | [`comms_paths`](#comms_paths) | Where the configuration, state, data, secrets and downloads live on this machine. |
-| [`comms_doctor`](#comms_doctor) | Check this machine: Node, the directories, the configuration, account names, the secret store, and which MCP clients start each server — each check with the fix when it fails. |
+| [`comms_doctor`](#comms_doctor) | Check this machine: Node, the directories, the configuration, account names, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. |
 | [`comms_audit_tail`](#comms_audit_tail) | The most recent audit records, newest last: every send, change and approval step, with the surface it came from. |
 | [`comms_approvals_list`](#comms_approvals_list) | Every approval on this machine — for sends, posts and configuration changes — with its state and when it expires. |
 | [`comms_approval_revoke`](#comms_approval_revoke) | Cancel an approval so it can never be used: a send, a post, or a configuration change the person said no to. |
@@ -33,7 +33,7 @@ applies a change it did not plan itself.
 | [`comms_org_update`](#comms_org_update) | Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. |
 | [`comms_org_remove`](#comms_org_remove) | Forget an organisation profile, and delete the OAuth clients it made here with their secrets; clients the person registered themselves are left as they are. |
 | [`comms_server_install`](#comms_server_install) | Register a channel’s MCP server — `gmail`, `resend`, `slack`, `whatsapp`, or `core` (this one) — with an MCP client, and prove it starts. |
-| [`comms_server_prune`](#comms_server_prune) | Remove a channel’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. |
+| [`comms_server_prune`](#comms_server_prune) | Remove a declared server’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. |
 | [`comms_update`](#comms_update) | Bring this machine to the latest published release. |
 | [`comms_names_migrate`](#comms_names_migrate) | Rename every mailbox and workspace to `organisation/platform`. |
 | [`comms_secrets_migrate`](#comms_secrets_migrate) | Move every credential between the system keychain and files on this disk, and delete the originals. |
@@ -48,7 +48,7 @@ Takes no arguments.
 
 ### `comms_doctor`
 
-Check this machine: Node, the directories, the configuration, account names, the secret store, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.
+Check this machine: Node, the directories, the configuration, account names, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.
 
 *read-only*
 
@@ -199,10 +199,10 @@ Register a channel’s MCP server — `gmail`, `resend`, `slack`, `whatsapp`, or
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
-| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` | **yes** | which server |
+| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` \\| `events` | **yes** | which server |
 | `client` | `claude-code` \\| `claude-desktop` \\| `codex` \\| `cursor` \\| `gemini` \\| `vscode` \\| `json` | **yes** | which MCP client to register it with |
 | `name` | string | no | the name the client shows; the channel’s own when left out. 1–64 of A–Z a–z 0–9 . _ - |
-| `account` | string | no | any channel but the core: serve this one account, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack |
+| `account` | string | no | a channel server that declares accounts: serve this one, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack |
 | `inbox` | string | no | Gmail only: serve this one mailbox |
 | `workspace` | string | no | Slack only: serve this one workspace |
 | `readOnly` | boolean | no | Gmail only: leave out every tool that changes a mailbox |
@@ -214,13 +214,13 @@ Register a channel’s MCP server — `gmail`, `resend`, `slack`, `whatsapp`, or
 
 ### `comms_server_prune`
 
-Remove a channel’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.
+Remove a declared server’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
-| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` | **yes** | whose runtimes |
+| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` \\| `events` | **yes** | whose runtimes |
 | `dryRun` | boolean | no | only say what would be removed |
 | `includePrinted` | boolean | no | also remove runtimes kept only because an entry for them was printed, once those entries are gone |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |

@@ -4,7 +4,7 @@ import { integrityRefusal, kindOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
 import { revokeChange } from '../changes.ts';
-import { type Channel, channelServer } from '../channel-servers.ts';
+import { type Channel, isChannel, type ServerId, serverFacts } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
 import { stripInvisible } from '../chars.ts';
 import { inlineCommand } from '../cli-runtime.ts';
@@ -14,7 +14,10 @@ import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { isGroupOrWorldAccessible } from '../fs.ts';
 import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requireHandoffs } from '../handoffs.ts';
+import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
+import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
+import { compareVersions } from '../npm.ts';
 import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
@@ -264,7 +267,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
   checks.push(await updateCheckLine(core, env, handoffs));
-  checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs)));
+  checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
 }
 
@@ -395,6 +398,7 @@ async function registrationChecks(
   env: NodeJS.ProcessEnv,
   config: Config | null,
   handoffs: CliHandoffs,
+  platform: NodeJS.Platform,
 ): Promise<DoctorCheck[]> {
   const REGISTRATION_PATH_KEYS = ['configDir', 'stateDir', 'dataDir', 'secretsDir'] as const;
   const report = await channelsAvailable(core, env);
@@ -408,8 +412,41 @@ async function registrationChecks(
   const blind = report.unreadable.map((file) => file.path);
   const where = (entry: ChannelRegistration) =>
     `${entry.client} as "${entry.name}" in ${entry.path}${entry.scope === 'project' ? ' (for one project)' : ''}`;
+  if (!managedShimsSupported({ platform })) {
+    checks.push({
+      name: 'managed CLI shims',
+      ok: true,
+      warn: true,
+      detail: managedShimUnsupportedNotice({ platform }),
+    });
+  }
   for (const channel of report.channels) {
     const name = `${channel.channel} server`;
+    const latestRuntime = channel.runtimes.reduce<(typeof channel.runtimes)[number] | null>(
+      (latest, runtime) =>
+        latest === null || (compareVersions(runtime.version, latest.version) ?? 0) > 0 ? runtime : latest,
+      null,
+    );
+    if (latestRuntime !== null && managedShimsSupported({ platform })) {
+      const expectedEntry = managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version);
+      const shim = await inspectManagedShim(
+        { env, dataDir: core.paths.dataDir, platform },
+        { binary: channel.binary, expectedEntry },
+      );
+      if (shim.status !== 'current') {
+        checks.push({
+          name: `CLI shim at ${shim.path}`,
+          ok: true,
+          warn: true,
+          detail: `${shim.status}: ${shim.path}; ${shim.detail}`,
+          fix: remedy(
+            shim.status === 'foreign'
+              ? `Confirm who owns ${shim.path}, then move it aside if this installation should provide that command. A managed install or update will create the shim without overwriting a foreign file.`
+              : `Run a managed install or update for ${channel.label}; it will ${shim.status === 'missing' ? 'create' : 'repoint'} the owned shim.`,
+          ),
+        });
+      }
+    }
     for (const entry of channel.registered) {
       const missingPins = REGISTRATION_PATH_KEYS.filter((key) => entry.pathPins[key] === undefined);
       const unpinned =
@@ -487,13 +524,13 @@ function accountsOf(config: Config, channel: Channel): string[] {
  * the flags `mcp install`'s own hint repeats when it refuses to replace an entry without `--force`, so following it
  * narrows or widens nothing. A project's entry is not one `mcp install` writes, and is said to be where it is instead.
  */
-function registerAgain(channel: Channel, entry: ChannelRegistration, handoffs: CliHandoffs): Remedy {
+function registerAgain(channel: ServerId, entry: ChannelRegistration, handoffs: CliHandoffs): Remedy {
   if (entry.scope === 'project') {
     return remedy(
       `It is registered for one project, in ${entry.path}, and \`mcp install\` registers at user scope only: remove it or register it again there, with ${entry.client}'s own command.`,
     );
   }
-  const facts = channelServer(channel);
+  const facts = serverFacts(channel);
   const words = ['mcp', 'install', '--client', entry.client];
   if (entry.name !== facts.defaultServerName) words.push('--name', entry.name);
   words.push(...entry.narrowing);
@@ -501,7 +538,10 @@ function registerAgain(channel: Channel, entry: ChannelRegistration, handoffs: C
   words.push('--force');
   // The entry's name and pins are read from the client's file, which may hold anything: a located command shows them
   // as words to type where no Windows line is safe, and a product not locatable here says so instead.
-  return remedy(handoffSentence(handoffs.of(channel, words), (command) => `Register it again: ${command}.`));
+  const handoff = isChannel(channel)
+    ? handoffs.of(channel, words)
+    : handoffs.core(['mcp', 'install', '--server', channel, ...words.slice(2)]);
+  return remedy(handoffSentence(handoff, (command) => `Register it again: ${command}.`));
 }
 
 /** An inbox's id from its name — the current one, so a former name is answered with what it is called now. */

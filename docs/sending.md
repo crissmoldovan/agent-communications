@@ -174,8 +174,9 @@ agent-gmail approve <approvalId>          # approve at this terminal, under `con
 
 To approve, run the command the result gave you exactly as given: it names this installation's own Node and CLI
 file, with its folders pinned, so it works without anything on your PATH and approves the very approval the agent
-holds. On Windows with Node under `C:\Program Files` it comes as words to type, each quoted for your shell; where it
-says the command is not locatable here, install or update that package the way you usually do and try again
+holds. On Windows with Node under `C:\Program Files` it comes as a line labelled for PowerShell and beginning with
+its `&` call operator; an unsafe word still comes as inert JSON to type for your shell. Where it says the command is
+not locatable here, install or update that package the way you usually do and try again
 ([troubleshooting](troubleshooting.md#a-command-a-result-gave-you-is-not-found)). It shows the preview once — that is
 the approval — and sends nothing: the agent, waiting, sends it.
 

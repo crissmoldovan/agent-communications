@@ -15,6 +15,7 @@ import { inlineCommand } from '../src/cli-runtime.ts';
 import type { AccountConfig, InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER, isCommand } from '../src/handoffs.ts';
+import { managedShimPath, managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { managedRuntimeDir, managedRuntimeEntry, whichExecutable } from '../src/mcp-install.ts';
 import { compareVersions, npmLatestVersion } from '../src/npm.ts';
@@ -61,6 +62,7 @@ const PACKAGES = {
   resend: '@agentcomms/resend',
   slack: '@agentcomms/slack',
   whatsapp: '@agentcomms/whatsapp',
+  events: '@agentcomms/events-daemon',
 } as const;
 
 function account(over: Partial<AccountConfig> = {}): AccountConfig {
@@ -147,6 +149,14 @@ function machine(body: Record<string, unknown> = ACCOUNTS): Machine {
   return { home, bin, configDir, dataDir: core.paths.dataDir, env, core };
 }
 
+/** The events service's own declaration and bin, read from its package rather than made up for it. */
+const EVENTS_MANIFEST = JSON.parse(
+  readFileSync(new URL('../../events-daemon/package.json', import.meta.url), 'utf8'),
+) as { agentcommsPackage: unknown; bin: Record<string, string> };
+
+/** Managed CLI shims are offered on macOS and Linux only: a Windows update writes or moves none. */
+const SHIMS = managedShimsSupported();
+
 /**
  * A runtime as the managed launcher leaves one. With `server`, its CLI is a tiny MCP server that answers `initialize`
  * and `tools/list` and writes the arguments it was started with to `started.log` beside it: enough for an install to
@@ -155,6 +165,8 @@ function machine(body: Record<string, unknown> = ACCOUNTS): Machine {
 function makeRuntime(m: Machine, packageName: string, version: string, server = false): string {
   const root = managedRuntimeDir(m.dataDir, packageName, version);
   const entry = managedRuntimeEntry(m.dataDir, packageName, version);
+  const unscoped = packageName.split('/').at(-1) ?? packageName;
+  const binary = unscoped === 'core' ? 'agentcomms' : `agent-${unscoped}`;
   mkdirSync(dirname(entry), { recursive: true });
   const log = join(root, 'started.log');
   writeFileSync(
@@ -179,7 +191,15 @@ function makeRuntime(m: Machine, packageName: string, version: string, server = 
   );
   writeFileSync(
     join(root, 'node_modules', ...packageName.split('/'), 'package.json'),
-    JSON.stringify({ name: packageName, version }),
+    JSON.stringify({
+      name: packageName,
+      version,
+      engines: { node: '>=22.12.0' },
+      // The events service as published declares itself in `agentcommsPackage`, which the locator has to read.
+      ...(unscoped === 'events-daemon'
+        ? { agentcommsPackage: EVENTS_MANIFEST.agentcommsPackage, bin: EVENTS_MANIFEST.bin }
+        : { agentcomms: { binary }, bin: { [binary]: './dist/cli.mjs' } }),
+    }),
   );
   writeFileSync(
     join(root, 'package.json'),
@@ -252,6 +272,7 @@ const EVERYTHING_LATEST = {
   [PACKAGES.resend]: LATEST,
   [PACKAGES.slack]: LATEST,
   [PACKAGES.whatsapp]: LATEST,
+  [PACKAGES.events]: LATEST,
 };
 
 interface Fakes extends UpdateDeps {
@@ -532,6 +553,67 @@ test('update --check: what is behind, what is up to date, what pins nothing, and
   }
 });
 
+test('update discovers and moves a declared service registration, including its owned CLI shim', async () => {
+  const m = machine();
+  makeRuntime(m, PACKAGES.events, OLD);
+  cursor(m, { events: managed(m, PACKAGES.events, OLD) });
+  const oldEntry = managedRuntimeEntry(m.dataDir, PACKAGES.events, OLD);
+  if (SHIMS) {
+    const oldShim = await writeManagedShim(
+      { env: m.env, dataDir: m.dataDir },
+      { binary: 'agent-events', command: [process.execPath, oldEntry], entry: oldEntry },
+    );
+    assert.equal(oldShim.status, 'created', 'the update fixture begins with an owned service shim');
+  }
+  const deps = fakes(m);
+  const { ok, close } = await connect(m, { update: deps });
+  try {
+    const check = await ok('comms_update', { check: true });
+    const registration = of(check.behind, 'registration').find((item) => item.channel === 'events');
+    assert.equal(registration?.package, PACKAGES.events, 'the update derives the service package from its declaration');
+    assert.equal(registration?.updatable, true, 'the managed service registration can be updated here');
+    assert.deepEqual(
+      of(check.behind, 'runtime').map((item) => [item.channel, item.package, item.latest]),
+      [['events', PACKAGES.events, LATEST]],
+      'the service registration asks for its latest managed runtime',
+    );
+
+    const first = await ok('comms_update', { noVerify: true });
+    assert.equal(first.approvalRequired, true, 'the service update uses the normal preview-and-approval change flow');
+    assert.match(
+      String(first.preview),
+      /registers the events MCP server/,
+      'the preview names the service registration',
+    );
+    if (SHIMS) assert.match(String(first.preview), /agent-events/, 'the preview includes the service CLI shim');
+    else assert.doesNotMatch(String(first.preview), /CLI shim/, 'a Windows preview promises no shim');
+    const applied = await ok('comms_update', { noVerify: true, approvalId: first.approvalId });
+    const service = (applied.result as { steps: Item[] }).steps.find(
+      (step) => step.kind === 'registration' && step.channel === 'events',
+    );
+    assert.equal(service?.outcome, 'registered', 'the approved update registers the service at the latest release');
+    assert.equal(
+      (service?.shim as { status?: string } | undefined)?.status,
+      SHIMS ? 'updated' : undefined,
+      SHIMS ? 'the service update repoints its owned CLI shim' : 'a Windows update writes no shim',
+    );
+    assert.deepEqual(
+      cursorEntries(m).events?.args,
+      [managedRuntimeEntry(m.dataDir, PACKAGES.events, LATEST), ...pinWords(m), 'mcp'],
+      'the client now starts the latest declared service runtime',
+    );
+    if (SHIMS) {
+      assert.match(
+        readFileSync(managedShimPath({ env: m.env, dataDir: m.dataDir }, 'agent-events'), 'utf8'),
+        new RegExp(managedRuntimeEntry(m.dataDir, PACKAGES.events, LATEST).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+        'the owned shim now starts the latest service runtime',
+      );
+    }
+  } finally {
+    await close();
+  }
+});
+
 test('an entry pinned to a renamed account, or written by hand, is behind and left for a person with what to run', async () => {
   const m = machine({
     ...ACCOUNTS,
@@ -701,18 +783,30 @@ test('update prepares one approval listing every step, writes nothing before it,
     assert.ok(npx, 'npm installs npx beside node');
     const goes = (command: string) =>
       `  - the entry goes in ${join('~', '.cursor', 'mcp.json')}, and cursor will start it with ${command}`;
-    assert.deepEqual(steps, [
-      `  - installs ${PACKAGES.gmail}@${LATEST} from npm into ${managedRuntimeDir(m.dataDir, PACKAGES.gmail, LATEST)}`,
-      `  - installs ${PACKAGES.slack}@${LATEST} from npm into ${managedRuntimeDir(m.dataDir, PACKAGES.slack, LATEST)}`,
-      `  - registers the agentcomms (core) MCP server with cursor as "agentcomms" again (user scope, npx launcher), at ${LATEST} in place of ${OLD}`,
-      goes(npx),
-      `  - cursor will fetch ${PACKAGES.core}@${LATEST} from npm each time it starts "agentcomms"`,
-      `  - registers the Gmail MCP server with cursor as "gmail" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the mailbox acme/gmail, read-only, as now`,
-      goes(process.execPath),
-      `  - registers the Slack MCP server with cursor as "slack-acme" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the workspace acme/slack, as now`,
-      goes(process.execPath),
-      `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: \`npm install -g ${PACKAGES.core}@${LATEST}\``,
-    ]);
+    const shim = (binary: string) =>
+      SHIMS
+        ? [
+            `  - writes or repoints the owned CLI shim at ${join(m.home, '.local', 'bin', binary)}; a foreign file there is left unchanged`,
+          ]
+        : [];
+    assert.deepEqual(
+      steps,
+      [
+        `  - installs ${PACKAGES.gmail}@${LATEST} from npm into ${managedRuntimeDir(m.dataDir, PACKAGES.gmail, LATEST)}`,
+        `  - installs ${PACKAGES.slack}@${LATEST} from npm into ${managedRuntimeDir(m.dataDir, PACKAGES.slack, LATEST)}`,
+        `  - registers the agentcomms (core) MCP server with cursor as "agentcomms" again (user scope, npx launcher), at ${LATEST} in place of ${OLD}`,
+        goes(npx),
+        `  - cursor will fetch ${PACKAGES.core}@${LATEST} from npm each time it starts "agentcomms"`,
+        `  - registers the Gmail MCP server with cursor as "gmail" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the mailbox acme/gmail, read-only, as now`,
+        goes(process.execPath),
+        ...shim('agent-gmail'),
+        `  - registers the Slack MCP server with cursor as "slack-acme" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the workspace acme/slack, as now`,
+        goes(process.execPath),
+        ...shim('agent-slack'),
+        `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: \`npm install -g ${PACKAGES.core}@${LATEST}\``,
+      ],
+      SHIMS ? 'the update preview includes the two managed CLI shim writes' : 'a Windows preview writes no shim',
+    );
     assert.equal(
       first.summary,
       'Update agent-communications to the latest release: 3 registrations, 2 runtimes, 1 global package',

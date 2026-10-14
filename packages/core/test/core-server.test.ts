@@ -17,6 +17,7 @@ import { type Core, openCore } from '../src/core.ts';
 import { CommsError, ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { CORE_CALLER, handoffText, isCommand } from '../src/handoffs.ts';
 import { newApprovalId } from '../src/ids.ts';
+import { managedShimPath, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { type McpProduct, managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
 import { changePolicyReport } from '../src/operations/change-policy.ts';
@@ -694,6 +695,89 @@ test('the doctor fails a registration whose runtime has gone, and says what regi
   ]);
   assert.equal(report.ok, false, 'a server a client cannot start is a failure');
   assert.match(renderDoctor(report), /^FAIL slack server {5}registered with claude-code/m);
+});
+
+test('the doctor reports a managed CLI shim that is missing, stale or foreign (CUE-406)', async () => {
+  const m = doctorMachine();
+  const oldEntry = managedRuntimeEntry(m.core.paths.dataDir, '@agentcomms/events-daemon', '0.16.0');
+  const currentEntry = managedRuntimeEntry(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION);
+  runtime(m, '@agentcomms/events-daemon', '0.16.0');
+  runtime(m, '@agentcomms/events-daemon', VERSION);
+
+  const missing = (await doctorChecks(m)).checks.find(
+    (check) => check.name.startsWith('CLI shim at ') && check.name.includes('agent-events'),
+  );
+  assert.equal(missing?.warn, true, 'a missing shim is something to repair, not a broken server');
+  assert.match(missing?.detail ?? '', /missing/, 'doctor names the missing shim state');
+  assert.match(missing?.detail ?? '', /agent-events/, 'doctor names the missing shim path');
+
+  const written = await writeManagedShim(
+    { env: m.env, dataDir: m.core.paths.dataDir, platform: 'darwin' },
+    { binary: 'agent-events', command: [process.execPath, oldEntry], entry: oldEntry },
+  );
+  assert.equal(written.status, 'created', 'the stale fixture begins as an owned older shim');
+  const stale = (await doctorChecks(m)).checks.find(
+    (check) => check.name.startsWith('CLI shim at ') && check.name.includes('agent-events'),
+  );
+  assert.equal(stale?.warn, true, 'a stale shim is reported as something to repair');
+  assert.match(stale?.detail ?? '', /stale/, 'doctor names the stale shim state');
+  assert.match(
+    stale?.detail ?? '',
+    new RegExp(currentEntry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    'doctor names the expected current entry',
+  );
+
+  writeFileSync(
+    managedShimPath({ env: m.env, dataDir: m.core.paths.dataDir, platform: 'darwin' }, 'agent-events'),
+    'foreign bytes\n',
+  );
+  const foreign = (await doctorChecks(m)).checks.find(
+    (check) => check.name.startsWith('CLI shim at ') && check.name.includes('agent-events'),
+  );
+  assert.equal(foreign?.warn, true, 'a changed shim is reported without claiming ownership');
+  assert.match(foreign?.detail ?? '', /foreign/, 'doctor names the foreign shim state');
+  assert.match(
+    foreign?.detail ?? '',
+    /changed after this installation wrote it/,
+    'doctor explains why the shim is foreign',
+  );
+});
+
+test('Windows doctor says managed CLI shims are not offered because cmd.exe re-parses arguments', async () => {
+  const m = doctorMachine();
+  runtime(m, '@agentcomms/events-daemon', VERSION);
+
+  const { checks } = await doctorChecks(m, 'win32');
+  const unsupported = checks.find((check) => check.name === 'managed CLI shims');
+  assert.equal(unsupported?.warn, true, 'the Windows limitation is a warning, not a failed installation');
+  assert.match(
+    unsupported?.detail ?? '',
+    /not offered on Windows yet.*cmd\.exe.*re-parses.*arguments/i,
+    'doctor states the Windows argument-reparsing reason plainly',
+  );
+  assert.equal(
+    checks.some((check) => check.name.includes('agent-events') && check.name.includes('shim')),
+    false,
+    'doctor does not diagnose a missing Windows shim that this release never offers',
+  );
+});
+
+test('a Windows managed-install plan does not claim that it will write a CLI shim', async () => {
+  const m = machine();
+  const config = await m.core.config.load();
+  const plan = await serverInstallChange(
+    m.core,
+    m.env,
+    { channel: 'core', client: 'cursor', noVerify: true },
+    undefined,
+    { platform: 'win32' },
+  ).plan(config);
+
+  assert.doesNotMatch(
+    (plan.effects ?? []).join('\n'),
+    /CLI shim/i,
+    'the Windows approval preview does not promise a shim that the apply step will not write',
+  );
 });
 
 test(
@@ -1588,6 +1672,113 @@ test('registering from chat warns about the servers that send with no approval, 
   }
 });
 
+test('the declared events service is listed, registered and pruned through the managed server path', async () => {
+  const m = machine();
+  const old = runtime(m, '@agentcomms/events-daemon', '0.0.1');
+  const current = runtime(m, '@agentcomms/events-daemon', VERSION);
+  const { ok, call, close } = await connect(m, { processes: nobodyRuns });
+  try {
+    const available = await ok('comms_channels_available');
+    const events = (available.channels as { channel: string; kind: string; package: string }[]).find(
+      (entry) => entry.channel === 'events',
+    );
+    assert.equal(events?.channel, 'events', 'the service declaration contributes the events server to the listing');
+    assert.equal(events?.kind, 'service', 'the events listing distinguishes a service from a channel');
+    assert.equal(events?.package, '@agentcomms/events-daemon', 'the events listing uses its declared package');
+
+    const printed = await ok('comms_server_install', {
+      channel: 'events',
+      client: 'json',
+      launcher: 'npx',
+      print: true,
+      noVerify: true,
+    });
+    const install = printed.result as { entry: { args: string[] }; warnings: string[] };
+    assert.deepEqual(
+      install.entry.args,
+      ['-y', `@agentcomms/events-daemon@${VERSION}`, ...pinWords(m.core.paths), 'mcp'],
+      'the events service uses its declared package and the same pinned registration path',
+    );
+    assert.deepEqual(install.warnings, [], 'service registration has no channel rival-server warnings');
+
+    const narrowed = await call('comms_server_install', {
+      channel: 'events',
+      client: 'json',
+      account: 'acme/events',
+      print: true,
+      noVerify: true,
+    });
+    assert.equal(narrowed.isError, true, 'a service cannot accept a channel account-narrowing option');
+
+    const dry = await ok('comms_server_prune', { channel: 'events', dryRun: true });
+    const pruning = dry.result as { removed: { path: string }[]; kept: { path: string; reason: string }[] };
+    assert.deepEqual(
+      pruning.removed.map((item) => item.path),
+      [old],
+      'events prune finds its unused older runtime',
+    );
+    assert.deepEqual(
+      pruning.kept.map((item) => [item.path, item.reason]),
+      [[current, 'this release']],
+      'events prune keeps the service runtime from this release',
+    );
+
+    const command = cli(m, [
+      'mcp',
+      'install',
+      '--server',
+      'events',
+      '--client',
+      'json',
+      '--launcher',
+      'npx',
+      '--print',
+      '--no-verify',
+      '--json',
+    ]);
+    assert.equal(command.status, 0, `the events CLI registration prints successfully: ${command.stderr}`);
+    assert.deepEqual(command.json().data, printed.result, 'the CLI and MCP tool return the same events registration');
+
+    const servicePin = cli(m, [
+      'mcp',
+      'install',
+      '--server',
+      'events',
+      '--client',
+      'json',
+      '--account',
+      'test/events',
+      '--print',
+      '--no-verify',
+      '--json',
+    ]);
+    assert.equal(servicePin.status, 64, 'the core CLI rejects a channel-only pin for a declared service');
+
+    const gmailMachine = machine({ inboxes: { 'acme/gmail': inbox() } });
+    const channelPin = cli(gmailMachine, [
+      'mcp',
+      'install',
+      '--server',
+      'gmail',
+      '--client',
+      'json',
+      '--inbox',
+      'acme/gmail',
+      '--print',
+      '--no-verify',
+      '--json',
+    ]);
+    assert.equal(channelPin.status, 0, `the core CLI accepts a channel pin: ${channelPin.stderr}`);
+    assert.deepEqual(
+      channelPin.json().data.entry.args.slice(-3),
+      ['mcp', '--inbox', 'acme/gmail'],
+      'the core CLI carries the requested Gmail pin into the shared install operation',
+    );
+  } finally {
+    await close();
+  }
+});
+
 // ── Pruning ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A managed runtime for `packageName` at `version`, as the installer leaves one. */
@@ -1596,6 +1787,63 @@ function runtime(m: Machine, packageName: string, version: string): string {
   mkdirSync(dirname(managedRuntimeEntry(m.core.paths.dataDir, packageName, version)), { recursive: true });
   return dir;
 }
+
+/** The events service's runtime as the managed launcher leaves it, with the package's own manifest, as published. */
+function eventsRuntime(m: Machine, version: string): string {
+  const packageName = '@agentcomms/events-daemon';
+  const dir = runtime(m, packageName, version);
+  const published = JSON.parse(
+    readFileSync(new URL('../../events-daemon/package.json', import.meta.url), 'utf8'),
+  ) as Record<string, unknown>;
+  const entry = managedRuntimeEntry(m.core.paths.dataDir, packageName, version);
+  writeFileSync(entry, '');
+  writeFileSync(join(dirname(entry), '..', 'package.json'), JSON.stringify({ ...published, version }));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: version } }));
+  return dir;
+}
+
+test(
+  'an approved managed events install writes its agent-events CLI shim from the service declaration (CUE-406)',
+  process.platform === 'win32'
+    ? { skip: 'managed CLI shims are POSIX-only; a Windows install is shown to write none' }
+    : {},
+  async () => {
+    const m = machine();
+    eventsRuntime(m, VERSION);
+    const { ok, close } = await connect(m);
+    try {
+      const args = { channel: 'events', client: 'cursor', noVerify: true };
+      const path = join(m.home, '.local', 'bin', 'agent-events');
+      const first = await ok('comms_server_install', args);
+      assert.equal(first.approvalRequired, true, 'registering the events server is asked for first');
+      assert.ok(
+        String(first.preview).includes(`writes or repoints the owned CLI shim at ${path}`),
+        'and names its shim',
+      );
+      const second = await ok('comms_server_install', { ...args, approvalId: first.approvalId });
+      const result = second.result as {
+        applied: boolean;
+        shim?: { status: string; path: string };
+        shimFailure?: string;
+      };
+      assert.equal(result.applied, true, 'the events server is registered');
+      assert.equal(result.shimFailure, undefined, 'the locator reads the service declaration, so the shim is written');
+      assert.equal(result.shim?.status, 'created', 'the managed events install creates its CLI shim');
+      assert.equal(result.shim?.path, path, 'named for the binary the service declares');
+      assert.ok(
+        readFileSync(path, 'utf8').includes(
+          managedRuntimeEntry(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION),
+        ),
+        "and it starts the events runtime's own CLI",
+      );
+
+      const printed = await ok('comms_server_install', { ...args, print: true });
+      assert.equal((printed.result as { shim?: unknown }).shim, undefined, '--print writes and reports no shim');
+    } finally {
+      await close();
+    }
+  },
+);
 
 const nobodyRuns = async () => [] as string[];
 
@@ -1905,7 +2153,8 @@ test('comms_channels_available says what is installed and where each server is r
     const channels = report.channels as Record<string, unknown>[];
     assert.deepEqual(
       channels.map((channel) => channel.channel),
-      ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
+      ['core', 'gmail', 'resend', 'slack', 'whatsapp', 'events'],
+      'the availability report includes every declared channel and service server',
     );
     const [core, gmail, resend, slack] = channels;
     assert.equal(core?.channel, 'core');
