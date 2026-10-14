@@ -57,7 +57,7 @@ async function commandLineOf(pid: number): Promise<string | null> {
  * is only a number, and Windows hands a finished process's to the next one quickly, so a PID that answers may be
  * another process's by the end of the suite: neither counted as a leak nor ever stopped in the listener's name.
  */
-async function stillListening(entry: RegisteredListener): Promise<boolean> {
+async function stillListening(entry: Pick<RegisteredListener, 'pid' | 'flowId'>): Promise<boolean> {
   if (!running(entry.pid)) return false;
   const line = (await commandLineOf(entry.pid)) ?? '';
   return line.includes('oauth-listen') && line.includes(entry.flowId);
@@ -93,10 +93,13 @@ export async function liveRegisteredListeners(): Promise<RegisteredListener[]> {
   return listeners.filter((_, index) => live[index]);
 }
 
-export async function stopRegisteredListeners(listeners: readonly RegisteredListener[]): Promise<void> {
+/** Stops listeners by PID and flow: only a process still `oauth-listen` for that flow is ever signalled. */
+export async function stopRegisteredListeners<Listener extends Pick<RegisteredListener, 'pid' | 'flowId'>>(
+  listeners: readonly Listener[],
+): Promise<void> {
   // Only a process that is still the listener is signalled: its PID may be another process's by now.
   const listening = (await Promise.all(listeners.map(stillListening))).flatMap((live, index) =>
-    live ? [listeners[index] as RegisteredListener] : [],
+    live ? [listeners[index] as Listener] : [],
   );
   for (const { pid } of listening) {
     try {
@@ -110,7 +113,7 @@ export async function stopRegisteredListeners(listeners: readonly RegisteredList
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   const left = (await Promise.all(listening.map(stillListening))).flatMap((live, index) =>
-    live ? [listening[index] as RegisteredListener] : [],
+    live ? [listening[index] as Listener] : [],
   );
   for (const { pid } of left) {
     try {

@@ -20,7 +20,7 @@ import { capabilitiesOf, SCOPES } from '../../src/auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../../src/auth/session.ts';
 import { GMAIL_CALLER } from '../../src/caller.ts';
 import { GmailContext } from '../../src/context.ts';
-import { LISTENER_TEST_FILE_ENV, LISTENER_TEST_NAME_ENV } from './detached-listeners.ts';
+import { LISTENER_TEST_FILE_ENV, LISTENER_TEST_NAME_ENV, stopRegisteredListeners } from './detached-listeners.ts';
 import { type FakeGoogle, type FakeGoogleOptions, startFakeGoogle } from './fake-google.ts';
 
 export const TEST_CLIENT_ID = 'test-client.apps.googleusercontent.com';
@@ -80,37 +80,6 @@ beforeEach((context) => {
   process.env[LISTENER_TEST_NAME_ENV] = context.name;
 });
 
-function processIsRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function stopProcess(pid: number): Promise<void> {
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
-    return;
-  }
-  const deadline = Date.now() + 5_000;
-  while (processIsRunning(pid) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  if (!processIsRunning(pid)) return;
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    // It stopped between the liveness check and the signal.
-  }
-  const killedDeadline = Date.now() + 1_000;
-  while (processIsRunning(pid) && Date.now() < killedDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
 async function stopHarnessListeners(harness: Harness): Promise<void> {
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const names = await readdir(context.flows.directory).catch(() => []);
@@ -119,7 +88,10 @@ async function stopHarnessListeners(harness: Harness): Promise<void> {
     const flowId = name.slice(0, -'.json'.length);
     try {
       const flow = await context.flows.get(flowId);
-      if (flow.listenerPid && flow.listenerPid !== process.pid) await stopProcess(flow.listenerPid);
+      // By PID and flow: a listener that finished may have handed its PID on, and that process is not stopped.
+      if (flow.listenerPid && flow.listenerPid !== process.pid) {
+        await stopRegisteredListeners([{ pid: flow.listenerPid, flowId }]);
+      }
       await context.flows.discard(flowId);
     } catch {
       // A finish or expiry removed it before cleanup reached it.
