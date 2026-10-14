@@ -49,7 +49,7 @@ const judgeKindMutations: readonly JudgeKindMutation[] = [
     id: 'e1-local-claim-transaction-disabled-kind',
     file: 'runtime/activations.ts',
     before: `const document = this.#document(row);
-      this.#assertRuleJudgeKindEnabled(document);`,
+      this.#assertBoundRuleAuthority(document);`,
     after: `const document = this.#document(row);
       void row;`,
     testFile: 'judge-kind-activation-race.test.ts',
@@ -61,7 +61,7 @@ const judgeKindMutations: readonly JudgeKindMutation[] = [
     file: 'runtime/activations.ts',
     before: `// Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
       // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
-      this.#assertRuleJudgeKindEnabled(document);`,
+      this.#assertBoundRuleAuthority(document);`,
     after: `// Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
       // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
       void document;`,

@@ -548,20 +548,29 @@ export class ActivationRuntime {
     readonly targetId?: string;
     readonly judgeId?: string;
   }): Promise<void> {
+    this.#store.immediate(() => {
+      this.cancelForRevocationInTransaction(input);
+    });
+  }
+
+  /** A caller already holding the removal transaction cancels every matching intent before revocation commits. */
+  cancelForRevocationInTransaction(input: {
+    readonly ruleId?: string;
+    readonly targetId?: string;
+    readonly judgeId?: string;
+  }): number {
     const rows = this.#store.database
       .prepare(
         "SELECT id, document FROM activation_intents WHERE status IN ('pending', 'pending-completion') ORDER BY id",
       )
       .all() as Array<{ id: string; document: string }>;
-    const cancelled: string[] = [];
+    let cancelled = 0;
     for (const row of rows) {
       if (!this.#isRevokedBinding(JSON.parse(row.document) as ActivationDocumentV1, input)) continue;
-      cancelled.push(row.id);
+      this.#cancel(row.id, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
+      cancelled += 1;
     }
-    if (cancelled.length === 0) return;
-    this.#store.immediate(() => {
-      for (const intentId of cancelled) this.#cancel(intentId, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
-    });
+    return cancelled;
   }
 
   /** Called by the kind-disable transaction; no pending kind approval may recreate the pointer after disable wins. */
@@ -576,7 +585,8 @@ export class ActivationRuntime {
       const document = JSON.parse(row.document) as ActivationDocumentV1;
       const bound =
         (document.kind === 'judge-kind' && document.enablement.kind === kind) ||
-        (document.kind === 'rule' && document.rule.agentic?.judge.kind === kind);
+        (document.kind === 'rule' && document.rule.agentic?.judge.kind === kind) ||
+        (document.kind === 'enable-all' && this.#ruleVersionsBindJudgeKind(document.ruleVersions, kind));
       if (bound) {
         this.#cancel(row.id, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
         cancelled += 1;
@@ -736,6 +746,10 @@ export class ActivationRuntime {
       ...new Map(points.map((point) => [`${point.source}\u0000${point.accountId}`, point] as const)).values(),
     ];
     this.#store.immediate(() => {
+      // Secret and configuration checks above awaited. Re-read every bound rule under the intent-write transaction,
+      // so a judge removal or kind disable cannot land in that gap and leave a stale approval to clean up later.
+      this.#assertBoundRuleAuthority(document);
+      this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
       this.#assertJudgeActivationLive(document, effect);
       // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
       // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
@@ -771,11 +785,41 @@ export class ActivationRuntime {
         );
     });
     const approval = await this.#approvals.createDisclosure(binding);
+    let settled: unknown;
     this.#store.immediate(() => {
-      this.#store.database
-        .prepare('UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND approval_id IS NULL')
-        .run(approval.approvalId, this.#now(), intentId);
+      const latest = this.#intent(intentId);
+      const linkApproval = () =>
+        this.#store.database
+          .prepare('UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND approval_id IS NULL')
+          .run(approval.approvalId, this.#now(), intentId).changes;
+      if (latest.status !== 'pending') {
+        if (linkApproval() !== 1)
+          throw new CommsError('APPROVAL_VOID', 'the cancelled activation could not retain its disclosure link');
+        settled = new CommsError('APPROVAL_VOID', 'the activation was cancelled before its approval could be linked');
+        return;
+      }
+      // Approval creation awaited another store. Repeat the complete authority and pointer-plan fences before this
+      // local write. If either moved, retain the cross-store link but settle the intent as unusable in this commit.
+      try {
+        this.#assertBoundRuleAuthority(document);
+        this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+        this.#assertJudgeActivationLive(document, effect);
+      } catch (error) {
+        if (linkApproval() !== 1)
+          throw new CommsError('APPROVAL_VOID', 'the stale activation could not retain its disclosure link');
+        this.#cancel(intentId, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
+        settled = error;
+        return;
+      }
+      const linked = this.#store.database
+        .prepare(
+          "UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND status = 'pending' AND approval_id IS NULL",
+        )
+        .run(approval.approvalId, this.#now(), intentId).changes;
+      if (linked !== 1)
+        throw new CommsError('APPROVAL_VOID', 'the activation approval link changed before it could be written');
     });
+    if (settled !== undefined) throw settled;
     return {
       intentId,
       approvalId: approval.approvalId,
@@ -811,7 +855,7 @@ export class ActivationRuntime {
       // Core claiming is another await boundary.  This transaction owns the local claim, so it must fence a judge
       // kind disabled after the core claim but before any provider baseline or local state mutation.
       const document = this.#document(row);
-      this.#assertRuleJudgeKindEnabled(document);
+      this.#assertBoundRuleAuthority(document);
       if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
         try {
           this.#assertJudgeActivationLive(document, JSON.parse(row.effect) as ActivationEffect);
@@ -1079,7 +1123,7 @@ export class ActivationRuntime {
       }
       // Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
       // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
-      this.#assertRuleJudgeKindEnabled(document);
+      this.#assertBoundRuleAuthority(document);
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
       if (
@@ -1293,6 +1337,7 @@ export class ActivationRuntime {
     if (binding.digest !== intent.digest || activationDocumentDigest(document) !== intent.digest) {
       throw new CommsError('APPROVAL_VOID', 'the activation document changed after preparation');
     }
+    this.#assertBoundRuleAuthority(document);
     if (document.kind === 'rule') {
       const versions = new ImmutableVersions(this.#store.database);
       const active = versions.activeVersion('rule', document.rule.ruleId);
@@ -1302,9 +1347,6 @@ export class ActivationRuntime {
           `${document.rule.ruleId}@${active.version}` !== intent.replacement_of_version)
       )
         throw new CommsError('APPROVAL_VOID', 'the rule gained an active pointer after preparation');
-      const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
-      if (canonicalJson(live) !== canonicalJson(document))
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
     } else if (document.kind === 'enable-all') {
       const current = this.#switch();
       const live = this.#store.database
@@ -1367,12 +1409,69 @@ export class ActivationRuntime {
     return row?.generation ?? 0;
   }
 
-  /** The absence of the sole judge-kind pointer is disabled; deterministic-only rules need no kind check. */
-  #assertRuleJudgeKindEnabled(document: ActivationDocumentV1): void {
-    if (document.kind !== 'rule' || document.rule.agentic === undefined) return;
-    const kind = document.rule.agentic.judge.kind;
+  /** Re-read every exact bound rule, including its embedded judge revocation and kind pointer, at each authority gate. */
+  #assertBoundRuleAuthority(document: ActivationDocumentV1): void {
+    if (document.kind !== 'rule' && document.kind !== 'enable-all') return;
     const versions = new ImmutableVersions(this.#store.database);
-    assertJudgeKindEnabled(kind, versions.activeVersion('judge-kind', kind) !== null);
+    if (document.kind === 'rule') {
+      const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
+      if (canonicalJson(live) !== canonicalJson(document))
+        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
+      return;
+    }
+    for (const entry of document.ruleVersions) versions.prepareRule(entry.ruleId, entry.ruleVersion);
+  }
+
+  /** Preparation may await local stores; the exact pointer plan captured before those awaits must still be current. */
+  #assertPreparationPlanLive(
+    document: ActivationDocumentV1,
+    effect: ActivationEffect,
+    replacementOfVersion?: string,
+  ): void {
+    if (document.kind === 'rule') {
+      const active = new ImmutableVersions(this.#store.database).activeVersion('rule', document.rule.ruleId);
+      const current = active === null ? null : `${document.rule.ruleId}@${active.version}`;
+      if (current !== (replacementOfVersion ?? null) || this.#switch().generation !== effect.switchGeneration)
+        throw new CommsError('APPROVAL_VOID', 'the rule activation pointer plan changed during preparation');
+      return;
+    }
+    if (document.kind !== 'enable-all') return;
+    const settings = this.#switch();
+    const live = this.#store.database
+      .prepare(
+        "SELECT object_id, version, current_cutover_id FROM active_versions WHERE kind = 'rule' ORDER BY object_id, version",
+      )
+      .all() as Array<{ object_id: string; version: number; current_cutover_id: string | null }>;
+    if (
+      settings.enabled ||
+      settings.generation !== document.switchGeneration ||
+      settings.generation !== effect.switchGeneration ||
+      canonicalJson(live.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version }))) !==
+        canonicalJson(document.ruleVersions) ||
+      canonicalJson(
+        live.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version, cutoverId: row.current_cutover_id })),
+      ) !== canonicalJson(effect.currentCutovers ?? [])
+    )
+      throw new CommsError('APPROVAL_VOID', 'the global enablement pointer plan changed during preparation');
+  }
+
+  /** A damaged captured rule row cannot prove that a kind disable is unrelated, so cancellation is fail-closed. */
+  #ruleVersionsBindJudgeKind(
+    entries: Extract<ActivationDocumentV1, { kind: 'enable-all' }>['ruleVersions'],
+    kind: string,
+  ): boolean {
+    for (const entry of entries) {
+      const row = this.#store.database
+        .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
+        .get(entry.ruleId, entry.ruleVersion) as { document: string } | undefined;
+      if (row === undefined) return true;
+      try {
+        if (canonicalFullRuleDocument(JSON.parse(row.document)).agentic?.judge.kind === kind) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
   }
 
   #document(intent: IntentRow): ActivationDocumentV1 {

@@ -480,6 +480,68 @@ const phaseEGateMutations: readonly JudgeMutation[] = [
     testName: 'E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs',
     killingAssertion: 'Phase E prerequisite failed: exact B3 capability inventory',
   },
+  {
+    id: 'e-review-kind-disable-enable-all',
+    source: 'packages/events-daemon/src/runtime/activations.ts',
+    before: "        (document.kind === 'enable-all' && this.#ruleVersionsBindJudgeKind(document.ruleVersions, kind));",
+    after: '        false;',
+    test: 'packages/events-daemon/test/activation-judge-authority.test.ts',
+    testName: 'E4 review: kind disable cancels enable-all when any bound active rule uses that judge kind',
+    killingAssertion: 'kind disable cancels the bound enable-all intent inside its transaction',
+  },
+  {
+    id: 'e-review-revoked-judge-activation',
+    source: 'packages/events-daemon/src/domain/versions.ts',
+    before: "      if (entry.kind === 'judge' && this.#embeddedJudgeIsRevoked(entry.id, entry.version)) {",
+    after: '      if (false) {',
+    test: 'packages/events-daemon/test/activation-judge-authority.test.ts',
+    testName: 'E4 review: a pending agentic rule cannot activate after its embedded judge is revoked',
+    killingAssertion: 'a revoked embedded judge is rejected before rule activation preparation',
+  },
+  {
+    id: 'e-review-prepare-bound-rule-authority',
+    source: 'packages/events-daemon/src/runtime/activations.ts',
+    before: `      // Secret and configuration checks above awaited. Re-read every bound rule under the intent-write transaction,
+      // so a judge removal or kind disable cannot land in that gap and leave a stale approval to clean up later.
+      this.#assertBoundRuleAuthority(document);
+      this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+      this.#assertJudgeActivationLive(document, effect);`,
+    after: `      // Secret and configuration checks above awaited. Re-read every bound rule under the intent-write transaction,
+      // so a judge removal or kind disable cannot land in that gap and leave a stale approval to clean up later.
+      void 0;
+      this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+      this.#assertJudgeActivationLive(document, effect);`,
+    test: 'packages/events-daemon/test/activation-judge-authority.test.ts',
+    testName:
+      'E4 review: prepare rechecks bound rule authority inside the intent insertion transaction after awaited setup',
+    killingAssertion: 'rule before-intent: revoked authority is fenced before an intent is written',
+  },
+  {
+    id: 'e-review-prepare-plan-before-intent',
+    source: 'packages/events-daemon/src/runtime/activations.ts',
+    before: `      this.#assertBoundRuleAuthority(document);
+      this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+      this.#assertJudgeActivationLive(document, effect);`,
+    after: `      this.#assertBoundRuleAuthority(document);
+      void 0;
+      this.#assertJudgeActivationLive(document, effect);`,
+    test: 'packages/events-daemon/test/activation-judge-authority.test.ts',
+    testName: 'E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes',
+    killingAssertion: 'rule before-intent: pointer drift is fenced before an intent is written',
+  },
+  {
+    id: 'e-review-prepare-plan-after-disclosure',
+    source: 'packages/events-daemon/src/runtime/activations.ts',
+    before: `        this.#assertBoundRuleAuthority(document);
+        this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+        this.#assertJudgeActivationLive(document, effect);`,
+    after: `        this.#assertBoundRuleAuthority(document);
+        void 0;
+        this.#assertJudgeActivationLive(document, effect);`,
+    test: 'packages/events-daemon/test/activation-judge-authority.test.ts',
+    testName: 'E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes',
+    killingAssertion: 'rule before-approval-link: preparation refuses a pointer plan changed across its awaited work',
+  },
 ];
 
 export const PHASE_E_GATE_MUTATIONS: readonly (JudgeMutation & { readonly killingAssertion: string })[] =

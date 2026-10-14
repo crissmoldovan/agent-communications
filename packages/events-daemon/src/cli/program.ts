@@ -69,6 +69,7 @@ import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
+import { VERSION } from '../version.ts';
 
 export interface EventsCliStreams {
   readonly stdin: NodeJS.ReadableStream & { readonly isTTY?: boolean };
@@ -163,6 +164,13 @@ export function renderDryRunRecordForTerminal(record: Parameters<typeof renderDr
 /** Runs the intentionally small Task B1 command surface. */
 export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Promise<number> {
   const streams = deps.streams ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
+  // The program's version is CLI metadata, not an operation. It is answered only as the sole argument: a program-wide
+  // Commander `--version` would swallow the subcommands' own `--version <n>`, and positional parsing would break the
+  // trailing `--json` every command documents.
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
+    streams.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
   const env = deps.env ?? process.env;
   const program = new Command();
   let ran = false;

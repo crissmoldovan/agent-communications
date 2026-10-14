@@ -872,7 +872,7 @@ test('E12 judge race: paused held resolution loses to target, subscriber, judge,
     const control = new B3OperatorControl({
       store: setup.store,
       ports: { quiescer: testWriterQuiescer() } as never,
-      activations: { cancelForRevocation: async () => undefined } as never,
+      activations: { cancelForRevocation: async () => undefined, cancelForRevocationInTransaction: () => 0 } as never,
       now: () => STAGED_AT + 1,
     });
     await control.handle({ operation: 'removeJudge', args: { judgeId: judge.judgeId } });

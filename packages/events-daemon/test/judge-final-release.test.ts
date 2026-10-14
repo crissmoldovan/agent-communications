@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 // @ts-expect-error The verifier is a repository executable with no declaration file.
@@ -9,9 +9,26 @@ import { verifyPhaseEPrerequisites } from '../../../scripts/verify-events-phase-
 import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
+const RELEASE_TOOL_PRELOAD = 'test/helpers/release-tool-seal-preload.mjs';
+const RELEASE_CHILD_PROCESS_ENTRY_POINTS = Object.freeze([
+  'spawn',
+  'spawnSync',
+  'execFile',
+  'execFileSync',
+  'exec',
+  'execSync',
+  'fork',
+] as const);
+
+function releaseToolPreloadUrl(root: string, recordFile: string): string {
+  const preload = pathToFileURL(join(root, RELEASE_TOOL_PRELOAD));
+  preload.searchParams.set('record', pathToFileURL(recordFile).href);
+  return preload.href;
+}
 
 async function copiedB3Tree(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'agentcomms-e13-b3-tree-'));
+  const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
   await Promise.all([
     cp(join(ROOT, 'packages/events-daemon/src'), join(root, 'packages/events-daemon/src'), { recursive: true }),
     cp(join(ROOT, 'packages/events-daemon/test'), join(root, 'packages/events-daemon/test'), { recursive: true }),
@@ -22,11 +39,11 @@ async function copiedB3Tree(): Promise<string> {
   ]);
   await mkdir(join(root, 'packages/events-daemon'), { recursive: true });
   await cp(join(ROOT, 'packages/events-daemon/package.json'), join(root, 'packages/events-daemon/package.json'));
-  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), 'dir');
+  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), directoryLinkType);
   await symlink(
     join(ROOT, 'packages/events-daemon/node_modules'),
     join(root, 'packages/events-daemon/node_modules'),
-    'dir',
+    directoryLinkType,
   );
   await writeFile(join(root, 'scripts/packages.mjs'), "export const PACKAGES = []; export const SCOPE = '@fixture';\n");
   return root;
@@ -35,10 +52,6 @@ async function copiedB3Tree(): Promise<string> {
 interface HermeticReleaseChild {
   readonly calls: string;
   readonly env: NodeJS.ProcessEnv;
-}
-
-function shellLiteral(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 async function hermeticReleaseChild(root: string): Promise<HermeticReleaseChild> {
@@ -52,27 +65,22 @@ async function hermeticReleaseChild(root: string): Promise<HermeticReleaseChild>
     mkdir(temporary, { recursive: true }),
     mkdir(path, { recursive: true }),
   ]);
-  await Promise.all(
-    ['git', 'npm', 'pnpm', 'npx'].map(async (tool) => {
-      const executable = join(path, tool);
-      await writeFile(
-        executable,
-        `#!/bin/sh\nprintf '%s\\n' ${shellLiteral(tool)} >> ${shellLiteral(calls)}\nexit 97\n`,
-        'utf8',
-      );
-      await chmod(executable, 0o700);
-    }),
-  );
   const env: NodeJS.ProcessEnv = {
     HOME: home,
     TMPDIR: temporary,
     PATH: path,
     npm_config_registry: 'http://127.0.0.1:9/',
-    ...(process.platform === 'win32' ? { SystemRoot: 'C:\\Windows' } : {}),
+    ...(process.platform === 'win32' ? { PATHEXT: '.COM;.EXE;.BAT;.CMD', SystemRoot: 'C:\\Windows' } : {}),
   };
   assert.deepEqual(
     Object.keys(env).sort(),
-    ['HOME', 'PATH', 'TMPDIR', 'npm_config_registry', ...(process.platform === 'win32' ? ['SystemRoot'] : [])].sort(),
+    [
+      'HOME',
+      'PATH',
+      'TMPDIR',
+      'npm_config_registry',
+      ...(process.platform === 'win32' ? ['PATHEXT', 'SystemRoot'] : []),
+    ].sort(),
     'the release child receives only the hermetic environment allowlist',
   );
   return { calls, env };
@@ -93,11 +101,7 @@ async function replaceOnce(root: string, file: string, before: string, after: st
   await writeFile(path, source.replace(before, after), 'utf8');
 }
 
-test('E13 final release: verify and direct release retain both Phase-E gates', {
-  skip:
-    process.platform === 'win32' &&
-    'the hermetic git/npm/pnpm/npx stand-ins are POSIX shell executables, which Windows cannot spawn without a shell',
-}, async () => {
+test('E13 final release: verify and direct release retain both Phase-E gates', async () => {
   const rootPackage = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')) as {
     readonly scripts: Readonly<Record<string, string>>;
   };
@@ -127,15 +131,18 @@ test('E13 final release: verify and direct release retain both Phase-E gates', {
       args: [
         '--import',
         pathToFileURL(join(fixture, 'test/helpers/loopback-seal-preload.mjs')).href,
+        '--import',
+        releaseToolPreloadUrl(fixture, hermetic.calls),
         'scripts/release.mjs',
         '--publish',
         '--skip-verify',
       ],
       cwd: fixture,
       env: hermetic.env,
-      timeoutMs: 30_000,
+      timeoutMs: 60_000,
     });
     assert.notEqual(release.code, 0, 'direct release refuses the damaged copied B3 tree');
+    assert.deepEqual(await recordedReleaseCalls(hermetic.calls), [], 'no release tool runs before the gate refuses');
     assert.match(
       release.output,
       /B3 human-only exception row exists: events-daemon\.judge-key\.rotate/u,
@@ -146,25 +153,128 @@ test('E13 final release: verify and direct release retain both Phase-E gates', {
       /Rehearsing a release|Releasing — checking first|npm user:|Publishing /u,
       'the prerequisite refusal is ordered before release preflight or publication',
     );
-    assert.deepEqual(
-      await recordedReleaseCalls(hermetic.calls),
-      [],
-      'the prerequisite refusal runs before every hermetic git/npm/pnpm/npx stand-in',
-    );
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
   const releaseSource = await readFile(join(ROOT, 'scripts/release.mjs'), 'utf8');
   assert.equal(
-    releaseSource.split("'scripts/verify-events-phase-e-prerequisites.mjs'").length - 1,
+    releaseSource.split("await requirePhaseEGate('Phase-E prerequisite gate', verifyPhaseEPrerequisites);").length - 1,
     1,
     'direct release invokes the prerequisite gate exactly once before preflight',
   );
   assert.equal(
-    releaseSource.split("'scripts/verify-events-phase-e-tests.mjs'").length - 1,
+    releaseSource.split("await requirePhaseEGate('Phase-E strict-test gate', verifyPhaseETestManifest);").length - 1,
     1,
     'direct release invokes the strict test gate exactly once before preflight',
   );
+});
+
+test('E13 final release: the preload also refuses workers, the low-level spawn and the spawn bindings', async () => {
+  const record = join(await mkdtemp(join(tmpdir(), 'e13-seal-lowlevel-')), 'calls.jsonl');
+  try {
+    const probe = await runStrictMutationChild({
+      command: process.execPath,
+      args: [
+        '--import',
+        `${pathToFileURL(join(ROOT, RELEASE_TOOL_PRELOAD)).href}?record=${encodeURIComponent(pathToFileURL(record).href)}`,
+        '--input-type=module',
+        '--eval',
+        `import { ChildProcess } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
+const attempts = [
+  () => new Worker('process.exit(0)', { eval: true }),
+  () => new ChildProcess().spawn({ file: process.execPath, args: [process.execPath], stdio: [] }),
+  () => process.binding('spawn_sync'),
+];
+let refused = 0;
+for (const attempt of attempts) { try { attempt(); } catch { refused += 1; } }
+process.exit(refused === attempts.length ? 0 : 3);`,
+      ],
+      cwd: ROOT,
+      env: { PATH: process.env.PATH ?? '', SystemRoot: process.env.SystemRoot ?? '' },
+      timeoutMs: 30_000,
+    });
+    assert.equal(probe.code, 0, `every low-level way to start a process or worker is refused\n${probe.output}`);
+    const lines = (await readFile(record, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line).entryPoint);
+    assert.deepEqual(
+      lines,
+      ['worker_threads.Worker', 'ChildProcess.prototype.spawn', 'process.binding'],
+      'each low-level attempt is recorded before it is refused',
+    );
+  } finally {
+    await rm(dirname(record), { recursive: true, force: true });
+  }
+});
+
+test('E13 final release: the preload intercepts every child_process entry point available to release', async () => {
+  const releaseSource = await readFile(join(ROOT, 'scripts/release.mjs'), 'utf8');
+  const imports = [...releaseSource.matchAll(/['"](?:node:)?child_process['"]/gu)];
+  assert.equal(imports.length, 1, 'release has one statically inspectable child_process import');
+  const namedImport = /import\s*\{(?<bindings>[^}]*)\}\s*from\s*['"]node:child_process['"]/u.exec(releaseSource);
+  assert.notEqual(namedImport, null, 'release imports child_process through named entry points');
+  const releaseEntries = (namedImport?.groups?.bindings ?? '')
+    .split(',')
+    .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
+    .filter(Boolean);
+  assert.equal(releaseEntries.length > 0, true, 'release uses at least one child_process entry point');
+  for (const entry of releaseEntries) {
+    assert.equal(
+      RELEASE_CHILD_PROCESS_ENTRY_POINTS.includes(entry as (typeof RELEASE_CHILD_PROCESS_ENTRY_POINTS)[number]),
+      true,
+      `release child_process entry point is sealed: ${entry}`,
+    );
+  }
+
+  const root = await mkdtemp(join(tmpdir(), 'agentcomms-release-tool-preload-'));
+  try {
+    const record = join(root, 'tool-calls');
+    const probe = await runStrictMutationChild({
+      command: process.execPath,
+      args: [
+        '--import',
+        releaseToolPreloadUrl(ROOT, record),
+        '--input-type=module',
+        '--eval',
+        `import * as childProcess from 'node:child_process';
+const entries = ${JSON.stringify(RELEASE_CHILD_PROCESS_ENTRY_POINTS)};
+for (const entry of entries) {
+  try {
+    if (entry === 'fork') childProcess[entry]('example-child.mjs', ['--probe']);
+    else if (entry === 'exec' || entry === 'execSync') childProcess[entry]('git status --short');
+    else childProcess[entry]('git', ['status', '--short']);
+    throw new Error('release tool seal allowed child_process.' + entry);
+  } catch (error) {
+    if (!String(error).includes('release tool seal refused child_process.' + entry)) throw error;
+  }
+}`,
+      ],
+      cwd: ROOT,
+      env: process.env,
+    });
+    assert.equal(probe.code, 0, `the release-tool preload probe completes after every refusal\n${probe.output}`);
+    assert.deepEqual(
+      await recordedReleaseCalls(record),
+      RELEASE_CHILD_PROCESS_ENTRY_POINTS.map((entry) =>
+        JSON.stringify({
+          entryPoint: entry,
+          command:
+            entry === 'fork'
+              ? 'example-child.mjs'
+              : entry === 'exec' || entry === 'execSync'
+                ? 'git status --short'
+                : 'git',
+          arguments:
+            entry === 'fork' ? ['--probe'] : entry === 'exec' || entry === 'execSync' ? [] : ['status', '--short'],
+        }),
+      ),
+      'the preload records and refuses every release-capable child_process entry point with its arguments',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('E13 final release: the positive B3 tree passes and B3 drift refuses verify and release before preflight', async () => {

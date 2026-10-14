@@ -203,8 +203,16 @@ export class ImmutableVersions {
    * not exist, or carrying a different copy of one that does, is refused rather than approved as something else.
    */
   private assertEmbeddedVersions(rule: CanonicalFullRuleDocument): void {
-    const embedded: Array<{ table: string; column: string; id: string; version: number; document: unknown }> = [
+    const embedded: Array<{
+      kind: 'target' | 'subscriber' | 'judge';
+      table: string;
+      column: string;
+      id: string;
+      version: number;
+      document: unknown;
+    }> = [
       ...rule.targets.map((target) => ({
+        kind: 'target' as const,
         table: 'target_versions',
         column: 'target_id',
         id: target.targetId,
@@ -212,6 +220,7 @@ export class ImmutableVersions {
         document: target,
       })),
       ...rule.subscribers.map((subscriber) => ({
+        kind: 'subscriber' as const,
         table: 'subscriber_versions',
         column: 'subscriber_id',
         id: subscriber.subscriberId,
@@ -222,6 +231,7 @@ export class ImmutableVersions {
         ? []
         : [
             {
+              kind: 'judge' as const,
               table: 'judge_versions',
               column: 'judge_id',
               id: rule.agentic.judge.judgeId,
@@ -246,7 +256,30 @@ export class ImmutableVersions {
           `the rule carries a copy of ${entry.id} version ${entry.version} that differs from the stored version`,
         );
       }
+      if (entry.kind === 'judge' && this.#embeddedJudgeIsRevoked(entry.id, entry.version)) {
+        throw new EventDomainError(
+          'VERSION_DOCUMENT_INVALID',
+          `the rule names revoked judge ${entry.id} version ${entry.version}`,
+        );
+      }
     }
+  }
+
+  #embeddedJudgeIsRevoked(judgeId: string, version: number): boolean {
+    return (
+      this.#database
+        .prepare(
+          `SELECT 1 AS present
+             FROM judge_versions AS stored
+             LEFT JOIN object_revocations AS revoked
+               ON revoked.kind = 'judge'
+              AND revoked.object_id = stored.judge_id
+              AND revoked.version = stored.version
+            WHERE stored.judge_id = ? AND stored.version = ?
+              AND (stored.revoked_at IS NOT NULL OR revoked.revoked_at IS NOT NULL)`,
+        )
+        .get(judgeId, version) !== undefined
+    );
   }
 
   private insert(

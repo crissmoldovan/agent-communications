@@ -354,7 +354,10 @@ interface OwnerB3ControlServiceOptions {
     Partial<
       Pick<
         ActivationRuntime,
-        'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+        | 'prepareJudgeBudget'
+        | 'prepareJudgeKind'
+        | 'cancelForJudgeKindInTransaction'
+        | 'cancelForRevocationInTransaction'
       >
     >;
   readonly cipher: Pick<EventRecordCipher, 'encrypt'>;
@@ -376,7 +379,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
     typeof options.activations.prepareJudgeBudget === 'function' &&
     typeof options.activations.prepareJudgeKind === 'function' &&
     typeof options.activations.cancelForJudgeKindInTransaction === 'function' &&
-    typeof options.activations.cancelForRevocation === 'function'
+    typeof options.activations.cancelForRevocationInTransaction === 'function'
       ? options.activations
       : undefined;
   const operator = new B3OperatorControl({
@@ -388,7 +391,10 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
       : {
           activations: judgeActivations as Pick<
             ActivationRuntime,
-            'prepareJudgeBudget' | 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction' | 'cancelForRevocation'
+            | 'prepareJudgeBudget'
+            | 'prepareJudgeKind'
+            | 'cancelForJudgeKindInTransaction'
+            | 'cancelForRevocationInTransaction'
           >,
         }),
     // Only `test` reaches the operator control, still bound to its control: an unbound method loses `this` and its

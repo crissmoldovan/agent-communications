@@ -26,6 +26,12 @@ Rejected recipient values are no longer copied into prepare errors, and Gmail's 
 envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
 record, over MCP and `send status --json`.
 
+**`agent-events --version` and `agent-events -V` now print the installed daemon version.** A subcommand's
+`--version <number>` still selects that immutable object version.
+
+**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
+a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
+
 ## 0.17.0
 
 **Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run

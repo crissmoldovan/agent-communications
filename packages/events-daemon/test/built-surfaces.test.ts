@@ -62,6 +62,11 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
       /^\s+migrate\b|^\s+target (?:resume|replay)\b|^\s+held decide\b/m,
       'the built CLI keeps B3 human-only secret/resume/held-decision controls out of its paired boundary',
     );
+    const installed = JSON.parse(await readFile(join(PACKAGE, 'package.json'), 'utf8')) as { readonly version: string };
+    for (const flag of ['--version', '-V']) {
+      const version = await run(process.execPath, ['--import', PRELOAD, CLI, flag], { env });
+      assert.equal(version.stdout, `${installed.version}\n`, `the built CLI ${flag} reports its package version`);
+    }
 
     if (WINDOWS_SKIP) {
       // B1-G: on Windows the service refuses by name rather than reaching for a pipe it cannot protect.
