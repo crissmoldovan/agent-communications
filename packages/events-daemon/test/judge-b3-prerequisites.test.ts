@@ -68,13 +68,15 @@ async function releaseFixture(): Promise<string> {
     await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(destination, 'package.json'));
   }
   await writeFile(join(root, 'scripts/packages.mjs'), "export const PACKAGES = []; export const SCOPE = '@fixture';\n");
+  // release.mjs imports both gates in-process, so each stand-in exports the function it calls: the first refuses, and
+  // the second throws only if it is ever reached.
   await writeFile(
     join(root, 'scripts/verify-events-phase-e-prerequisites.mjs'),
-    "console.error('fixture Phase-E gate refused'); process.exitCode = 1;\n",
+    "export async function verifyPhaseEPrerequisites() { return ['fixture Phase-E gate refused']; }\n",
   );
   await writeFile(
     join(root, 'scripts/verify-events-phase-e-tests.mjs'),
-    "throw new Error('second gate must not run');\n",
+    "export async function verifyPhaseETestManifest() { throw new Error('second gate must not run'); }\n",
   );
   return root;
 }
@@ -114,6 +116,7 @@ test('E3: release --publish --skip-verify stops at a failing Phase-E gate before
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
     assert.notEqual(result.code, 0);
     assert.match(output, /fixture Phase-E gate refused/u);
+    assert.doesNotMatch(output, /second gate must not run/u, 'the strict-test gate never runs after the first refuses');
     assert.doesNotMatch(output, /npm whoami|Publishing /u);
   } finally {
     await rm(root, { recursive: true, force: true });
