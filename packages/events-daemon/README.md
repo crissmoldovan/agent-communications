@@ -40,18 +40,22 @@ safe way to see what a rule would send before you point it at a webhook.
 agent-events target add '{"targetId":"log","version":1,"kind":"dry-run","retentionMs":86400000}'
 
 # 2. a rule: every received Gmail message with a subject, mapped to its subject only
-agent-events sources list          # the Gmail account ids you can name in a rule
+agent-events sources list          # every connected account a rule can name: its source, id and name
 agent-events rule create "$(cat rule.json)"
 
 # 3. turn it on: each step prints an approval, which you approve by typing its challenge
-agent-events rule enable mail-subjects 1
-agent-events approve <approval-id>
 agent-events enable-all            # the standing approval that starts collection
 agent-events approve <approval-id>
+agent-events rule enable mail-subjects 1
+agent-events approve <approval-id> # offers to test the target first; answering no is fine
 
-# 4. read what matched
+# 4. read what matched: the list gives each record's id, and show prints that record
 agent-events dryrun list
+agent-events dryrun show <record-id>
 ```
+
+Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
+cannot run, the approval says why and still asks for its challenge.
 
 `rule.json`:
 

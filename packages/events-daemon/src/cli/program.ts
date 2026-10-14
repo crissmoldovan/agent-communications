@@ -1,5 +1,13 @@
 import { createInterface } from 'node:readline/promises';
-import { agentMarker, CommsError, canPrompt, escapeForDisplay, isCommsError, isDangerous } from '@agentcomms/core';
+import {
+  agentMarker,
+  CommsError,
+  canPrompt,
+  escapeForDisplay,
+  isCommsError,
+  isDangerous,
+  resolvePaths,
+} from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
@@ -117,6 +125,19 @@ export function renderApprovalViewForTerminal(result: unknown): string {
   return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);
 }
 
+/**
+ * An optional test the owner refused is reported and the approval goes on to its challenge (CUE-475): declining the
+ * test was always allowed, so a test that could not run must not end the approval for the person.
+ */
+async function optionalTest(label: Record<string, number>, test: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await test();
+  } catch (error) {
+    if (!isCommsError(error)) throw error;
+    return { ...label, test: 'not run', reason: error.message };
+  }
+}
+
 /** Runs the only interactive terminal approval path; the owner, not this client, made every pending-target selector. */
 export async function runTerminalApprovalFlow(input: {
   readonly approvalId: string;
@@ -134,7 +155,8 @@ export async function runTerminalApprovalFlow(input: {
     const answer = await input.terminal.question(
       `Test pending target ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
-    if (/^\s*(?:y|yes)\s*$/iu.test(answer)) input.print(await input.testPendingTarget(selector));
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer))
+      input.print(await optionalTest({ pendingTarget: index + 1 }, () => input.testPendingTarget(selector)));
   }
   for (let index = 0; index < start.pendingRuleJudgeTestSelectors.length; index += 1) {
     const selector = start.pendingRuleJudgeTestSelectors[index];
@@ -142,8 +164,9 @@ export async function runTerminalApprovalFlow(input: {
     const answer = await input.terminal.question(
       `Test pending rule judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
-    if (/^\s*(?:y|yes)\s*$/iu.test(answer) && input.testPendingRuleJudge !== undefined)
-      input.print(await input.testPendingRuleJudge(selector));
+    const testPendingRuleJudge = input.testPendingRuleJudge;
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer) && testPendingRuleJudge !== undefined)
+      input.print(await optionalTest({ pendingRuleJudge: index + 1 }, () => testPendingRuleJudge(selector)));
   }
   const answer = await input.terminal.question(
     `Type this approval challenge: ${escapeForDisplay(start.challenge)}\n> `,
@@ -173,6 +196,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
   const env = deps.env ?? process.env;
   const program = new Command();
+  runEnvironment.set(program, env);
   let ran = false;
 
   program
@@ -717,10 +741,20 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
 }
 
+/**
+ * The state directory a control client looks in: the one pinned for this run, or the one the environment this CLI was
+ * given resolves to. A caller that passes its own `env` to `run` reaches its own owner, never the one the process
+ * environment names.
+ */
 function controlOptions(program: Command): { stateDir?: string } {
   const { stateDir } = program.opts<EventsCliOptions>();
-  return stateDir === undefined ? {} : { stateDir };
+  if (stateDir !== undefined) return { stateDir };
+  const env = runEnvironment.get(program);
+  return env === undefined ? {} : { stateDir: resolvePaths({ env }).stateDir };
 }
+
+/** The environment each program was made with, read by `controlOptions` outside `run`'s closure. */
+const runEnvironment = new WeakMap<Command, NodeJS.ProcessEnv>();
 
 function parseVersion(value: string): number {
   const version = Number(value);

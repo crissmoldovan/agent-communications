@@ -8,6 +8,7 @@ import { JudgePurgeParticipant } from '../src/runtime/judge-purge.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 function seedHold(
@@ -188,6 +189,7 @@ test('E8: owner startup expires a held projection before it exposes its control 
     store.close();
     owner = await startEventOwner({
       stateDir,
+      configDir: await emptyConfigDir(stateDir),
       // The injected process clock is deliberately stale. Only the owner startup transaction's SQLite clock may
       // terminalise the hold before this no-listener control seam is exposed.
       now: () => 0,

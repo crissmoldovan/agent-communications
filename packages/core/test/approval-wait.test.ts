@@ -440,6 +440,9 @@ test('every way a wait ends — success, timeout, cancellation, an error — fre
     const open = Array.from({ length: MAX_WAITS - 1 }, () =>
       waitForApproval(w.core, record.approvalId, { waitSeconds: 5, clock: held }),
     );
+    // Each open wait makes one look and then holds. Every one has made it before the wait that ends starts, so the
+    // read the error case breaks is that wait's own, never an open wait's that a slow machine let run late (CUE-472).
+    while (w.reads.length < MAX_WAITS - 1) await new Promise((settle) => setImmediate(settle));
     const cancel = new AbortController();
     if (how === 'cancellation') cancel.abort();
     if (how === 'error') {

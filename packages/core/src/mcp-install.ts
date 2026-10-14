@@ -1710,6 +1710,18 @@ function commandLinesFrom(ps: string): Promise<string[] | null> {
 
 const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
 
+/** Whether a runtime's own manifest, the one the installer writes, names this package as what it installs. */
+async function pinsPackage(runtime: string, packageName: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(await readFile(join(runtime, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, unknown>;
+    };
+    return typeof manifest.dependencies?.[packageName] === 'string';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * This product's managed runtimes on disk, oldest name first: every directory directly inside `<data>/runtime`,
  * named like a version, that holds this product's package — never a symbolic link, never another product's runtime,
@@ -1741,6 +1753,10 @@ export async function listManagedRuntimes(
     } catch {
       continue;
     }
+    // Holding the package is not enough: another product's runtime carries it as a dependency, as the events service's
+    // carries every channel. A runtime is this product's when its name says so, or, in the old Gmail layout with no
+    // suffix, when the installer's own manifest pins this package.
+    if (!name.endsWith(suffix) && !(await pinsPackage(path, packageName))) continue;
     found.push({ path, version: name.endsWith(suffix) ? name.slice(0, -suffix.length) : name });
   }
   return found;

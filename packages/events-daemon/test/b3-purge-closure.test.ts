@@ -13,6 +13,7 @@ import {
 } from '../src/runtime/target-version-references.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 function subscriberRemovalPorts(
@@ -284,7 +285,7 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
            VALUES ('subscriber', 'subscriber-purge', 1, 'sse-bearer', 1, ?, 'synthetic-bearer-digest', X'00', 'current', NULL, 1)`,
         )
         .run(subscriber.digest);
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
       server = await startSseServer({
         listener,
         store,

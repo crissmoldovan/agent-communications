@@ -29,6 +29,7 @@ import {
   installRemedyOf,
   installTarget,
   isProductServer,
+  listManagedRuntimes,
   type McpProduct,
   managedRuntimeDir,
   managedRuntimeEntry,
@@ -452,6 +453,31 @@ test('the installer refuses a server name that is not plain, whoever calls it', 
     name: 'x'.repeat(64),
   });
   assert.equal(plain.name, 'x'.repeat(64));
+});
+
+test('a runtime that only carries a package as a dependency is not that package’s runtime (CUE-473)', async () => {
+  const data = tempDir();
+  const at = (name: string) => join(data, 'runtime', name);
+  // The events service's runtime installs core, Gmail, Slack, Resend and WhatsApp beside its own package.
+  makeRuntime(at('0.0.9-events-daemon'), '@agentcomms/events-daemon', '0.0.9');
+  for (const dependency of ['@agentcomms/core', '@agentcomms/slack', '@agentcomms/resend']) {
+    const dir = join(at('0.0.9-events-daemon'), 'node_modules', ...dependency.split('/'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: dependency, version: '0.0.9' }));
+  }
+  // Slack's own runtime carries core the same way.
+  makeRuntime(at('0.0.9-slack'), SLACK.packageName, '0.0.9');
+  mkdirSync(join(at('0.0.9-slack'), 'node_modules', '@agentcomms', 'core'), { recursive: true });
+  // Gmail's old layout has no name suffix: its own pin manifest is what makes it Gmail's.
+  makeRuntime(at('0.0.1'), GMAIL.packageName, '0.0.1');
+
+  const versions = async (packageName: string) =>
+    (await listManagedRuntimes(data, packageName)).map((runtime) => basename(runtime.path));
+  assert.deepEqual(await versions(SLACK.packageName), ['0.0.9-slack'], 'Slack has its own runtime and no other');
+  assert.deepEqual(await versions('@agentcomms/resend'), [], 'Resend has none: the events runtime only carries it');
+  assert.deepEqual(await versions('@agentcomms/core'), [], 'core has none: Slack and events only carry it');
+  assert.deepEqual(await versions('@agentcomms/events-daemon'), ['0.0.9-events-daemon'], 'events has its own');
+  assert.deepEqual(await versions(GMAIL.packageName), ['0.0.1'], 'the old Gmail layout is Gmail’s by its pin');
 });
 
 test('prune removes only unused runtimes of this product, and nothing else in the directory', async () => {

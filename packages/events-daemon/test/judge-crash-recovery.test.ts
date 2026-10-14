@@ -8,6 +8,7 @@ import { recoverJudgeWork } from '../src/runtime/judge-recovery.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { JUDGE_CRASH_POINTS, type JudgeCrashPoint } from './fixtures/judges/crash-recovery/points.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const NOW = 1_800_000_000_000;
@@ -258,6 +259,7 @@ test('E5 crash: owner startup does not issue a judge-ledger statement before the
     try {
       owner = await startEventOwner({
         stateDir: setup.root,
+        configDir: await emptyConfigDir(setup.root),
         tickMs: 60_000,
         now: () => NOW + 1,
       });
@@ -309,7 +311,12 @@ test('E7 owner: startup recovers in-flight judge work only after an active kind 
     enterHostedDns(setup, 'owner-e7-recovery');
     setup.store.close();
     try {
-      owner = await startEventOwner({ stateDir: setup.root, tickMs: 60_000, now: () => NOW + 1 });
+      owner = await startEventOwner({
+        stateDir: setup.root,
+        configDir: await emptyConfigDir(setup.root),
+        tickMs: 60_000,
+        now: () => NOW + 1,
+      });
     } catch (error) {
       if (!(error instanceof Error) || !/EPERM/u.test(error.message)) throw error;
     }

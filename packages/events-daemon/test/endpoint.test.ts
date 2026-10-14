@@ -17,6 +17,7 @@ import {
 import { readInstance } from '../src/control/instance.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { eventPaths } from '../src/runtime/paths.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const UID = 501;
@@ -168,7 +169,7 @@ test('CTRL-B1: the owner re-proves its endpoint for every connection, and a clie
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-endpoint-');
-  const owner = await startEventOwner({ stateDir });
+  const owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir) });
   const paths = eventPaths(stateDir);
   try {
     const client = new EventControlClient({ stateDir });

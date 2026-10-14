@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { rm } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
@@ -6,12 +7,15 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run } from '../src/cli/program.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
 import { status } from '../src/operations/status.ts';
-import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 test('PAR-B1: the status command and tool return the one content-free daemon status', {
   skip: WINDOWS_SKIP,
-}, async () => {
-  const expected = await status();
+}, async (t) => {
+  // A state directory of the test's own: an event service running on this machine must not answer it.
+  const stateDir = await shortTempDir('aev-status-parity-');
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expected = await status({ stateDir });
   assert.deepEqual(expected, { owner: 'not-running' });
 
   const stdout = new PassThrough();
@@ -20,13 +24,13 @@ test('PAR-B1: the status command and tool return the one content-free daemon sta
   stdout.on('data', (chunk) => {
     output += String(chunk);
   });
-  const code = await run(['--json', 'status'], {
+  const code = await run(['--json', '--state-dir', stateDir, 'status'], {
     streams: { stdin: new PassThrough(), stdout, stderr: new PassThrough() },
   });
   assert.equal(code, 0);
   assert.deepEqual(JSON.parse(output), expected);
 
-  const { server } = await createEventsMcpServer();
+  const { server } = await createEventsMcpServer({ stateDir });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'events-daemon-test', version: '0' });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { EventControlClient } from '../src/control/client.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { copyRepositorySnapshot, expandOverlayInput, runB3Mutation } from './support/b3-mutants.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
@@ -36,6 +37,7 @@ test('B3 mutation proof: a sealed owner dispatches only B3 contract operations',
   const seen: unknown[] = [];
   const owner = await startEventOwner({
     stateDir,
+    configDir: await emptyConfigDir(stateDir),
     b3OwnerService: {
       async handle(request) {
         seen.push(request);
