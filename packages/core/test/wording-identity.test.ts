@@ -317,6 +317,8 @@ async function collect(): Promise<Record<string, string>> {
       globalPackages: async () => ({ '@agentcomms/core': OLD, '@agentcomms/slack': OLD }),
       installGlobal: async () => undefined,
       installRuntime: async () => undefined,
+      // One platform's sentences on every host, as the install's above: a Windows update offers no CLI shim.
+      platform: 'darwin' as const,
     };
     const plan = await updateChange(m.core, m.env, { noVerify: true }, deps).plan(await m.core.config.load());
     out['update: summary'] = normalise(m, plan.summary);

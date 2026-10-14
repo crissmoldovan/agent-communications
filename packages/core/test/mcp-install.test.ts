@@ -17,7 +17,7 @@ import { CHANNEL_SERVERS, serverFacts } from '../src/channel-servers.ts';
 import { locateCliCommand } from '../src/cli-command.ts';
 import { ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { handoffSentence } from '../src/handoffs.ts';
-import { writeManagedShim } from '../src/managed-shims.ts';
+import { managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { knownClientConfigs } from '../src/mcp-clients.ts';
 import {
   clientCliDirectories,
@@ -482,15 +482,21 @@ test('prune removes only unused runtimes of this product, and nothing else in th
   const running = [`node ${managedRuntimeEntry(data, SLACK.packageName, '0.0.3')} mcp`, 'ps -A -o args='];
   const product = { packageName: SLACK.packageName, version: '0.0.9' };
   const installing = context(data, home);
-  const ownedShim = await writeManagedShim(
-    { env: installing.env, dataDir: installing.core.paths.dataDir, platform: installing.platform },
-    {
-      binary: 'agent-slack',
-      command: [process.execPath, managedRuntimeEntry(data, SLACK.packageName, '0.0.1')],
-      entry: managedRuntimeEntry(data, SLACK.packageName, '0.0.1'),
-    },
-  );
-  assert.equal(ownedShim.status, 'created', 'the prune fixture owns a shim into the unused runtime');
+  // Shims exist on macOS and Linux only; on Windows prune has none to remove, and says so.
+  const shims = managedShimsSupported();
+  const ownedShim = shims
+    ? await writeManagedShim(
+        { env: installing.env, dataDir: installing.core.paths.dataDir, platform: installing.platform },
+        {
+          binary: 'agent-slack',
+          command: [process.execPath, managedRuntimeEntry(data, SLACK.packageName, '0.0.1')],
+          entry: managedRuntimeEntry(data, SLACK.packageName, '0.0.1'),
+        },
+      )
+    : undefined;
+  if (ownedShim !== undefined) {
+    assert.equal(ownedShim.status, 'created', 'the prune fixture owns a shim into the unused runtime');
+  }
 
   // Nothing is removed when the processes cannot be listed: "unused" cannot be shown.
   const blind = await pruneManagedRuntimes(context(data, home), product, { processes: async () => null });
@@ -506,8 +512,12 @@ test('prune removes only unused runtimes of this product, and nothing else in th
     ['0.0.1'],
     'the dry run finds only the unused Slack runtime',
   );
-  assert.deepEqual(dry.shims.removed, [ownedShim.path], 'the dry run previews removing its owned CLI shim');
-  assert.equal(existsSync(ownedShim.path), true, 'the dry run leaves the owned shim in place');
+  if (ownedShim !== undefined) {
+    assert.deepEqual(dry.shims.removed, [ownedShim.path], 'the dry run previews removing its owned CLI shim');
+    assert.equal(existsSync(ownedShim.path), true, 'the dry run leaves the owned shim in place');
+  } else {
+    assert.deepEqual(dry.shims, { removed: [], kept: [] }, 'a Windows dry run has no CLI shim to remove');
+  }
   await stat(at('0.0.1-slack'));
 
   const pruned = await pruneManagedRuntimes(context(data, home), product, { processes: async () => running });
@@ -516,8 +526,12 @@ test('prune removes only unused runtimes of this product, and nothing else in th
     [at('0.0.1-slack')],
     'prune removes only the unused runtime it previewed',
   );
-  assert.deepEqual(pruned.shims.removed, [ownedShim.path], 'prune reports the owned CLI shim it removed');
-  assert.equal(existsSync(ownedShim.path), false, 'prune removes the unchanged owned CLI shim');
+  if (ownedShim !== undefined) {
+    assert.deepEqual(pruned.shims.removed, [ownedShim.path], 'prune reports the owned CLI shim it removed');
+    assert.equal(existsSync(ownedShim.path), false, 'prune removes the unchanged owned CLI shim');
+  } else {
+    assert.deepEqual(pruned.shims, { removed: [], kept: [] }, 'a Windows prune removes no CLI shim');
+  }
   assert.deepEqual(Object.fromEntries(pruned.kept.map((item) => [item.version, item.reason])), {
     '0.0.2': 'registered with claude-code as "slack"',
     '0.0.3': 'a running process uses it',
