@@ -3,7 +3,18 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.18.0
+
+**`agentcomms` now installs, updates and repairs the events server like the channel servers, and a managed install
+puts its command on your PATH on macOS and Linux.** Until now, the events server was added to each client by hand,
+outside the managed install and update, and the CLI a managed install had already downloaded was not on PATH. This
+release also finishes what 0.17.0 left open:
+- `agent-events --version`;
+- judge fixes for turning a kind off and for budgets;
+- a PowerShell line you can paste on Windows;
+- sends that no longer echo a message's text outside the untrusted-content envelope.
+
+Nothing existing breaks. Read **Upgrading** at the end before you start it.
 
 **The core installer now manages the events MCP server.** `agentcomms mcp install --server events --client <client>`
 and `comms_server_install` with `channel: "events"` register `@agentcomms/events-daemon` through the same preview and
@@ -13,14 +24,6 @@ channel account pins, read-only narrowing and warnings about rival servers remai
 
 Why: the 0.16.0 and 0.17.0 instructions made people add `npx -y @agentcomms/events-daemon mcp` to each client by
 hand, outside the managed install and update path.
-
-**Windows handoffs with the default Node installation are pasteable in PowerShell.** When Node lives under
-`C:\Program Files`, a safe handoff is now printed as a line beginning with PowerShell's `&`, with every word
-single-quoted and the result labelled “PowerShell”. Inner single quotes are doubled. A command whose words cannot be
-proved safe in that form still uses the inert JSON fallback.
-
-Why: the absolute Node path needs quoting; earlier releases therefore reduced the most common Windows handoff to a
-list of words to retype even though PowerShell has a safe, explicit call-operator form.
 
 **Managed installs now provide owned CLI shims.** After a managed install or registration update, `agentcomms`,
 `agent-gmail`, `agent-slack`, `agent-resend`, `agent-whatsapp` or `agent-events` is written to `~/.local/bin` on
@@ -35,16 +38,16 @@ Why: managed registrations already install a complete CLI runtime, but people st
 the command separately for ordinary terminal use. Windows needs a forwarding format that preserves argument
 boundaries before it can offer the same convenience safely.
 
-**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
-to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
-headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
-no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
+**Windows handoffs with the default Node installation are pasteable in PowerShell.** When Node lives under
+`C:\Program Files`, a safe handoff is now printed as a line beginning with PowerShell's `&`, with every word
+single-quoted and the result labelled “PowerShell”. Inner single quotes are doubled. A command whose words cannot be
+proved safe in that form still uses the inert JSON fallback.
+
+Why: the absolute Node path needs quoting; earlier releases therefore reduced the most common Windows handoff to a
+list of words to retype even though PowerShell has a safe, explicit call-operator form.
 
 **`agent-events --version` and `agent-events -V` now print the installed daemon version.** A subcommand's
 `--version <number>` still selects that immutable object version.
-
-**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
-a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
 
 **Fixed — agents now send Gmail and Resend mail with the approval id, without copying recipients or subjects back
 into the send call.** The approval already binds the exact message, and copying those fields made text taken from
@@ -62,8 +65,8 @@ Rejected recipient values are no longer copied into prepare errors, and Gmail's 
 envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
 record, over MCP and `send status --json`.
 
-**Fixed.** A Slack sign-in listener now closes its loopback server if the sign-in expires before the listener can
-record that it started, so the port is released immediately instead of remaining occupied until the listener timeout.
+**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
+a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
 
 **Fixed.** A judge call that stopped before anything was sent no longer counts against the judge's budget. That covers
 a call refused, out of time or cut short by a crash before its first connection. 0.17.0 marked a call in flight before
@@ -71,9 +74,27 @@ it reached the network, so such a call could be charged as if it had been made. 
 it is in flight only from its first network lookup, a retry is a new attempt, and the rolling and concurrent budgets
 count each attempt once.
 
-**Upgrading.** On its first start, this release moves the event database to schema 22. After that, do not start 0.17.0
-against it: 0.17.0 does not know schema 22. From this release on, `agent-events` refuses a database that a newer release
-has migrated. It names both versions and writes nothing to it.
+**Fixed.** A Slack sign-in listener now closes its loopback server if the sign-in expires before the listener can
+record that it started, so the port is released immediately instead of remaining occupied until the listener timeout.
+
+**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
+to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
+headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
+no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
+
+**Upgrading.** Run `agentcomms update`, or `comms_update` from a chat.
+- It moves every registration to 0.18.0.
+- On macOS and Linux it writes or repoints each managed registration's CLI shim in `~/.local/bin`. A file there that
+  this installation did not write is left alone.
+- Restart each client afterwards.
+
+To add the events server, run `agentcomms mcp install --server events --client <client>`.
+
+On its first start, this release moves the event database to schema 22. After that, do not start 0.17.0 against it:
+0.17.0 does not know schema 22. From this release on, `agent-events` refuses a database that a newer release has
+migrated. It names both versions and writes nothing to it.
+
+`postal-mime` 4 reads fewer unusual address headers as addresses; see **Dependencies**.
 
 ## 0.17.0
 
