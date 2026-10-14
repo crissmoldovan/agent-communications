@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -29,7 +29,8 @@ function releaseToolPreloadUrl(root: string, recordFile: string): string {
 async function copiedB3Tree(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'agentcomms-e13-b3-tree-'));
   // Directory symlinks on every platform, Windows included: through a junction, pnpm's workspace links do not resolve
-  // there, and every production module then fails to load.
+  // there, and every production module then fails to load. Each points at the real directory, so a tree copied from
+  // a mutation tree, whose own node_modules are links, is one link from them too.
   await Promise.all([
     cp(join(ROOT, 'packages/events-daemon/src'), join(root, 'packages/events-daemon/src'), { recursive: true }),
     cp(join(ROOT, 'packages/events-daemon/test'), join(root, 'packages/events-daemon/test'), { recursive: true }),
@@ -40,9 +41,9 @@ async function copiedB3Tree(): Promise<string> {
   ]);
   await mkdir(join(root, 'packages/events-daemon'), { recursive: true });
   await cp(join(ROOT, 'packages/events-daemon/package.json'), join(root, 'packages/events-daemon/package.json'));
-  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), 'dir');
+  await symlink(await realpath(join(ROOT, 'node_modules')), join(root, 'node_modules'), 'dir');
   await symlink(
-    join(ROOT, 'packages/events-daemon/node_modules'),
+    await realpath(join(ROOT, 'packages/events-daemon/node_modules')),
     join(root, 'packages/events-daemon/node_modules'),
     'dir',
   );

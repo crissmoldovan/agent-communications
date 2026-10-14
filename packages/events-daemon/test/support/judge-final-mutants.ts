@@ -106,7 +106,9 @@ function tapSummary(output: string, label: 'tests' | 'pass' | 'fail', value: num
 
 async function copyMutationTree(root: string): Promise<void> {
   const copiedPackage = join(root, 'packages/events-daemon');
-  const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  // Directory symlinks on every platform, as every other mutation tree here: through a Windows junction, pnpm's
+  // workspace links do not resolve.
+  const directoryLinkType = 'dir';
   await Promise.all([
     mkdir(copiedPackage, { recursive: true }),
     mkdir(join(root, 'packages/events'), { recursive: true }),
