@@ -56,6 +56,12 @@ up there — see [Releasing](docs/RELEASING.md). The only other workflow, the pu
 pull request's description and file list and never its code — see
 [What every pull request carries](#what-every-pull-request-carries).
 
+**Tests own their ports and their processes.** A test binds a server once and passes the bound server, or port 0,
+through; it never asks for a free port, releases it and binds it again, because a suite running alongside can take it
+in between. Gmail's `pnpm test` runs through `packages/gmail/test/run.mjs`, which records every detached OAuth listener
+with the test that started it and fails the suite if one is still alive at the end: a test that starts a listener
+stops it, or finishes or discards its flow.
+
 **A change to `packages/events` runs `pnpm verify:browser` too.** It runs the event library's vectors in real Chromium
 and WebKit, the engines of the desktop app's webviews, under the app's production CSP. `pnpm verify` does not run it,
 because it needs those two browsers: install them once with
