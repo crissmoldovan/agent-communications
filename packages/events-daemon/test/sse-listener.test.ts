@@ -111,7 +111,9 @@ for (const refusal of [
     listener: () => new InjectedListener(null, false),
   },
 ]) {
-  test(`B2-T9: the injected SSE listener refuses ${refusal.name} without taking ownership`, async () => {
+  test(`B2-T9: the injected SSE listener refuses ${refusal.name} without taking ownership`, {
+    skip: WINDOWS_SKIP,
+  }, async () => {
     const listener = refusal.listener();
     const setup = await injectedListenerFixture(listener);
     try {
@@ -128,7 +130,7 @@ for (const refusal of [
   });
 }
 
-test('B2-T9: closing an SSE server leaves its accepted injected listener open', async () => {
+test('B2-T9: closing an SSE server leaves its accepted injected listener open', { skip: WINDOWS_SKIP }, async () => {
   const listener = new InjectedListener({ address: '127.0.0.1', family: 'IPv4', port: injectedPort });
   const setup = await injectedListenerFixture(listener);
   try {
