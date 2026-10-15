@@ -248,6 +248,12 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     await discardPendingSecret(context, flow);
     if (foreground?.signal.aborted) throw error;
     if (error instanceof CommsError) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      throw new CommsError('UNEXPECTED', `port ${flow.port} is already in use, so the sign-in could not start`, {
+        hint: busyPortHint(context, flow, true),
+        cause: error,
+      });
+    }
     throw new CommsError('UNEXPECTED', `the sign-in could not start: ${(error as Error).message}`, {
       hint: `Port ${options.port} may already be in use.`,
       cause: error,
@@ -443,6 +449,8 @@ async function startDetached(context: SlackContext, flow: SlackFlow, options: St
   }
 
   let listenerPort: number;
+  // Ended before it said it was ready: by far most often because something else holds the port.
+  let endedEarly = false;
   try {
     listenerPort = await new Promise<number>((settle, reject) => {
       const timer = setTimeout(
@@ -460,6 +468,7 @@ async function startDetached(context: SlackContext, flow: SlackFlow, options: St
       });
       child.once('exit', (code) => {
         clearTimeout(timer);
+        endedEarly = true;
         // The likeliest reason by far, and the one whose fix is not obvious from an exit code.
         reject(
           new Error(
@@ -472,7 +481,9 @@ async function startDetached(context: SlackContext, flow: SlackFlow, options: St
     child.kill();
     await context.flows.discard(flow.flowId);
     throw new CommsError('UNEXPECTED', String((error as Error).message), {
-      hint: 'Run the sign-in at a terminal instead, without `--start`.',
+      hint: endedEarly
+        ? `${busyPortHint(context, flow, false)} If nothing holds it, run the sign-in at a terminal without \`--start\`, which says what stopped it.`
+        : 'Run the sign-in at a terminal instead, without `--start`.',
       cause: error,
     });
   }
@@ -501,6 +512,35 @@ export function releaseChannel(child: { disconnect(): void }): void {
   } catch {
     // already disconnected by the child, which is the normal case
   }
+}
+
+/**
+ * What to do about a sign-in whose port something else holds (2026-10-15): free the port, or — connecting a person's
+ * own app — make a new app, whose manifest chooses a free port that is then that app's. An existing app's port cannot
+ * simply change, because Slack matches the redirect URL it stores exactly: so a reauth, which signs in through the app
+ * the workspace already has, and an organisation's app, which keeps the profile's port, have only the first way.
+ *
+ * `certain` when the system said the port is in use; otherwise the listener only ended before it was ready, and this
+ * says what to do if that is why, rather than that it is.
+ */
+function busyPortHint(context: SlackContext, flow: SlackFlow, certain: boolean): string {
+  const held = certain
+    ? `Port ${flow.port} is held by another program: close whatever uses it, then sign in again`
+    : `If another program holds port ${flow.port}, close whatever uses it, then sign in again`;
+  if (flow.profile) return `${held}. It is the organisation app's port, so it cannot change here.`;
+  if (flow.expect) return `${held}. It is the port this workspace's app redirects to, so it cannot change here.`;
+  const manifest = [
+    'manifest',
+    ...(flow.mode === 'send' ? ['--mode', 'send'] : []),
+    ...(flow.clientSecretRef === undefined ? [] : ['--with-client-secret']),
+  ];
+  return handoffSentence(
+    context.handoffs.own(manifest),
+    (command) => `${held} — or, for a new app, run ${command} again: it chooses a free port, which the new app keeps.`,
+    {
+      instead: `${held} — or, for a new app, call slack_manifest again: it chooses a free port, which the new app keeps.`,
+    },
+  );
 }
 
 function testLoopbackPort(context: SlackContext): number | undefined {

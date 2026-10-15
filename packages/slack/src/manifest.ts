@@ -206,6 +206,14 @@ export function renderManifest(
 }
 
 /**
+ * What a port chosen for a new app now is, in one sentence: that app's, for good. Here, beside the manifest, because the
+ * operation returns it and the command prints it, and the two must say the same.
+ */
+export function chosenPortSentence(port: number): string {
+  return `Port ${port} was free, and is now this app's: Slack matches the redirect URL exactly, so every later sign-in reuses it.`;
+}
+
+/**
  * The page where one app's manifest is edited: the one link a person needs to widen or narrow a workspace's app.
  *
  * Here rather than beside the commands that print it, because the manifest step, the mode steps and `app update`

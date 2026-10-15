@@ -23,7 +23,7 @@ Tightening applies at once. No tool approves.
 | [`slack_workspaces_list`](#slack_workspaces_list) | The connected Slack workspaces, what each may do (`read` cannot post at all — Slack enforces that), and whether its credential looks healthy. |
 | [`slack_workspace_show`](#slack_workspace_show) | Everything recorded about one workspace: its ids, its mode, the scopes it was granted, the app it signed in through and when it was connected. |
 | [`slack_doctor`](#slack_doctor) | Check everything that has to work — each workspace’s stored credential and sign-in, what Slack says the token is and may do, and other Slack servers registered on this machine — and return each problem with one or more commands or actions that fix it. |
-| [`slack_manifest`](#slack_manifest) | The manifest for a Slack app in `read` or `send` mode, for a loopback port. |
+| [`slack_manifest`](#slack_manifest) | The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. |
 | [`slack_channels`](#slack_channels) | Channels and conversations this account can see. |
 | [`slack_read`](#slack_read) | Recent messages, newest first. |
 | [`slack_thread`](#slack_thread) | One thread, parent first. |
@@ -87,7 +87,7 @@ Check everything that has to work — each workspace’s stored credential and s
 
 ### `slack_manifest`
 
-The manifest for a Slack app in `read` or `send` mode, for a loopback port. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.
+The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.
 
 *read-only*
 
@@ -95,7 +95,7 @@ The manifest for a Slack app in `read` or `send` mode, for a loopback port. Give
 |---|---|---|---|
 | `workspace` | string | no | a workspace already connected, as `organisation/slack` |
 | `mode` | `read` \\| `send` | no | `read` when left out |
-| `port` | integer | no | the loopback port its redirect uses; a connected workspace’s own when left out |
+| `port` | integer | no | the loopback port its redirect uses; left out, a connected workspace’s own, or a free one for a new app |
 | `pkce` | boolean | no | `false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out |
 
 ### `slack_channels`
