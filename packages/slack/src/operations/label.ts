@@ -14,7 +14,7 @@ import {
   UNLABELLED_PREVIEW_LINE,
 } from '@agentcomms/core';
 import { callSlack, type SlackCall } from '../api/call.ts';
-import { type ComposedPayload, escapeForSlack } from '../compose/blocks.ts';
+import { type ComposedPayload, escapeForSlack, payloadOf } from '../compose/blocks.ts';
 import type { Channel } from './people.ts';
 
 /**
@@ -378,7 +378,7 @@ export function identityLine(label: SlackLabel, appName?: string | undefined): s
     return `${label.phrase ?? ''} · posted by ${app}`;
   }
   if (label.route === 'fallback') {
-    return `${label.name ?? ''} · labelled "${fallbackLabelLine(label.phrase ?? '')}" · ${label.reason ?? ''}`;
+    return `${label.name ?? ''} · labelled "${fallbackTextPrefix(label.phrase ?? '').trimEnd()}" at the start of the message · ${label.reason ?? ''}`;
   }
   // An `agent` reaction the person makes: it carries no label at all, and says so.
   return `you, with no label · ${label.reason ?? ''}`;
@@ -398,16 +398,18 @@ export async function appNameOf(call: SlackCall, botUserId: string): Promise<str
 }
 
 /**
- * A labelled fallback's message (S3): the label in both places a reader meets it — a context block above the
- * message's own section, and the front of `text`, which notifications show.
+ * A labelled fallback's message (S3): `<phrase>: ` at the front of its words, in both places a reader meets them — the
+ * one section a person sees, and `text`, which notifications show. The composer's own shape of the labelled words, so
+ * the two halves say the same thing and reading reports no mismatch: a context block above the section, as this was
+ * first written, made every labelled post read back as one saying something else in its notification — the very
+ * signal a deception raises. A post with no words (files alone) is labelled `Sent by <phrase>`.
  */
 export function labelledPayload(payload: ComposedPayload, phrase: string): ComposedPayload {
-  const line = fallbackLabelLine(phrase);
-  return {
-    ...payload,
-    text: payload.text === '' ? escapeForSlack(line) : `${escapeForSlack(fallbackTextPrefix(phrase))}${payload.text}`,
-    blocks: [{ type: 'context', elements: [{ type: 'plain_text', text: line, emoji: false }] }, ...payload.blocks],
-  };
+  const text =
+    payload.text === ''
+      ? escapeForSlack(fallbackLabelLine(phrase))
+      : `${escapeForSlack(fallbackTextPrefix(phrase))}${payload.text}`;
+  return payloadOf(text, payload.channel, payload.thread_ts);
 }
 
 /**

@@ -252,9 +252,9 @@ from your agent and not from you — unless you chose otherwise for that message
   photo. Nobody passes a name, an icon or blocks: they come from your profile and settings, read at prepare.
 - **As you, labelled.** Where the app cannot post — a direct message, a group DM, your own DM, a room the app is not
   in or whose membership could not be checked, every post with files, and every workspace with no app bot token
-  stored — the message goes out with your own token, labelled in it: `Sent by Jo Example (agent)` above the
-  words, and `Jo Example (agent): …` at the front of the text a notification shows. A file post's comment starts the
-  same way. The preview names the reason.
+  stored — the message goes out with your own token, labelled in it: its words begin `Jo Example (agent): `, and so
+  does the text a notification shows, so the two agree and a reader sees one message, not two that differ. A file
+  post's comment starts the same way. The preview names the reason.
 - **As you, with no label**, only when you say so for that message: `--as me` on `post prepare`, `react` and
   `edit prepare`, or `as: "me"` on their tools. The preview's first line then reads `Sent as you, with no label: it
   will look as if you wrote it yourself`. Rules for an account, a conversation or a kind of act are the core's

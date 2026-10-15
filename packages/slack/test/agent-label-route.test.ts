@@ -130,7 +130,7 @@ test('the same channel without the bot takes the labelled fallback, with the rea
   assert.equal(prepared.label?.reason, FALLBACK_REASONS.notMember);
   assert.equal(
     prepared.preview.postingAs,
-    'Jo Example · labelled "Sent by Jo Example (agent)" · the app is not a member of this channel',
+    'Jo Example · labelled "Jo Example (agent):" at the start of the message · the app is not a member of this channel',
   );
   assert.ok(
     (prepared.preview.warnings ?? []).some((warning) => /labelled in the message/.test(warning)),
@@ -155,7 +155,11 @@ test('a DM, a group DM and the person’s own DM take the labelled fallback, eac
     const prepared = await prepare(w, { channel });
     assert.equal(prepared.label?.route, 'fallback', channel);
     assert.equal(prepared.label?.reason, reason, channel);
-    assert.match(prepared.preview.postingAs, /^Jo Example · labelled "Sent by Jo Example \(agent\)" · /, channel);
+    assert.match(
+      prepared.preview.postingAs,
+      /^Jo Example · labelled "Jo Example \(agent\):" at the start of the message · /,
+      channel,
+    );
   }
   // No room the app cannot be in was asked about its members.
   assert.equal(w.fake.requests.filter((request) => request.method === 'conversations.members').length, 0);
