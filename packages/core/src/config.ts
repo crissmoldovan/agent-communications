@@ -3,6 +3,12 @@ import { chmod, open, readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  type AgentLabelLoosening,
+  type AgentLabelRule,
+  agentLabelOf,
+  classifyAgentLabelChange,
+} from './agent-label.ts';
 import type { ChangeBinding } from './approvals.ts';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { CONVERSION_HOOKS, type ConversionHooks } from './config-hooks.ts';
@@ -233,6 +239,16 @@ interface ConfigBody {
   /** Superseded rotating credentials which still need conclusive per-token cleanup. */
   pendingRevocations?: PendingRevocation[] | undefined;
   defaults: Defaults;
+  /**
+   * How what an agent sends is labelled (design 2026-10-15-agent-label, L5): the word, the name, the rules that say
+   * who a message appears to come from, and each Slack account's agent emoji.
+   *
+   * `unknown` here, on purpose: it is read only through `agentLabelOf`, which reads a value it does not understand
+   * as the stricter one — an unknown word as `agent`, a rule list it cannot read as no rules — so a hand edit or a
+   * later release's key can only tighten. Kept through every write as the schemas keep every key they do not name, and
+   * judged by `classifyChange`.
+   */
+  agentLabel?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -1874,7 +1890,41 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (before.secrets === undefined && after.secrets !== undefined && after.secrets.store !== 'keychain') {
     if (holdsSecrets(before)) loosen('secrets.store', secretsStoreOf(before), after.secrets.store);
   }
+  // The agent label (design 2026-10-15-agent-label, L5), read as every channel reads it: a change that could leave a
+  // message unlabelled, or that changes how the label looks, waits for the person. Its values are rendered as the
+  // other settings' are, so the preview shows them and the approval binds them.
+  for (const loosening of classifyAgentLabelChange(agentLabelOf(before), agentLabelOf(after))) {
+    loosen(loosening.path, labelSettingValue(loosening, loosening.was), labelSettingValue(loosening, loosening.now));
+  }
   return { loosened: changes.map((change) => change.path), changes };
+}
+
+/**
+ * One label rule in words, as a preview lists it: `acme/slack in C0ACME for post/reply: me`. No comma inside, since a
+ * preview joins a list of them with commas.
+ */
+export function agentLabelRuleText(rule: AgentLabelRule): string {
+  const where = rule.conversation === undefined ? '' : ` in ${rule.conversation}`;
+  const kinds = rule.kinds === undefined ? '' : ` for ${rule.kinds.join('/')}`;
+  return `${rule.account}${where}${kinds}: ${rule.as}`;
+}
+
+/** A label setting's value as a loosening carries it: the rules in words, the icons as they are, the rest as text. */
+function labelSettingValue(loosening: AgentLabelLoosening, value: unknown): SettingValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
+  if (loosening.path === 'agentLabel.slackIcons') return { ...(value as Readonly<Record<string, string>>) };
+  return String(value);
+}
+
+/** The label settings a change can write, as the file holds them — raw, as `changedSettings` records every setting. */
+const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons'] as const;
+
+function storedAgentLabel(config: Config): Readonly<Record<string, unknown>> {
+  const stored = config.agentLabel;
+  return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+    ? (stored as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -1897,7 +1947,7 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * and each mailbox's and account's own settings — including those of one added or removed.
+ * the agent label's settings, and each mailbox's and account's own settings — including those of one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
  * changes approved by chat" — and binding only the loosenings let a claim drop the tightening a person read, since
@@ -1937,6 +1987,9 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
     record(`defaults.${key}`, defaultsBefore[key], defaultsAfter[key]);
   }
   record('secrets.store', before.secrets?.store, after.secrets?.store);
+  const labelBefore = storedAgentLabel(before);
+  const labelAfter = storedAgentLabel(after);
+  for (const key of LABEL_SETTINGS) record(`agentLabel.${key}`, labelBefore[key], labelAfter[key]);
   return changes;
 }
 
