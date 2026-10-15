@@ -480,6 +480,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .int()
           .optional()
           .describe('the loopback port its redirect uses; a connected workspace’s own when left out'),
+        pkce: z
+          .boolean()
+          .optional()
+          .describe(
+            '`false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out',
+          ),
       },
       annotations: readsLocal,
     },
@@ -490,6 +496,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             mode: args.mode,
             port: args.port,
             workspace: await resolveOptional(args.workspace),
+            ...(args.pkce === undefined ? {} : { pkce: args.pkce }),
           }),
         );
       } catch (error) {

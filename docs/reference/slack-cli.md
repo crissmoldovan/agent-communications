@@ -68,6 +68,7 @@ agent-slack manifest [options]
 | `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
 | `--port <port>` | the loopback port its redirect will use | — |
 | `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
+| `--with-client-secret` | the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app | — |
 
 ### `agent-slack app`
 
@@ -129,6 +130,7 @@ agent-slack workspace add [options] [alias]
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
 | `--client-id <id>` | use your own app’s Client ID; also requires --port | — |
+| `--with-client-secret` | sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace list`
@@ -200,6 +202,7 @@ agent-slack workspace reauth [options] <alias>
 | `--wait <seconds>` | with --finish, how long to wait for the browser | `"60"` |
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
+| `--with-client-secret` | sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace policy`

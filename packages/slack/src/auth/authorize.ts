@@ -8,7 +8,7 @@ import {
 } from '@agentcomms/core';
 import { SLACK_ORIGIN } from '../api/methods.ts';
 import type { InstallMode } from '../manifest.ts';
-import { BOT_SCOPES, scopesForMode } from '../manifest.ts';
+import { BOT_SCOPES, botScopesForMode, scopesForMode } from '../manifest.ts';
 import { newPkcePair, newState, type PkcePair } from './pkce.ts';
 
 /**
@@ -60,6 +60,12 @@ export interface AuthorizeRequest {
  * documents that `team` "ensures the user will auth against that workspace" when they are signed in to it. An own app's
  * first sign-in names none, because which workspace it belongs to is only learnt from the exchange.
  */
+/**
+ * How a sign-in proves itself to Slack: PKCE, as every app this package's manifest makes — or, for an app that has never
+ * enabled PKCE, the app's client secret, sent only to `oauth.v2.access` (design 2026-10-15 S1, revised).
+ */
+export type SignInAuth = 'pkce' | 'client-secret';
+
 export function buildAuthorizeUrl(options: {
   clientId: string;
   mode: InstallMode;
@@ -67,6 +73,12 @@ export function buildAuthorizeUrl(options: {
   team?: string | undefined;
   pkce?: PkcePair;
   state?: string;
+  /**
+   * `client-secret` for an app that never enabled PKCE, whose `localhost` redirect Slack then treats "like a server
+   * redirect": it may ask for the send app's bot scopes, and carries no PKCE parameter. Slack's OAuth page also says
+   * "The `redirect_uri` must use HTTPS" — whether `http://localhost` passes for such an app is a live check (§10).
+   */
+  auth?: SignInAuth | undefined;
 }): AuthorizeRequest {
   const pkce = options.pkce ?? newPkcePair();
   const state = options.state ?? newState();
@@ -75,11 +87,17 @@ export function buildAuthorizeUrl(options: {
 
   const url = new URL('/oauth/v2/authorize', SLACK_ORIGIN);
   url.searchParams.set('client_id', options.clientId);
+  const secret = options.auth === 'client-secret';
+  // The bot scopes only where Slack allows them: a server redirect, which the client-secret sign-in's is.
+  const botScopes = secret ? botScopesForMode(options.mode) : [];
+  if (botScopes.length > 0) url.searchParams.set('scope', botScopes.join(','));
   url.searchParams.set('user_scope', scopes.join(','));
   url.searchParams.set('redirect_uri', redirectUrl);
   url.searchParams.set('state', state);
-  url.searchParams.set('code_challenge', pkce.challenge);
-  url.searchParams.set('code_challenge_method', pkce.method);
+  if (!secret) {
+    url.searchParams.set('code_challenge', pkce.challenge);
+    url.searchParams.set('code_challenge_method', pkce.method);
+  }
   if (options.team) url.searchParams.set('team', options.team);
 
   return { url: url.href, state, pkce, redirectUrl, scopes };
@@ -233,12 +251,30 @@ interface OAuthResponse {
  * label is a claim about a token nobody re-examined. `handoffs` make the commands a refusal names, located from the
  * installation printing them, or say why there is none here.
  */
-export function readExchange(body: unknown, handoffs: CliHandoffs, mode: InstallMode = 'read'): ExchangedToken {
+/** Slack's refusals of a redirect URL, which a client-secret sign-in over `http://localhost` may meet (§10). */
+const REFUSED_REDIRECT = new Set(['bad_redirect_uri', 'invalid_redirect']);
+
+export function readExchange(
+  body: unknown,
+  handoffs: CliHandoffs,
+  mode: InstallMode = 'read',
+  /**
+   * For a client-secret sign-in: what to say when Slack refuses its `localhost` redirect — paste the bot token once
+   * instead, after a PKCE sign-in.
+   */
+  options: { refusedRedirect?: string | undefined } = {},
+): ExchangedToken {
   const response = body as OAuthResponse;
   if (response?.ok !== true) {
     const shown = safeSlackFailureText;
     const slackError = shown(response?.error);
     const slackDescription = shown(response?.error_description);
+    if (options.refusedRedirect !== undefined && REFUSED_REDIRECT.has(slackError)) {
+      throw new CommsError('AUTH_REQUIRED', `Slack refused the sign-in: ${displaySlackFailureText(slackError)}`, {
+        hint: options.refusedRedirect,
+        details: { slackError, ...(slackDescription ? { slackDescription } : {}) },
+      });
+    }
     /*
      * The hint names the app, not the command.
      *

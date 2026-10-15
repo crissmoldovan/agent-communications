@@ -453,6 +453,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .addOption(modeOption())
     .option('--port <port>', 'the loopback port its redirect will use')
     .option('--workspace <name>', 'for a workspace already connected: its port, and the link to its own app')
+    .option(
+      '--with-client-secret',
+      'the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app',
+    )
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
@@ -460,12 +464,13 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           mode: String(flags.mode) as InstallMode,
           port: flags.port,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
+          ...(flags.withClientSecret === true ? { pkce: false } : {}),
         });
         writeResult(
           result,
           output(),
           (data) =>
-            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl)}`,
+            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl, { pkce: data.manifest.oauth_config.pkce_enabled })}`,
           streams,
         );
       }),
@@ -627,7 +632,11 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       .description(
         'connect through the named organisation profile’s read app, or send app with --mode send; an own app uses --client-id and --port',
       )
-      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port'),
+      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port')
+      .option(
+        '--with-client-secret',
+        "sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string | undefined, flags: Options) => {
       if (flags.finish) {
@@ -657,6 +666,19 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         });
       }
       const mode = String(flags.mode) as InstallMode;
+      const words = [
+        'workspace',
+        'add',
+        alias,
+        '--mode',
+        mode,
+        ...(flags.clientId === undefined ? [] : ['--client-id', String(flags.clientId)]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_add`: in send mode, a change approved before the sign-in starts.
       const started = await changeAt(
         context,
@@ -667,6 +689,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
         [
@@ -868,7 +891,12 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         'read',
         'send',
       ]),
-    ).description('sign in again: renew the grant, or change how much access it has'),
+    )
+      .description('sign in again: renew the grant, or change how much access it has')
+      .option(
+        '--with-client-secret',
+        "sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string, flags: Options) => {
       if (flags.finish) {
@@ -890,6 +918,17 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
        * quietly downgrade it, which is the opposite of what "the same, again" means.
        */
       const mode = flags.mode === undefined ? undefined : (String(flags.mode) as InstallMode);
+      const words = [
+        'workspace',
+        'reauth',
+        alias,
+        ...(mode === undefined ? [] : ['--mode', mode]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_reauth`: a widening is approved before its sign-in starts.
       const started = await changeAt(
         context,
@@ -899,15 +938,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
-        [
-          'workspace',
-          'reauth',
-          alias,
-          ...(mode === undefined ? [] : ['--mode', mode]),
-          ...given(flags, ['port', 'start']),
-        ],
+        words,
       );
       await presentSignIn(context, started, true, options, {
         start: flags.start === true,
@@ -983,6 +1017,54 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
    * Who a post, reaction or edit appears to come from (design 2026-10-15 L3): the person's word for this one act, and
    * nothing an agent picks for itself. Left out, the rules and the default — `agent`, labelled — decide.
    */
+  /*
+   * The app's client secret, for the sign-in that uses it (design 2026-10-15 S1, revised): a person's, at a hidden prompt,
+   * and refused to an agent or anything without a terminal before it asks — as `approve` and `workspace bot` refuse.
+   * No option or variable takes the secret itself: a command line lands in shell history.
+   */
+  const readClientSecret = async (context: SlackContext, json: boolean, words: string[]): Promise<string> => {
+    const again = context.handoffs.own(words);
+    const marker = agentMarker(env);
+    if (marker) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "only a person can sign in with the app's client secret, not an agent",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Ask the person to run ${command} in their own terminal. Never paste the secret into a chat: the transcript keeps it.`,
+            {
+              instead: 'Ask the person to run this command in their own terminal. Never paste the secret into a chat.',
+            },
+          ),
+          details: { marker },
+        },
+      );
+    }
+    if (!canPrompt(env, streams, { json })) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "signing in with the app's client secret needs an interactive terminal",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Run ${command} directly in a terminal, without --json: it asks for the secret without showing it.`,
+          ),
+        },
+      );
+    }
+    const typed = (
+      await askHidden(
+        streams,
+        "The app's client secret (its Basic Information page, under App Credentials; it is not shown as you type): ",
+      )
+    ).trim();
+    if (typed === '') throw new CommsError('USAGE', 'no client secret was typed, so nothing started');
+    return typed;
+  };
+
   const identityOption = (): Option =>
     new Option(
       '--as <identity>',

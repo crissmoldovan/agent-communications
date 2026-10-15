@@ -39,6 +39,8 @@ import {
   botSecretRefFor,
   bundleFrom,
   checkAliasFree,
+  clientSecretRefFor,
+  pendingClientSecretRefFor,
   profileTargetFor,
   renewedSecretRefFor,
   requireWorkspace,
@@ -89,6 +91,14 @@ export interface StartOptions {
   readonly listenerCommand?: ListenerEntry | undefined;
   /** Injectable listener lifetime for embedded callers and loopback tests; never changes stored expiry. */
   readonly listenerTimeoutMs?: number | undefined;
+  /**
+   * The app's client secret, as a person typed it at a hidden prompt: sign in with it rather than PKCE (design
+   * 2026-10-15 S1, revised). Kept in the secret store before the flow is saved — by the app's id on a reauth that
+   * knows it, by the Client ID until Slack says otherwise — and the flow holds only where it is.
+   */
+  readonly clientSecret?: string | undefined;
+  /** Where an account that already signs in with its app's client secret keeps it: a reauth that typed none reuses it. */
+  readonly clientSecretRef?: string | undefined;
 }
 
 export interface StartedSignIn {
@@ -150,12 +160,31 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     });
   }
 
+  if ((options.clientSecret !== undefined || options.clientSecretRef !== undefined) && options.profile) {
+    throw new CommsError('USAGE', "an organisation's app signs in through its profile, not with its client secret", {
+      hint: 'Leave --with-client-secret out: the organisation’s administrator holds the app’s secret, not its members.',
+    });
+  }
+  // Kept before anything else exists, so a flow never names a secret that is not there.
+  const clientSecretRef =
+    options.clientSecret === undefined
+      ? options.clientSecretRef
+      : options.expect?.appId !== undefined
+        ? clientSecretRefFor(options.expect.appId)
+        : pendingClientSecretRefFor(options.clientId);
+  if (options.clientSecret !== undefined && clientSecretRef !== undefined) {
+    if (options.clientSecret.trim() === '')
+      throw new CommsError('USAGE', 'no client secret was typed, so nothing started');
+    await (await context.secrets()).set(clientSecretRef, options.clientSecret.trim());
+  }
+  const auth = clientSecretRef === undefined ? 'pkce' : 'client-secret';
   let request = buildAuthorizeUrl({
     clientId: options.clientId,
     mode: options.mode,
     port: options.port,
     // The account a renewal must turn out to be, else the profile's workspace; an own app's first sign-in knows none.
     team: options.expect?.workspaceId ?? options.profile?.workspace,
+    auth,
   });
   const startedAt = context.now();
   const flow: SlackFlow = {
@@ -167,6 +196,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     clientId: options.clientId,
     ...(options.profile ? { profile: options.profile } : {}),
     ...(options.transition ? { transition: options.transition } : {}),
+    ...(clientSecretRef === undefined ? {} : { clientSecretRef }),
     verifier: request.pkce.verifier,
     state: request.state,
     redirectUrl: request.redirectUrl,
@@ -215,6 +245,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     }
   } catch (error) {
     await context.flows.discard(flow.flowId);
+    await discardPendingSecret(context, flow);
     if (foreground?.signal.aborted) throw error;
     if (error instanceof CommsError) throw error;
     throw new CommsError('UNEXPECTED', `the sign-in could not start: ${(error as Error).message}`, {
@@ -234,6 +265,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
       team: options.expect?.workspaceId ?? options.profile?.workspace,
       pkce: request.pkce,
       state: request.state,
+      auth,
     });
   }
 
@@ -1166,16 +1198,23 @@ export async function completeSignIn(
       );
     }
     if (flow.profile) profileTargetFor(flow, await context.config(), context.handoffs);
+    // A client-secret sign-in sends the app's secret and no verifier; a PKCE one the verifier and no secret.
+    const clientSecret = await clientSecretOf(context, flow);
     const exchanged = await context.exchange({
       client_id: flow.clientId,
       code,
       redirect_uri: flow.redirectUrl,
-      code_verifier: flow.verifier,
+      ...(clientSecret === undefined ? { code_verifier: flow.verifier } : { client_secret: clientSecret }),
     });
     if (flow.profile) profileTargetFor(flow, await context.config(), context.handoffs);
     let token: ReturnType<typeof readExchange>;
     try {
-      token = readExchange(exchanged, context.handoffs, flow.mode);
+      token = readExchange(
+        exchanged,
+        context.handoffs,
+        flow.mode,
+        clientSecret === undefined ? {} : { refusedRedirect: pasteInstead(context, flow) },
+      );
     } catch (error) {
       if (flow.profile && error instanceof CommsError && error.details) {
         throw await profileFailure(
@@ -1229,6 +1268,15 @@ export async function completeSignIn(
     const accountId = existing ? existing.account.id : newAccountId();
     const secretRef = existing ? renewedSecretRefFor(accountId) : secretRefFor(accountId);
     const secrets = await context.secrets();
+    // The app's client secret, kept by the app's id once Slack has said which app this is (S1, revised).
+    const keptSecretRef =
+      flow.clientSecretRef === undefined
+        ? undefined
+        : token.appId !== undefined && /^A[A-Z0-9]{2,20}$/.test(token.appId)
+          ? clientSecretRefFor(token.appId)
+          : flow.clientSecretRef;
+    // A refresh token of an app that never enabled PKCE does not expire after 30 days.
+    const refreshExpires = flow.clientSecretRef === undefined;
     const account = accountFrom({
       token,
       mode: flow.mode,
@@ -1239,6 +1287,7 @@ export async function completeSignIn(
       ...(flow.profile
         ? { provenance: { organisation: flow.profile.organisation, profileApp: flow.profile.role } }
         : {}),
+      ...(keptSecretRef === undefined ? {} : { clientSecretRef: keptSecretRef }),
     });
     let written: AccountConfig = account;
     let writtenAlias = flow.alias;
@@ -1266,7 +1315,11 @@ export async function completeSignIn(
        */
       const stage = async () => {
         completionSignal?.throwIfAborted();
-        await secrets.set(secretRef, serialiseBundle(bundleFrom(token, at)));
+        await secrets.set(secretRef, serialiseBundle(bundleFrom(token, at, { refreshExpires })));
+        // The secret under the app's id before anything names it there.
+        if (clientSecret !== undefined && keptSecretRef !== undefined && keptSecretRef !== flow.clientSecretRef) {
+          await secrets.set(keptSecretRef, clientSecret);
+        }
       };
       // Detached finishers retain their existing staging/claim semantics. Foreground interruption fences both
       // writes under the credentials lock, including callbacks that already own their flow.
@@ -1396,6 +1449,11 @@ export async function completeSignIn(
               const { botUserId: _bot, ...unbotted } = written as SlackAccount;
               written = unbotted;
             }
+            // Renewals use the secret only for the grant made with it: a PKCE sign-in's tokens renew without one.
+            if (keptSecretRef === undefined) {
+              const { clientSecretRef: _secret, ...pkce } = written as SlackAccount;
+              written = pkce;
+            }
             const next = flow.profile
               ? learnProfileSlackAppId(
                   current,
@@ -1496,7 +1554,10 @@ export async function completeSignIn(
     if (flow.mode === 'send' && token.bot) {
       try {
         const current = await context.secrets();
-        await current.set(botSecretRefFor(accountId), serialiseBundle(botBundleFrom(token.bot, at)));
+        await current.set(
+          botSecretRefFor(accountId),
+          serialiseBundle(botBundleFrom(token.bot, at, { refreshExpires })),
+        );
       } catch (error) {
         appTokenUnsaved = `the app's token could not be stored (${safeSlackFailureText((error as Error).message)}), so posts go out as you, labelled, until this workspace signs in again`;
       }
@@ -1537,5 +1598,43 @@ export async function completeSignIn(
     stopListener(flow, context.now());
     // The result was built before this deletion; an interrupt here leaves the saved sign-in and its result accurate.
     await context.flows.discard(flowId);
+    // A first sign-in's secret, kept by the Client ID until Slack named the app: moved by now, or not needed.
+    await discardPendingSecret(context, flow);
   }
+}
+
+/**
+ * The app's client secret, for a client-secret sign-in — or undefined for a PKCE one. Read from the secret store, where
+ * the start put it; one that is gone is a refusal, never a sign-in attempted without it.
+ */
+async function clientSecretOf(context: SlackContext, flow: SlackFlow): Promise<string | undefined> {
+  if (flow.clientSecretRef === undefined) return undefined;
+  const secrets = await context.secrets();
+  secrets.invalidate(flow.clientSecretRef);
+  const secret = await secrets.get(flow.clientSecretRef);
+  if (secret === null || secret === '') {
+    throw new CommsError('AUTH_REQUIRED', "the app's client secret is not stored on this machine any more", {
+      hint: 'Nothing was saved. Start the sign-in again with --with-client-secret, and type the secret when asked.',
+    });
+  }
+  return secret;
+}
+
+/** Deletes a first sign-in's secret kept by its Client ID, once its flow is over. One kept by the app's id stays. */
+async function discardPendingSecret(context: SlackContext, flow: SlackFlow): Promise<void> {
+  if (flow.clientSecretRef === undefined || flow.clientSecretRef !== pendingClientSecretRefFor(flow.clientId)) return;
+  await (await context.secrets()).delete(flow.clientSecretRef).catch(() => undefined);
+}
+
+/**
+ * What to do when Slack refuses a client-secret sign-in's `localhost` redirect: sign in with PKCE, which Slack takes on
+ * `localhost`, and paste the app's bot token once — the plain way round a redirect Slack wants on HTTPS (§10).
+ */
+function pasteInstead(context: SlackContext, flow: SlackFlow): string {
+  const bot = handoffSentence(
+    context.handoffs.own(['workspace', 'bot', flow.alias]),
+    (command) => `then give it its bot token once with ${command}`,
+    { instead: "then give it its bot token once with the Slack CLI's workspace bot, at a terminal" },
+  );
+  return `Slack would not take the localhost redirect for an app signing in with its client secret. Sign in the usual way — the same command without --with-client-secret, through an app with PKCE on — and ${bot}.`;
 }

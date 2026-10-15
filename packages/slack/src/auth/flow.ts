@@ -70,6 +70,11 @@ export interface SlackFlow {
    * read this file can already finish the sign-in.
    */
   readonly consent?: LooseningConsent | undefined;
+  /**
+   * Where the app's client secret is, for a client-secret sign-in (design 2026-10-15 S1, revised): a reference into the
+   * secret store, never the secret. Absent for a PKCE sign-in, which proves itself with `verifier` instead.
+   */
+  readonly clientSecretRef?: string | undefined;
   readonly verifier: string;
   readonly state: string;
   readonly redirectUrl: string;

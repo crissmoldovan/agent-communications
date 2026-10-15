@@ -58,9 +58,23 @@ export function modeWanted(value: unknown): InstallMode | undefined {
 
 export async function manifestFor(
   context: SlackContext,
-  options: { mode?: unknown; port?: unknown; workspace?: string | undefined },
+  options: {
+    mode?: unknown;
+    port?: unknown;
+    workspace?: string | undefined;
+    /**
+     * `false` for the manifest of a new app that signs in with its client secret at a person's terminal, rather than
+     * PKCE (design 2026-10-15 S1, revised). Left out, PKCE is on, as for every app this package has made.
+     */
+    pkce?: unknown;
+  },
 ): Promise<ManifestResult> {
   const mode = modeWanted(options.mode) ?? 'read';
+  if (options.pkce !== undefined && typeof options.pkce !== 'boolean') {
+    throw new CommsError('USAGE', '`pkce` is true or false', {
+      hint: 'Pass false for the manifest of a new app that signs in with its client secret.',
+    });
+  }
   const found =
     options.workspace === undefined
       ? undefined
@@ -81,7 +95,7 @@ export async function manifestFor(
     mode,
     port,
     redirectUrl,
-    manifest: buildManifest(mode, redirectUrl),
+    manifest: buildManifest(mode, redirectUrl, { pkce: options.pkce !== false }),
     workspace: found?.alias ?? null,
     appId,
     manifestUrl: appId === null ? null : appManifestUrl(appId),
