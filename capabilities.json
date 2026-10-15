@@ -1396,6 +1396,14 @@
       "reason": "Needs an app configuration token, which must never pass through chat: the transcript would keep it. From chat, slack_manifest returns the manifest and the app's manifest page to paste it into (design §4, §6.4)."
     },
     {
+      "id": "slack.workspace.bot",
+      "package": "slack",
+      "cli": "workspace bot",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Takes the send app's bot token at a hidden prompt, from a person at a terminal: an agent never handles a secret, and a token typed into a chat stays in the transcript. From chat the answer is the command for the person to run (design 2026-10-15 S1, revised)."
+    },
+    {
       "id": "slack.app.create",
       "package": "slack",
       "cli": "app create",

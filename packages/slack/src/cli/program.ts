@@ -58,6 +58,7 @@ import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
+import { storeBotToken } from '../operations/bot-token.ts';
 import {
   connectWorkspace,
   planModeSet,
@@ -104,7 +105,7 @@ import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
-import { readConfigurationToken } from './config-token.ts';
+import { askHidden, readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
   renderAppCreated,
@@ -774,6 +775,67 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       }
     }),
   );
+
+  /*
+   * The send app's bot token, pasted once (design 2026-10-15 S1, revised): the PKCE sign-in cannot ask Slack for bot
+   * scopes, so a person copies the token from the app's own page. A person's command only, at a terminal, as `approve`
+   * is: an agent never handles a secret, so there is no tool for this, and no flag or variable to pass the token in.
+   * A shell agent can defeat the checks — `script` makes any command see a terminal — and they are a speed bump, not a
+   * boundary; what the token is gets checked with Slack before anything keeps it (`storeBotToken`).
+   */
+  workspace
+    .command('bot <alias>')
+    .description(
+      "keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal",
+    )
+    .action(
+      act(async (context, options, alias: string) => {
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "only a person can give this workspace its app's bot token, not an agent",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) =>
+                  `Ask the person to run ${command} in their own terminal. Never paste the token into a chat: the transcript keeps it.`,
+                {
+                  instead:
+                    'Ask the person to run this command in their own terminal. Never paste the token into a chat.',
+                },
+              ),
+              details: { marker },
+            },
+          );
+        }
+        if (!canPrompt(env, streams, { json: options.json })) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "giving this workspace its app's bot token needs an interactive terminal",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) => `Run ${command} directly in a terminal: it asks for the token without showing it.`,
+              ),
+            },
+          );
+        }
+        const pasted = await askHidden(
+          streams,
+          'Bot User OAuth Token (the app’s OAuth & Permissions page, after Install to Workspace; it is not shown as you type): ',
+        );
+        // The same operation a test drives: checked with Slack through the guard, then kept. Never printed.
+        const stored = await storeBotToken(context, alias, pasted, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+        writeResult(
+          stored,
+          output(),
+          () =>
+            `${paint(options.color, 'green', '✓')} "${stored.alias}" keeps its app's bot token: an agent's posts now go out as the app (bot user ${stored.botUserId}) where it can post.`,
+          streams,
+        );
+      }),
+    );
 
   approvalOption(
     workspace
