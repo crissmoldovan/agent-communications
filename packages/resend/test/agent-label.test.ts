@@ -146,3 +146,15 @@ test('the approval binds the From: a stored message whose From lost its label is
   );
   assert.equal(harness.fake.sends().length, 0, 'nothing reached the fake');
 });
+
+test("a rule that recorded this account's id applies, and one that recorded another account's id does not", async () => {
+  harness = await newHarness();
+  await harness.addAccount({ name: 'acme/resend', mode: 'send' });
+  const context = harness.context('mcp');
+  const id = (await harness.core.config.load()).accounts['acme/resend']?.id;
+  assert.ok(id);
+  await setAgentLabel(harness, { rules: [{ account: 'acme/resend', accountId: id, as: 'me' }] });
+  assert.equal((await prepareSend(context, 'acme/resend', email())).identity, 'me');
+  await setAgentLabel(harness, { rules: [{ account: 'acme/resend', accountId: 'acc_ZZZZZZZZZZZZZZZZ', as: 'me' }] });
+  assert.equal((await prepareSend(context, 'acme/resend', email())).identity, 'agent');
+});

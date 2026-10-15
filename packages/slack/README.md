@@ -272,8 +272,8 @@ the app's where the app can post, and yours elsewhere — and since a reaction c
 goes unlabelled.
 
 **Your agent emoji.** The icon is your Slack photo until you set an emoji: make one from your photo with a small robot
-badge with the Slack CLI's `icon make`, upload it at your workspace's emoji page, and record its name with the core's
-`label icon <workspace> :name:`, which you approve. Nothing is published outside Slack.
+badge with the Slack CLI's `icon make` (MCP `slack_icon_make`), upload it at your workspace's emoji page, and record
+its name with the core's `label icon <workspace> :name:` (MCP `comms_label`), which you approve. Nothing is published outside Slack.
 
 #### Giving a workspace its app's bot token
 
@@ -397,7 +397,7 @@ It reads your Slack profile photo with the workspace's token, puts the robot bad
 `slack/agent-icons/<account id>.png`. It prints the workspace's emoji page,
 `https://<workspace>.slack.com/customize/emoji`, and a name for the emoji made from your handle, such as
 `:sam-agent:`. Upload the file there under that name yourself, then record the name for the account with core's
-`label icon <account> :sam-agent:`, so the app's posts for your agent show it.
+`label icon <account> :sam-agent:` (MCP `comms_label`), so the app's posts for your agent show it.
 
 It uploads nothing and changes nothing in Slack or in the configuration, so it asks nobody, and it works in `read`
 mode. The photo is fetched from Slack's photo host, `avatars.slack-edge.com`, with no token on the request. A photo

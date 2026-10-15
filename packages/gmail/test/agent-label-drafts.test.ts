@@ -203,3 +203,14 @@ test('a rule for another mailbox does not apply here', async () => {
   const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Hi', text: 'Hi.' });
   assert.equal(draft.identity, 'agent');
 });
+
+test("a rule that recorded this inbox's id applies, and one that recorded another inbox's id does not", async () => {
+  const { harness, context } = await connected();
+  const id = (await harness.core.config.load()).inboxes.work?.id;
+  assert.ok(id);
+  const draft = () => createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Hi', text: 'Hi.' });
+  await setAgentLabel(harness, { rules: [{ account: 'work', accountId: id, as: 'me' }] });
+  assert.equal((await draft()).identity, 'me', 'the rule made for this inbox applies');
+  await setAgentLabel(harness, { rules: [{ account: 'work', accountId: 'ibx_ZZZZZZZZZZZZZZZZ', as: 'me' }] });
+  assert.equal((await draft()).identity, 'agent', 'a rule made for an inbox once called work does not');
+});

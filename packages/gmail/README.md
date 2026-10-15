@@ -23,7 +23,7 @@ can tell the person's agent sent it, not the person ([design](../../docs/superpo
 §5).
 
 - **The name** is the one Gmail holds for that address under "Send mail as"; when it has none, or one the label
-  cannot use, the label name set in the core (its CLI's `label name`); with neither, the draft is refused and says
+  cannot use, the label name set in the core (its CLI's `label name`, or `comms_label`); with neither, the draft is refused and says
   how to set one. **The word** is `agent`, unless the person chose `assistant`, `twin`, `minion`, `bot`, `fake` or
   `AI`.
 - **`--as me`** on `draft new`, `draft reply`, `draft update` and `send prepare` (`as: "me"` on their tools) writes it

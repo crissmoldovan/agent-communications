@@ -227,6 +227,7 @@ async function draftIdentity(
   return mailIdentity({
     settings: labelSettingsOf(config),
     account: accountNameOf(config, resolved),
+    accountId: resolved.inbox.id,
     kind: options.kind,
     requested,
     recipients: addressesOf(options.recipients),
