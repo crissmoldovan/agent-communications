@@ -145,9 +145,11 @@ test('--version and --help print and exit 0', () => {
   // It said every policy change is "shown before it happens"; `policy confirm` tightens, and applies at once.
   const prose = help.stdout.replace(/\s+/g, ' ');
   assert.match(prose, /confirm applies at once, chat is approved first/);
+  // A label rule that only adds labelling — an `agent` rule added, a `me` rule removed — is a tightening too (agent
+  // label design, L5).
   assert.match(
     prose,
-    /A tightening — policy confirm, attach roots remove, attach deny add — applies at once and asks nobody/,
+    /A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies at once and asks nobody/,
   );
   // And the other way: allowing another folder for attachments is a change a person approves.
   assert.match(prose, /policy chat, attach roots add, attach deny remove, mcp install/);
