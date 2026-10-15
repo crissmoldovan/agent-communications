@@ -523,6 +523,10 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'defaults.confirm.elicitationClients': 'clients trusted to ask for a send approval',
   'defaults.updateCheck': 'daily update check',
   'secrets.store': 'where credentials are kept',
+  'agentLabel.word': 'the word after your name in the agent label',
+  'agentLabel.name': 'the name in the agent label',
+  'agentLabel.rules': 'who each kind of message appears to come from',
+  'agentLabel.slackIcons': 'the icon of the agent’s Slack posts',
 };
 
 /**
@@ -567,6 +571,16 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
       return 'nothing on this machine will ask npm for a newer release, or stop until one is installed';
     case 'secrets.store':
       return 'credentials will move out of the system keychain into files on this disk';
+    case 'agentLabel.word':
+      return 'what an agent sends will carry this word after your name';
+    case 'agentLabel.name':
+      return after === null
+        ? 'where a channel has no name of its own for you, an agent’s message will be refused until a name is set'
+        : 'where a channel has no name of its own for you, what an agent sends will carry this name';
+    case 'agentLabel.rules':
+      return 'what a rule sends as `me` goes out as you, with no label: it will look as if you wrote it yourself';
+    case 'agentLabel.slackIcons':
+      return 'the app’s Slack posts will show this icon beside your name';
     default:
       return '';
   }
