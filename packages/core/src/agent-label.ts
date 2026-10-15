@@ -247,3 +247,8 @@ export function readAgentLabelSettings(raw: unknown): AgentLabelSettings {
   }
   return settings;
 }
+
+/** The person's label settings from a loaded configuration, read as `readAgentLabelSettings` reads them. */
+export function agentLabelOf(config: { readonly agentLabel?: unknown }): AgentLabelSettings {
+  return readAgentLabelSettings(config.agentLabel);
+}

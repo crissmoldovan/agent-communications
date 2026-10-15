@@ -154,3 +154,9 @@ test('S3: the fallback carries the phrase in its context line and at the front o
   assert.equal(fallbackLabelLine('Cristian Moldovan (agent)'), 'Sent by Cristian Moldovan (agent)');
   assert.equal(fallbackTextPrefix('Cristian Moldovan (agent)'), 'Cristian Moldovan (agent): ');
 });
+
+test('agentLabelOf reads a configuration that has no agentLabel as the defaults', async () => {
+  const { agentLabelOf } = await import('../src/agent-label.ts');
+  assert.deepEqual(agentLabelOf({}), {});
+  assert.equal(agentLabelOf({ agentLabel: { word: 'minion' } }).word, 'minion');
+});
