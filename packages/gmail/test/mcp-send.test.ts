@@ -7,7 +7,7 @@ import { GmailContext } from '../src/context.ts';
 import { createGmailMcpServer } from '../src/mcp/server.ts';
 import { createDraft } from '../src/operations/drafts.ts';
 import { locatedGmailLine } from './support/handoffs.ts';
-import { type Harness, newHarness } from './support/harness.ts';
+import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 
 /**
  * Sending through MCP, including the one channel a model cannot answer.
@@ -251,6 +251,8 @@ test('gmail_draft_send finds another mailbox’s or another kind’s approval as
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'confirm' });
   await harness.connectInbox({ alias: 'home', email: 'sam@example.test', sub: 'sub-2', sendPolicy: 'confirm' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Sam Example' });
   await harness.core.config.update(
     (config) => ({
       ...config,

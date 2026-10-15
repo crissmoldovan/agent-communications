@@ -26,7 +26,7 @@ import { createGmailMcpServer } from '../../src/mcp/server.ts';
 import { createDraft } from '../../src/operations/drafts.ts';
 import { beginApproval, finishApproval, prepareSend } from '../../src/operations/send.ts';
 import { DRAFT_SEND_PATH, type FakeMessage } from './fake-google.ts';
-import { type Harness, newHarness, tempDir } from './harness.ts';
+import { type Harness, newHarness, setAgentLabel, tempDir } from './harness.ts';
 
 /*
  * Gmail's sends in the D2 matrix (CUE-404 Task 24): `test/approval-matrix.test.mjs` runs this as its own program,
@@ -77,6 +77,8 @@ async function world(row: string): Promise<World> {
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: route });
   await harness.connectInbox({ alias: 'home', email: 'kim@home.test', sub: 'sub-2', sendPolicy: 'chat' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Kim Example' });
   // No escalation from what was read — each row's route is its policy's — and one client trusted with forms.
   await harness.core.config.update(
     (config) => ({

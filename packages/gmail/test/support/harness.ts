@@ -228,6 +228,23 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
   return harness;
 }
 
+/** Every `agentLabel` path a change to the label settings can loosen (design 2026-10-15-agent-label, L5). */
+const AGENT_LABEL_PATHS = ['agentLabel.word', 'agentLabel.name', 'agentLabel.rules', 'agentLabel.slackIcons'];
+
+/**
+ * Sets the person's label settings, `agentLabel`, with the consent a person's change to them carries.
+ *
+ * A fixture whose second mailbox signs in as the fake's first account (`connectInbox` consents as that one) has no
+ * send-as entry for the second mailbox's address, so its drafts have no Gmail name to label: such a fixture gives the
+ * person a `label name`, as a person whose send-as name is empty would.
+ */
+export async function setAgentLabel(harness: Harness, settings: Record<string, unknown>): Promise<void> {
+  const added = { agentLabel: settings };
+  await harness.core.config.update((config): Config => ({ ...config, ...added }), {
+    consent: { kind: 'loosening-consent', paths: AGENT_LABEL_PATHS },
+  });
+}
+
 /**
  * Migrates the harness's config to organisation/platform names, exactly as `agentcomms names migrate` does.
  *
