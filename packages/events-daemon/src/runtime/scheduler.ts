@@ -440,6 +440,9 @@ export class EventScheduler {
         },
       },
       ...(this.#hostedJudgeKeyFor === undefined ? {} : { hostedJudgeKeyFor: this.#hostedJudgeKeyFor }),
+      // The scheduler's clock, as every other source's evaluator is given the owner's (`source-owner-work.ts`): a
+      // decision deadline is judged on the clock the projection's deadline was set by, never on another.
+      now: this.#now,
     });
     const fence = async (rule: GmailSourceRule): Promise<void> => {
       await assertDisclosable({
