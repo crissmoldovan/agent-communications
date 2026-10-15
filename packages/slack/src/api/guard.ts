@@ -6,6 +6,7 @@ import {
   isUploadPath,
   methodOfUrl,
   methodRule,
+  SLACK_AVATARS_ORIGIN,
   SLACK_FILES_ORIGIN,
   SLACK_ORIGIN,
 } from './methods.ts';
@@ -22,10 +23,13 @@ import {
  * behind the code; and a classified write is refused without an open permit, so the approval gate cannot be
  * stepped around by calling Slack directly.
  *
- * Two origins, both hardcoded: the Web API, and `files.slack.com` for a file's bytes. The second is shut except
- * inside a download grant naming one file, and then open for one `GET` of that file's path and nothing else — or
- * inside an upload grant naming one upload URL, which opens only inside an approved file post, and then for one
- * `POST` to that exact URL and nothing else.
+ * Two origins that carry the token, both hardcoded: the Web API, and `files.slack.com` for a file's bytes. The second
+ * is shut except inside a download grant naming one file, and then open for one `GET` of that file's path and nothing
+ * else — or inside an upload grant naming one upload URL, which opens only inside an approved file post, and then for
+ * one `POST` to that exact URL and nothing else.
+ *
+ * A third, `avatars.slack-edge.com`, holds people's profile photos, and is shut the same way except inside a photo
+ * grant naming one photo's URL: then open for one `GET` of exactly that URL, carrying no credential, and nothing else.
  */
 
 export interface WritePermit {
@@ -65,10 +69,27 @@ export interface WritePermit {
    * still is. It lends nothing back: opening it leaves the post's permit as it was, for the one call that publishes.
    */
   uploading: string | null;
+  /**
+   * The one profile photo that may be fetched next, by its whole URL, or null — which is always, except inside
+   * `avatarWith`.
+   *
+   * The fifth answer, and like a download it lends nothing: opening it leaves every other answer null, so nothing that
+   * posts, changes an app or reads a file gets through inside it. Unlike a download, the request it lets out carries no
+   * credential: the photo host is never sent the workspace's token, and the guard refuses a request that has one.
+   */
+  avatar: string | null;
 }
 
 export function closedPermit(): WritePermit {
-  return { approvalId: null, method: null, configuring: null, revoking: null, downloading: null, uploading: null };
+  return {
+    approvalId: null,
+    method: null,
+    configuring: null,
+    revoking: null,
+    downloading: null,
+    uploading: null,
+    avatar: null,
+  };
 }
 
 /** The durable identity a revocation request is bound to, without retaining its bearer token. */
@@ -168,6 +189,40 @@ function checkUpload(url: URL, verb: string, permit: WritePermit): void {
   permit.uploading = null;
 }
 
+function refuseAvatar(message: string): CommsError {
+  return new CommsError('SEND_REFUSED', message, { hint: 'This is a bug — please report it.' });
+}
+
+/** The headers a request carries, however they were given: on `init`, or on a `Request`. */
+function headersOf(input: string | URL | Request, init: RequestInit | undefined): Headers {
+  if (init?.headers !== undefined) return new Headers(init.headers);
+  return input instanceof Request ? new Headers(input.headers) : new Headers();
+}
+
+/**
+ * The photo host: one `GET`, of exactly the URL the open grant names, with no credential on it — and then the grant
+ * is spent.
+ *
+ * No credential, checked here at the request rather than trusted to the caller: the host serves a photo to anyone with
+ * its address, so a token or a cookie on the request could only be one sent by mistake, to a host that never needed it.
+ * As with a download, every refusal comes before the grant is spent, and none names the URL.
+ */
+function checkAvatar(url: URL, verb: string, headers: Headers, permit: WritePermit): void {
+  const grant = permit.avatar;
+  if (grant === null) {
+    throw refuseAvatar(
+      `${SLACK_AVATARS_ORIGIN} is reached only for a profile photo just looked up, and no photo is open`,
+    );
+  }
+  if (verb !== 'GET') throw refuseAvatar(`a profile photo is fetched with GET, not ${verb}`);
+  if (headers.has('authorization') || headers.has('cookie')) {
+    throw refuseAvatar(`a profile photo is fetched with no credential, and this request carried one`);
+  }
+  if (url.href !== grant) throw refuseAvatar('that is not the photo this grant is for');
+  // One grant, one request: a second fetch inside the same grant finds the door shut.
+  permit.avatar = null;
+}
+
 /**
  * Wraps `fetch` so every Slack call is classified before it leaves.
  *
@@ -179,7 +234,7 @@ function checkUpload(url: URL, verb: string, permit: WritePermit): void {
  * was wrong: the type was exported from the package root, so any caller could name any origin, which is precisely
  * the production override it claimed not to be. A test reaches a fake Slack by rewriting an already-validated URL in
  * the *inner* fetch — after this has approved it — so there is no mode, anywhere, in which the check is off. The
- * files host was added the same way: a second constant beside the first, not a parameter.
+ * files host was added the same way: a second constant beside the first, not a parameter, and the photo host a third.
  */
 export function guardSlackRequests(
   inner: FetchLike,
@@ -208,11 +263,11 @@ export function guardSlackRequests(
       });
     }
     const actual = parsed.origin;
-    if (actual !== SLACK_ORIGIN && actual !== SLACK_FILES_ORIGIN) {
+    if (actual !== SLACK_ORIGIN && actual !== SLACK_FILES_ORIGIN && actual !== SLACK_AVATARS_ORIGIN) {
       // The origin is named; the rest of the URL is not, because a query can carry a token.
       throw new CommsError(
         'SEND_REFUSED',
-        `this package only calls ${SLACK_ORIGIN} and ${SLACK_FILES_ORIGIN}, and that request went to ${actual}`,
+        `this package only calls ${SLACK_ORIGIN} and ${SLACK_FILES_ORIGIN}, and reads profile photos from ${SLACK_AVATARS_ORIGIN}; that request went to ${actual}`,
         { hint: 'This is a bug — please report it.' },
       );
     }
@@ -243,6 +298,13 @@ export function guardSlackRequests(
       else checkDownload(parsed, verb, permit);
       // The redirect rule below holds here too, and matters more: this request carries the token, and a 30x would
       // take it to an address chosen by whatever answered rather than by the path just checked.
+      return inner(input, { ...init, redirect: 'error' });
+    }
+
+    if (actual === SLACK_AVATARS_ORIGIN) {
+      const verb = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      checkAvatar(parsed, verb, headersOf(input, init), permit);
+      // Not followed either: a redirect would be a second request, to a host nothing here checked.
       return inner(input, { ...init, redirect: 'error' });
     }
 
@@ -380,7 +442,8 @@ export async function spendOn<T>(
     permit.approvalId !== null ||
     permit.revoking !== null ||
     permit.downloading !== null ||
-    permit.uploading !== null
+    permit.uploading !== null ||
+    permit.avatar !== null
   ) {
     throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
       hint: 'This is a bug — please report it.',
@@ -431,7 +494,8 @@ export async function revokeWith<T>(
     permit.configuring !== null ||
     permit.revoking !== null ||
     permit.downloading !== null ||
-    permit.uploading !== null
+    permit.uploading !== null ||
+    permit.avatar !== null
   ) {
     throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
       hint: 'This is a bug — please report it.',
@@ -465,7 +529,8 @@ export async function configureWith<T>(permit: WritePermit, method: string, body
     permit.configuring !== null ||
     permit.revoking !== null ||
     permit.downloading !== null ||
-    permit.uploading !== null
+    permit.uploading !== null ||
+    permit.avatar !== null
   ) {
     throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
       hint: 'This is a bug — please report it.',
@@ -499,7 +564,8 @@ export async function downloadWith<T>(permit: WritePermit, file: FileOfPath, bod
     permit.configuring !== null ||
     permit.revoking !== null ||
     permit.downloading !== null ||
-    permit.uploading !== null
+    permit.uploading !== null ||
+    permit.avatar !== null
   ) {
     throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
       hint: 'This is a bug — please report it.',
@@ -552,7 +618,8 @@ export async function uploadWith<T>(permit: WritePermit, url: string, body: () =
     permit.configuring !== null ||
     permit.revoking !== null ||
     permit.downloading !== null ||
-    permit.uploading !== null
+    permit.uploading !== null ||
+    permit.avatar !== null
   ) {
     throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
       hint: 'This is a bug — please report it.',
@@ -563,5 +630,56 @@ export async function uploadWith<T>(permit: WritePermit, url: string, body: () =
     return await body();
   } finally {
     permit.uploading = null;
+  }
+}
+
+/**
+ * Opens a photo grant for exactly one `GET` of one profile photo at `url`, and closes it however `body` ends.
+ *
+ * The fifth of the shape, and the narrowest: the photo host, a path, and nothing else. `url` must be on
+ * {@link SLACK_AVATARS_ORIGIN} exactly — `https`, no port, no credentials — with a path and no query or fragment, so
+ * the grant names one photo and not a pattern; the request is then compared with it whole. It lends nothing and does
+ * not nest: no post, configuration, revocation, download, upload or other photo opens inside it, and it opens inside
+ * none of them.
+ *
+ * Not exported from the package root. `api/avatar.ts` is the one caller, and a test fails if another appears.
+ */
+export async function avatarWith<T>(permit: WritePermit, url: string, body: () => Promise<T>): Promise<T> {
+  let named: URL | undefined;
+  try {
+    named = new URL(url);
+  } catch {
+    named = undefined;
+  }
+  if (
+    named === undefined ||
+    named.origin !== SLACK_AVATARS_ORIGIN ||
+    named.username !== '' ||
+    named.password !== '' ||
+    named.search !== '' ||
+    named.hash !== '' ||
+    url.includes('?') ||
+    url.includes('#') ||
+    named.pathname.length <= 1
+  ) {
+    throw refuseAvatar(`a photo grant names one photo on ${SLACK_AVATARS_ORIGIN}, by its path alone`);
+  }
+  if (
+    permit.approvalId !== null ||
+    permit.configuring !== null ||
+    permit.revoking !== null ||
+    permit.downloading !== null ||
+    permit.uploading !== null ||
+    permit.avatar !== null
+  ) {
+    throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
+      hint: 'This is a bug — please report it.',
+    });
+  }
+  permit.avatar = named.href;
+  try {
+    return await body();
+  } finally {
+    permit.avatar = null;
   }
 }
