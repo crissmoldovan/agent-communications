@@ -58,6 +58,7 @@ import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
+import { storeBotToken } from '../operations/bot-token.ts';
 import {
   connectWorkspace,
   planModeSet,
@@ -105,7 +106,7 @@ import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
-import { readConfigurationToken } from './config-token.ts';
+import { askHidden, readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
   renderAgentIcon,
@@ -452,6 +453,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .addOption(modeOption())
     .option('--port <port>', 'the loopback port its redirect will use')
     .option('--workspace <name>', 'for a workspace already connected: its port, and the link to its own app')
+    .option(
+      '--with-client-secret',
+      'the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app',
+    )
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
@@ -459,12 +464,13 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           mode: String(flags.mode) as InstallMode,
           port: flags.port,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
+          ...(flags.withClientSecret === true ? { pkce: false } : {}),
         });
         writeResult(
           result,
           output(),
           (data) =>
-            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl)}`,
+            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl, { pkce: data.manifest.oauth_config.pkce_enabled })}`,
           streams,
         );
       }),
@@ -626,7 +632,11 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       .description(
         'connect through the named organisation profile’s read app, or send app with --mode send; an own app uses --client-id and --port',
       )
-      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port'),
+      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port')
+      .option(
+        '--with-client-secret',
+        "sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string | undefined, flags: Options) => {
       if (flags.finish) {
@@ -656,6 +666,19 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         });
       }
       const mode = String(flags.mode) as InstallMode;
+      const words = [
+        'workspace',
+        'add',
+        alias,
+        '--mode',
+        mode,
+        ...(flags.clientId === undefined ? [] : ['--client-id', String(flags.clientId)]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_add`: in send mode, a change approved before the sign-in starts.
       const started = await changeAt(
         context,
@@ -666,6 +689,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
         [
@@ -777,6 +801,67 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     }),
   );
 
+  /*
+   * The send app's bot token, pasted once (design 2026-10-15 S1, revised): the PKCE sign-in cannot ask Slack for bot
+   * scopes, so a person copies the token from the app's own page. A person's command only, at a terminal, as `approve`
+   * is: an agent never handles a secret, so there is no tool for this, and no flag or variable to pass the token in.
+   * A shell agent can defeat the checks — `script` makes any command see a terminal — and they are a speed bump, not a
+   * boundary; what the token is gets checked with Slack before anything keeps it (`storeBotToken`).
+   */
+  workspace
+    .command('bot <alias>')
+    .description(
+      "keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal",
+    )
+    .action(
+      act(async (context, options, alias: string) => {
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "only a person can give this workspace its app's bot token, not an agent",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) =>
+                  `Ask the person to run ${command} in their own terminal. Never paste the token into a chat: the transcript keeps it.`,
+                {
+                  instead:
+                    'Ask the person to run this command in their own terminal. Never paste the token into a chat.',
+                },
+              ),
+              details: { marker },
+            },
+          );
+        }
+        if (!canPrompt(env, streams, { json: options.json })) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "giving this workspace its app's bot token needs an interactive terminal",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) => `Run ${command} directly in a terminal: it asks for the token without showing it.`,
+              ),
+            },
+          );
+        }
+        const pasted = await askHidden(
+          streams,
+          'Bot User OAuth Token (the app’s OAuth & Permissions page, after Install to Workspace; it is not shown as you type): ',
+        );
+        // The same operation a test drives: checked with Slack through the guard, then kept. Never printed.
+        const stored = await storeBotToken(context, alias, pasted, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+        writeResult(
+          stored,
+          output(),
+          () =>
+            `${paint(options.color, 'green', '✓')} "${stored.alias}" keeps its app's bot token: an agent's posts now go out as the app (bot user ${stored.botUserId}) where it can post.`,
+          streams,
+        );
+      }),
+    );
+
   approvalOption(
     workspace
       .command('remove <alias>')
@@ -806,7 +891,12 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         'read',
         'send',
       ]),
-    ).description('sign in again: renew the grant, or change how much access it has'),
+    )
+      .description('sign in again: renew the grant, or change how much access it has')
+      .option(
+        '--with-client-secret',
+        "sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string, flags: Options) => {
       if (flags.finish) {
@@ -828,6 +918,17 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
        * quietly downgrade it, which is the opposite of what "the same, again" means.
        */
       const mode = flags.mode === undefined ? undefined : (String(flags.mode) as InstallMode);
+      const words = [
+        'workspace',
+        'reauth',
+        alias,
+        ...(mode === undefined ? [] : ['--mode', mode]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_reauth`: a widening is approved before its sign-in starts.
       const started = await changeAt(
         context,
@@ -837,15 +938,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
-        [
-          'workspace',
-          'reauth',
-          alias,
-          ...(mode === undefined ? [] : ['--mode', mode]),
-          ...given(flags, ['port', 'start']),
-        ],
+        words,
       );
       await presentSignIn(context, started, true, options, {
         start: flags.start === true,
@@ -916,6 +1012,64 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
 
   const session = (context: SlackContext, alias: string) =>
     openWorkspace(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+
+  /*
+   * Who a post, reaction or edit appears to come from (design 2026-10-15 L3): the person's word for this one act, and
+   * nothing an agent picks for itself. Left out, the rules and the default — `agent`, labelled — decide.
+   */
+  /*
+   * The app's client secret, for the sign-in that uses it (design 2026-10-15 S1, revised): a person's, at a hidden prompt,
+   * and refused to an agent or anything without a terminal before it asks — as `approve` and `workspace bot` refuse.
+   * No option or variable takes the secret itself: a command line lands in shell history.
+   */
+  const readClientSecret = async (context: SlackContext, json: boolean, words: string[]): Promise<string> => {
+    const again = context.handoffs.own(words);
+    const marker = agentMarker(env);
+    if (marker) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "only a person can sign in with the app's client secret, not an agent",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Ask the person to run ${command} in their own terminal. Never paste the secret into a chat: the transcript keeps it.`,
+            {
+              instead: 'Ask the person to run this command in their own terminal. Never paste the secret into a chat.',
+            },
+          ),
+          details: { marker },
+        },
+      );
+    }
+    if (!canPrompt(env, streams, { json })) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "signing in with the app's client secret needs an interactive terminal",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Run ${command} directly in a terminal, without --json: it asks for the secret without showing it.`,
+          ),
+        },
+      );
+    }
+    const typed = (
+      await askHidden(
+        streams,
+        "The app's client secret (its Basic Information page, under App Credentials; it is not shown as you type): ",
+      )
+    ).trim();
+    if (typed === '') throw new CommsError('USAGE', 'no client secret was typed, so nothing started');
+    return typed;
+  };
+
+  const identityOption = (): Option =>
+    new Option(
+      '--as <identity>',
+      'who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one',
+    ).choices(['agent', 'me']);
 
   workspaceOption(program.command('channels'))
     .description('the channels and conversations this account can see')
@@ -1275,13 +1429,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   workspaceOption(post.command('prepare'))
     .description('show what would be posted, and how many people it interrupts. Posts nothing')
     .requiredOption('--draft <draftId>', 'the draft to prepare')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_post_prepare` given a `draftId`: one draft, one preview, from either surface.
         const prepared = await prepareDraftPost(
           context,
           String(flags.workspace),
-          { draftId: String(flags.draft) },
+          { draftId: String(flags.draft), ...(flags.as === undefined ? {} : { as: flags.as }) },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
         writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
@@ -1317,6 +1472,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--emoji <name>', 'the emoji name, without colons')
     .option('--remove', 'remove your reaction instead', false)
     .option('--approval <approvalId>', 'the approval a person gave with `approve`, under `confirm`')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         const wanted = {
@@ -1337,6 +1493,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           wanted,
           flags.approval ? String(flags.approval) : undefined,
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+          flags.as,
         );
         writeResult(
           done,
@@ -1372,6 +1529,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       '--remove-file <fileId...>',
       'take this file of the message off it, by id; it stays in Slack, shared nowhere',
     )
+    .addOption(identityOption())
     .action(
       act(async (context, _options, flags: Options) => {
         // The same operation as `slack_edit_prepare` given a `draftId`: see `prepareEdit`.
@@ -1382,6 +1540,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             draftId: String(flags.draft),
             ts: String(flags.ts),
             removeFiles: flags.removeFile as string[] | undefined,
+            ...(flags.as === undefined ? {} : { as: flags.as }),
           },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );

@@ -39,6 +39,11 @@ export interface Channel {
   readonly isMpim: boolean;
   readonly isArchived: boolean;
   readonly isMember: boolean;
+  /**
+   * Shared with another workspace or organisation (`is_shared`, `is_ext_shared`, `is_org_shared`, or a share still
+   * pending). The app posts in one only once it is a member (design 2026-10-15 S2).
+   */
+  readonly isShared: boolean;
   readonly topic?: SenderField | undefined;
   readonly purpose?: SenderField | undefined;
   readonly memberCount?: number | undefined;
@@ -81,6 +86,11 @@ export function channelOf(raw: Raw): Channel {
     isMpim: raw.is_mpim === true,
     isArchived: raw.is_archived === true,
     isMember: raw.is_member === true,
+    isShared:
+      raw.is_shared === true ||
+      raw.is_ext_shared === true ||
+      raw.is_org_shared === true ||
+      raw.is_pending_ext_shared === true,
     topic: senderField(str(topic)),
     purpose: senderField(str(purpose)),
     memberCount: num(raw.num_members),

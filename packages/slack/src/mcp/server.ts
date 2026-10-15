@@ -374,6 +374,15 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
    * the operation's, in the same words at both surfaces.
    */
   const oneOfWords = (values: readonly string[]) => z.string().meta({ enum: [...values] });
+  /*
+   * Who an act appears to come from (design 2026-10-15 L3): the person's word for this one message, and nothing an agent
+   * chooses for itself. Checked by the operation, so the tool refuses what the command refuses.
+   */
+  const identityArg = oneOfWords(['agent', 'me'])
+    .optional()
+    .describe(
+      'who it appears to come from: `agent` (the default, labelled as your agent) or `me` (as you, with no label). Pass `me` only when the person said so for this message',
+    );
   /**
    * Local files to post, by path. The limits and the folders are the operation's to check — `recordFiles` — so a path
    * outside them is refused in the words the command refuses it with, not by the schema.
@@ -471,6 +480,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .int()
           .optional()
           .describe('the loopback port its redirect uses; a connected workspace’s own when left out'),
+        pkce: z
+          .boolean()
+          .optional()
+          .describe(
+            '`false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out',
+          ),
       },
       annotations: readsLocal,
     },
@@ -481,6 +496,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             mode: args.mode,
             port: args.port,
             workspace: await resolveOptional(args.workspace),
+            ...(args.pkce === undefined ? {} : { pkce: args.pkce }),
           }),
         );
       } catch (error) {
@@ -758,6 +774,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
         broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; needs a person'),
         files: filesArg().describe(`${FILES_HELP}, for a new message; with files, \`text\` is optional`),
+        as: identityArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -776,6 +793,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               mentionUsers: args.mentionUsers,
               broadcast: args.broadcast,
               files: args.files,
+              as: args.as,
             },
             slackDeps,
           ),
@@ -1008,12 +1026,14 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       title: 'React to a message',
       description:
         'Add a reaction or remove your reaction. Say which emoji on which message first, and wait for a yes. Under the workspace’s `chat` policy this does it at once, through a single-use approval. Under `confirm` it adds nothing: it returns APPROVAL_PENDING with an approval id and the approve command the person runs at their own terminal — you cannot approve it yourself. Once they have, call slack_react_send with that approval id. Under `never` it refuses.',
-      inputSchema: { ...workspaceArg, ...reactionArgs },
+      inputSchema: { ...workspaceArg, ...reactionArgs, as: identityArg },
       annotations: outward,
     },
     async (args) => {
       try {
-        return reply(await react(context, await resolve(args.workspace), reactionOf(args), undefined, slackDeps));
+        return reply(
+          await react(context, await resolve(args.workspace), reactionOf(args), undefined, slackDeps, args.as),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -1074,6 +1094,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .array(z.string())
           .optional()
           .describe('ids of the message’s own files to take off (F…), as a read lists them'),
+        as: identityArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -1092,6 +1113,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               broadcast: args.broadcast,
               files: args.files,
               removeFiles: args.removeFiles,
+              as: args.as,
             },
             slackDeps,
           ),

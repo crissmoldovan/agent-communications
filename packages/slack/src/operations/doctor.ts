@@ -27,7 +27,7 @@ import { VERSION } from '../version.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
 import { type PendingRevocationResult, pendingRevocationResult, retryPendingRevocations } from './revocations.ts';
 import { openWorkspace } from './session.ts';
-import { listWorkspaces, requireWorkspace } from './workspaces.ts';
+import { botSecretRefFor, listWorkspaces, requireWorkspace } from './workspaces.ts';
 
 /**
  * What has to be true for this to work, and the commands or actions that fix each thing that is not.
@@ -121,6 +121,12 @@ export interface DoctorInput {
    * "a credential is stored" and "the credential works, and belongs to who this says it does".
    */
   readonly identities?: ReadonlyMap<string, IdentityProbe> | undefined;
+  /**
+   * Whether each send workspace's app bot token is in the secret store (design 2026-10-15 S1, revised): `stored`,
+   * `missing`, or `unknown` when the store would not say. Absent for an alias means nobody looked, which is reported as
+   * unknown for a workspace that records a bot user — never as able to post as the app.
+   */
+  readonly appTokens?: ReadonlyMap<string, 'stored' | 'missing' | 'unknown'> | undefined;
   /**
    * Check only this workspace, by its current name. The checks about the machine — the rate limit, the MCP entries —
    * are reported either way, as Gmail's doctor reports them for one mailbox.
@@ -484,6 +490,56 @@ export function doctor(input: DoctorInput): DoctorResult {
               workspace: workspace.alias,
             },
     );
+
+    /*
+     * Whether an agent's posts can go out as the app (design 2026-10-15 S1, revised; Review focus 1). The PKCE sign-in
+     * cannot ask Slack for bot scopes, so a send workspace has the app's bot token only once it was pasted or came with
+     * a client-secret sign-in — and only if it is actually stored here, which is read, not inferred from the bot user
+     * the account records. Until then its agent's posts take the labelled fallback: never unlabelled, never refused.
+     */
+    if (mode === 'send') {
+      const token = input.appTokens?.get(workspace.alias);
+      const title = `Posting as the app from ${workspace.alias}`;
+      if (workspace.appUserId !== undefined && token === 'stored') {
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'ok',
+          detail: `an agent's posts go out as the app (bot user ${workspace.appUserId}), named after you and labelled, where the app can post`,
+          fix: null,
+          workspace: workspace.alias,
+        });
+      } else if (workspace.appUserId !== undefined && (token === undefined || token === 'unknown')) {
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'unknown',
+          detail:
+            "whether the app's bot token is stored could not be read, so whether posts go out as the app is not known",
+          fix: null,
+          workspace: workspace.alias,
+        });
+      } else {
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'warn',
+          detail:
+            "no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, give it the bot token one of two ways",
+          fix: remedy(
+            [
+              handoffs.own(['workspace', 'bot', workspace.alias]),
+              ' — paste the "Bot User OAuth Token" once, from the app’s OAuth & Permissions page after Install to Workspace; or',
+            ],
+            [
+              handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
+              ' — sign in with the app’s client secret, for an app with PKCE off',
+            ],
+          ),
+          workspace: workspace.alias,
+        });
+      }
+    }
   }
 
   /*
@@ -560,6 +616,7 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
       : await retryPendingRevocations(context, workspaceId);
   if (options.offline !== true) config = await context.config();
   const bundles = new Map<string, TokenBundle | null | 'unreadable' | StoreUnavailable>();
+  const appTokens = new Map<string, 'stored' | 'missing' | 'unknown'>();
   /*
    * A store that will not open is one finding per workspace, not a crash: a keychain module missing, or a keychain
    * that is locked, says nothing about any credential inside it.
@@ -575,6 +632,17 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
     if (only !== undefined && view.alias !== only) continue;
     const account = lookupName(config, 'account', view.alias);
     if (!account) continue;
+    // Whether the app's bot token is stored, for a send workspace (S1, revised): read, never inferred.
+    if ((account.mode ?? account.tier) === 'send') {
+      if (secrets === null) appTokens.set(view.alias, 'unknown');
+      else {
+        try {
+          appTokens.set(view.alias, (await secrets.get(botSecretRefFor(account.id))) === null ? 'missing' : 'stored');
+        } catch {
+          appTokens.set(view.alias, 'unknown');
+        }
+      }
+    }
     if (secrets === null) {
       bundles.set(view.alias, { storeUnavailable: storeProblem ?? 'the secret store could not be opened' });
       continue;
@@ -670,6 +738,7 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
     now: context.now(),
     handoffs,
     bundles,
+    appTokens,
     identities,
     registeredServers,
     missingFiles,

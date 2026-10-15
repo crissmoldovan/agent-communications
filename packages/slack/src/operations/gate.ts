@@ -1,10 +1,13 @@
 import { effectiveAccountSendPolicy, sendEpochOf } from '@agentcomms/core';
+import type { SlackCall } from '../api/call.ts';
 import { closedPermit, type WritePermit } from '../api/guard.ts';
 import type { SlackContext } from '../context.ts';
+import { appPostRecordFor } from './app-posts.ts';
 import { attachPolicyOf } from './drafts.ts';
+import { labelSettingsOf, noAppReason } from './label.ts';
 import type { PostDeps, PrepareDeps } from './send.ts';
-import { openWorkspace, type SessionDeps } from './session.ts';
-import { requireWorkspace } from './workspaces.ts';
+import { openApp, openWorkspace, type SessionDeps } from './session.ts';
+import { botUserIdOf, requireWorkspace } from './workspaces.ts';
 
 /**
  * Everything the gate needs, assembled once — for the CLI and the MCP server alike.
@@ -28,6 +31,10 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
   const config = await context.config();
   const { alias: name, account } = requireWorkspace(config, alias, context.handoffs);
   const { call, teamId } = await openWorkspace(context, name, deps);
+  const mode = account.mode ?? account.tier;
+  const botUserId = mode === 'send' ? botUserIdOf(account) : undefined;
+  // Opened at most once, and only when an act routes to the app (design 2026-10-15 S2).
+  let app: Promise<SlackCall> | undefined;
   return {
     call,
     accountId: account.id,
@@ -46,5 +53,24 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     surface: context.surface,
     permit: closedPermit(),
     sendPacing: context.sendPacing,
+    // This account's own record of its app's posts (design 2026-10-15 S5).
+    appPosts: appPostRecordFor(context.core.paths.stateDir, account.id),
+    // Who each act appears to come from (design 2026-10-15): the person's settings, and this account's app if it has one.
+    label: {
+      account: name,
+      accountId: account.id,
+      settings: labelSettingsOf(config),
+      ...(botUserId === undefined
+        ? { noApp: noAppReason(mode) }
+        : {
+            app: {
+              userId: botUserId,
+              call: () => {
+                app ??= openApp(context, name, account, deps);
+                return app;
+              },
+            },
+          }),
+    },
   };
 }

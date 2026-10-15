@@ -57,6 +57,24 @@ export const READ_SCOPES: readonly string[] = [
  */
 export const NEVER_REQUESTED: readonly string[] = ['incoming-webhook', 'im:write', 'team:read'];
 
+/**
+ * The send app's bot user, and exactly the four scopes it holds (design 2026-10-15 S1).
+ *
+ * It posts as the app, named after the person with the word that says an agent sent it, so it needs to post
+ * (`chat:write`), to name each post (`chat:write.customize`), to post in a public channel it has not joined
+ * (`chat:write.public`) and to react (`reactions:write`). Nothing that reads or uploads: a bot token reads nothing here,
+ * and files go out as the person. This reverses the Slack design's D7, which never asked for `chat:write.customize`:
+ * nobody can pass a name or an icon, and Slack's APP badge stands beside every such post, so it discloses the agent.
+ *
+ * The read app has none, so on this machine no token a read workspace holds can post.
+ */
+export const BOT_SCOPES: readonly string[] = Object.freeze([
+  'chat:write',
+  'chat:write.customize',
+  'chat:write.public',
+  'reactions:write',
+]);
+
 export type InstallMode = 'read' | 'send';
 
 export const INSTALL_MODES: readonly InstallMode[] = ['read', 'send'];
@@ -90,8 +108,11 @@ export interface SlackManifest {
      * sign-in.
      */
     pkce_enabled: boolean;
-    scopes: { user: string[] };
+    /** `bot` only in the send app's manifest: its bot user's four posting scopes (S1). */
+    scopes: { user: string[]; bot?: string[] };
   };
+  /** Only in the send app's manifest: the bot user that posts as the app, named after the person, per post (S1). */
+  features?: { bot_user: { display_name: string; always_online: boolean } };
   settings: {
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
@@ -117,6 +138,16 @@ export function scopesForMode(mode: InstallMode): string[] {
 }
 
 /**
+ * The bot scopes a mode asks for: the send app's four (S1), and none for the read app. Each mode named, as
+ * {@link scopesForMode} names them, so a value a cast let through gets nothing.
+ */
+export function botScopesForMode(mode: InstallMode): string[] {
+  if (mode === 'read') return [];
+  if (mode === 'send') return [...BOT_SCOPES].sort();
+  return parseMode(mode, 'this request') as never;
+}
+
+/**
  * Builds a manifest for one mode.
  *
  * `redirectUrl` is a parameter because the loopback port is not fixed until the flow starts, and Slack matches
@@ -135,13 +166,25 @@ export function scopesForMode(mode: InstallMode): string[] {
  * `settings` carries only the three keys the research did verify: `org_deploy_enabled`, `socket_mode_enabled`
  * and `token_rotation_enabled`.
  */
-export function buildManifest(mode: InstallMode, redirectUrl: string): SlackManifest {
+export function buildManifest(
+  mode: InstallMode,
+  redirectUrl: string,
+  /**
+   * `pkce: false` for an app that signs in with its client secret (design 2026-10-15 S1, revised): its `localhost`
+   * redirect is then a server redirect, which may ask for the bot scopes. Slack's PKCE page: enabling PKCE "is a one-way
+   * operation" that "cannot be disabled without contacting Slack support" — so this is a new app, never an existing one.
+   */
+  options: { pkce?: boolean | undefined } = {},
+): SlackManifest {
+  const bot = botScopesForMode(mode);
   return {
     display_information: DISPLAY,
+    // The send app's bot user. Its name is only the default: every post it makes is named after the person (S4).
+    ...(bot.length > 0 ? { features: { bot_user: { display_name: DISPLAY.name, always_online: false } } } : {}),
     oauth_config: {
       redirect_urls: [redirectUrl],
-      pkce_enabled: true,
-      scopes: { user: scopesForMode(mode) },
+      pkce_enabled: options.pkce !== false,
+      scopes: { user: scopesForMode(mode), ...(bot.length > 0 ? { bot } : {}) },
     },
     settings: {
       org_deploy_enabled: false,
@@ -154,8 +197,12 @@ export function buildManifest(mode: InstallMode, redirectUrl: string): SlackMani
 }
 
 /** The manifest as a person pastes it: JSON, two-space indented, newline-terminated. */
-export function renderManifest(mode: InstallMode, redirectUrl: string): string {
-  return `${JSON.stringify(buildManifest(mode, redirectUrl), null, 2)}\n`;
+export function renderManifest(
+  mode: InstallMode,
+  redirectUrl: string,
+  options: { pkce?: boolean | undefined } = {},
+): string {
+  return `${JSON.stringify(buildManifest(mode, redirectUrl, options), null, 2)}\n`;
 }
 
 /**

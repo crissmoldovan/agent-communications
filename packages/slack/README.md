@@ -236,6 +236,88 @@ have joined: a post to a channel you are not a member of is refused (`SCOPE_MISS
 again. Direct messages and group DMs are exempt. When the room cannot be read, the preview says membership could not
 be checked.
 
+### Labelling what an agent sends
+
+Someone who reads a message an agent sent through this package can tell, without opening anything, that it came
+from your agent and not from you — unless you chose otherwise for that message. The preview's first line, the
+`From:`, says which before anything is sent, and the approval binds it ([design](../../docs/superpowers/specs/2026-10-15-agent-label-design.md)).
+
+- **As the app, named after you.** Once the workspace has its app's bot token (below), and where the app can post —
+  a public channel not shared with another organisation, or a private or shared one its bot user has joined — the
+  message goes out as the app, with the name
+  `Jo Example (agent)` and Slack's APP badge beside it. The name is your Slack display name, else your real name, else
+  the name set with the core's `label name`; the word is the one set with `label word` — `agent` by default, or
+  `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`. A name that cannot make a label of at most 80 characters is
+  refused, never cut short. The icon is your agent emoji when one is recorded for the workspace, else your Slack
+  photo. Nobody passes a name, an icon or blocks: they come from your profile and settings, read at prepare.
+- **As you, labelled.** Where the app cannot post — a direct message, a group DM, your own DM, a room the app is not
+  in or whose membership could not be checked, every post with files, and every workspace with no app bot token
+  stored — the message goes out with your own token, labelled in it: its words begin `Jo Example (agent): `, and so
+  does the text a notification shows, so the two agree and a reader sees one message, not two that differ. A file
+  post's comment starts the same way. The preview names the reason.
+- **As you, with no label**, only when you say so for that message: `--as me` on `post prepare`, `react` and
+  `edit prepare`, or `as: "me"` on their tools. The preview's first line then reads `Sent as you, with no label: it
+  will look as if you wrote it yourself`. Rules for an account, a conversation or a kind of act are the core's
+  `label rule`; an agent passes `me` only when you said so for this one message.
+
+The route is chosen before the preview and never changed after it. An app post Slack refuses — the app removed from
+the room meanwhile — is a refused send: nothing is posted as you instead, because that would be a different message
+needing a new yes.
+
+**Edits and deletions use the token that posted.** A message you posted, by hand or labelled, is edited with your
+token; an agent's edit of it puts `Jo Example (agent): ` at the front of its new words. An app message is edited or
+deleted with the app's token, and only when this machine's own record of what this workspace's app posted holds it:
+others who installed the same app post as the same bot, and theirs are refused before any preview. **A reaction** is
+the app's where the app can post, and yours elsewhere — and since a reaction carries no words, the preview says it
+goes unlabelled.
+
+**Your agent emoji.** The icon is your Slack photo until you set an emoji: make one from your photo with a small robot
+badge with the Slack CLI's `icon make`, upload it at your workspace's emoji page, and record its name with the core's
+`label icon <workspace> :name:`, which you approve. Nothing is published outside Slack.
+
+#### Giving a workspace its app's bot token
+
+The ordinary sign-in is PKCE, and Slack does not let a PKCE sign-in on `localhost` ask for bot scopes ("Desktop
+redirects are not allowed to request bot scopes"). So a `send` workspace is in one of three states, and
+`agent-slack doctor` says which:
+
+1. **No bot token** — every workspace after its first sign-in, and every one connected before this release. It keeps
+   working: its agent's messages go out as you, labelled. Nothing needs doing unless you want them to appear as the
+   app.
+2. **Pasted once.** The send manifest declares the app's bot user and its four scopes, so after updating the app from
+   it (`agent-slack app update <name> --mode send`, or paste `agent-slack manifest --workspace <name> --mode send` on
+   its App Manifest page), press **Install to Workspace** on the app's **OAuth & Permissions** page and copy the **Bot
+   User OAuth Token** (`xoxb-…`). Then, at your own terminal:
+
+   ```sh
+   agent-slack workspace bot acme/slack     # asks for the token without showing it, checks it with Slack, keeps it
+   ```
+
+   It checks the token with Slack before keeping it: a bot token, of this workspace's team, with exactly
+   `chat:write`, `chat:write.customize`, `chat:write.public` and `reactions:write`. It refuses a user token, and a
+   token that rotates (`xoxe.…`), which would stop working within twelve hours with nothing here able to renew it. An
+   app made from this package's manifest has token rotation on, and Slack never turns rotation off once it is on — so
+   for such an app use the third way. The command is a person's only: it refuses an agent, and has no tool, because a
+   token typed into a chat stays in the transcript.
+3. **Signed in with the app's client secret.** For an app that has never enabled PKCE — which Slack says cannot be
+   switched off on an existing app, so this is a new app, made from the manifest
+   `agent-slack manifest --mode send --with-client-secret --port 51234` prints (PKCE off). Its sign-in asks for the
+   four bot scopes as well as yours, and both tokens come back from it:
+
+   ```sh
+   agent-slack workspace add acme/slack --mode send --client-id <id> --port 51234 --with-client-secret
+   agent-slack workspace reauth acme/slack --mode send --with-client-secret    # an existing workspace, moved to it
+   ```
+
+   It asks for the client secret (the app's **Basic Information** page, under **App Credentials**) at a hidden prompt —
+   a person's, at a terminal, as for `workspace bot` — keeps it in the secret store by the app's id, sends it only to
+   Slack's token exchange, and renews both tokens with it. A later `workspace reauth` of the workspace uses the kept
+   secret without asking. Slack's OAuth page says a redirect URL "must use HTTPS"; whether Slack takes this sign-in's
+   `http://localhost` one is not yet confirmed. If Slack refuses it (`bad_redirect_uri`), sign in the ordinary way and
+   paste the bot token instead.
+
+Narrowing to `read` or removing the workspace deletes this machine's copy of the bot token, and never revokes it.
+
 ### Files
 
 A post can carry up to ten local files, each up to 100 MiB, with or without words: `--file` on `draft create`, and
@@ -393,7 +475,15 @@ transcript would keep it.
 | Mode | What the token can do | Who enforces it |
 |---|---|---|
 | `read` (default) | history, read, users, files, search | **Slack** |
-| `send` | the above plus `chat:write`, `files:write`, `reactions:write` | this package's approval gate |
+| `send` | the above plus `chat:write`, `files:write`, `reactions:write`; and the app's bot user, with exactly `chat:write`, `chat:write.customize`, `chat:write.public` and `reactions:write` | this package's approval gate |
+
+The send app's bot user is what lets an agent's message appear as the app, named after you — see
+[Labelling what an agent sends](#labelling-what-an-agent-sends). The ordinary sign-in asks for user scopes only; the bot
+token is pasted once or comes with the client-secret sign-in ([giving a workspace its app's bot
+token](#giving-a-workspace-its-apps-bot-token)), and is kept only with exactly those four scopes. It is kept beside
+your own, under `slack/bot-token/<accountId>` in the secret store; it is the workspace's, not yours — everyone who
+installed the same organisation app holds it — so narrowing to `read` or removing the workspace deletes this machine's
+copy and never revokes it. The read app has no bot user, so no token a read workspace holds can post.
 
 Moving to `send` means editing your app's manifest — on its page, or with `agent-slack app update <name> --mode
 send` — and then approving the change and re-authorising: a new grant you approve in Slack's own UI.

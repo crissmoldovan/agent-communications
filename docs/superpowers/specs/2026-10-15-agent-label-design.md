@@ -261,11 +261,17 @@ Identity `me` posts with the person's token, as before this release.
 
 ### S3 — The labelled fallback
 
-When the person's token posts an `agent` message, the label is in the message, in both places a reader meets it:
-- `blocks`: a context block, `Sent by <name> (<word>)`, above the message's own section;
-- `text`, which notifications show: `<name> (<word>): <message>`.
+When the person's token posts an `agent` message, the label is in the message, in both places a reader meets it, and
+the same in both:
+- `text`, which notifications show: `<name> (<word>): <message>`;
+- `blocks`: the message's one section, whose text is that same `<name> (<word>): <message>`.
 
-A file post carries the same prefix in its `initial_comment`. An edit sends `text` only, because Slack shows
+The two halves must agree. Reading compares the rendered blocks with `text` and reports a difference as `mismatch`
+(Slack design, D4), the signal of a message that says one thing in the room and another in its notification. A
+context block `Sent by <name> (<word>)` above the section, as this section first said, made every labelled post read
+back as a mismatch, so every agent reading it would take our own label for a deception (amended 2026-10-15).
+
+A file post carries the same prefix in its `initial_comment`; one with no words is labelled `Sent by <name> (<word>)`. An edit sends `text` only, because Slack shows
 "(edited)" only on a text update (the edit design, §2), so the prefix goes in its new text.
 
 ### S4 — The app's message: the phrase, the icon, and nothing a caller supplies
@@ -317,8 +323,8 @@ preview says so in plain words.
 
 The first line names the identity exactly:
 - an app post: `Cristian Moldovan (agent) · posted by the app <the app's name in Slack>`;
-- the labelled fallback: `Cristian Moldovan · labelled "Sent by Cristian Moldovan (agent)" · <the reason, e.g. the
-  app cannot post in a direct message between two people>`;
+- the labelled fallback: `Cristian Moldovan · labelled "Cristian Moldovan (agent):" at the start of the message ·
+  <the reason, e.g. the app cannot post in a direct message between two people>`;
 - `me`: `Sent as you, with no label: it will look as if you wrote it yourself` (L3).
 
 ## 5. Gmail

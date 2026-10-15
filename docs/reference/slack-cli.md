@@ -68,6 +68,7 @@ agent-slack manifest [options]
 | `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
 | `--port <port>` | the loopback port its redirect will use | — |
 | `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
+| `--with-client-secret` | the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app | — |
 
 ### `agent-slack app`
 
@@ -129,6 +130,7 @@ agent-slack workspace add [options] [alias]
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
 | `--client-id <id>` | use your own app’s Client ID; also requires --port | — |
+| `--with-client-secret` | sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace list`
@@ -163,6 +165,14 @@ agent-slack workspace mode [options] <alias> [mode]
 | `--no-browser` | print the link instead of opening it | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
+### `agent-slack workspace bot`
+
+keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal
+
+```
+agent-slack workspace bot [options] <alias>
+```
+
 ### `agent-slack workspace remove`
 
 disconnect a workspace from this machine, once a person approves it
@@ -192,6 +202,7 @@ agent-slack workspace reauth [options] <alias>
 | `--wait <seconds>` | with --finish, how long to wait for the browser | `"60"` |
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
+| `--with-client-secret` | sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace policy`
@@ -444,6 +455,7 @@ agent-slack post prepare [options]
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--draft <draftId>` | the draft to prepare | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack post send`
 
@@ -476,6 +488,7 @@ agent-slack react [options]
 | `--emoji <name>` | the emoji name, without colons | — |
 | `--remove` | remove your reaction instead | `false` |
 | `--approval <approvalId>` | the approval a person gave with `approve`, under `confirm` | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack edit`
 
@@ -499,6 +512,7 @@ agent-slack edit prepare [options]
 | `--draft <draftId>` | the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own | — |
 | `--ts <ts>` | the message to edit | — |
 | `--remove-file <fileId...>` | take this file of the message off it, by id; it stays in Slack, shared nowhere | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack edit send`
 
