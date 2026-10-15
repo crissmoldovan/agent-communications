@@ -3,13 +3,12 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { asV2, type CommsError, renderChannelPreview, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
-import { parseBundle } from '../src/auth/bundle.ts';
 import { beginApproval } from '../src/operations/approve.ts';
-import { doctor } from '../src/operations/doctor.ts';
+import { runDoctor } from '../src/operations/doctor.ts';
 import { FALLBACK_REASONS, noAppReason } from '../src/operations/label.ts';
 import { prepareDraftPost, sendPost } from '../src/operations/post.ts';
+import { botSecretRefFor } from '../src/operations/workspaces.ts';
 import { type SlackWorld, startFakeSlack, type WorldRoom } from './support/fake-slack.ts';
-import { slackHandoffs } from './support/handoffs.ts';
 import { newHarness } from './support/harness.ts';
 
 /**
@@ -173,41 +172,36 @@ test('a post with files always takes the labelled fallback (S2)', async (t) => {
   assert.equal(prepared.label?.reason, FALLBACK_REASONS.file);
 });
 
-test('a workspace connected before the label takes the fallback, and doctor says how to update its app (Review focus 1)', async (t) => {
+test('a send workspace with no bot token takes the fallback, and doctor names both ways to give it one (Review focus 1)', async (t) => {
   const w = await labelled(t, { bot: false });
   const prepared = await prepare(w, { channel: 'C1' });
   assert.equal(prepared.label?.identity, 'agent', 'a workspace with no bot went out unlabelled');
   assert.equal(prepared.label?.route, 'fallback');
   assert.equal(prepared.label?.reason, noAppReason('send'));
 
-  const report = doctor({
-    config: await w.harness.core.config.load(),
-    now: new Date(),
-    handoffs: slackHandoffs(),
-    bundles: await bundlesOf(w),
-  });
-  const check = report.checks.find((one) => one.id === 'app-identity');
+  const check = await appIdentityCheck(w);
   assert.equal(check?.status, 'warn');
-  assert.match(check?.detail ?? '', /no bot user/);
-  assert.match(String(check?.fix), /manifest/);
-  assert.match(String(check?.fix), /workspace reauth/);
+  assert.match(check?.detail ?? '', /as you, labelled/);
+  // Both ways, located: paste the bot token once, or sign in with the app's client secret.
+  assert.match(String(check?.fix), / workspace bot acme`?/);
+  assert.match(String(check?.fix), / workspace reauth acme --mode send --with-client-secret`?/);
 
-  // With its bot user, the same check is ok.
-  const with_ = await labelled(t);
-  const ok = doctor({
-    config: await with_.harness.core.config.load(),
-    now: new Date(),
-    handoffs: slackHandoffs(),
-    bundles: await bundlesOf(with_),
-  }).checks.find((one) => one.id === 'app-identity');
-  assert.equal(ok?.status, 'ok');
+  // With its bot token stored, the same check is ok.
+  assert.equal((await appIdentityCheck(await labelled(t)))?.status, 'ok');
 });
 
-/** The workspace's stored credential, as doctor is handed it. */
-async function bundlesOf(w: Labelled) {
-  const account = (await w.harness.core.config.load()).accounts.acme;
-  const raw = await (await w.harness.core.secrets('file')).get(account?.secretRef ?? '');
-  return new Map([['acme', parseBundle(raw, slackHandoffs())]]);
+test('doctor checks the bot token is stored, not only that a bot user is recorded', async (t) => {
+  const w = await labelled(t);
+  await (await w.harness.core.secrets('file')).delete(botSecretRefFor(w.accountId));
+  const check = await appIdentityCheck(w);
+  assert.equal(check?.status, 'warn', 'a bot user with no stored token read as able to post as the app');
+  assert.match(String(check?.fix), / workspace bot acme/);
+});
+
+/** Doctor's app-identity finding for the workspace, read as `doctor` reads everything, offline. */
+async function appIdentityCheck(w: Labelled) {
+  const report = await runDoctor(w.harness.context({ platform: 'darwin' }), { offline: true });
+  return report.checks.find((one) => one.id === 'app-identity');
 }
 
 // ── Identity ───────────────────────────────────────────────────────────────────────────────────────────────────────

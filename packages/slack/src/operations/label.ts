@@ -93,7 +93,7 @@ export const FALLBACK_REASONS = {
 /** The reason a workspace with no app takes the fallback: one signed in before this release, or connected to read. */
 export function noAppReason(mode: string | undefined): string {
   return mode === 'send'
-    ? "this workspace's app cannot post as itself yet: update the app from the send manifest and sign in again"
+    ? "this workspace's app has no bot token on this machine yet"
     : 'this workspace is connected to read';
 }
 
