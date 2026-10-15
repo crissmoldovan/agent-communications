@@ -105,6 +105,28 @@ retired then ("prepared by an earlier release; prepare it again"): prepare them 
 and `slack` (each shows what it will delete and asks); it keeps any version a running process still
 uses, so a window that was not restarted keeps its old one until it is.
 
+## 4. Then walk through what the new release asks of the person
+
+Some releases change what other people see, or need one decision from the person. After the restart, read the
+changelog's **Upgrading** section for every version passed over, and go through it with the person **one step at a
+time**, as the contract's setup section says: what it changes for them in plain words, then the step as numbered
+instructions, then wait for their answer.
+
+From 0.19.0, everything an agent sends is labelled as their agent's, "Their Name (agent)". Take these as separate
+messages, in this order, skipping any that does not apply:
+
+1. **Tell them what changed.** People who get a message an agent sent can now see it came from their agent. They
+   can still have a message sent as themselves, by saying so for that message, or with a rule. `comms_label` with no
+   change shows how each account's messages will look.
+2. **Their name,** only if a channel has none for them. That happens when Gmail holds no display name for the
+   address, or a Resend send gives a bare address. Offer `comms_label` with `name`: it shows a preview to approve,
+   and a labelled send without a name is refused until then.
+3. **The word,** only if they ask. It is `agent` unless they choose `assistant`, `twin`, `minion`, `bot`, `fake` or
+   `AI`, and a new word is approved like the name.
+4. **Slack, posting as the app,** only if they want the APP badge. Until then, an agent's Slack messages go out as
+   them, with the label at the start. Explain that the bot token stays on this machine, and that both ways need a new
+   Slack app; then give one way's numbered steps, not both at once. The slack-setup skill has them.
+
 ## Without the MCP tools
 
 | Step | Command |
