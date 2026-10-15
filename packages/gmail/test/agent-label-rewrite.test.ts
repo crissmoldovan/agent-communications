@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CommsError, type Config, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
+import { CommsError, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
 import { createDraft } from '../src/operations/drafts.ts';
 import { executeSend, prepareSend } from '../src/operations/send.ts';
 import type { FakeMessage } from './support/fake-google.ts';
-import { type Harness, newHarness } from './support/harness.ts';
+import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 
 /**
  * G2 (design 2026-10-15-agent-label §5): a draft whose From does not fit its identity — written in Gmail, written
@@ -14,15 +14,6 @@ import { type Harness, newHarness } from './support/harness.ts';
  * which these tests check against the bytes themselves, on plain, HTML and attachment drafts and on encoded and
  * folded From lines (the plan's review focus 3).
  */
-
-const ALL_LABEL_PATHS = ['agentLabel.word', 'agentLabel.name', 'agentLabel.rules', 'agentLabel.slackIcons'];
-
-async function label(harness: Harness, settings: Record<string, unknown>): Promise<void> {
-  const added = { agentLabel: settings };
-  await harness.core.config.update((config): Config => ({ ...config, ...added }), {
-    consent: { kind: 'loosening-consent', paths: ALL_LABEL_PATHS },
-  });
-}
 
 async function connected(): Promise<{ harness: Harness; context: GmailContext }> {
   const harness = await newHarness({
@@ -220,7 +211,7 @@ test('`as: "me"` takes the label off an agent draft, and the first line says it 
 test('a rule that settles `me` for the conversation is followed at prepare too', async () => {
   const { harness, context } = await connected();
   const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tuesday', text: 'Yes.' });
-  await label(harness, { rules: [{ account: 'work', conversation: 'sam@partner.test', as: 'me' }] });
+  await setAgentLabel(harness, { rules: [{ account: 'work', conversation: 'sam@partner.test', as: 'me' }] });
   const prepared = await prepareSend(context, 'work', draft.draftId);
   assert.equal(prepared.identity, 'me');
   assert.equal(prepared.fromRewritten, true);

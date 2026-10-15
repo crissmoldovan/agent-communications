@@ -25,7 +25,7 @@ import { run } from '../src/cli/program.ts';
 import { GmailContext } from '../src/context.ts';
 import { createDraft } from '../src/operations/drafts.ts';
 import { DRAFT_SEND_PATH } from './support/fake-google.ts';
-import { type Harness, migrateNamesForTest, newHarness } from './support/harness.ts';
+import { type Harness, migrateNamesForTest, newHarness, setAgentLabel } from './support/harness.ts';
 
 /*
  * The released 0.13.0 `agent-gmail`, run as its own process beside this release over one home, one configuration and
@@ -124,6 +124,8 @@ async function machine(): Promise<Machine> {
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'chat' });
   await harness.connectInbox({ alias: 'home', email: 'kim@example.test', sub: 'sub-2', sendPolicy: 'chat' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Kim Example' });
   // Version 2, as a configuration made or migrated since 0.11 is: the one 0.13.0 and this release share.
   await migrateNamesForTest(harness, [`work=${ALIAS}`, `home=${OTHER}`]);
 

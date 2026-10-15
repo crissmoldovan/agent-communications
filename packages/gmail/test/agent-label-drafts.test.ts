@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CommsError, type Config, decodeHeaderWords, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
+import { CommsError, decodeHeaderWords, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
 import { createDraft, replyDraft, updateDraft } from '../src/operations/drafts.ts';
 import type { FakeAccount, FakeMessage } from './support/fake-google.ts';
-import { type Harness, newHarness } from './support/harness.ts';
+import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 
 /**
  * G1 (design 2026-10-15-agent-label §5): a draft is labelled when it is written. For identity `agent` its From is
@@ -12,16 +12,6 @@ import { type Harness, newHarness } from './support/harness.ts';
  * for `me` it is the bare address, as every draft was before. The kind is `send` for a new message and `reply` for a
  * reply, and a mail rule's conversation matches only when every recipient does.
  */
-
-const ALL_LABEL_PATHS = ['agentLabel.word', 'agentLabel.name', 'agentLabel.rules', 'agentLabel.slackIcons'];
-
-/** The person's label settings, written with the consent a person's change would carry. */
-async function label(harness: Harness, settings: Record<string, unknown>): Promise<void> {
-  const added = { agentLabel: settings };
-  await harness.core.config.update((config): Config => ({ ...config, ...added }), {
-    consent: { kind: 'loosening-consent', paths: ALL_LABEL_PATHS },
-  });
-}
 
 function base64url(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64url');
@@ -83,7 +73,7 @@ test('the word is the person’s, and a name that already carries it is not labe
   const { harness, context } = await connected([
     { sendAsEmail: 'jo@example.test', displayName: 'Jo Example (twin)', isDefault: true, isPrimary: true },
   ]);
-  await label(harness, { word: 'twin' });
+  await setAgentLabel(harness, { word: 'twin' });
   const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tuesday', text: 'Yes.' });
   assert.equal(storedFrom(harness, draft.draftId), '"Jo Example (twin)" <jo@example.test>');
 });
@@ -107,7 +97,7 @@ test('with no send-as name the core’s name is used, and with neither the draft
     'nothing was written to Drafts before the refusal',
   );
 
-  await label(harness, { name: 'Jo From Settings' });
+  await setAgentLabel(harness, { name: 'Jo From Settings' });
   const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tuesday', text: 'Yes.' });
   assert.equal(storedFrom(harness, draft.draftId), '"Jo From Settings (agent)" <jo@example.test>');
 });
@@ -160,7 +150,7 @@ test('`as: "me"` keeps the bare address, and the preview’s first line says it 
 
 test('a new draft is kind `send` and a reply kind `reply`; a forward starts a new message', async () => {
   const { harness, context } = await connected();
-  await label(harness, { rules: [{ account: 'work', kinds: ['reply'], as: 'me' }] });
+  await setAgentLabel(harness, { rules: [{ account: 'work', kinds: ['reply'], as: 'me' }] });
 
   const fresh = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Hi', text: 'Hi.' });
   assert.equal(fresh.identity, 'agent', 'a rule for replies leaves a new message labelled');
@@ -186,7 +176,7 @@ test('a new draft is kind `send` and a reply kind `reply`; a forward starts a ne
 
 test('a rule on @domain applies only when every recipient is in it', async () => {
   const { harness, context } = await connected();
-  await label(harness, { rules: [{ account: 'work', conversation: '@partner.test', as: 'me' }] });
+  await setAgentLabel(harness, { rules: [{ account: 'work', conversation: '@partner.test', as: 'me' }] });
 
   const inside = await createDraft(context, 'work', {
     to: ['Sam Lee <sam@partner.test>'],
@@ -209,7 +199,7 @@ test('a rule on @domain applies only when every recipient is in it', async () =>
 
 test('a rule for another mailbox does not apply here', async () => {
   const { harness, context } = await connected();
-  await label(harness, { rules: [{ account: 'home', as: 'me' }] });
+  await setAgentLabel(harness, { rules: [{ account: 'home', as: 'me' }] });
   const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Hi', text: 'Hi.' });
   assert.equal(draft.identity, 'agent');
 });

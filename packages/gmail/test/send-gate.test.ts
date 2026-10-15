@@ -25,7 +25,7 @@ import {
 } from '../src/operations/send.ts';
 import type { FakeGoogle } from './support/fake-google.ts';
 import { assertNoBareCommand, gmailInline } from './support/handoffs.ts';
-import { type Harness, newHarness } from './support/harness.ts';
+import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 import { cli, connect } from './support/surfaces.ts';
 
 /**
@@ -794,6 +794,8 @@ test('an id nobody prepared, another mailbox’s, another kind’s and an expire
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'chat' });
   await harness.connectInbox({ alias: 'home', email: 'sam@example.test', sub: 'sub-2', sendPolicy: 'chat' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Sam Example' });
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const homeDraft = await createDraft(context, 'home', { to: ['kim@partner.test'], subject: 'Home', text: 'Hi.' });
   const forHome = await prepareSend(context, 'home', homeDraft.draftId);
@@ -979,4 +981,44 @@ test('approved and then a day unused reads expired after approval; approved unde
   assert.equal(approvalOf(expired)?.state, 'expired');
   assert.equal(approvalOf(expired)?.approvedAt, record.approvedAt);
   assert.equal(approvalOf(expired)?.expiredAt, record.usableUntil);
+});
+
+/**
+ * G3 (design 2026-10-15-agent-label §5): the approval binds the whole From header as the preview shows it, display name
+ * and all — not only the address. Gmail gives a draft a new message id on every save, so the edits here are made in
+ * the fake's own record of the message, keeping its id: what is left to catch them is the digest alone.
+ */
+test('a From display name changed after prepare voids the send, at execute and at the terminal, and nothing is sent', async () => {
+  for (const [moment, edited] of [
+    ['the label taken off', '"Jo Example" <jo@example.test>'],
+    ['another name labelled', '"Someone Else (agent)" <jo@example.test>'],
+    ['the name dropped', 'jo@example.test'],
+  ] as const) {
+    const { context, google } = await connected({ riskEscalation: false });
+    /** A prepared draft whose From is then edited in place, its message id kept. */
+    const preparedThenEdited = async (): Promise<string> => {
+      const draftId = await draftTo(context, ['sam@partner.test']);
+      const prepared = await prepareSend(context, 'work', draftId);
+      assert.match(prepared.preview, /^From: +"Jo Example \(agent\)" <jo@example\.test>$/m, moment);
+      const message = google.accounts.get('sub-1')?.drafts?.[draftId]?.message;
+      assert.ok(message, moment);
+      const headers = (message.payload as { headers: Array<{ name: string; value: string }> }).headers;
+      const from = headers.find((header) => header.name === 'From');
+      assert.ok(from, moment);
+      from.value = edited;
+      return prepared.approvalId;
+    };
+
+    await assert.rejects(
+      beginApproval(context, await preparedThenEdited()),
+      (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+      `${moment}: the terminal will not show it to approve`,
+    );
+    await assert.rejects(
+      executeSend(context, 'work', { approvalId: await preparedThenEdited() }),
+      (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+      `${moment}: execute refuses it`,
+    );
+    assert.equal(google.requests.filter((request) => request.path.endsWith('/send')).length, 0, moment);
+  }
 });
