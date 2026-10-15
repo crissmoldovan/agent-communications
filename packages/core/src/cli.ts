@@ -44,6 +44,13 @@ import {
   isChangePolicy,
   refuseApprovalWithoutChange,
 } from './operations/change-policy.ts';
+import {
+  type LabelChangeRequest,
+  type LabelChangeResult,
+  type LabelReport,
+  labelChange,
+  labelReport,
+} from './operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from './operations/maintenance.ts';
 import { namesDryRun, namesMigration } from './operations/names-migrate.ts';
 import {
@@ -126,6 +133,21 @@ Usage — run these with this CLI, each as the words after its program:
                                 source and --for-other-addresses on are approved first
   org remove <organisation> [--approval <id>]
                                 forget a profile and the clients it made: approved first
+  label                         how what an agent sends is labelled — "Jo Example (agent)" — and who
+                                each kind of message appears to come from on each account
+  label word <word> [--approval <id>]
+                                the word after your name: agent, assistant, twin, minion, bot, fake or
+                                AI; approved first
+  label name <name>|--clear [--approval <id>]
+                                your name, for where a channel has none of its own: approved first
+  label rule add <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--approval <id>]
+                                who a kind of message appears to come from: --as me sends it as you,
+                                unlabelled, and is approved first; --as agent applies at once
+  label rule remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--approval <id>]
+                                take a rule away, as it is listed: an agent rule is approved first,
+                                a me rule applies at once
+  label icon <account> <:emoji:>|--clear [--approval <id>]
+                                the workspace emoji the app's Slack posts show: approved first
   mcp                           run the core MCP server on stdio (what an MCP client starts)
   mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
@@ -144,11 +166,12 @@ Usage — run these with this CLI, each as the words after its program:
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
-install and prune, update, secrets and names migrate, org add, update and remove — is shown before it happens. At a
-terminal you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again
-with --approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
-\`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add — applies at once and asks nobody,
-and a --dry-run changes nothing.
+install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
+rule add --as me and label rule remove --as agent — is shown before it happens. At a terminal you approve it there;
+anything else gets the preview and an approval id (exit 10), and runs the command again with --approval <id> once the
+person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening —
+policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies
+at once and asks nobody, and a --dry-run changes nothing.
 
 Once a day this machine asks npm whether a newer release is out. When one is, every command but update, doctor,
 paths, approve and approvals stops first: at a terminal it asks "Update now, later today, or cancel?"; anywhere else
@@ -236,6 +259,11 @@ function parse(argv: string[]) {
       adopt: { type: 'string' },
       store: { type: 'string' },
       source: { type: 'string' },
+      // `label rule add|remove` and `label name|icon --clear`; refused on every other command.
+      conversation: { type: 'string' },
+      kinds: { type: 'string' },
+      as: { type: 'string' },
+      clear: { type: 'boolean', default: false },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -291,6 +319,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return true;
     case 'org':
       return sub === 'add' || sub === 'update' || sub === 'remove';
+    case 'label':
+      return sub !== undefined;
     default:
       return false;
   }
@@ -311,8 +341,36 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
+}
+
+/**
+ * Refuses `label`'s own options on any other command, as USAGE, before anything runs — as `org`'s are, and for the
+ * same reason: an option a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseLabelOptionsElsewhere(
+  command: string | undefined,
+  values: { conversation?: string; kinds?: string; as?: string; clear?: boolean },
+  help: Handoff,
+): void {
+  if (command === 'label') return;
+  const given = labelOptionsGiven(values);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the label command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+function labelOptionsGiven(values: { conversation?: string; kinds?: string; as?: string; clear?: boolean }): string[] {
+  return [
+    ...(values.conversation !== undefined ? ['conversation'] : []),
+    ...(values.kinds !== undefined ? ['kinds'] : []),
+    ...(values.as !== undefined ? ['as'] : []),
+    ...(values.clear ? ['clear'] : []),
+  ];
 }
 
 /**
@@ -394,6 +452,7 @@ export async function main(
   try {
     refuseApprovalNotTaken(command, sub, values.approval);
     refuseOrgOptionsElsewhere(command, values, help);
+    refuseLabelOptionsElsewhere(command, values, help);
   } catch (error) {
     return writeError(error as CommsError, output);
   }
@@ -676,6 +735,79 @@ export async function main(
         }
         throw usage('usage: org add|list|show|update|remove');
       }
+      case 'label': {
+        const [, , ...rest] = positionals;
+        const taking = (taken: readonly string[]) => {
+          const wrong = labelOptionsGiven(values).filter((flag) => !taken.includes(flag));
+          if (wrong.length > 0) {
+            throw usage(
+              `the ${['label', ...positionals.slice(1, sub === 'rule' ? 3 : 2)].join(' ')} command takes no --${wrong.join(', --')}`,
+            );
+          }
+        };
+        if (sub === undefined) {
+          taking([]);
+          // Reporting takes no --approval: refused with the rest, before the update check's stop.
+          writeResult(await labelReport(core), output, renderLabel);
+          return;
+        }
+        let request: LabelChangeRequest;
+        let rerun: string[];
+        if (sub === 'word') {
+          taking([]);
+          const [word, ...extra] = rest;
+          if (word === undefined || extra.length > 0) throw usage('usage: label word <word>');
+          request = { word };
+          rerun = ['label', 'word', word];
+        } else if (sub === 'name') {
+          taking(['clear']);
+          const [name, ...extra] = rest;
+          if (extra.length > 0) throw usage('usage: label name <name>|--clear — quote a name with spaces in it');
+          if ((name === undefined) === !values.clear) throw usage('usage: label name <name>|--clear');
+          request = { name: values.clear ? null : (name as string) };
+          rerun = values.clear ? ['label', 'name', '--clear'] : ['label', 'name', name as string];
+        } else if (sub === 'rule') {
+          taking(['conversation', 'kinds', 'as']);
+          const [action, account, ...extra] = rest;
+          if ((action !== 'add' && action !== 'remove') || account === undefined || extra.length > 0) {
+            throw usage(
+              'usage: label rule add|remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me',
+            );
+          }
+          if (values.as === undefined) throw usage('say who the messages appear to come from: --as agent or --as me');
+          const kinds = values.kinds?.split(',').map((kind) => kind.trim());
+          const rule = {
+            account,
+            ...(values.conversation === undefined ? {} : { conversation: values.conversation }),
+            ...(kinds === undefined ? {} : { kinds }),
+            as: values.as,
+          };
+          request = action === 'add' ? { addRule: rule } : { removeRule: rule };
+          rerun = [
+            'label',
+            'rule',
+            action,
+            account,
+            ...(values.conversation === undefined ? [] : ['--conversation', values.conversation]),
+            ...(values.kinds === undefined ? [] : ['--kinds', values.kinds]),
+            '--as',
+            values.as,
+          ];
+        } else if (sub === 'icon') {
+          taking(['clear']);
+          const [account, emoji, ...extra] = rest;
+          if (account === undefined || extra.length > 0 || (emoji === undefined) === !values.clear) {
+            throw usage('usage: label icon <account> <:emoji:>|--clear');
+          }
+          request = { icon: { account, emoji: values.clear ? null : (emoji as string) } };
+          rerun = values.clear ? ['label', 'icon', account, '--clear'] : ['label', 'icon', account, emoji as string];
+        } else {
+          throw usage('usage: label [word|name|rule add|rule remove|icon]');
+        }
+        const result = await gatedChangeAtTerminal(core, labelChange(core, request, 'cli'), { ...approval, rerun });
+        writeResult(result, output, renderLabelChange);
+        return;
+      }
       case 'channels': {
         if (sub !== undefined) throw usage('usage: channels');
         writeResult(await channelsAvailable(core, env), output, renderChannels);
@@ -908,6 +1040,38 @@ function renderPolicy(report: ChangePolicyReport): string {
     for (const entry of report.looser) lines.push(`  ${handoffText(entry.tighten.command)}`);
   }
   return lines.join('\n');
+}
+
+/** The label as a person reads it: the word and the name, then each account and who its messages appear from. */
+function renderLabel(report: LabelReport): string {
+  const lines = [
+    `Word: ${report.word}  (one of ${report.words.join(', ')})`,
+    `Name: ${report.name ?? 'not set'} — used where a channel has no name of its own for you`,
+  ];
+  for (const ignored of report.ignored) lines.push(`Ignored: ${ignored}`);
+  for (const account of report.accounts) {
+    lines.push('', `${account.account} (${account.channel})`);
+    if (account.note !== undefined) lines.push(`  ${account.note}`);
+    for (const kind of account.kinds) {
+      lines.push(`  ${kind.kind.padEnd(9)}${kind.appearsAs}${kind.rule === undefined ? '' : `  (rule ${kind.rule})`}`);
+    }
+    for (const conversation of account.conversations) lines.push(`  in one conversation: ${conversation}`);
+    if (account.icon !== undefined) {
+      lines.push(
+        `  icon     ${'emoji' in account.icon ? account.icon.emoji : 'your Slack photo, until an agent emoji is set'}`,
+      );
+    }
+  }
+  const stray = report.rules.filter((rule) => !rule.matches);
+  if (stray.length > 0) {
+    lines.push('', 'Rules naming no account connected now — they match nothing:');
+    for (const rule of stray) lines.push(`  ${rule.text}`);
+  }
+  return lines.join('\n');
+}
+
+function renderLabelChange(result: LabelChangeResult): string {
+  return [result.note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderLabel(result)].join('\n');
 }
 
 /** `attach roots add` and the rest, by their words. */

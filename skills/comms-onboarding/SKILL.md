@@ -130,6 +130,12 @@ approved; `comms_change_policy` sets how changes are. WhatsApp never sends, so i
 workspace set to `chat` itself stays `chat` when the default goes to `confirm`: show the person the
 result's `warning`, and tighten each one it lists if that is what they meant.
 
+What an agent sends is labelled, so recipients can tell the agent sent it: the person's name and a word
+in parentheses, "Jo Example (agent)". `comms_label` with no change shows it for every account. A new
+word (`agent`, `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`) or a name for where a channel has
+none is a change: show the preview, get their yes, call again with `approvalId`. Add a rule `as: "me"`
+— a kind of message sent as them, unlabelled — only when they ask for that.
+
 ## 5. Check, and hand over
 
 - `comms_doctor`, `gmail_doctor`, `slack_doctor`, `resend_doctor` and `whatsapp_status`, for the
@@ -159,6 +165,7 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | Resend | `agent-resend account add <name> --mode <mode>`, the key typed by the person |
 | WhatsApp | `agent-whatsapp add <name>`, then `agent-whatsapp sync --account <name>`, at the Mac's terminal |
 | Policies | `agent-gmail inbox policy <name> --send <policy> --change <policy>`, `agent-slack workspace policy <name> --send <policy> --change <policy>`, `agent-resend account policy <name> --send <policy> --change <policy>`, `agentcomms policy confirm` |
+| The agent label | `agentcomms label`; `agentcomms label word <word>`, `agentcomms label name "<name>"` |
 | Check | `agentcomms doctor`, `agent-gmail doctor`, `agent-slack doctor`, `agent-resend doctor`, `agent-whatsapp status` |
 
 A change stops with exit `10`, its preview and an approval id, and changes nothing — with one

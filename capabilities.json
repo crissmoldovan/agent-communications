@@ -156,6 +156,108 @@
       "reason": "A deny entry taken away widens what can be attached, so it is a change the person approves; the built-in list cannot be removed."
     },
     {
+      "id": "core.label",
+      "package": "core",
+      "cli": "label",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelReport",
+      "reason": "How what an agent sends is labelled: the word, the name, every rule, and who each kind of message on each account appears to come from. `comms_label` with no change is this report."
+    },
+    {
+      "id": "core.label.word",
+      "package": "core",
+      "cli": "label word",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["twin"],
+      "args": { "word": "twin" },
+      "expect": {
+        "request.word": "twin",
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null
+      },
+      "reason": "A new word changes how the label looks, so it is a change the person approves; the preview shows the phrase recipients will see."
+    },
+    {
+      "id": "core.label.name",
+      "package": "core",
+      "cli": "label name",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["Parity Person"],
+      "args": { "name": "Parity Person" },
+      "expect": {
+        "request.word": null,
+        "request.name": "Parity Person",
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null
+      },
+      "reason": "A new name changes how the label looks, so it is a change the person approves; `--clear` and `name: null` take it away the same way."
+    },
+    {
+      "id": "core.label.rule.add",
+      "package": "core",
+      "cli": "label rule add",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "--as", "me"],
+      "args": { "addRule": { "account": "parity/slack", "as": "me" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.account": "parity/slack",
+        "request.addRule.as": "me",
+        "request.removeRule.as": null,
+        "request.icon.emoji": null
+      },
+      "reason": "A rule `as: me` sends a kind of message unlabelled, so it is approved first; a rule `as: agent` labels more and applies at once."
+    },
+    {
+      "id": "core.label.rule.remove",
+      "package": "core",
+      "cli": "label rule remove",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "--as", "me"],
+      "args": { "removeRule": { "account": "parity/slack", "as": "me" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.account": "parity/slack",
+        "request.removeRule.as": "me",
+        "request.icon.emoji": null
+      },
+      "reason": "Removing an `agent` rule can leave a message unlabelled, so it is approved first; removing a `me` rule labels more and applies at once."
+    },
+    {
+      "id": "core.label.icon",
+      "package": "core",
+      "cli": "label icon",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", ":parity:"],
+      "args": { "icon": { "account": "parity/slack", "emoji": ":parity:" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.account": "parity/slack",
+        "request.icon.emoji": ":parity:"
+      },
+      "reason": "The icon of the app's Slack posts changes how the label looks, so it is a change the person approves; `--clear` and `emoji: null` go back to the person's photo the same way."
+    },
+    {
       "id": "core.channels",
       "package": "core",
       "cli": "channels",
