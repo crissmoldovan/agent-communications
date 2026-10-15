@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { ACT_KINDS, AGENT_LABEL_WORDS } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
@@ -16,6 +17,7 @@ import {
   changePolicyReport,
   refuseApprovalWithoutChange,
 } from '../operations/change-policy.ts';
+import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport } from '../operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
 import { orgAddChange, orgList, orgRemoveChange, orgShow, orgUpdateChange } from '../operations/organisations.ts';
@@ -106,12 +108,13 @@ async function buildInstructions(core: Core): Promise<string> {
     `agent-communications core: install and manage the ${listed(CHANNEL_LABELS_LISTED, 'and')} servers, and look after this machine.`,
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
-    'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach and comms_change_policy with no change,',
-    'and comms_update with `check`.',
+    'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach, comms_change_policy and comms_label',
+    'with no change, and comms_update with `check`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
-    '(comms_org_add, comms_org_update, comms_org_remove) — is shown to the person before it happens. The first call',
+    '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label) — is shown to the',
+    'person before it happens. The first call',
     'returns `approvalRequired` with a `preview` and an `approvalId`: show the preview in full and ask. Then call the',
     'same tool again, with the same arguments and the `approvalId`. Under the `chat` change policy the person’s yes in',
     'this conversation is the approval; under `confirm` they first run the approve command the result gives, in their',
@@ -188,6 +191,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       approvals: {
         comms_attach: CHANGE_CLAIM,
         comms_change_policy: CHANGE_CLAIM,
+        comms_label: CHANGE_CLAIM,
         comms_server_install: CHANGE_CLAIM,
         comms_server_prune: CHANGE_CLAIM,
         comms_names_migrate: CHANGE_CLAIM,
@@ -429,6 +433,79 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       }
       const [kind] = asked as [(typeof ATTACH_CHANGE_KINDS)[number]];
       return change(() => attachChange(core, env, { kind, path: String(args[kind]) }, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── The agent label ──────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * How what an agent sends is labelled (design 2026-10-15-agent-label, L6): `agentcomms label` and this, one operation.
+   * A rule's object is strict, so a misspelt key inside it is refused rather than dropped: a `conversaton` lost on the
+   * way would turn a rule for one channel into one for the whole account.
+   */
+  const ruleArg = (what: string) =>
+    z
+      .strictObject({
+        account: z.string().describe('the account it is for, by its name: `organisation/platform`'),
+        conversation: z
+          .string()
+          .optional()
+          .describe(
+            'only here — Slack: a channel or DM id (C…, G…, D…) or a person (U…); mail: an address, or @domain. Leave out for the whole account',
+          ),
+        kinds: z
+          .array(z.enum(ACT_KINDS as unknown as [string, ...string[]]))
+          .optional()
+          .describe('only these kinds of message; leave out for every kind'),
+        as: z.enum(['agent', 'me']).describe('`agent`: labelled. `me`: as the person, with no label'),
+      })
+      .optional()
+      .describe(what);
+
+  server.registerTool(
+    'comms_label',
+    {
+      title: 'The agent label',
+      description: `Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of \`word\`, \`name\`, \`addRule\`, \`removeRule\`, \`icon\`. A new word, name or icon, a rule \`as: "me"\`, and removing an \`agent\` rule are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule \`as: "agent"\`, or removing a \`me\` rule, labels more and applies at once. Add a \`me\` rule only when the person asked for that.`,
+      inputSchema: {
+        word: z
+          .string()
+          .optional()
+          .describe(`the word after the name: one of ${AGENT_LABEL_WORDS.join(', ')}, written exactly so`),
+        name: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('the name, for where a channel has no name of its own for the person; null clears it'),
+        addRule: ruleArg('who a kind of message appears to come from, on one account'),
+        removeRule: ruleArg('a rule to take away, as it is listed'),
+        icon: z
+          .strictObject({
+            account: z.string().describe('a Slack workspace, by its name'),
+            emoji: z
+              .string()
+              .nullable()
+              .describe('the workspace emoji the app’s posts show, between colons — `:jo-agent:`; null for the photo'),
+          })
+          .optional()
+          .describe('the icon of the agent’s Slack posts in one workspace'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = LABEL_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `word`, `name`, `addRule`, `removeRule` or `icon` — with it.',
+          });
+          return labelReport(core);
+        });
+      }
+      const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as LabelChangeRequest;
+      return change(() => labelChange(core, request, 'mcp'), args.approvalId);
     },
   );
 
