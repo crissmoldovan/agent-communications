@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.19.0
 
 **What an agent sends is now labelled as your agent's: "Cristian Moldovan (agent)", not just your name.** People who
 get a Slack message, a Gmail message or a Resend email that an agent sent through these tools can tell it came from
