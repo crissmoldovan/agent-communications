@@ -917,6 +917,16 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   const session = (context: SlackContext, alias: string) =>
     openWorkspace(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
 
+  /*
+   * Who a post, reaction or edit appears to come from (design 2026-10-15 L3): the person's word for this one act, and
+   * nothing an agent picks for itself. Left out, the rules and the default — `agent`, labelled — decide.
+   */
+  const identityOption = (): Option =>
+    new Option(
+      '--as <identity>',
+      'who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one',
+    ).choices(['agent', 'me']);
+
   workspaceOption(program.command('channels'))
     .description('the channels and conversations this account can see')
     .option('--all', 'include channels this account is not a member of', false)
@@ -1275,13 +1285,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   workspaceOption(post.command('prepare'))
     .description('show what would be posted, and how many people it interrupts. Posts nothing')
     .requiredOption('--draft <draftId>', 'the draft to prepare')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_post_prepare` given a `draftId`: one draft, one preview, from either surface.
         const prepared = await prepareDraftPost(
           context,
           String(flags.workspace),
-          { draftId: String(flags.draft) },
+          { draftId: String(flags.draft), ...(flags.as === undefined ? {} : { as: flags.as }) },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
         writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
@@ -1317,6 +1328,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--emoji <name>', 'the emoji name, without colons')
     .option('--remove', 'remove your reaction instead', false)
     .option('--approval <approvalId>', 'the approval a person gave with `approve`, under `confirm`')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         const wanted = {
@@ -1337,6 +1349,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           wanted,
           flags.approval ? String(flags.approval) : undefined,
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+          flags.as,
         );
         writeResult(
           done,
@@ -1372,6 +1385,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       '--remove-file <fileId...>',
       'take this file of the message off it, by id; it stays in Slack, shared nowhere',
     )
+    .addOption(identityOption())
     .action(
       act(async (context, _options, flags: Options) => {
         // The same operation as `slack_edit_prepare` given a `draftId`: see `prepareEdit`.
@@ -1382,6 +1396,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             draftId: String(flags.draft),
             ts: String(flags.ts),
             removeFiles: flags.removeFile as string[] | undefined,
+            ...(flags.as === undefined ? {} : { as: flags.as }),
           },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );

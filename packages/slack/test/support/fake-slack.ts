@@ -155,6 +155,66 @@ export interface UploadOptions {
   onUploadUrl?: (filename: string) => void;
 }
 
+/** One person or bot in a {@link SlackWorld}, as `users.info` returns them. */
+export interface WorldUser {
+  readonly display_name?: string;
+  readonly real_name?: string;
+  readonly image_192?: string;
+  readonly image_512?: string;
+  readonly is_bot?: boolean;
+}
+
+/** One conversation in a {@link SlackWorld}: what `conversations.info` says of it, and who is in it. */
+export interface WorldRoom {
+  readonly name?: string;
+  readonly is_private?: boolean;
+  readonly is_im?: boolean;
+  readonly is_mpim?: boolean;
+  readonly is_ext_shared?: boolean;
+  /** For a DM: whose it is. */
+  readonly user?: string;
+  /** Everyone in it, the bot user included when it has joined: what `conversations.members` pages through. */
+  members: string[];
+}
+
+/** A message the world holds: one posted through it, or one planted to be edited or deleted. */
+export interface WorldMessage {
+  readonly channel: string;
+  readonly ts: string;
+  text: string;
+  blocks?: unknown;
+  readonly user: string;
+  /** Set on a message the bot posted, as Slack sets it on every app message. */
+  readonly bot_id?: string;
+  readonly username?: string;
+  readonly icon_emoji?: string;
+  readonly icon_url?: string;
+  /** Which token posted it, by what it is: the person's, or the app's bot's. */
+  readonly via: 'user' | 'bot';
+  deleted?: boolean;
+  edited?: { ts: string };
+}
+
+/**
+ * A small workspace with state, for the agent label's tests (design 2026-10-15 §9): people, rooms and paged
+ * membership, and a bot token that posts and reacts as the app. What it assumes of Slack is what the design read,
+ * and §10's live check settles: a bot posting to a private or shared room it has not joined gets `not_in_channel`, and
+ * to a DM or group DM `channel_not_found`; an app message carries `bot_id`, the bot user and any `username` and icon.
+ */
+export interface SlackWorld {
+  readonly userToken: string;
+  readonly botToken: string;
+  readonly self: string;
+  readonly botUserId: string;
+  readonly users: Record<string, WorldUser>;
+  readonly rooms: Record<string, WorldRoom>;
+  /** How many members a page of `conversations.members` holds: small, so a test can make Slack page. */
+  pageSize?: number;
+  readonly messages: WorldMessage[];
+  /** Every reaction added or removed, and with which token. */
+  readonly reactions: { channel: string; ts: string; name: string; via: 'user' | 'bot'; remove: boolean }[];
+}
+
 export interface FakeSlack {
   readonly requests: SlackRequest[];
   /** Replies by method. A method with no reply answers `unknown_method`, as Slack does. */
@@ -174,6 +234,11 @@ export interface FakeSlack {
    * Replaces any `files.info` already scripted: a test that posts files is not also downloading them.
    */
   acceptUploads(options?: UploadOptions): FakeUploads;
+  /**
+   * Scripts the methods a labelled post, reaction, edit or deletion makes against `world`, which it reads and changes
+   * as they are called: see {@link SlackWorld}.
+   */
+  world(world: Partial<SlackWorld>): SlackWorld;
   /** This server's own origin, for a reply that must point somewhere the guard never approved — a redirect. */
   readonly local: string;
   /** The inner fetch to hand the CLI. */
@@ -361,6 +426,179 @@ function installEventPages(fake: FakeSlack, pages: SlackEventPages): void {
   };
 }
 
+/** Scripts `fake` as a workspace with state: see {@link SlackWorld}. */
+function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
+  const world: SlackWorld = {
+    userToken: 'fake-user-token-0',
+    botToken: 'fake-bot-token-0',
+    self: 'U0001',
+    botUserId: 'U0BOT0001',
+    users: {},
+    rooms: {},
+    messages: [],
+    reactions: [],
+    ...given,
+  };
+  let clock = 0;
+  const nextTs = (): string => {
+    clock += 1;
+    return `1700000100.${String(clock).padStart(6, '0')}`;
+  };
+  const tokenOf = (request: SlackRequest): 'user' | 'bot' | 'other' => {
+    const bearer = request.authorization?.replace(/^Bearer /, '');
+    return bearer === world.userToken ? 'user' : bearer === world.botToken ? 'bot' : 'other';
+  };
+  const room = (request: SlackRequest): [string, WorldRoom | undefined] => {
+    const id = request.params.get('channel') ?? '';
+    return [id, world.rooms[id]];
+  };
+  /** Whether the bot may post or react here (§10 to confirm): never in a DM; elsewhere, in a private or shared room, only once it has joined. */
+  const botRefusal = (target: WorldRoom | undefined): string | undefined => {
+    if (target === undefined || target.is_im || target.is_mpim) return 'channel_not_found';
+    if ((target.is_private || target.is_ext_shared) && !target.members.includes(world.botUserId))
+      return 'not_in_channel';
+    return undefined;
+  };
+  fake.script['conversations.info'] = (request) => {
+    const [id, target] = room(request);
+    if (target === undefined) return { ok: false, error: 'channel_not_found' };
+    return {
+      ok: true,
+      channel: {
+        id,
+        ...(target.name === undefined ? {} : { name: target.name }),
+        is_private: target.is_private === true,
+        is_im: target.is_im === true,
+        is_mpim: target.is_mpim === true,
+        is_ext_shared: target.is_ext_shared === true,
+        ...(target.user === undefined ? {} : { user: target.user }),
+        // A DM's answer has no `is_member`, as Slack's has none.
+        ...(target.is_im ? {} : { is_member: target.members.includes(world.self) }),
+        num_members: target.members.length,
+      },
+    };
+  };
+  fake.script['conversations.members'] = (request) => {
+    if (tokenOf(request) !== 'user') return { ok: false, error: 'invalid_auth' };
+    const [, target] = room(request);
+    if (target === undefined) return { ok: false, error: 'channel_not_found' };
+    const size = world.pageSize ?? 100;
+    const start = Number(request.params.get('cursor') || '0');
+    const page = target.members.slice(start, start + size);
+    const next = start + size < target.members.length ? String(start + size) : '';
+    return { ok: true, members: page, response_metadata: { next_cursor: next } };
+  };
+  fake.script['users.info'] = (request) => {
+    const id = request.params.get('user') ?? '';
+    const user = world.users[id];
+    if (user === undefined) return { ok: false, error: 'user_not_found' };
+    return {
+      ok: true,
+      user: {
+        id,
+        name: id.toLowerCase(),
+        ...(user.real_name === undefined ? {} : { real_name: user.real_name }),
+        is_bot: user.is_bot === true,
+        profile: {
+          display_name: user.display_name ?? '',
+          real_name: user.real_name ?? '',
+          ...(user.image_192 === undefined ? {} : { image_192: user.image_192 }),
+          ...(user.image_512 === undefined ? {} : { image_512: user.image_512 }),
+        },
+      },
+    };
+  };
+  fake.script['chat.postMessage'] = (request) => {
+    const via = tokenOf(request);
+    if (via === 'other') return { ok: false, error: 'invalid_auth' };
+    const [channel, target] = room(request);
+    if (via === 'bot') {
+      const refused = botRefusal(target);
+      if (refused) return { ok: false, error: refused };
+    } else if (target === undefined) return { ok: false, error: 'channel_not_found' };
+    const ts = nextTs();
+    const field = (name: string): string | undefined => request.params.get(name) ?? undefined;
+    const username = field('username');
+    const icon_emoji = field('icon_emoji');
+    const icon_url = field('icon_url');
+    world.messages.push({
+      channel,
+      ts,
+      text: field('text') ?? '',
+      ...(field('blocks') ? { blocks: JSON.parse(field('blocks') as string) } : {}),
+      user: via === 'bot' ? world.botUserId : world.self,
+      ...(via === 'bot' ? { bot_id: 'B0BOT0001' } : {}),
+      ...(username === undefined ? {} : { username }),
+      ...(icon_emoji === undefined ? {} : { icon_emoji }),
+      ...(icon_url === undefined ? {} : { icon_url }),
+      via,
+    });
+    return { ok: true, channel, ts };
+  };
+  const shown = (message: WorldMessage) => ({
+    type: 'message',
+    ts: message.ts,
+    user: message.user,
+    text: message.text,
+    ...(message.bot_id ? { bot_id: message.bot_id } : {}),
+    ...(message.username ? { username: message.username } : {}),
+    ...(message.edited ? { edited: message.edited } : {}),
+  });
+  fake.script['conversations.history'] = (request) => {
+    const channel = request.params.get('channel') ?? '';
+    const ts = request.params.get('latest') ?? '';
+    const found = world.messages.filter((m) => m.channel === channel && m.ts === ts && !m.deleted);
+    return { ok: true, messages: found.map(shown) };
+  };
+  fake.script['conversations.replies'] = () => ({ ok: false, error: 'thread_not_found' });
+  const own = (request: SlackRequest): WorldMessage | string => {
+    const via = tokenOf(request);
+    const channel = request.params.get('channel') ?? '';
+    const ts = request.params.get('ts') ?? '';
+    const message = world.messages.find((m) => m.channel === channel && m.ts === ts && !m.deleted);
+    if (message === undefined) return 'message_not_found';
+    // Each token changes only its own messages: the app's bot its posts, the person theirs.
+    if (via === 'other') return 'invalid_auth';
+    if (message.via !== via) return 'cant_update_message';
+    return message;
+  };
+  fake.script['chat.update'] = (request) => {
+    const message = own(request);
+    if (typeof message === 'string') return { ok: false, error: message };
+    message.text = request.params.get('text') ?? '';
+    message.edited = { ts: nextTs() };
+    return { ok: true, channel: message.channel, ts: message.ts, text: message.text };
+  };
+  fake.script['chat.delete'] = (request) => {
+    const message = own(request);
+    if (typeof message === 'string') {
+      return { ok: false, error: message === 'cant_update_message' ? 'cant_delete_message' : message };
+    }
+    message.deleted = true;
+    return { ok: true, channel: message.channel, ts: message.ts };
+  };
+  for (const method of ['reactions.add', 'reactions.remove'] as const) {
+    fake.script[method] = (request) => {
+      const via = tokenOf(request);
+      if (via === 'other') return { ok: false, error: 'invalid_auth' };
+      const [channel, target] = room(request);
+      if (via === 'bot') {
+        const refused = botRefusal(target);
+        if (refused) return { ok: false, error: refused };
+      }
+      world.reactions.push({
+        channel,
+        ts: request.params.get('timestamp') ?? '',
+        name: request.params.get('name') ?? '',
+        via,
+        remove: method === 'reactions.remove',
+      });
+      return { ok: true };
+    };
+  }
+  return world;
+}
+
 export async function startFakeSlack(script: Record<string, Reply> = {}): Promise<FakeSlack> {
   const requests: SlackRequest[] = [];
   const fake: FakeSlack = {
@@ -370,6 +608,7 @@ export async function startFakeSlack(script: Record<string, Reply> = {}): Promis
     uploadAnswer: () => ({ status: 200, body: 'OK' }),
     eventPages: (pages) => installEventPages(fake, pages),
     acceptUploads: (options) => acceptUploads(fake, options),
+    world: (world) => installWorld(fake, world),
     local: '',
     fetch: async () => {
       throw new Error('not started');

@@ -75,6 +75,12 @@ export interface Harness {
      * by default: a workspace connected before this release, which has none.
      */
     bot?: { userId: string; bundle?: Partial<TokenBundle> } | undefined;
+    /**
+     * Who its acts appear to come from (design 2026-10-15 L3). `me` by default — a rule switching the label off for
+     * this workspace, as a person can — so the gate's own tests see the post they always did. The label's tests pass
+     * `agent`, which plants no rule and leaves the default.
+     */
+    identity?: 'agent' | 'me' | undefined;
   }): Promise<AccountConfig>;
 }
 
@@ -272,10 +278,24 @@ export async function newHarness(options: { version?: 1 | 2 } = {}): Promise<Har
           }),
         );
       }
-      // A workspace planted able to post stands for one a person connected and confirmed, so it carries that consent.
+      // A workspace planted able to post stands for one a person connected and confirmed, so it carries that consent —
+      // and a workspace with the label switched off, one a person switched off (design 2026-10-15 L5).
       await core.config.update(
-        (config) => ({ ...config, accounts: { ...config.accounts, [options.alias]: account } }),
-        { consent: { kind: 'loosening-consent', paths: [`accounts.${options.alias}.mode`] } },
+        (config) => {
+          const label = ((config as { agentLabel?: { rules?: unknown[] } }).agentLabel ?? {}) as {
+            rules?: unknown[];
+          };
+          const rules =
+            options.identity === 'agent' ? label.rules : [...(label.rules ?? []), { account: options.alias, as: 'me' }];
+          return {
+            ...config,
+            accounts: { ...config.accounts, [options.alias]: account },
+            ...(rules === undefined ? {} : { agentLabel: { ...label, rules } }),
+          };
+        },
+        {
+          consent: { kind: 'loosening-consent', paths: [`accounts.${options.alias}.mode`, 'agentLabel.rules'] },
+        },
       );
       return account;
     },

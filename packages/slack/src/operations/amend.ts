@@ -26,6 +26,17 @@ import { type ComposedPayload, payloadOf } from '../compose/blocks.ts';
 import type { SlackDraft } from '../compose/drafts.ts';
 import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/files.ts';
 import { FILE_POST_UNFURLS, urlsInWords } from '../compose/preview.ts';
+import { decodeSlackText } from '../text/decode.ts';
+import {
+  decideEditLabel,
+  editLine,
+  labelBinding,
+  labelledEditText,
+  requestedOf,
+  requestFlags,
+  type SlackLabel,
+  unlabelled,
+} from './label.ts';
 import { messageAt, requireOwnMessage, shownText, type TargetMessage, targetDigest } from './message.ts';
 import type { Channel, NameBook } from './people.ts';
 import {
@@ -39,7 +50,9 @@ import {
   discarded,
   fenceFirstStep,
   filesAsRecorded,
+  type LabelView,
   LINK_MAY_UNFURL,
+  labelView,
   messageOf,
   NO_ID,
   noteOf,
@@ -284,6 +297,8 @@ export interface EditView {
   readonly files: EditFiles | null;
   /** The draft has no words: the message keeps its own, sent back exactly as Slack holds them. */
   readonly keepsWords: boolean;
+  /** Who the edit appears to come from (design 2026-10-15 S5): undefined for a gate built without the label's deps. */
+  readonly label: SlackLabel | undefined;
 }
 
 /**
@@ -391,11 +406,13 @@ function editWarnings(
  * counted from that text, as a post of it would be.
  */
 export async function viewEdit(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs'>,
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label'>,
   draft: SlackDraft,
   ts: string,
   removeFiles: readonly string[],
   book: NameBook,
+  /** What the edit asked for (design 2026-10-15 L3): `as` at prepare, read back from the approval after it. */
+  requested?: 'agent' | 'me' | undefined,
 ): Promise<EditView> {
   requireEditable(draft);
   const message = await messageAt(deps.call, { channel: draft.payload.channel, ts });
@@ -410,18 +427,34 @@ export async function viewEdit(
   }
   // The post the edit's words and new files would be, checked, read and counted as a post of them is (§E6).
   const words = keepsWords ? { ...draft, payload: payloadOf(message.text, draft.payload.channel, undefined) } : draft;
-  const view = await viewPost(deps, words, book);
-  const request: EditRequest = { channel: view.payload.channel, ts, text: view.payload.text, parse: 'none' };
+  // The words as a post of them would be read, without a post's label: an edit's label is its own (S5).
+  const view = await viewPost({ ...deps, label: undefined }, words, book);
+  const label =
+    deps.label === undefined
+      ? undefined
+      : await decideEditLabel(
+          { call: deps.call, postingAs: deps.postingAs, label: deps.label },
+          { channelId: view.payload.channel, channel: book.channel(view.payload.channel), requested },
+        );
+  // An agent's edit says so in its new words (S5): the fallback's prefix, at the front of what `chat.update` is sent.
+  const text =
+    label?.identity === 'agent' && label.phrase !== undefined
+      ? labelledEditText(view.payload.text, label.phrase)
+      : view.payload.text;
+  const wordsChange = !keepsWords || text !== view.payload.text;
+  const request: EditRequest = { channel: view.payload.channel, ts, text, parse: 'none' };
   // Every address in the words, bare or not: an edit cannot turn unfurling off, so any of them may unfurl.
   const urls = urlsInWords(request.text);
   const thread = threadShown(message);
   const preview: ChannelPreview = {
     ...view.preview,
+    // Who it appears to come from (S7), and the words as they will read: the label in them, when it is there.
+    ...(label === undefined ? {} : { postingAs: editLine(label), body: decodeSlackText(text, book.names()).text }),
     ...(thread === undefined ? {} : { thread }),
     replaces: {
       ts,
       body: shownText(message, book),
-      ...(keepsWords ? { wordsUnchanged: true } : {}),
+      ...(wordsChange ? {} : { wordsUnchanged: true }),
       ...(files === null
         ? {}
         : { files: { keeps: files.keep.map((file) => file.name), removes: files.remove.map((file) => file.name) } }),
@@ -431,7 +464,7 @@ export async function viewEdit(
     warnings: [
       // The post's warning about links in a file post is not this edit's: its words go out through `chat.update`.
       ...(view.preview.warnings ?? []).filter((warning) => warning !== FILE_POST_UNFURLS),
-      ...editWarnings(message, view.preview.notifies, urls, files, keepsWords),
+      ...editWarnings(message, view.preview.notifies, urls, files, !wordsChange),
     ],
   };
   const digest = sha256Hex(
@@ -447,9 +480,21 @@ export async function viewEdit(
           ? null
           : { keep: files.keep.map((file) => file.id), remove: files.remove.map((file) => file.id) },
       message: targetDigest(message, 'edit'),
+      // Who it appears to come from, for any edit but one as the person, unlabelled, as every edit before the label was.
+      ...(unlabelled(label) ? {} : { label: labelBinding(label as SlackLabel) }),
     }),
   );
-  return { preview, digest, request, roomUnread: view.roomUnread, payload: view.payload, message, files, keepsWords };
+  return {
+    preview,
+    digest,
+    request,
+    roomUnread: view.roomUnread,
+    payload: view.payload,
+    message,
+    files,
+    keepsWords,
+    label,
+  };
 }
 
 export interface PreparedEdit {
@@ -465,6 +510,8 @@ export interface PreparedEdit {
   readonly requiredPolicy: SendPolicy;
   readonly riskFlags: readonly string[];
   readonly expiresAt: string;
+  /** Who it appears to come from (design 2026-10-15 S5, S7). */
+  readonly label?: LabelView | undefined;
   /** Where its approval stands (design 2026-10-05 §D8): pending, and whether a yes in the chat makes it. */
   readonly approval: ApprovalObject;
 }
@@ -485,12 +532,21 @@ export async function prepareMessageEdit(
   ts: string,
   removeFiles: readonly string[],
   book: NameBook,
+  /** `as`: the person's word for this one edit (design 2026-10-15 L3). */
+  requested?: 'agent' | 'me' | undefined,
 ): Promise<PreparedEdit> {
   refuseNever(deps.policy, 'edit');
   requireChatWrite(deps, 'edit');
   if (changesFiles(draft, removeFiles)) requireFileSending(deps);
   await filesAsRecorded(deps, draft);
-  const { preview, digest, payload, message, files } = await viewEdit(deps, draft, ts, removeFiles, book);
+  const { preview, digest, payload, message, files, label } = await viewEdit(
+    deps,
+    draft,
+    ts,
+    removeFiles,
+    book,
+    requested,
+  );
   const where = { channel: message.channel, ts };
   const riskFlags = [
     EDITS_MESSAGE,
@@ -498,6 +554,7 @@ export async function prepareMessageEdit(
     ...(files !== null && files.remove.length > 0 ? [REMOVES_FILES] : []),
     ...risksOf(payload, preview.notifies, 0).filter((flag) => flag !== 'contains-link'),
     ...((preview.links ?? []).length > 0 ? ['contains-link', LINK_MAY_UNFURL] : []),
+    ...requestFlags(requested),
   ];
   // What raises a post raises its edit (§E6): a broadcast, a large room, or a reach nobody could count.
   const broadcast = preview.notifies.channel || preview.notifies.here;
@@ -533,6 +590,7 @@ export async function prepareMessageEdit(
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describeActPolicy(stricterPolicy(deps.policy, requiredPolicy), 'edit'),
     },
+    ...(label === undefined ? {} : { label: labelView(label, preview.postingAs) }),
     expect: record.expect,
     policy: deps.policy,
     requiredPolicy,
@@ -653,8 +711,9 @@ async function editClassified(
   const adding = draft.files ?? [];
   if (changesFiles(draft, bound.removeFiles)) requireFileSending(deps);
   const policy = adding.length > 0 ? attachPolicyFor(deps) : undefined;
-  // The request sent below is this one: the one previewed, and the one the digest is taken over.
-  const view = await viewEdit(deps, draft, target.ts, bound.removeFiles, book);
+  // The request sent below is this one: the one previewed, and the one the digest is taken over — its label decided
+  // again as it was prepared, with what the edit asked for read back from its approval.
+  const view = await viewEdit(deps, draft, target.ts, bound.removeFiles, book, requestedOf(record?.riskFlags));
   const where = { channel: view.request.channel, ts: target.ts };
   const ids = idsOf(where, draft.draftId);
 

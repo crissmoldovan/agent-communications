@@ -1,9 +1,9 @@
-import { CommsError, findById, handoffSentence } from '@agentcomms/core';
+import { type AccountConfig, CommsError, findById, handoffSentence } from '@agentcomms/core';
 import type { SlackCall } from '../api/call.ts';
 import type { FetchLike } from '../api/guard.ts';
 import { accessTokenFor, type PersistPolicy, type RefreshDeps, renewRejectedToken } from '../auth/refresh.ts';
 import type { SlackContext } from '../context.ts';
-import { bundleFrom, requireWorkspace } from './workspaces.ts';
+import { botSecretRefFor, bundleFrom, requireWorkspace } from './workspaces.ts';
 
 /**
  * A workspace, ready to be read.
@@ -130,6 +130,82 @@ function refreshExchange(context: SlackContext, clientId: string) {
 
 /** Slack's rotation guide: `expires_in` "will always" be 43200 seconds, twelve hours. */
 const DEFAULT_EXPIRES_IN_SECONDS = 43_200;
+
+/**
+ * Renews the send app's bot token (design 2026-10-15 S1): the same exchange as the user token's, and the same rule once
+ * Slack has said `ok:true` — but the token read is the bot's, at the top of the reply, and a reply that holds only a
+ * user token is not this credential. The manifest turns rotation on for the whole app, so the bot token rotates too.
+ */
+function botRefreshExchange(context: SlackContext, clientId: string) {
+  return async (refreshToken: string) => {
+    const raw = (await context.exchange({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+    })) as Record<string, unknown> | null;
+    if (raw === null || typeof raw !== 'object') {
+      throw new CommsError('PROVIDER_UNAVAILABLE', 'Slack’s reply to the app token renewal was not an object', {
+        details: { stage: 'unreadable' },
+      });
+    }
+    if (raw.ok !== true) {
+      const error = typeof raw.error === 'string' ? raw.error : 'unknown';
+      throw new CommsError('AUTH_REQUIRED', `Slack refused the app token renewal: ${error}`, {
+        details: { stage: 'refused', slackError: error },
+      });
+    }
+    const accessToken = typeof raw.access_token === 'string' ? raw.access_token : undefined;
+    const newRefresh = typeof raw.refresh_token === 'string' ? raw.refresh_token : undefined;
+    if (raw.token_type !== 'bot' || !accessToken || !newRefresh) {
+      throw new CommsError('AUTH_REQUIRED', 'Slack’s app token renewal returned no bot token', {
+        details: { stage: 'parse' },
+      });
+    }
+    const expiresIn =
+      typeof raw.expires_in === 'number' && Number.isFinite(raw.expires_in) && raw.expires_in > 0
+        ? raw.expires_in
+        : DEFAULT_EXPIRES_IN_SECONDS;
+    const bundle = bundleFrom(
+      { accessToken, refreshToken: newRefresh, expiresInSeconds: expiresIn } as Parameters<typeof bundleFrom>[0],
+      context.now(),
+    );
+    const { v: _v, state: _state, attempt: _attempt, ...rest } = bundle;
+    return rest;
+  };
+}
+
+/**
+ * A call carrying the send app's bot token, renewed first when it is due (design 2026-10-15 S1, S4). Under the same
+ * credentials lock as every refresh, with a lock and an in-flight slot of its own, so it never waits on the user
+ * token's. Only an act the gate routed to the app opens it, and only to post through the gate.
+ */
+export async function openApp(
+  context: SlackContext,
+  name: string,
+  account: AccountConfig,
+  deps: SessionDeps = {},
+): Promise<SlackCall> {
+  if (!account.oauthClientId) {
+    throw new CommsError('CONFIG', `"${name}" has no Slack client id recorded, so its app's token cannot be renewed`);
+  }
+  const secrets = await context.secrets();
+  const persist = deps.persist ?? context.persist;
+  const ref = botSecretRefFor(account.id);
+  const refresh: RefreshDeps = {
+    secrets,
+    openSecrets: () => context.secrets(),
+    configDir: context.core.paths.configDir,
+    stateDir: context.core.paths.stateDir,
+    now: context.now,
+    exchange: botRefreshExchange(context, account.oauthClientId),
+    alias: name,
+    handoffs: context.handoffs,
+    ...(persist ? { persist } : {}),
+  };
+  // Its own lock and its own kept result: the user token's are keyed by the account's id, and this is not that token.
+  const { token } = await accessTokenFor(refresh, `${account.id}-app`, ref);
+  return { token, fetch: deps.fetch, baseUrl: deps.baseUrl };
+}
 
 /** Resolves a workspace by name and returns a call that carries a live token for it. */
 export async function openWorkspace(
