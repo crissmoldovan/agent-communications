@@ -201,7 +201,8 @@ test('the preview lists every recipient — BCC too — the reach, and the From 
   assert.match(prepared.preview, /Bcc: {6}audit@acme\.test/);
   assert.match(prepared.preview, /Reach: 3 unique recipient\(s\) — To 1 · Cc 1 · Bcc 2/);
   assert.match(prepared.preview, /From domain acme\.test: verified for sending at Resend/);
-  assert.match(prepared.preview, /From: {5}Acme <hello@acme\.test>/);
+  // An agent's send, labelled (design 2026-10-15-agent-label, R1).
+  assert.match(prepared.preview, /From: {5}"Acme \(agent\)" <hello@acme\.test>/);
   assert.match(
     prepared.preview,
     /── To sam@partner\.test · Cc ana@partner\.test · Bcc audit@acme\.test, sam@partner\.test/,

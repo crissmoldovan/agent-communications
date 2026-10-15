@@ -133,7 +133,8 @@ is not a request to draft: offer, and stop.
    each is verified. Note what it does **not** do: the draft is sent from the mailbox's own
    address, and there is no per-draft `from` argument. If the user wants a message to come from a
    different identity, that means drafting in the inbox connected under that identity. The
-   send-as list matters mostly because the signature is chosen from it.
+   send-as list matters because the signature is chosen from it, and because the name a send-as
+   address has in Gmail is the name the agent label is made from (step 5).
    **Complete when:** the user's expectation about the From line matches the mailbox you are in.
 
 4. **Read the writing profile before writing anything.** Pass `includeProfile: true` (CLI:
@@ -155,10 +156,23 @@ is not a request to draft: offer, and stop.
    under its own file name, and anything over 25 MB raises a warning because some recipients will
    simply not receive it. Leave the mailbox signature off with `signature: false` (CLI:
    `--no-signature`).
-   **Complete when:** the call returned a `draftId` and a `preview`.
+   **The From line says your agent wrote it.** Every draft is labelled `"<name> (agent)"
+   <address>` — the address's send-as name in Gmail, else the label name the person set in the
+   core, then their word (`agent` unless they chose `assistant`, `twin`, `minion`, `bot`, `fake` or
+   `AI`) — so whoever receives it can tell it was not typed by the person. Pass `as: "me"` (CLI:
+   `--as me`) only when the person said, for this message, that it should go as them, unlabelled.
+   Never pass it on your own, to make a message read better, or to get past a refusal. Left out,
+   the person's label rules decide — by mailbox, by who it goes to (an address or `@domain`,
+   matching only when every recipient does) and by kind (`send` for a new message or a forward,
+   `reply` for a reply) — and then `agent`. A draft with no name to label, or a name too long for
+   the label, is refused with how to set one: tell the person what it says.
+   **Complete when:** the call returned a `draftId` and a `preview`, and its `identity` is the one
+   the person expects.
 
 6. **Show the preview verbatim, and read the warnings out.** Paste the returned `preview` into the
-   conversation inside a code fence. It carries the From line, every recipient, the subject, each
+   conversation inside a code fence. Its first line says who the message will appear to come from —
+   labelled as the agent, or `Sent as you, with no label: it will look as if you wrote it yourself`.
+   Then it carries the From line, every recipient, the subject, each
    attachment with its size, the body fenced and with invisible characters made visible, and the
    recipients again after the body, because a long message pushes the To line off the screen. The
    `warnings` array is what the tool noticed: recipients outside the user's own domains, blind
@@ -270,8 +284,9 @@ Good — the preview shown whole, the warning named, and the handover made expli
 ```text
 Drafted as a reply-all in `acme/gmail`. Nothing has been sent.
 
+    Sent as Jo Example (agent): labelled in the From line, so whoever receives it can tell your agent sent it
     MESSAGE PREVIEW · inbox acme/gmail · draft r_88214 · nothing has been sent
-    From:     jo@example.com
+    From:     "Jo Example (agent)" <jo@example.com>
     To:       sam@partner.test
     Cc:       ana@partner.test
     Subject:  Re: Phase 2 plan
@@ -318,6 +333,8 @@ to disambiguate a mess you made is not a safety check.
 
 - **Sending.** The single thing this skill must not do. "Just send it" is an instruction to hand
   over, not to call a send tool.
+- **Taking the label off.** `as: "me"` makes a message look as if the person typed it. Pass it only
+  when they said so for that message; a rule they set is theirs to set, not yours.
 - **Writing Markdown or HTML in the body.** The HTML part is generated from your plain text.
   Asterisks, backticks and tags arrive as themselves. Write sentences.
 - **A second draft instead of an update.** Two drafts mean two previews, and the user approves

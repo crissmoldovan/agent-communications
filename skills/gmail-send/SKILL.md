@@ -86,7 +86,14 @@ exists.
 1. **Prepare, and read what comes back.** Call `gmail_send_prepare` with the inbox and draft id
    (CLI: `agent-gmail send prepare <draftId> --inbox <name>`). It reads the draft, refuses it
    outright if an agent could not have written it, and returns a preview, an `approvalId`, an
-   `expect` display block, `riskFlags`, the `effectivePolicy` and the `approval`. Nothing has been sent.
+   `expect` display block, `riskFlags`, the `effectivePolicy`, the `identity` and the `approval`.
+   Nothing has been sent.
+   It also settles who the message appears to come from: labelled `"<name> (agent)"` in its From
+   line, or — only with `as: "me"` (CLI: `--as me`), passed when the person said so for this
+   message, or a rule of theirs — as them, unlabelled. A draft whose From does not say so (one
+   written in Gmail, say) has that header alone rewritten, every other byte kept, and the draft
+   replaced; `fromRewritten` is then `true` and the preview's second line says so. A draft from an
+   address this mailbox cannot send as is refused rather than relabelled.
    The display block uses Gmail's safe field form; do not copy it into the send call.
    `approval.claimable` says whose yes counts: `true` — route `chat` — means a yes in this chat sends
    it, within ten minutes; `false` — route `confirm` — means a person outside the chat approves it,
@@ -94,7 +101,10 @@ exists.
    **Complete when:** you hold an `approvalId` and the preview text, or a refusal to report.
 
 2. **Show the preview verbatim.** Paste it into the conversation exactly as it came, inside a code
-   fence. It already contains the recipients twice — once at the top and once after the body,
+   fence. Its first line says who the message will appear to come from; for `me` it reads `Sent as
+   you, with no label: it will look as if you wrote it yourself`. The approval binds the whole
+   From, name and all: a From changed after the preview voids it. It already contains the
+   recipients twice — once at the top and once after the body,
    because a long message pushes the To line off the screen — the subject, the attachments with
    their sizes, every link in full, and a line saying what the policy needs. Do not add a summary
    above it that the user might read instead.
@@ -216,8 +226,9 @@ Good — the whole preview, the flag named, nothing added that competes with it:
 ```text
 Here is exactly what would be sent. Nothing has gone yet.
 
+    Sent as Jo Example (agent): labelled in the From line, so whoever receives it can tell your agent sent it
     SEND PREVIEW · inbox acme/gmail · approval ap_7K2Q… · draft r_88… · nothing has been sent
-    From:     Jo Example <jo@example.com>
+    From:     "Jo Example (agent)" <jo@example.com>
     To:       sam@partner.test     EXTERNAL
               ana@partner.test     EXTERNAL · FIRST-TIME
     Subject:  Re: Phase 2 plan
@@ -257,6 +268,8 @@ even when it would succeed.
 
 - **Summarising the preview.** The most natural thing to do, and the one that defeats the whole
   design. The preview repeats the recipients after the body precisely because it is long.
+- **Taking the label off to send it.** `as: "me"` makes the message look as if the person typed it.
+  Pass it only when they said so for this message — never to get past a refusal.
 - **Passing the display-safe `expect` block back to send.** Send by approval id. The returned block is
   safe output for display, not an input to copy or reconstruct.
 - **Treating `APPROVAL_PENDING` as a failure.** The approval is alive and waiting for a person.

@@ -405,6 +405,7 @@ agent-gmail draft new [options]
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | who it goes to | — |
 | `--subject <subject>` | the subject line | — |
@@ -427,6 +428,7 @@ agent-gmail draft reply [options] <messageId>
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--mode <mode>` | how to answer (choices: "reply", "reply_all", "forward") | — |
 | `--to <address...>` | who it goes to (a forward needs this; a reply computes it) | — |
@@ -474,6 +476,7 @@ agent-gmail draft update [options] <draftId>
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | replace the recipients | — |
 | `--subject <subject>` | replace the subject line | — |
@@ -509,6 +512,7 @@ agent-gmail send prepare [options] <draftId>
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 
 ### `agent-gmail send execute`
 

@@ -573,6 +573,10 @@ is out: update first, or put it off (the stop names both commands) Â· 64 usage Â
     .option('--in-reply-to <messageId>', 'the Message-ID this replies to, to keep the thread')
     .option('--references <messageId>', 'an earlier Message-ID in the thread; repeat for more', collect, [])
     .option('--scheduled-at <time>', 'send later: an ISO 8601 time with a zone, at most 30 days ahead')
+    .option(
+      '--as <who>',
+      'who it appears to come from: agent (From labelled) or me (From as given, only when the person said so)',
+    )
     .action(
       act(async (context, _options, flags: Options) => {
         const prepared = await prepareSend(context, String(flags.account), {
@@ -588,6 +592,7 @@ is out: update first, or put it off (the stop names both commands) Â· 64 usage Â
           inReplyTo: flags.inReplyTo === undefined ? undefined : String(flags.inReplyTo),
           references: flags.references as string[],
           scheduledAt: flags.scheduledAt === undefined ? undefined : String(flags.scheduledAt),
+          as: flags.as === undefined ? undefined : String(flags.as),
         });
         writeResult(prepared, output(), renderPrepared, streams);
       }),

@@ -475,7 +475,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     {
       title: 'Prepare an email',
       description:
-        'Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Show the preview in full and wait for the person’s yes.',
+        'Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Its From is labelled `<name> (agent)` — the From’s name, or the person’s label name for a bare address — unless `as` is `me`, and the preview’s first line says which. Show the preview in full and wait for the person’s yes.',
       inputSchema: {
         ...accountArg,
         from: z.string().describe('the sender at a verified domain: `Name <you@example.com>` or a bare address'),
@@ -493,6 +493,14 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
         inReplyTo: z.string().optional().describe('the Message-ID this replies to, to keep the thread'),
         references: z.array(z.string()).optional(),
         scheduledAt: z.string().optional().describe('send later: an ISO 8601 time with a zone, at most 30 days ahead'),
+        // A word, checked by the operation: a word that is not one is refused as USAGE from either surface.
+        as: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'who it appears to come from: agent (From labelled "<name> (agent)") or me (From as given). Pass `me` only when the person said so for this email; left out, their rules decide, and then agent',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -511,6 +519,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
         inReplyTo?: string | undefined;
         references?: string[] | undefined;
         scheduledAt?: string | undefined;
+        as?: string | undefined;
       }) => {
         const { account, ...input } = args;
         return prepareSend(context, await resolve(account), input);

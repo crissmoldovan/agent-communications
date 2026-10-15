@@ -2,10 +2,12 @@ import { readFile } from 'node:fs/promises';
 import {
   type ApprovalObject,
   type ApprovalRecord,
+  agentLabelOf,
   approveAndWaitSentence,
   type CliHandoffs,
   CommsError,
   canonicalAddress,
+  DEFAULT_AGENT_LABEL_WORD,
   type Expectation,
   ensureSendEpochConfig,
   fenceOrStop,
@@ -13,17 +15,22 @@ import {
   handoffSentenceToFill,
   integrityRefusal,
   type LegacyDrainReport,
+  labelPhrase,
+  type MessageIdentity,
   type MessagePreview,
   newBoundary,
   ownerOf,
   type PublicApprovalView,
   publicApproval,
   renderMessagePreview,
+  resolveIdentity,
   type SendPolicy,
   sendEpochOf,
   sha256Hex,
   stateOf,
   stricterPolicy,
+  truncateDisplay,
+  UNLABELLED_PREVIEW_LINE,
   type UsedSaid,
   withApproval,
   withSendingLease,
@@ -36,6 +43,8 @@ import {
   type BuiltMessage,
   buildMessage,
   digestOf,
+  identityOfFrom,
+  labelledFrom,
   newPreparedId,
   type OutboundMessage,
   REACH_CONFIRM_THRESHOLD,
@@ -74,6 +83,12 @@ export interface SendPreparation {
   account: string;
   /** Show it verbatim; do not summarise it. */
   preview: string;
+  /**
+   * Who the email appears to come from (design 2026-10-15-agent-label, L3), bound by the approval with the From that
+   * says it: `agent`, labelled `"<name> (<word>)"`, or `me`, the From as the caller gave it. The preview's first line
+   * says which.
+   */
+  identity: MessageIdentity;
   policy: SendPolicy;
   effectivePolicy: SendPolicy;
   riskFlags: string[];
@@ -401,7 +416,73 @@ function previewOf(options: {
     warnings,
     policy: describePolicy(options.effective, options.approvalId, options.flags, options.handoffs),
   };
-  return renderMessagePreview(preview);
+  // First, who it appears to come from, read from the From the approval binds: the terminal's approval says what the
+  // prepare said (L3).
+  return `${identityLine(identityOfFrom(message.from))}\n${renderMessagePreview(preview)}`;
+}
+
+/** L3: the first line of a preview — the label recipients will see, or that there is none. */
+function identityLine(identity: { readonly identity: MessageIdentity; readonly phrase?: string | undefined }): string {
+  if (identity.identity === 'me' || identity.phrase === undefined) return UNLABELLED_PREVIEW_LINE;
+  return `Sent as ${truncateDisplay(identity.phrase, 120)}: labelled in the From line, so whoever receives it can tell your agent sent it`;
+}
+
+/** What `prepareSend` takes: the email, and who it appears to come from. */
+export interface PrepareInput extends SendInput {
+  /**
+   * `me` or `agent`: what the person said for this email (L3). Left out, the rules and then `agent` decide. Checked
+   * here, so a word that is not one is refused alike from either surface.
+   */
+  as?: string | undefined;
+}
+
+/** The longest an agent's From name may be, label and all: Resend's name limit (design 2026-10-15-agent-label, L2). */
+export const RESEND_LABEL_LIMIT = 100;
+
+/**
+ * R1: who the email appears to come from, and its From. For `agent`, L1's phrase from the caller's From name, or the
+ * core's `agentLabel.name` when the caller gave a bare address, refused when there is neither or it does not fit; for
+ * `me`, the From as the caller gave it.
+ */
+function labelled(
+  config: object,
+  account: string,
+  built: BuiltMessage,
+  requested: string | undefined,
+): { message: OutboundMessage; identity: MessageIdentity } {
+  if (requested !== undefined && requested !== 'agent' && requested !== 'me') {
+    throw new CommsError('USAGE', `"${requested}" is not who an email appears to come from`, {
+      hint: 'Use agent or me.',
+    });
+  }
+  const settings = agentLabelOf(config as { readonly agentLabel?: unknown });
+  const decision = resolveIdentity(settings, {
+    account,
+    kind: 'send',
+    requested,
+    mail: { recipients: uniqueRecipients(built.message) },
+  });
+  if (decision.identity === 'me') return { message: built.message, identity: 'me' };
+  const name = built.fromName !== '' ? built.fromName : settings.name;
+  if (name === undefined) {
+    throw new CommsError('USAGE', 'this email is to be labelled as sent by your agent, and there is no name to label', {
+      hint: 'Give From a name, `Name <you@example.com>`, or set one with `label name`.',
+    });
+  }
+  let phrase: string;
+  try {
+    phrase = labelPhrase(name, settings.word ?? DEFAULT_AGENT_LABEL_WORD, RESEND_LABEL_LIMIT);
+  } catch (error) {
+    if (!(error instanceof CommsError) || error.hint !== undefined) throw error;
+    throw new CommsError(error.code, error.message, {
+      hint: 'Give From a name the label can use, or set one with `label name` and give From a bare address.',
+      cause: error,
+    });
+  }
+  return {
+    message: { ...built.message, from: labelledFrom(phrase, built.message.fromAddress) },
+    identity: 'agent',
+  };
 }
 
 async function attachPolicy(context: ResendContext) {
@@ -420,7 +501,7 @@ async function attachPolicy(context: ResendContext) {
  * Step one. Builds and checks the message, refuses a From on an unverified domain, and records an approval bound to
  * this exact content. Nothing is sent; preparing twice is free.
  */
-export async function prepareSend(context: ResendContext, name: string, input: SendInput): Promise<SendPreparation> {
+export async function prepareSend(context: ResendContext, name: string, input: PrepareInput): Promise<SendPreparation> {
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const named = await context.accounts.require(name);
@@ -435,8 +516,12 @@ export async function prepareSend(context: ResendContext, name: string, input: S
       ),
     });
   }
-  const built = await buildMessage(input, { now: context.now(), attach: await attachPolicy(context) });
-  const domainNote = await checkFromDomain(context, named, built.message.fromDomain);
+  const { as: requested, ...email } = input;
+  const composed = await buildMessage(email, { now: context.now(), attach: await attachPolicy(context) });
+  const domainNote = await checkFromDomain(context, named, composed.message.fromDomain);
+  // Who it appears to come from, and the From that says so (R1): settled before the digest, which binds it.
+  const { message: outbound, identity } = labelled(config, named.name, composed, requested);
+  const built: BuiltMessage = { ...composed, message: outbound };
   const study = await studyRecipients(context, named, built.message, config.defaults.riskEscalation);
   const requiredPolicy: SendPolicy = study.flags.length > 0 ? 'confirm' : 'chat';
   const effective = stricterPolicy(livePolicy, requiredPolicy);
@@ -481,6 +566,7 @@ export async function prepareSend(context: ResendContext, name: string, input: S
   return {
     approvalId: record.approvalId,
     account: name,
+    identity,
     preview: previewOf({
       name,
       approvalId: record.approvalId,

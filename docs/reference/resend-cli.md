@@ -281,6 +281,7 @@ agent-resend send prepare [options]
 | `--in-reply-to <messageId>` | the Message-ID this replies to, to keep the thread | — |
 | `--references <messageId>` | an earlier Message-ID in the thread; repeat for more | `[]` |
 | `--scheduled-at <time>` | send later: an ISO 8601 time with a zone, at most 30 days ahead | — |
+| `--as <who>` | who it appears to come from: agent (From labelled) or me (From as given, only when the person said so) | — |
 
 ### `agent-resend send execute`
 

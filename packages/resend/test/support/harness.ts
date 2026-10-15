@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { type Core, type LooseningConsent, openCore } from '@agentcomms/core';
+import { type Config, type Core, type LooseningConsent, openCore } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import {
@@ -86,6 +86,17 @@ export function tempDir(prefix = 'agent-resend-'): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
+/** Every `agentLabel` path a change to the label settings can loosen (design 2026-10-15-agent-label, L5). */
+const AGENT_LABEL_PATHS = ['agentLabel.word', 'agentLabel.name', 'agentLabel.rules', 'agentLabel.slackIcons'];
+
+/** Replaces the person's label settings, `agentLabel`, with the consent a person's change to them carries. */
+export async function setAgentLabel(harness: Harness, settings: Record<string, unknown>): Promise<void> {
+  const replaced = { agentLabel: settings };
+  await harness.core.config.update((config): Config => ({ ...config, ...replaced }), {
+    consent: { kind: 'loosening-consent', paths: AGENT_LABEL_PATHS },
+  });
+}
+
 export async function newHarness(): Promise<Harness> {
   const dir = tempDir();
   const env: NodeJS.ProcessEnv = {
@@ -103,7 +114,14 @@ export async function newHarness(): Promise<Harness> {
   // Opened as this package's CLI and server open it, so every command they print is located from here (CUE-403).
   const core = openCore({ env, caller: RESEND_CALLER });
   mkdirSync(join(dir, 'config'), { recursive: true, mode: 0o700 });
-  writeFileSync(join(dir, 'config', 'config.json'), `${JSON.stringify({ version: 2, secrets: { store: 'file' } })}\n`);
+  /*
+   * The person has a label name (design 2026-10-15-agent-label, L1): a send an agent prepares is labelled, and one
+   * whose From is a bare address takes its name from here — without one it is refused. `setAgentLabel` changes it.
+   */
+  writeFileSync(
+    join(dir, 'config', 'config.json'),
+    `${JSON.stringify({ version: 2, secrets: { store: 'file' }, agentLabel: { name: 'Jo Example' } })}\n`,
+  );
   const fake = await startFakeResend();
   fake.keys.set(FULL, { permission: 'full_access' });
   fake.keys.set(SENDING, { permission: 'sending_access' });
