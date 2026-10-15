@@ -433,9 +433,13 @@ function planChange(config: Config, change: CheckedChange): Plan {
             : null,
         target: targetOf(account),
         summary: `Send ${scopeText(rule)} ${rule.as === 'me' ? AS_YOU : `${AS_AGENT}, labelled`}`,
+        // The account's id goes with the rule, so an account connected later under this name never inherits it.
         edit: withStored((label) => ({
           ...label,
-          rules: [...readableRules(config).filter((held) => !sameScope(held, rule)), rule],
+          rules: [
+            ...readableRules(config).filter((held) => !sameScope(held, rule)),
+            { ...rule, accountId: account.id },
+          ],
         })),
       };
     }
@@ -611,11 +615,12 @@ function agentPhrase(settings: AgentLabelSettings, platform: string): string {
 }
 
 function queryFor(account: ConnectedAccount, kind: ActKind, conversation?: string): IdentityQuery {
-  if (conversation === undefined) return { account: account.alias, kind };
+  const base = { account: account.alias, accountId: account.id, kind };
+  if (conversation === undefined) return base;
   const mail = Object.hasOwn(LABELLED, account.platform) && LABELLED[account.platform]?.conversation === 'mail';
   return mail
-    ? { account: account.alias, kind, mail: { recipients: [conversation] } }
-    : { account: account.alias, kind, slack: { channel: conversation, dmWith: conversation } };
+    ? { ...base, mail: { recipients: [conversation] } }
+    : { ...base, slack: { channel: conversation, dmWith: conversation } };
 }
 
 function reportOf(config: Config): LabelReport {
@@ -623,7 +628,6 @@ function reportOf(config: Config): LabelReport {
   const raw = stored(config);
   const word = settings.word ?? DEFAULT_AGENT_LABEL_WORD;
   const accounts = connectedAccounts(config);
-  const names = new Set(accounts.map((account) => account.alias));
   const rules = settings.rules ?? [];
   const ignored = [
     ...(raw.word !== undefined && settings.word === undefined
@@ -640,7 +644,13 @@ function reportOf(config: Config): LabelReport {
     word,
     words: AGENT_LABEL_WORDS,
     name: settings.name ?? null,
-    rules: rules.map((rule) => ({ rule, text: agentLabelRuleText(rule), matches: names.has(rule.account) })),
+    rules: rules.map((rule) => ({
+      rule,
+      text: agentLabelRuleText(rule),
+      matches: accounts.some(
+        (account) => account.alias === rule.account && (rule.accountId === undefined || rule.accountId === account.id),
+      ),
+    })),
     accounts: accounts.map((account) => accountView(account, settings)),
     ignored,
   };

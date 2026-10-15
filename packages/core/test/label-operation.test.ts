@@ -252,11 +252,11 @@ test('rules: an agent rule, or removing a me rule, tightens and applies at once 
   assert.equal(added.changed, true);
   assert.deepEqual((await labelOf(m)).rules, [
     meRule,
-    { account: 'acme/slack', conversation: 'C0ACME', kinds: ['post'], as: 'agent' },
+    { account: 'acme/slack', accountId: 'acc_AAAAAAAAAAAAAAAA', conversation: 'C0ACME', kinds: ['post'], as: 'agent' },
   ]);
   applied(await run(m, { removeRule: meRule }));
   assert.deepEqual((await labelOf(m)).rules, [
-    { account: 'acme/slack', conversation: 'C0ACME', kinds: ['post'], as: 'agent' },
+    { account: 'acme/slack', accountId: 'acc_AAAAAAAAAAAAAAAA', conversation: 'C0ACME', kinds: ['post'], as: 'agent' },
   ]);
   assert.deepEqual(await listApprovals(m.core), [], 'neither asked anybody');
 });
@@ -270,7 +270,9 @@ test('rules: a me rule waits, and its preview says what each affected kind will 
   assert.doesNotMatch(prepared.preview, /acme\/slack, reaction/, 'only the kinds it names');
   assert.deepEqual((await labelOf(m)).rules, undefined);
   applied(await run(m, { addRule: { ...rule, kinds: [...rule.kinds] } }, prepared.approvalId));
-  assert.deepEqual((await labelOf(m)).rules, [{ account: 'acme/slack', kinds: ['post', 'reply'], as: 'me' }]);
+  assert.deepEqual((await labelOf(m)).rules, [
+    { account: 'acme/slack', accountId: 'acc_AAAAAAAAAAAAAAAA', kinds: ['post', 'reply'], as: 'me' },
+  ]);
 });
 
 test('rules: a rule replaces the rule for the same scope with the other identity, so it is never shadowed', async () => {
@@ -280,10 +282,12 @@ test('rules: a rule replaces the rule for the same scope with the other identity
   assert.match(prepared.preview, /acme\/slack, post: as your agent → as you, with no label/);
   const result = applied(await run(m, { addRule: { account: 'acme/slack', as: 'me' } }, prepared.approvalId));
   assert.match(result.note ?? '', /replaced/);
-  assert.deepEqual((await labelOf(m)).rules, [{ account: 'acme/slack', as: 'me' }]);
+  assert.deepEqual((await labelOf(m)).rules, [{ account: 'acme/slack', accountId: 'acc_AAAAAAAAAAAAAAAA', as: 'me' }]);
   // And back, at once: the agent rule replaces the me rule, which is a tightening.
   applied(await run(m, { addRule: { account: 'acme/slack', as: 'agent' } }));
-  assert.deepEqual((await labelOf(m)).rules, [{ account: 'acme/slack', as: 'agent' }]);
+  assert.deepEqual((await labelOf(m)).rules, [
+    { account: 'acme/slack', accountId: 'acc_AAAAAAAAAAAAAAAA', as: 'agent' },
+  ]);
 });
 
 test('rules: what a rule names is checked against the account it is for', async () => {
@@ -303,7 +307,9 @@ test('rules: what a rule names is checked against the account it is for', async 
   }
   // A mail rule's address is kept in lower case, as it is matched.
   applied(await run(m, { addRule: { account: 'acme/gmail', conversation: '@Acme.Test', as: 'agent' } }));
-  assert.deepEqual((await labelOf(m)).rules, [{ account: 'acme/gmail', conversation: '@acme.test', as: 'agent' }]);
+  assert.deepEqual((await labelOf(m)).rules, [
+    { account: 'acme/gmail', accountId: 'ibx_AAAAAAAAAAAAAAAA', conversation: '@acme.test', as: 'agent' },
+  ]);
 });
 
 test('Review focus 2: a rule naming a renamed or removed account matches nothing, is shown so, and can be removed', async () => {
@@ -327,6 +333,19 @@ test('Review focus 2: a rule naming a renamed or removed account matches nothing
   applied(await run(m, { removeRule: { account: 'acme/slack', as: 'me' } }));
   assert.equal((await labelOf(m)).rules, undefined, 'the last rule taken out takes the list with it');
   await assert.rejects(run(m, { removeRule: { account: 'acme/slack', as: 'me' } }), usage('NOT_FOUND', /rule/));
+});
+
+test('a rule records its account id, so an account connected later under a removed name never inherits it', async () => {
+  const m = machine();
+  applied(await run(m, { addRule: { account: 'acme/slack', kinds: ['reaction'], as: 'agent' } }));
+  const stored = (await labelOf(m)).rules?.[0] as { accountId?: string } | undefined;
+  assert.equal(stored?.accountId, 'acc_AAAAAAAAAAAAAAAA');
+  const report = await labelReport(m.core);
+  assert.deepEqual(
+    report.rules.map((rule) => rule.matches),
+    [true],
+    'it matches the account it was added for',
+  );
 });
 
 test('icon: an emoji name between colons is recorded for a Slack account through the flow; anything else is refused', async () => {

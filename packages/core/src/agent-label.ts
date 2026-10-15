@@ -36,6 +36,11 @@ export type ActKind = (typeof ACT_KINDS)[number];
 /** L4: a rule names an account, optionally a conversation and kinds, and gives the identity. */
 export interface AgentLabelRule {
   readonly account: string;
+  /**
+   * The account's stable id (`ibx_…`, `acc_…`) when the rule was added. A rule that carries one matches only that
+   * account, so an account connected later under a removed account's name never inherits its rules.
+   */
+  readonly accountId?: string;
   /** Slack: a channel or DM id (`C…`, `G…`, `D…`) or a person (`U…`). Mail: an address or `@domain`. */
   readonly conversation?: string;
   readonly kinds?: readonly ActKind[];
@@ -54,6 +59,8 @@ export interface AgentLabelSettings {
 /** What a channel knows about one act when it asks who it appears to come from. */
 export interface IdentityQuery {
   readonly account: string;
+  /** The account's stable id. A rule that recorded an id matches only a query that carries the same one. */
+  readonly accountId?: string | undefined;
   readonly kind: ActKind;
   /** L3 step 1: what the person told the agent, passed to the prepare as `as`. */
   readonly requested?: MessageIdentity | undefined;
@@ -119,6 +126,7 @@ function addressMatches(pattern: string, address: string): boolean {
 
 function ruleMatches(rule: AgentLabelRule, query: IdentityQuery): boolean {
   if (rule.account !== query.account) return false;
+  if (rule.accountId !== undefined && rule.accountId !== query.accountId) return false;
   if (rule.kinds !== undefined && !rule.kinds.includes(query.kind)) return false;
   if (rule.conversation === undefined) return true;
   if (query.slack !== undefined)
@@ -165,6 +173,7 @@ export interface AgentLabelLoosening {
 const ruleKey = (rule: AgentLabelRule): string =>
   JSON.stringify([
     rule.account,
+    rule.accountId ?? null,
     rule.conversation ?? null,
     rule.kinds === undefined ? null : [...rule.kinds].sort(),
     rule.as,
@@ -181,8 +190,7 @@ export function classifyAgentLabelChange(
   const changes: AgentLabelLoosening[] = [];
   const wordBefore = before?.word ?? DEFAULT_AGENT_LABEL_WORD;
   const wordAfter = after?.word ?? DEFAULT_AGENT_LABEL_WORD;
-  if ((before?.word ?? null) !== (after?.word ?? null) || wordBefore !== wordAfter)
-    changes.push({ path: 'agentLabel.word', was: wordBefore, now: wordAfter });
+  if (wordBefore !== wordAfter) changes.push({ path: 'agentLabel.word', was: wordBefore, now: wordAfter });
   if ((before?.name ?? null) !== (after?.name ?? null))
     changes.push({ path: 'agentLabel.name', was: before?.name, now: after?.name });
   const rulesBefore = new Map((before?.rules ?? []).map((rule) => [ruleKey(rule), rule] as const));
@@ -207,6 +215,7 @@ function isRule(value: unknown): value is AgentLabelRule {
   const rule = value as Record<string, unknown>;
   if (typeof rule.account !== 'string' || rule.account.length === 0) return false;
   if (rule.as !== 'agent' && rule.as !== 'me') return false;
+  if (rule.accountId !== undefined && (typeof rule.accountId !== 'string' || rule.accountId.length === 0)) return false;
   if (rule.conversation !== undefined && (typeof rule.conversation !== 'string' || rule.conversation.length === 0))
     return false;
   if (
