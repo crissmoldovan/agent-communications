@@ -206,12 +206,32 @@ The `send` manifest adds a bot user and exactly four bot scopes:
 
 It asks for no bot scope that reads or uploads. The `read` manifest is unchanged, and has no bot user.
 
-Sign-in:
-- **A `send` app's exchange** must return a bot token, `token_type` `bot`, with exactly those scopes. It is refused
-  with anything more or less, and it is stored beside the user token in the core's secret store, under
-  `slack/bot-token/<accountId>`.
-- **A `read` app's exchange** still refuses any bot token. The read-mode guarantee stays as it was: on this machine,
-  no stored token for a read workspace can post.
+**How the bot token reaches this machine: two local ways, no server.** Slack's PKCE guide says "Desktop redirects are
+not allowed to request bot scopes" ([using PKCE](https://docs.slack.dev/authentication/using-pkce), read 2026-10-15).
+Our sign-in is a PKCE `localhost` redirect, so it can never create the bot token. On 2026-10-15 the owner decided
+against a hosted sign-in page, and asked for both local ways:
+
+1. **Paste once.**
+   - The person updates the app from the new manifest, presses "Install to Workspace" on the app's Slack settings
+     page, and pastes its Bot User OAuth Token at `workspace bot <workspace>`. That command takes it at a hidden
+     prompt, at a terminal only. It refuses agents and non-TTY input, as `agent-events approve` does. It has no MCP
+     tool: an agent never handles a secret.
+   - The token is verified before it is stored. `auth.test` must name this workspace's team. The granted scopes must
+     be exactly the four. An expiring, rotated token is refused.
+2. **Local sign-in with the app's client secret**, for a Slack app that has never enabled PKCE.
+   - Slack's guide says such an app's `localhost` redirect is "treated like a server redirect", which may request bot
+     scopes.
+   - The person enters the client secret once, at a hidden terminal prompt. It is kept in the secret store.
+   - Sign-in then asks for `scope` (the four) and `user_scope` together, and exchanges the code with the secret.
+   - Slack's OAuth guide also says "The `redirect_uri` must use HTTPS"
+     ([installing with OAuth](https://docs.slack.dev/authentication/installing-with-oauth), read 2026-10-15). Whether
+     `http://localhost` is accepted for a non-PKCE app is §10's live check. If Slack refuses it, this way does not
+     ship, and its refusal points to paste-once.
+
+The PKCE sign-in itself asks for user scopes only, as before this release. A `read` app's exchange still refuses any
+bot token. The read-mode guarantee stays as it was: on this machine, no stored token for a read workspace can post. A
+bot token, however it arrives, is stored under `slack/bot-token/<accountId>`, with the bot's user id, and is never
+printed.
 
 **This reverses D7's first bullet,** which said: "We never request `chat:write.customize`. Our messages go out as the
 person, with their own name." D7 was written against an app choosing any name and avatar, so that the channel cannot
@@ -220,9 +240,9 @@ Slack adds its APP badge, so the customisation discloses the agent instead of hi
 unchanged: attribution comes from `bot_id` and `user`, and a `username` is shown only as a display name the app
 chose. D7 gets a note pointing here.
 
-**An existing `send` workspace keeps working without a new sign-in.** Until the person updates their app from the new
-manifest and signs in again, an `agent` message takes the labelled fallback (S3), and `doctor` says how to switch to
-the app's identity. Nothing is silently unlabelled.
+**An existing `send` workspace keeps working without a new sign-in.** Until a bot token reaches this machine by
+either way above, an `agent` message takes the labelled fallback (S3). `doctor` names both ways to switch to the app's
+identity. Nothing is silently unlabelled.
 
 ### S2 — The route is chosen before the preview, and never changed after it
 
@@ -376,7 +396,9 @@ Every test runs against the fakes: Slack's loopback (`packages/slack/test/suppor
 
 ## 10. Live checks, each only with the owner's yes to the exact preview
 
-1. The owner updates their `send` Slack app from the new manifest and signs in again.
+1. The owner updates their `send` Slack app from the new manifest, presses "Install to Workspace", and pastes the bot
+   token at `workspace bot`. Separately, on a new app that never enabled PKCE, they try the client-secret sign-in. This
+   settles whether Slack accepts `http://localhost` there.
 2. They make their agent emoji with `agent-slack icon make`, upload it, and record its name with
    `agentcomms label icon`.
 3. An app post in a test channel: the phrase, the emoji icon and the APP badge appear as S4 says. **This settles
@@ -393,6 +415,6 @@ A minor release: a new capability, and a change in what recipients see by defaul
 
 The changelog's **Upgrading** section says plainly:
 - after updating, every message an agent sends is labelled unless the person chooses otherwise;
-- to post as the app, a Slack send app must be updated from the new manifest and signed in again; until then its
-  messages go out as the person, labelled;
+- to post as the app, a Slack send app needs its bot token on this machine, pasted once from the app's settings page,
+  or through the client-secret sign-in; until then its messages go out as the person, labelled;
 - older runtimes still running in other clients send unlabelled until `agentcomms update` reaches them.
