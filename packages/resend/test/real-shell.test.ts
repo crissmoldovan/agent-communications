@@ -22,6 +22,7 @@ import {
   suiteTraces,
   wordsOf,
 } from '../../../test/helpers/real-shell.mjs';
+import { THIS_NODE } from './support/handoffs.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 
 /*
@@ -63,7 +64,7 @@ function assertClean(harness: Harness, shell: Shell, before: number): void {
 function assertResendCommand(command: string, harness: Harness, tail: readonly string[]): void {
   const words = wordsOf(command);
   assert.ok(words !== null, `a line to paste: ${command}`);
-  assert.deepEqual(words.slice(0, 3), [process.execPath, ...SOURCE_FLAGS, RESEND_CLI], command);
+  assert.deepEqual(words.slice(0, 3), [THIS_NODE, ...SOURCE_FLAGS, RESEND_CLI], command);
   const pins = pinsOf(words);
   assert.deepEqual(Object.keys(pins).sort(), [...FOUR_FOLDERS].sort(), command);
   for (const key of FOUR_FOLDERS) {
