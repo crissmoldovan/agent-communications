@@ -40,7 +40,11 @@ export interface CliHandoffsOptions {
   /** The printing process's folders. */
   readonly paths: Readonly<ResolvedPaths>;
   readonly platform?: NodeJS.Platform | undefined;
-  /** Where the MCP clients' configurations are found, for `registered()`: this process's unless given. */
+  /**
+   * The printing process's environment: where the MCP clients' configurations are found, for `registered()` (this
+   * process's unless given), and the PATH each command names this Node from, as a registration does (CUE-492). Left
+   * out, a command names `process.execPath`, which the system reports resolved.
+   */
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly registrations?: readonly RegisteredServer[] | undefined;
   /** For a test only: the Node version and flags the commands are located for. Its program is always this one's. */
@@ -82,6 +86,7 @@ export function cliHandoffs(options: CliHandoffsOptions): CliHandoffs {
         paths,
         platform,
         ...(registrations === undefined ? {} : { registrations }),
+        ...(options.env === undefined ? {} : { env: options.env }),
       },
       ...(options.runtime === undefined ? [] : [options.runtime]),
     );

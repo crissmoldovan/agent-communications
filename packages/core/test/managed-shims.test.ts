@@ -413,3 +413,51 @@ test('a stale corrupt mutation lock left by a crashed install is recovered', asy
     'the recovered mutation still leaves a current owned shim and receipt',
   );
 });
+
+test(
+  'a shim naming the file a link to the expected Node resolves to is stale; one naming the link is never (CUE-492)',
+  WINDOWS_SKIP,
+  async () => {
+    const { context, home } = fixture();
+    const entry = entryAt(home, 'runtime/0.19.0-core');
+    const link = join(home, 'bin', 'node');
+    mkdirSync(join(home, 'bin'));
+    symlinkSync(process.execPath, link);
+    const real = realpathSync(process.execPath);
+    const inspect = (expectedNode: string) =>
+      inspectManagedShim(context, { binary: 'agentcomms', expectedEntry: entry, expectedNode });
+
+    // What an earlier release wrote: the file the system reports, where PATH finds this Node by a link.
+    await writeManagedShim(context, { binary: 'agentcomms', command: [real, entry], entry });
+    const stale = await inspect(link);
+    assert.equal(stale.status, 'stale', stale.detail);
+    assert.ok(stale.detail.includes(real) && stale.detail.includes(link), stale.detail);
+    assert.equal((await inspect(real)).status, 'current', 'with no link on PATH, the real file is what is expected');
+
+    // Written now: the link. A process that finds this Node only by its real file never calls the link stale, and a
+    // Node that is another file altogether is not this one to judge by.
+    await writeManagedShim(context, { binary: 'agentcomms', command: [link, entry], entry });
+    assert.equal((await inspect(link)).status, 'current');
+    assert.equal((await inspect(real)).status, 'current', 'a link is never repointed to the file it resolves to');
+    assert.equal((await inspect('/opt/another/bin/node')).status, 'current', 'another Node is not judged by this one');
+  },
+);
+
+test(
+  'a shim naming its entry by the real path is current where the runtime is found through a linked folder',
+  WINDOWS_SKIP,
+  async () => {
+    // The locator names the entry it checked by its real path; the doctor finds the runtime by the data folder's path.
+    const { context, home } = fixture();
+    const entry = realpathSync(entryAt(home, 'runtime/0.19.0-core'));
+    const linked = join(home, 'linked-runtime');
+    symlinkSync(join(home, 'runtime'), linked);
+    const throughLink = join(linked, '0.19.0-core', 'node_modules', '@agentcomms', 'core', 'dist', 'cli.mjs');
+    await writeManagedShim(context, { binary: 'agentcomms', command: [process.execPath, entry], entry });
+    const current = await inspectManagedShim(context, { binary: 'agentcomms', expectedEntry: throughLink });
+    assert.equal(current.status, 'current', current.detail);
+    const other = entryAt(home, 'runtime/0.20.0-core');
+    const stale = await inspectManagedShim(context, { binary: 'agentcomms', expectedEntry: other });
+    assert.equal(stale.status, 'stale', 'another runtime is still another entry');
+  },
+);

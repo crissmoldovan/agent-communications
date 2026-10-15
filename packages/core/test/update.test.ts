@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { delimiter, dirname, join } from 'node:path';
@@ -19,6 +28,7 @@ import { managedShimPath, managedShimsSupported, writeManagedShim } from '../src
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { managedRuntimeDir, managedRuntimeEntry, whichExecutable } from '../src/mcp-install.ts';
 import { compareVersions, npmLatestVersion } from '../src/npm.ts';
+import { doctor } from '../src/operations/maintenance.ts';
 import type { UpdateDeps } from '../src/operations/update.ts';
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
@@ -613,6 +623,62 @@ test('update discovers and moves a declared service registration, including its 
     await close();
   }
 });
+
+test(
+  'a shim an earlier release wrote naming the file a link to this Node resolves to is stale, and update repoints it to the link (CUE-492)',
+  SHIMS ? {} : { skip: 'WINDOWS_SKIP: managed CLI shims are offered on macOS and Linux only' },
+  async () => {
+    const m = machine();
+    // `node` on this PATH is a symlink to this very Node, as `~/.local/bin/node` or Homebrew's is.
+    const link = join(m.bin, 'node');
+    symlinkSync(process.execPath, link);
+    const real = realpathSync(process.execPath);
+    makeRuntime(m, PACKAGES.events, OLD);
+    cursor(m, { events: managed(m, PACKAGES.events, OLD) });
+    const oldEntry = managedRuntimeEntry(m.dataDir, PACKAGES.events, OLD);
+    // What 0.19.0 wrote: the Node the system reports, which is the file the link resolves to.
+    const written = await writeManagedShim(
+      { env: m.env, dataDir: m.dataDir },
+      { binary: 'agent-events', command: [real, oldEntry], entry: oldEntry },
+    );
+    assert.equal(written.status, 'created', 'the fixture begins with an owned shim an earlier release wrote');
+    const shimRow = async () =>
+      (await doctor(m.core, m.env)).checks.find(
+        (check) => check.name.startsWith('CLI shim at ') && check.name.includes('agent-events'),
+      );
+
+    const nodeRow = (await doctor(m.core, m.env)).checks.find((check) => check.name === 'node');
+    assert.equal(
+      nodeRow?.detail,
+      `Node ${process.versions.node} at ${link}, which resolves to ${process.execPath}`,
+      'the doctor names this Node as commands do, and the file it is',
+    );
+    const stale = await shimRow();
+    assert.equal(stale?.warn, true, 'a shim naming the resolved file is something to repair, not a broken server');
+    assert.match(stale?.detail ?? '', /^stale: /, `the doctor reports it stale: ${stale?.detail}`);
+    assert.ok(stale?.detail.includes(real) && stale.detail.includes(link), `and names both paths: ${stale?.detail}`);
+    assert.match(String(stale?.fix), /update/, `with the update that repoints it: ${String(stale?.fix)}`);
+
+    const deps = fakes(m);
+    const { ok, close } = await connect(m, { update: deps });
+    try {
+      const first = await ok('comms_update', { noVerify: true });
+      const applied = await ok('comms_update', { noVerify: true, approvalId: first.approvalId });
+      const service = (applied.result as { steps: Item[] }).steps.find(
+        (step) => step.kind === 'registration' && step.channel === 'events',
+      );
+      assert.equal((service?.shim as { status?: string } | undefined)?.status, 'updated', 'the update repoints it');
+    } finally {
+      await close();
+    }
+    const source = readFileSync(managedShimPath({ env: m.env, dataDir: m.dataDir }, 'agent-events'), 'utf8');
+    const exec = source.split('\n')[2] ?? '';
+    assert.ok(exec.startsWith(`exec '${link}' `), `the shim now execs the link PATH finds: ${exec}`);
+    assert.ok(!source.includes(real), `and never the file it resolves to: ${source}`);
+    assert.equal(cursorEntries(m).events?.command, link, 'as the registration beside it starts it');
+    assert.equal(await shimRow(), undefined, 'the doctor finds the repointed shim current');
+  },
+);
 
 test('an entry pinned to a renamed account, or written by hand, is behind and left for a person with what to run', async () => {
   const m = machine({

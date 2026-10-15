@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -351,6 +352,44 @@ test(
       result.entry.command,
       'the fixture proves the registration Node and the locator program are different',
     );
+  },
+);
+
+test(
+  'a managed shim execs the link to this Node that PATH finds, as the registration names it, not its target (CUE-492)',
+  POSIX_SHIMS,
+  async () => {
+    /*
+     * `~/.local/bin/node` a symlink into another tool's private Node, or Homebrew's `/opt/homebrew/bin/node` into a
+     * Cellar version `brew upgrade` deletes: a shim naming the file the link resolves to breaks when its owner moves
+     * it, while the registration beside it names the link and keeps working.
+     */
+    const data = tempDir();
+    const home = tempDir();
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    const link = join(bin, 'node');
+    symlinkSync(process.execPath, link);
+    const real = realpathSync(process.execPath);
+    const installing = context(data, home);
+    installing.env.PATH = bin;
+    const product = pinnedProduct();
+    makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+    const result = await withManagedShim(
+      installing,
+      product,
+      await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+    );
+    assert.equal(result.entry.command, link, 'the registration names the link PATH finds, as it always has');
+    const source = readFileSync(result.shim?.path ?? '', 'utf8');
+    const entry = realpathSync(managedRuntimeEntry(data, product.packageName, product.version));
+    assert.equal(
+      source.split('\n')[2],
+      `exec '${link}' '${entry}' "$@"`,
+      'the shim execs the same link the registration starts, with the checked runtime entry',
+    );
+    assert.ok(!source.includes(real), `the shim never names the file the link resolves to: ${source}`);
   },
 );
 
