@@ -506,6 +506,8 @@ export async function withManagedShim(
       uses: [],
       paths: { ...context.core.paths, downloadsDir: context.core.paths.dataDir },
       platform: context.platform,
+      // This Node as PATH finds it, as the registration beside the shim names it: a link stays the link (CUE-492).
+      env: context.env,
     });
     if (!located.ok) {
       throw new CommsError('CONFIG', `the managed CLI command could not be located: ${located.message}`);

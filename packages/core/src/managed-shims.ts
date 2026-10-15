@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { type LockOptions, withFileLock } from './lock.ts';
+import { namesResolvedNode } from './node-program.ts';
 import { homeDirectory } from './paths.ts';
 
 const RECEIPT_VERSION = 1 as const;
@@ -343,10 +344,31 @@ function pathNotice(directory: string): string {
   return `The shim directory ${directory} is not on PATH. For this shell, run: export PATH=${quoted}:"$PATH". No shell profile was edited.`;
 }
 
-/** Inspect one expected managed shim without changing it. */
+/**
+ * Two paths are one file: equal, or resolving to the same real file. A shim names the entry the locator checked, by its
+ * real path, while the runtime it belongs to is found by the path the data directory is reached by; behind a linked
+ * folder the two differ, and an identical entry is not a stale one.
+ */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  if (a === b) return true;
+  try {
+    return (await realpath(a)) === (await realpath(b));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Inspect one expected managed shim without changing it.
+ *
+ * `expectedNode` is the path a shim written now would name this Node by (`nodeProgram`). A shim naming instead the
+ * file that path resolves to — as releases before CUE-492 wrote it, from `process.execPath` — is stale: it breaks when
+ * whatever owns that file moves it, though the link it was reached by would not. A shim naming the link, or another
+ * Node altogether, is not judged by it.
+ */
 export async function inspectManagedShim(
   context: ManagedShimContext,
-  options: { binary: string; expectedEntry?: string | undefined },
+  options: { binary: string; expectedEntry?: string | undefined; expectedNode?: string | undefined },
 ): Promise<ManagedShimInspection> {
   const publicPath = managedShimPath(context, options.binary);
   const directory = await pinShimDirectory(context, false);
@@ -390,13 +412,25 @@ export async function inspectManagedShim(
       detail: 'the file changed after this installation wrote it',
     };
   }
-  if (options.expectedEntry !== undefined && recorded.entry !== options.expectedEntry) {
+  if (options.expectedEntry !== undefined && !(await sameFile(recorded.entry, options.expectedEntry))) {
     return {
       ...recorded,
       binary: options.binary,
       path: publicPath,
       status: 'stale',
       detail: `the shim starts ${recorded.entry}, not ${options.expectedEntry}`,
+    };
+  }
+  if (
+    options.expectedNode !== undefined &&
+    namesResolvedNode(recorded.node, options.expectedNode, platformOf(context))
+  ) {
+    return {
+      ...recorded,
+      binary: options.binary,
+      path: publicPath,
+      status: 'stale',
+      detail: `the shim starts ${recorded.node}, the file ${options.expectedNode} resolves to, not ${options.expectedNode}: it stops working if that file moves`,
     };
   }
   if (!(await pathExists(recorded.node)) || !(await pathExists(recorded.entry))) {

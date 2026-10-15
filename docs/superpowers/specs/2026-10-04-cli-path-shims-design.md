@@ -484,6 +484,29 @@ prepending it in a POSIX shell. No command edits a shell profile, user environme
 directory. This is a convenience path to the same locator-resolved program and entry; D1 handoffs continue
 to locate and pin their installation directly and never trust a bare PATH command.
 
+### CUE-492 amendment (2026-10-15): this Node as PATH finds it
+
+`process.execPath` is this Node as the system reports it, and macOS and Linux report it resolved: a Node reached
+through a symlink — Homebrew's `/opt/homebrew/bin/node`, or a `~/.local/bin/node` another tool made into its own Node
+— reports the file the link points at. Printed commands and managed shims named that file, while registrations name
+the `node` found on PATH, unresolved (`resolveNode`, `packages/core/src/mcp-install.ts`). When the link's owner moved
+the file (`brew upgrade` removes the Cellar version it names) every shim broke, and a command read as though the suite
+depended on that owner.
+
+D1's interpreter rule stands — the program is this process's Node and no other interpreter — and only its spelling
+changes. The locator is given the printing process's environment (the one `openCore` was opened with, or the
+installer's for a shim) and names the first `node` on its PATH whose real file is `process.execPath`'s, as PATH spells
+it (`packages/core/src/node-program.ts`); with none, or with no environment, `process.execPath`. The real file serves
+only that identity check: `engines.node` is still checked against `process.version`, nothing found on PATH is run or
+asked its version, and a `node` on PATH that is another file is never named.
+
+A shim written before this names the resolved file. `doctor` reports it stale — the file the expected link resolves
+to — with the managed install or update that repoints it, and `mcp install` and `update` rewrite an owned shim with the
+link whenever they register its runtime; a release carrying this moves every managed registration, so updating to it
+repoints every owned shim. A shim naming the link is never called stale by a process that finds this Node only by its
+real file, nor is one naming another Node. `doctor` also compares a shim's entry with the expected runtime entry as
+files: the locator names the entry by its real path, which differs from the runtime's path behind a linked folder.
+
 ## 4. Tests
 
 0000. **Round-14 case:** a built `.mjs` caller on Node 22.12–22.17 resolving a cross-product `local` registration with

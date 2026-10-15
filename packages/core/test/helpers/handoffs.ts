@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CHANNEL_SNAPSHOT } from '../../src/channels.generated.ts';
 import { inlineCommand } from '../../src/cli-runtime.ts';
@@ -61,6 +62,19 @@ export function assertNoBareCommand(text: string, what = 'the output'): void {
 const CORE_SOURCE_CLI = fileURLToPath(new URL('../../src/cli.ts', import.meta.url));
 
 /**
+ * Whether `program` is this Node: its own path, or a path on PATH that resolves to the same file — a `node` that is a
+ * link to it, which a command names as PATH has it (CUE-492). A CLI run with the test's own PATH finds it so.
+ */
+function isThisNode(program: string): boolean {
+  if (program === process.execPath) return true;
+  try {
+    return realpathSync(program) === realpathSync(process.execPath);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The command in backticks in `text` that ends with `words`, checked to be core's own, located: this Node, then core's
  * CLI entry here, then path pins, then the words. For output whose folders a test cannot name in advance — a CLI run in
  * a fresh home — rather than for building an expected sentence.
@@ -69,7 +83,7 @@ export function locatedCoreLine(text: string, words: readonly string[]): string 
   const tail = ` ${words.join(' ')}`;
   const line = [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1] as string).find((each) => each.endsWith(tail));
   assert.ok(line !== undefined, `no command ending in "${tail.trim()}" in: ${text}`);
-  assert.ok(line.startsWith(`${process.execPath} `), `the program is this Node: ${line}`);
+  assert.ok(isThisNode(line.split(' ', 1)[0] ?? ''), `the program is this Node: ${line}`);
   assert.ok(line.includes(` ${CORE_SOURCE_CLI} `), `it runs core's own CLI: ${line}`);
   assert.match(line, / --config-dir /, 'with the folders pinned');
   assertNoBareCommand(text);
