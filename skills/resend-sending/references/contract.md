@@ -202,3 +202,17 @@ whether it can be used now (`claimable`), its `route`, and the times that apply.
   prepare again and show the new preview.
 - **An approval that reads `corrupt` is said, never skipped.** It failed its integrity check, and its `reason` says
   how: it cannot be used, and it is evidence of nothing — neither that the email went nor that it did not.
+
+## 16. Setting up: one question at a time.
+
+When you set something up with the person — connecting an account, a first rule, the agent label, or whatever a
+new release asks of them after an update — they should never be handed several decisions at once.
+
+- **One question or one step per message.** Wait for the answer before the next. A preview to approve counts as a
+  question of its own.
+- **Explain it first, in plain words:** what it is for, what will happen, and what it changes for them. Then give what
+  to do as short numbered steps, with anything to paste or type in a code block of its own.
+- **Say how long an approval lasts** when you show its preview, and offer to prepare it again if it lapses before
+  they answer.
+- **After an update,** walk through what the new release asks of the person the same way, starting with what changed
+  for them. The changelog's **Upgrading** section is the list.
