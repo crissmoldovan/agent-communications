@@ -393,7 +393,14 @@ transcript would keep it.
 | Mode | What the token can do | Who enforces it |
 |---|---|---|
 | `read` (default) | history, read, users, files, search | **Slack** |
-| `send` | the above plus `chat:write`, `files:write`, `reactions:write` | this package's approval gate |
+| `send` | the above plus `chat:write`, `files:write`, `reactions:write`; and the app's bot user, with exactly `chat:write`, `chat:write.customize`, `chat:write.public` and `reactions:write` | this package's approval gate |
+
+The send app's bot user is what lets an agent's message appear as the app, named after you — see
+[Labelling what an agent sends](#labelling-what-an-agent-sends). Its sign-in asks Slack for those four bot scopes
+beside the user scopes, and is refused unless the bot token comes back with exactly them. The bot token is kept beside
+your own, under `slack/bot-token/<accountId>` in the secret store; it is the workspace's, not yours — everyone who
+installed the same organisation app holds it — so narrowing to `read` or removing the workspace deletes this machine's
+copy and never revokes it. The read app has no bot user, so no token a read workspace holds can post.
 
 Moving to `send` means editing your app's manifest — on its page, or with `agent-slack app update <name> --mode
 send` — and then approving the change and re-authorising: a new grant you approve in Slack's own UI.

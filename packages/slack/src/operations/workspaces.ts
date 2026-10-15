@@ -17,7 +17,13 @@ import {
   secretsStoreOf,
   shownText,
 } from '@agentcomms/core';
-import { type ExchangedToken, safeSlackFailureText, scopeMismatch } from '../auth/authorize.ts';
+import {
+  type ExchangedBot,
+  type ExchangedToken,
+  requireBotForSend,
+  safeSlackFailureText,
+  scopeMismatch,
+} from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../auth/bundle.ts';
 import type { SlackFlow } from '../auth/flow.ts';
 import type { InstallMode } from '../manifest.ts';
@@ -32,6 +38,18 @@ import type { PendingRevocationResult } from './revocations.ts';
  * "re-authorise" means the same person and the same workspace, and a browser will happily authorise somebody
  * else if the person is signed into two accounts.
  */
+
+/**
+ * A Slack account as this package records it: core's account, and the send app's bot user it posts as when its app
+ * has one (design 2026-10-15 S1). Kept as the account's own key, which core's loose schema carries through every write.
+ */
+export type SlackAccount = AccountConfig & { botUserId?: string | undefined };
+
+/** The bot user this account's app posts as, when one was recorded and looks like a Slack user id. */
+export function botUserIdOf(account: AccountConfig): string | undefined {
+  const value = (account as SlackAccount).botUserId;
+  return typeof value === 'string' && /^[UW][A-Z0-9]{2,39}$/.test(value) ? value : undefined;
+}
 
 export interface WorkspaceView {
   readonly alias: string;
@@ -53,6 +71,13 @@ export interface WorkspaceView {
   readonly committedBeforeAbort?: true | undefined;
   /** Present after switching profile apps; each old token's cleanup state is reported separately. */
   readonly cleanup?: PendingRevocationResult | undefined;
+  /** The bot user the send app posts as (design 2026-10-15 S1). Absent for a read workspace, or an app without one. */
+  readonly appUserId?: string | undefined;
+  /**
+   * Why the app's bot token could not be kept, when a sign-in was saved and that one write failed: its posts then go
+   * out as the person, labelled, until it signs in again. Never the token.
+   */
+  readonly appTokenUnsaved?: string | undefined;
 }
 
 /**
@@ -81,6 +106,7 @@ export function viewOf(alias: string, account: AccountConfig, profileLabel?: str
       : {}),
     ...(account.profileApp ? { profileApp: account.profileApp } : {}),
     createdAt: account.createdAt,
+    ...(botUserIdOf(account) ? { appUserId: botUserIdOf(account) } : {}),
   };
 }
 
@@ -266,6 +292,8 @@ export function validateExchange(options: {
       hint: 'Leave every permission ticked on the consent screen, or re-create the app from the manifest.',
     });
   }
+  // The send app's bot token, after the user scopes: an app never moved to send is told that first (S1).
+  requireBotForSend(token, mode, handoffs);
   if (extra.length > 0) {
     /*
      * Asking for `read` and getting posting back is not a broken app. Slack adds every scope a person has granted this
@@ -495,6 +523,27 @@ export function secretRefFor(accountId: string): string {
 }
 
 /**
+ * Where the send app's bot token lives, beside the user token (design 2026-10-15 S1): one place per account, written
+ * after the sign-in that issued it is saved, and deleted — never revoked — when the account narrows to read or is
+ * removed, because the token is the workspace's and others who installed the same app hold it too.
+ */
+export function botSecretRefFor(accountId: string): string {
+  return `slack/bot-token/${accountId}`;
+}
+
+/** The bot token, as one value the refresh machinery can renew: the user token's shape (S1). */
+export function botBundleFrom(bot: ExchangedBot, now: Date): TokenBundle {
+  return bundleFrom(
+    {
+      accessToken: bot.accessToken,
+      refreshToken: bot.refreshToken,
+      expiresInSeconds: bot.expiresInSeconds,
+    } as ExchangedToken,
+    now,
+  );
+}
+
+/**
  * Where a renewed credential lives: beside the one it replaces, never over it, under the same account id.
  *
  * A reauth stages the new credential under its own reference and moves the pointer in one config write, so the old
@@ -534,7 +583,9 @@ export function accountFrom(options: {
     ...(options.provenance ?? {}),
     redirectPort: flow.port,
     createdAt: now.toISOString(),
-  };
+    // The bot user the send app posts as (S1); its token is stored apart, under `botSecretRefFor`.
+    ...(mode === 'send' && token.bot ? { botUserId: token.bot.userId } : {}),
+  } as SlackAccount;
 }
 
 export { newAccountId, serialiseBundle };
@@ -591,6 +642,12 @@ export async function removeWorkspace(
       ),
     });
   }
+  /*
+   * The app's bot token first: deleted, never revoked (design 2026-10-15 S1). It is the workspace's, and everyone who
+   * installed the same app holds it, so revoking it would stop their posts too. A sign-in stores one only after the
+   * account naming its bot user is saved, so an account that names none has none to delete.
+   */
+  if (botUserIdOf(found.account) !== undefined) await deps.secrets.delete(botSecretRefFor(found.account.id));
   await deps.secrets.delete(found.account.secretRef);
   await deps.update((config) => {
     /*

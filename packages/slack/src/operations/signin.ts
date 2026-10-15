@@ -35,11 +35,14 @@ import type { InstallMode } from '../manifest.ts';
 import { createPendingRevocation, pendingRevocationResult, revokePendingEntry } from './revocations.ts';
 import {
   accountFrom,
+  botBundleFrom,
+  botSecretRefFor,
   bundleFrom,
   checkAliasFree,
   profileTargetFor,
   renewedSecretRefFor,
   requireWorkspace,
+  type SlackAccount,
   secretRefFor,
   validateExchange,
   viewOf,
@@ -1172,7 +1175,7 @@ export async function completeSignIn(
     if (flow.profile) profileTargetFor(flow, await context.config(), context.handoffs);
     let token: ReturnType<typeof readExchange>;
     try {
-      token = readExchange(exchanged, context.handoffs);
+      token = readExchange(exchanged, context.handoffs, flow.mode);
     } catch (error) {
       if (flow.profile && error instanceof CommsError && error.details) {
         throw await profileFailure(
@@ -1270,6 +1273,12 @@ export async function completeSignIn(
       if (!completionSignal) await stage();
       const switchAccount = async () => {
         if (completionSignal) await stage();
+        /*
+         * A sign-in that leaves the account unable to post deletes the app's bot token first, before anything says
+         * `read` (design 2026-10-15 S1): on this machine, no stored token of a read workspace may post. Deleted, never
+         * revoked — the token is the workspace's. If the delete fails nothing is saved, and the account is as it was.
+         */
+        if (existing && flow.mode !== 'send') await secrets.delete(botSecretRefFor(accountId));
         if (
           flow.transition === 'profile-app' &&
           existing &&
@@ -1382,6 +1391,11 @@ export async function completeSignIn(
              * not speak to, including fields a later version adds that this one has never heard of.
              */
             written = held && flow.expect ? { ...held, ...account, createdAt: held.createdAt } : account;
+            // A read account names no bot user: its app's token was deleted above (S1).
+            if (flow.mode !== 'send') {
+              const { botUserId: _bot, ...unbotted } = written as SlackAccount;
+              written = unbotted;
+            }
             const next = flow.profile
               ? learnProfileSlackAppId(
                   current,
@@ -1473,6 +1487,22 @@ export async function completeSignIn(
      * That bound is the whole justification. A credential that did *not* expire on its own would have to be
      * reported rather than dropped.
      */
+    /*
+     * The send app's bot token, kept once the sign-in that issued it is saved (design 2026-10-15 S1) — after, so a
+     * sign-in refused at its write leaves no bot token behind, named by nothing. If this one write fails, the sign-in
+     * still stands, and its posts go out as the person, labelled, until it signs in again; the result says so.
+     */
+    let appTokenUnsaved: string | undefined;
+    if (flow.mode === 'send' && token.bot) {
+      try {
+        const current = await context.secrets();
+        await current.set(botSecretRefFor(accountId), serialiseBundle(botBundleFrom(token.bot, at)));
+      } catch (error) {
+        appTokenUnsaved = `the app's token could not be stored (${safeSlackFailureText((error as Error).message)}), so posts go out as you, labelled, until this workspace signs in again`;
+      }
+    }
+    const withApp = (view: WorkspaceView): WorkspaceView =>
+      appTokenUnsaved === undefined ? view : { ...view, appTokenUnsaved };
     // The credential of the row this write actually replaced, read under the lock — not the snapshot's.
     const previousRef = replacedRef ?? existing?.account.secretRef;
     if (pendingRevocation) {
@@ -1490,17 +1520,17 @@ export async function completeSignIn(
           message: 'the app switch was saved; its old credential remains pending cleanup',
         });
       }
-      return {
+      return withApp({
         ...viewOf(writtenAlias, written, flow.profile?.label),
         ...(savedBeforeInterrupt() ? { committedBeforeAbort: true as const } : {}),
         cleanup,
-      };
+      });
     }
     if (previousRef && previousRef !== secretRef) {
       await secrets.delete(previousRef).catch(() => undefined);
     }
 
-    const view = viewOf(writtenAlias, written, flow.profile?.label);
+    const view = withApp(viewOf(writtenAlias, written, flow.profile?.label));
     return savedBeforeInterrupt() ? { ...view, committedBeforeAbort: true } : view;
   } finally {
     // Only the owner may stop the listener or discard the flow; a cancelled or losing finisher does neither.
