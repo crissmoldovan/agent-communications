@@ -115,6 +115,7 @@ import {
   renderAppUpdateNeeded,
   renderChanged,
   renderChannels,
+  renderClientSecretManifestHelp,
   renderConnected,
   renderCreatedDraft,
   renderDeletedDraft,
@@ -451,7 +452,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .command('manifest')
     .description('the Slack app to create, as a manifest you can paste')
     .addOption(modeOption())
-    .option('--port <port>', 'the loopback port its redirect will use')
+    .option(
+      '--port <port>',
+      'the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app',
+    )
     .option('--workspace <name>', 'for a workspace already connected: its port, and the link to its own app')
     .option(
       '--with-client-secret',
@@ -469,8 +473,21 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         writeResult(
           result,
           output(),
-          (data) =>
-            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl, { pkce: data.manifest.oauth_config.pkce_enabled })}`,
+          (data) => {
+            const pkce = data.manifest.oauth_config.pkce_enabled;
+            // The PKCE app's text is this command's own, as it was; the client-secret app's is the operation's steps.
+            const help = pkce
+              ? renderManifestHelp(
+                  data.mode,
+                  data.port,
+                  options.color,
+                  data,
+                  context.handoffs,
+                  data.portFrom === 'chosen',
+                )
+              : renderClientSecretManifestHelp(data, options.color);
+            return `${help}\n\n${renderManifest(data.mode, data.redirectUrl, { pkce })}`;
+          },
           streams,
         );
       }),

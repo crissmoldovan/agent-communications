@@ -34,14 +34,17 @@ client secret is stored anywhere: the sign-in is PKCE, and the verifier never le
 ## Getting started
 
 ```sh
-agent-slack manifest --mode read --port 51234      # the app to create, and how
-agent-slack workspace add acme/slack --client-id <id> --port 51234
+agent-slack manifest --mode read                     # the app to create, the steps, and its port
+agent-slack workspace add acme/slack --client-id <id> --port <port>   # the command it printed, port and all
 agent-slack doctor
 agent-slack mcp install --client claude-code         # connect it to your agent, once you approve it
 ```
 
-The port must be the same number in both commands — Slack stores redirect URLs on the app and matches them
-exactly.
+You do not choose the port. Slack stores the redirect URL on the app and matches it exactly, so the port is settled
+when the manifest is printed: `manifest` for a new app asks the system for a free loopback port, skips any another
+workspace here already uses, and puts it in both the manifest and the `workspace add` command it prints. That port is
+then the app's, and every later sign-in reuses it. `--port` still sets one yourself. If a sign-in finds the port held
+by another program, it says so: close whatever uses it, or run `manifest` again for a new app.
 
 ## Changing a workspace, and who approves it
 
@@ -301,11 +304,14 @@ redirects are not allowed to request bot scopes"). So a `send` workspace is in o
    token typed into a chat stays in the transcript.
 3. **Signed in with the app's client secret.** For an app that has never enabled PKCE — which Slack says cannot be
    switched off on an existing app, so this is a new app, made from the manifest
-   `agent-slack manifest --mode send --with-client-secret --port 51234` prints (PKCE off). Its sign-in asks for the
-   four bot scopes as well as yours, and both tokens come back from it:
+   `agent-slack manifest --mode send --with-client-secret` prints (PKCE off; `slack_manifest` with `pkce: false`). It
+   prints three steps: create the new app from the manifest; on **Basic Information**, copy the Client ID and keep the
+   Client Secret to hand, to type once at a hidden prompt and never paste into a chat; then connect it with the command
+   it prints, which carries `--with-client-secret` and the port it chose. Its sign-in asks for the four bot scopes as
+   well as yours, and both tokens come back from it:
 
    ```sh
-   agent-slack workspace add acme/slack --mode send --client-id <id> --port 51234 --with-client-secret
+   agent-slack workspace add acme/slack --mode send --client-id <id> --port <port> --with-client-secret
    agent-slack workspace reauth acme/slack --mode send --with-client-secret    # an existing workspace, moved to it
    ```
 
@@ -434,7 +440,7 @@ on stdio directly.
 | `slack_workspace_policy` | report or set how its posts and its changes are approved — loosening is approved first |
 | `slack_workspace_remove` | disconnect one and delete its token — approved first |
 | `slack_doctor` | what `agent-slack doctor` checks, as the same JSON |
-| `slack_manifest` | the app manifest, and for a connected workspace the link to its own app's manifest page — changes nothing |
+| `slack_manifest` | the app manifest with its steps — a free port chosen for a new app given none — and for a connected workspace the link to its own app's manifest page; changes nothing |
 | `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | read, bounded |
 | `slack_icon_make` | make your agent emoji — your Slack photo with a robot badge — as a PNG to upload yourself; changes nothing in Slack |
 | `slack_file_download` | save files where the person says — asks first; by id, from one message, or from a conversation; opens nothing |

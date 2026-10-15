@@ -211,13 +211,13 @@ test('a workspace that never recorded its app id gets no link rather than a gues
   }
 });
 
-test('slack_manifest refuses a missing or impossible port as the CLI does', async () => {
+test('slack_manifest refuses an impossible port, or a workspace with none recorded, as the CLI does', async () => {
+  // A new app with no port is no longer refused: one is chosen (manifest-setup.test.ts).
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme' });
   const { call, close } = await connect(harness);
   try {
     for (const [args, argv] of [
-      [{ mode: 'read' }, ['manifest', '--mode', 'read']],
       // Named, but it signed in before ports were kept: there is no recorded one to fall back on.
       [{ workspace: 'acme' }, ['manifest', '--workspace', 'acme']],
       [{ port: 70000 }, ['manifest', '--port', '70000']],
