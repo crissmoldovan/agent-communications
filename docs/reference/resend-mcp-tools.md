@@ -188,7 +188,7 @@ Addresses Resend will not send to, and why (bounce, complaint, manual).
 
 ### `resend_send_prepare`
 
-Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Show the preview in full and wait for the person’s yes.
+Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Its From is labelled `<name> (agent)` — the From’s name, or the person’s label name for a bare address — unless `as` is `me`, and the preview’s first line says which. Show the preview in full and wait for the person’s yes.
 
 *writes*
 
@@ -207,6 +207,7 @@ Build an email and return the exact preview — every recipient, BCC included, t
 | `inReplyTo` | string | no | the Message-ID this replies to, to keep the thread |
 | `references` | string[] | no |  |
 | `scheduledAt` | string | no | send later: an ISO 8601 time with a zone, at most 30 days ahead |
+| `as` | string | no | who it appears to come from: agent (From labelled "<name> (agent)") or me (From as given). Pass `me` only when the person said so for this email; left out, their rules decide, and then agent |
 
 ### `resend_send_execute`
 
