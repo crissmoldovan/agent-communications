@@ -3,6 +3,21 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A rule activation whose approval ran out or was withdrawn before anyone approved it is now cancelled, and the rule's
+next update can be enabled** (CUE-491). When `rule enable` prepared a rule or an update and its approval expired unused
+(after 30 minutes) or was revoked, the activation stayed `pending` for good: `agent-events status` kept counting it, and
+for an update it kept the rule's one replacement slot, so enabling the rule's next version was refused as "this rule
+already has a replacement completing". The event service now settles such an activation as `cancelled`, with the
+failure code `APPROVAL_ABSENT`, on its next tick and when it starts, and `rule enable` settles its rule's lapsed update
+before it asks for a new approval. An activation that was approved and claimed is left to finish as before. Activations
+an earlier release left pending are settled the first time the upgraded service starts. Nothing to migrate.
+
+Why: on a real machine, two rule approvals that expired while the rule was being checked were still reported as
+`{"status":"pending","count":2,"failureCode":null}` after a third was approved, and nothing would ever have cleared
+them. A lapsed approval can never be used, so the activation it was asked for has nothing left to wait for.
+
 ## 0.18.1
 
 **A first events rule now works in the order the README gives, and `agentcomms doctor` stops warning about commands
