@@ -251,6 +251,33 @@ steps for its account type. An own-app workspace signed in with 0.4.1 or later r
 `--workspace` names no workspace, so it has no recorded port to use and needs `--port` given. An older workspace
 has none recorded either, so give `--port` there too: its steps print `<port>` until it is given one.
 
+## Letting an agent's posts appear as the app
+
+What an agent sends is labelled as the person's agent: as the app, named after them, where the app can post, and as
+them with the label in the message elsewhere (the `slack-posting` skill). Posting as the app needs the send app's
+**bot token**, which the ordinary sign-in cannot fetch — Slack does not let a PKCE sign-in on `localhost` ask for bot
+scopes. So a `send` workspace is in one of three states; `doctor`'s "Posting as the app" check says which:
+
+1. **No bot token.** The state after the ordinary sign-in, and of every workspace connected before this release. It
+   works as it is: posts go out as the person, labelled. Do nothing unless the person wants posts to appear as the app.
+2. **Pasted once.** The app's manifest must be the `send` one (it declares the bot user and its four scopes); the
+   person presses **Install to Workspace** on the app's **OAuth & Permissions** page, copies the **Bot User OAuth
+   Token** (`xoxb-…`), and runs `agent-slack workspace bot <name>` **in their own terminal**, which asks for it without
+   showing it and checks it with Slack before keeping it. There is no tool for this: never ask for the token in the
+   chat, and never run the command yourself — it refuses an agent. It refuses a rotating token (`xoxe.…`), and an app
+   made from this package's manifest rotates its tokens, which Slack never turns off; for such an app, use state 3.
+3. **Signed in with the app's client secret.** For a new app with PKCE off — Slack does not let PKCE be turned off on
+   an existing app — made from `agent-slack manifest --mode send --with-client-secret --port <port>` (`slack_manifest`
+   with `pkce: false`). The person runs, in their own terminal, `agent-slack workspace add <name> --mode send
+   --client-id <id> --port <port> --with-client-secret` (or `agent-slack workspace reauth <name> --mode send
+   --with-client-secret`), which asks for the client secret at a hidden prompt; the sign-in brings back the bot token
+   with the person's. Whether Slack accepts this sign-in's `http://localhost` redirect is not yet confirmed: if it
+   refuses (`bad_redirect_uri`), go back to state 2.
+
+The read app has no bot user, and a read workspace keeps no bot token. Narrowing to `read` or removing the workspace
+deletes the bot token from this machine and never revokes it: it is the workspace's, shared by everyone who
+installed the same app.
+
 ## Going back to `read`
 
 For an account with organisation provenance, `agent-slack workspace mode <name> read`
@@ -288,7 +315,9 @@ installed in the workspace; removing it there is the person's step in Slack's se
 - who the token actually is, via `auth.test` — the only check that can tell a revoked token from a working one,
   because everything else reads files this package wrote;
 - other Slack MCP servers registered on this machine. Where it says *not checked*, it could not look, and that is
-  not the same as "none": open the client's MCP server list and look for another Slack entry yourself.
+  not the same as "none": open the client's MCP server list and look for another Slack entry yourself;
+- for a `send` workspace, whether its app's bot token is actually stored — so whether an agent's posts can appear as
+  the app — and, when it is not, both ways to give it one (see above).
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
 the files can say, and `--workspace <name>` checks one workspace. `slack_doctor` runs the same checks and returns
@@ -296,6 +325,8 @@ the same JSON, with `offline` and `workspace`; on a server pinned to one workspa
 
 ## Pitfalls
 
+- **Asking for a secret in the chat.** The bot token and the client secret are typed by the person at their own
+  terminal, into `workspace bot` or `--with-client-secret`; a chat's transcript keeps whatever is pasted into it.
 - **Starting an own-app widening before the app is updated.** Slack grants what the app declares, so a
   `send` sign-in through a `read` app comes back `read` and nothing is recorded. Do the own-app
   manifest step first; `workspace mode <name> send` enforces the order.
