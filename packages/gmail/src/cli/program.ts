@@ -1276,9 +1276,15 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     .command('prepare <draftId>')
     .description('show exactly what would be sent, and record an approval for it')
     .requiredOption('--inbox <alias>', 'which mailbox')
+    .option(
+      '--as <who>',
+      'who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so)',
+    )
     .action(
       act(async (context, globalOptions, draftId: string, options: Options) => {
-        const result = await prepareSend(context, String(options.inbox), draftId);
+        const result = await prepareSend(context, String(options.inbox), draftId, {
+          as: options.as === undefined ? undefined : String(options.as),
+        });
         writeResult(
           result,
           output(),
