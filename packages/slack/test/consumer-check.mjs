@@ -161,6 +161,8 @@ try {
     // Saves files on this machine, under the downloads folder only: a read as far as Slack is concerned.
     'slack_file_download',
     'slack_files',
+    // Makes the agent emoji as a file on this machine: reads Slack, changes nothing there.
+    'slack_icon_make',
     'slack_manifest',
     'slack_mode',
     'slack_mode_narrow',

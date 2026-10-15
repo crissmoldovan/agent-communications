@@ -78,6 +78,7 @@ import {
   type FileDownloadQuestion,
   type FileDownloadResult,
 } from '../operations/files.ts';
+import { makeAgentIcon } from '../operations/icon.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
 import {
@@ -107,6 +108,7 @@ import { openInBrowser } from './browser.ts';
 import { readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
+  renderAgentIcon,
   renderAppCreated,
   renderAppUpdated,
   renderAppUpdateNeeded,
@@ -1132,6 +1134,24 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         const { call } = await session(context, String(flags.workspace));
         const result = await listPeople(call, { limit: limitOf(flags) });
         writeResult(result, output(), () => renderPeople(result, options.color), streams);
+      }),
+    );
+
+  // ── The agent emoji ─────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * A picture, made on this machine: the person's Slack photo with the robot badge, to upload as a workspace emoji
+   * themselves. It reads Slack and changes nothing there or in the configuration, so it asks nobody; `slack_icon_make`
+   * is the same operation from a chat.
+   */
+  const icon = program.command('icon').description('your agent’s emoji: your Slack photo with a robot badge');
+  icon
+    .command('make <workspace>')
+    .description('make the emoji as a PNG in the data folder, and say where to upload it; changes nothing in Slack')
+    .action(
+      act(async (context, options, alias: string) => {
+        const result = await makeAgentIcon(context, await session(context, alias));
+        writeResult(result, output(), () => renderAgentIcon(result, options.color), streams);
       }),
     );
 

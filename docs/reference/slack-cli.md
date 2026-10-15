@@ -45,6 +45,7 @@ Scripts should read these rather than parse output.
 | [`search`](#agent-slack-search) | Slack’s own search, in Slack’s syntax, over this workspace |
 | [`files`](#agent-slack-files) | files shared in this workspace |
 | [`people`](#agent-slack-people) | the members of this workspace |
+| [`icon`](#agent-slack-icon) | your agent’s emoji: your Slack photo with a robot badge |
 | [`draft`](#agent-slack-draft) | compose and keep messages locally; nothing reaches Slack |
 | [`post`](#agent-slack-post) | take a draft through the approval gate |
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
@@ -324,6 +325,22 @@ agent-slack people [options]
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--limit <n>` | how many | `"200"` |
+
+### `agent-slack icon`
+
+your agent’s emoji: your Slack photo with a robot badge
+
+```
+agent-slack icon [options] [command]
+```
+
+### `agent-slack icon make`
+
+make the emoji as a PNG in the data folder, and say where to upload it; changes nothing in Slack
+
+```
+agent-slack icon make [options] <workspace>
+```
 
 ### `agent-slack draft`
 

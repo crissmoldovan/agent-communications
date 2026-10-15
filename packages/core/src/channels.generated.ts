@@ -177,7 +177,7 @@ export const CHANNEL_SNAPSHOT: readonly ChannelEntry[] = [
         word: 'slack',
         can: 'post to Slack',
       },
-      hosts: ['slack.com', 'files.slack.com'],
+      hosts: ['slack.com', 'files.slack.com', 'avatars.slack-edge.com'],
       approve: 'agent-slack approve',
       skills: {
         prefix: 'slack-',

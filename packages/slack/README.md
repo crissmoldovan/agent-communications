@@ -301,6 +301,28 @@ in Slack, shared nowhere — delete it there if it should go. Changing files nee
 are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch to stop it. A deletion
 cannot be undone.
 
+## Your agent's emoji
+
+When your agent posts as the Slack app, its messages can carry your own picture with a small robot badge on it, so
+anyone can see at a glance that it is your agent and not you. Make the picture once per workspace:
+
+```sh
+agent-slack icon make acme/slack
+```
+
+It reads your Slack profile photo with the workspace's token, puts the robot badge on its lower right, and saves a
+128 × 128 PNG — under the 128 KB Slack allows an emoji — in this machine's data folder, as
+`slack/agent-icons/<account id>.png`. It prints the workspace's emoji page,
+`https://<workspace>.slack.com/customize/emoji`, and a name for the emoji made from your handle, such as
+`:sam-agent:`. Upload the file there under that name yourself, then record the name for the account with core's
+`label icon <account> :sam-agent:`, so the app's posts for your agent show it.
+
+It uploads nothing and changes nothing in Slack or in the configuration, so it asks nobody, and it works in `read`
+mode. The photo is fetched from Slack's photo host, `avatars.slack-edge.com`, with no token on the request. A photo
+kept anywhere else — a Gravatar, or Slack's default picture — is not fetched, and it asks you to add a profile photo
+in Slack first. Only a PNG or a JPEG of at most 5 MiB is read; anything else is refused and nothing is saved. From a
+chat, `slack_icon_make` does the same.
+
 ## As an MCP server
 
 Register it with your agent's client, which also starts it once to prove the entry works:
@@ -332,6 +354,7 @@ on stdio directly.
 | `slack_doctor` | what `agent-slack doctor` checks, as the same JSON |
 | `slack_manifest` | the app manifest, and for a connected workspace the link to its own app's manifest page — changes nothing |
 | `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | read, bounded |
+| `slack_icon_make` | make your agent emoji — your Slack photo with a robot badge — as a PNG to upload yourself; changes nothing in Slack |
 | `slack_file_download` | save files where the person says — asks first; by id, from one message, or from a conversation; opens nothing |
 | `slack_post_prepare` | compose a draft, with local files if given, and return the preview a person must approve — posts nothing |
 | `slack_post_send` | post a prepared draft once its approval allows it, reading every file again first — the operation `agent-slack post send` runs |
