@@ -11,7 +11,7 @@
 
 set -eu
 
-VERSION="0.18.2"
+VERSION="0.19.0"
 
 # A directory holding an executable `node`, or nothing.
 node_in() {

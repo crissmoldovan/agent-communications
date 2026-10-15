@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/resend",
-  "version": "0.18.2",
+  "version": "0.19.0",
   "description": "Resend for coding agents: read domains, sent and received mail, metrics and suppressions, and send mail that nothing sends without a person's approval of exactly what goes out.",
   "type": "module",
   "license": "MIT",
