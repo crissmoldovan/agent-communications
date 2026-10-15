@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
-import { asV2, type CommsError, fallbackLabelLine, fallbackTextPrefix } from '@agentcomms/core';
+import { asV2, type CommsError, fallbackTextPrefix } from '@agentcomms/core';
 import { beginApproval } from '../src/operations/approve.ts';
 import {
   prepareDelete,
@@ -13,6 +13,8 @@ import {
   sendEdit,
   sendPost,
 } from '../src/operations/post.ts';
+import { readChannel } from '../src/operations/read.ts';
+import { openWorkspace } from '../src/operations/session.ts';
 import { type SlackRequest, type SlackWorld, startFakeSlack, type WorldRoom } from './support/fake-slack.ts';
 import { newHarness } from './support/harness.ts';
 
@@ -140,19 +142,48 @@ test('an app post Slack refuses is a refused send, and nothing is posted as the 
 
 // ── The fallback ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the fallback carries the label in its blocks and at the front of its text, with the person’s token (S3)', async (t) => {
+test('the fallback starts its words and its notification with the label, the same in both, with the person’s token (S3)', async (t) => {
   const w = await labelled(t);
   await post(w, 'D1');
   const [sent] = calls(w, 'chat.postMessage');
   assert.equal(sent?.authorization, USER);
   assert.equal(sent?.params.has('username'), false, 'the person’s post named itself');
-  assert.equal(sent?.params.get('text'), `${fallbackTextPrefix(PHRASE)}shipping in ten minutes`);
-  const blocks = JSON.parse(sent?.params.get('blocks') ?? '[]') as Record<string, unknown>[];
-  assert.deepEqual(blocks[0], {
-    type: 'context',
-    elements: [{ type: 'plain_text', text: fallbackLabelLine(PHRASE), emoji: false }],
-  });
-  assert.deepEqual(blocks[1], { type: 'section', text: { type: 'mrkdwn', text: 'shipping in ten minutes' } });
+  const labelled_ = `${fallbackTextPrefix(PHRASE)}shipping in ten minutes`;
+  // The notification carries it, and so does the one section a reader sees: the composer's shape, of the labelled words.
+  assert.equal(sent?.params.get('text'), labelled_);
+  assert.deepEqual(JSON.parse(sent?.params.get('blocks') ?? '[]'), [
+    { type: 'section', text: { type: 'mrkdwn', text: labelled_ } },
+  ]);
+});
+
+test('a labelled fallback reads back as one message: no mismatch, and the label at its top (S3)', async (t) => {
+  /*
+   * Reading compares what a person sees with what a notification says, and reports a difference as `mismatch` — the
+   * signal for a message that reads one way to an agent and another to the room. Our own labelled post must not
+   * raise it: every agent that read it would take it for a deception.
+   */
+  const w = await labelled(t);
+  await post(w, 'D1');
+  const { call } = await openWorkspace(w.context, 'acme', w.slack);
+  const read = await readChannel(call, 'acme', 'D1');
+  const [row, ...more] = read.rows;
+  assert.equal(more.length, 0);
+  assert.equal(row?.message.mismatch, false, 'our own labelled post reads back as a mismatch');
+  assert.equal(row?.message.unrenderable, false);
+  assert.match(row?.message.enveloped ?? '', /Jo Example \(agent\): shipping in ten minutes/);
+
+  // An agent's edit of it keeps the label, in the text alone, and reads back the same way.
+  const ts = w.world.messages[0]?.ts ?? '';
+  const prepared = await prepareEdit(w.context, 'acme', { ts, channel: 'D1', text: 'shipping in five' }, w.slack);
+  await sendEdit(
+    w.context,
+    'acme',
+    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: 'D1', ts },
+    w.slack,
+  );
+  const edited = (await readChannel(call, 'acme', 'D1')).rows[0];
+  assert.equal(edited?.message.mismatch, false);
+  assert.match(edited?.message.enveloped ?? '', /Jo Example \(agent\): shipping in five/);
 });
 
 test('a file post’s initial comment begins with the label (S3)', async (t) => {

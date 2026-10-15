@@ -540,15 +540,19 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     ts: message.ts,
     user: message.user,
     text: message.text,
+    ...(message.blocks === undefined ? {} : { blocks: message.blocks }),
     ...(message.bot_id ? { bot_id: message.bot_id } : {}),
     ...(message.username ? { username: message.username } : {}),
     ...(message.edited ? { edited: message.edited } : {}),
   });
   fake.script['conversations.history'] = (request) => {
     const channel = request.params.get('channel') ?? '';
-    const ts = request.params.get('latest') ?? '';
-    const found = world.messages.filter((m) => m.channel === channel && m.ts === ts && !m.deleted);
-    return { ok: true, messages: found.map(shown) };
+    const ts = request.params.get('latest');
+    // One message by its ts, as an edit or a deletion reads it; else the channel, newest first, as a read does.
+    const found = world.messages
+      .filter((m) => m.channel === channel && !m.deleted && (ts === null || m.ts === ts))
+      .reverse();
+    return { ok: true, messages: found.map(shown), response_metadata: { next_cursor: '' } };
   };
   fake.script['conversations.replies'] = () => ({ ok: false, error: 'thread_not_found' });
   const own = (request: SlackRequest): WorldMessage | string => {
@@ -566,6 +570,8 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     const message = own(request);
     if (typeof message === 'string') return { ok: false, error: message };
     message.text = request.params.get('text') ?? '';
+    // Text without blocks replaces the blocks: Slack renders the message from its text alone (the edit design, §2).
+    if (!request.params.has('blocks')) message.blocks = undefined;
     message.edited = { ts: nextTs() };
     return { ok: true, channel: message.channel, ts: message.ts, text: message.text };
   };

@@ -336,7 +336,7 @@ export function postKind(payload: ComposedPayload, files: number): 'file' | 'rep
 function labelWarnings(label: SlackLabel | undefined): string[] {
   if (label?.identity !== 'agent' || label.route !== 'fallback' || label.phrase === undefined) return [];
   return [
-    `This goes out as you, labelled in the message: Slack shows "Sent by ${label.phrase}" above it, and its notification begins "${label.phrase}:". The app does not post it, because ${label.reason ?? 'it cannot here'}.`,
+    `This goes out as you, labelled in the message: its words and its notification both begin "${label.phrase}:". The app does not post it, because ${label.reason ?? 'it cannot here'}.`,
   ];
 }
 
@@ -443,8 +443,15 @@ export async function viewPost(
     countUnknown: why,
     membershipUnchecked: why,
   });
+  // The body as the room reads it: with the label at its front, for the fallback (S3); otherwise the words themselves.
   const preview: ChannelPreview =
-    label === undefined ? shown : { ...shown, warnings: [...labelWarnings(label), ...(shown.warnings ?? [])] };
+    label === undefined
+      ? shown
+      : {
+          ...shown,
+          ...(sent.payload === payload ? {} : { body: decodeSlackText(sent.payload.text, book.names()).text }),
+          warnings: [...labelWarnings(label), ...(shown.warnings ?? [])],
+        };
 
   const canonical: CanonicalChannelMessage = {
     kind: 'channel',

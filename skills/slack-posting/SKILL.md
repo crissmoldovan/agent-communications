@@ -77,7 +77,7 @@ message.** You do not choose the label, its name or its icon; nothing you pass c
 | First line | What the recipient sees |
 |---|---|
 | `Jo Example (agent) · posted by the app …` | the app's post, named after the person, with Slack's APP badge, and their agent emoji or photo |
-| `Jo Example · labelled "Sent by Jo Example (agent)" · <reason>` | the person's own post, with `Sent by Jo Example (agent)` above the words and `Jo Example (agent): …` in the notification — where the app cannot post: a DM, a group DM, their own DM, a room the app is not in, any post with files, a workspace with no app bot token yet (`slack-setup` says how to give it one) |
+| `Jo Example · labelled "Jo Example (agent):" at the start of the message · <reason>` | the person's own post, its words and its notification both beginning `Jo Example (agent): ` — where the app cannot post: a DM, a group DM, their own DM, a room the app is not in, any post with files, a workspace with no app bot token yet (`slack-setup` says how to give it one) |
 | `Sent as you, with no label: it will look as if you wrote it yourself` | the person's own post, unlabelled |
 
 **Pass `as: "me"` (`--as me`) only when the person said so for this message** — "send this one as me". Never on your
