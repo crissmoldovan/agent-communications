@@ -427,6 +427,7 @@ agent-slack post prepare [options]
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--draft <draftId>` | the draft to prepare | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack post send`
 
@@ -459,6 +460,7 @@ agent-slack react [options]
 | `--emoji <name>` | the emoji name, without colons | — |
 | `--remove` | remove your reaction instead | `false` |
 | `--approval <approvalId>` | the approval a person gave with `approve`, under `confirm` | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack edit`
 
@@ -482,6 +484,7 @@ agent-slack edit prepare [options]
 | `--draft <draftId>` | the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own | — |
 | `--ts <ts>` | the message to edit | — |
 | `--remove-file <fileId...>` | take this file of the message off it, by id; it stays in Slack, shared nowhere | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack edit send`
 

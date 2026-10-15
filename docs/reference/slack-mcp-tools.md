@@ -207,6 +207,7 @@ Return the preview a person must approve, with its approval id. **Nothing is pos
 | `mentionUsers` | string[] | no | user ids to mention, by id — never by name |
 | `broadcast` | `here` \\| `channel` \\| `everyone` | no | interrupts the room; needs a person |
 | `files` | string[] | no | local files to post, by path: under the home folder and not in a hidden folder there, at most 10, each at most 100 MiB, for a new message; with files, `text` is optional |
+| `as` | `agent` \\| `me` | no | who it appears to come from: `agent` (the default, labelled as your agent) or `me` (as you, with no label). Pass `me` only when the person said so for this message |
 
 ### `slack_post_send`
 
@@ -300,6 +301,7 @@ Add a reaction or remove your reaction. Say which emoji on which message first, 
 | `ts` | string | **yes** | the message timestamp |
 | `emoji` | string | **yes** | the emoji name, without colons |
 | `remove` | boolean | no | remove your reaction instead of adding one |
+| `as` | `agent` \\| `me` | no | who it appears to come from: `agent` (the default, labelled as your agent) or `me` (as you, with no label). Pass `me` only when the person said so for this message |
 
 ### `slack_react_send`
 
@@ -333,6 +335,7 @@ Return the preview a person must approve to edit a message this account posted �
 | `broadcast` | `here` \\| `channel` \\| `everyone` | no | interrupts the room; needs a person |
 | `files` | string[] | no | local files to post, by path: under the home folder and not in a hidden folder there, at most 10, each at most 100 MiB, added after the files the message keeps |
 | `removeFiles` | string[] | no | ids of the message’s own files to take off (F…), as a read lists them |
+| `as` | `agent` \\| `me` | no | who it appears to come from: `agent` (the default, labelled as your agent) or `me` (as you, with no label). Pass `me` only when the person said so for this message |
 
 ### `slack_edit_send`
 

@@ -484,6 +484,40 @@ export function doctor(input: DoctorInput): DoctorResult {
               workspace: workspace.alias,
             },
     );
+
+    /*
+     * Whether an agent's posts can go out as the app (design 2026-10-15 S1, Review focus 1). A send workspace signed in
+     * before the label has no bot user: its agent posts take the labelled fallback — never unlabelled, never refused —
+     * and this says how to move them to the app: update the app from the send manifest, then sign in again.
+     */
+    if (mode === 'send') {
+      checks.push(
+        workspace.appUserId !== undefined
+          ? {
+              id: 'app-identity',
+              title: `Posting as the app from ${workspace.alias}`,
+              status: 'ok',
+              detail: `an agent's posts go out as the app (bot user ${workspace.appUserId}), named after you and labelled, where the app can post`,
+              fix: null,
+              workspace: workspace.alias,
+            }
+          : {
+              id: 'app-identity',
+              title: `Posting as the app from ${workspace.alias}`,
+              status: 'warn',
+              detail:
+                "its app has no bot user, so an agent's posts go out as you, labelled in their text: update the app from the send manifest and sign in again to post as the app",
+              fix: remedy(
+                [
+                  handoffs.own(['manifest', '--workspace', workspace.alias, '--mode', 'send']),
+                  ' prints the send manifest and the link to its app page: update the app from it, then',
+                ],
+                handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send']),
+              ),
+              workspace: workspace.alias,
+            },
+      );
+    }
   }
 
   /*

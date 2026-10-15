@@ -19,6 +19,7 @@ import {
   viewEdit,
 } from './amend.ts';
 import { gateDepsFor } from './gate.ts';
+import { reactionLabelOf, reactionLine, requestedOf } from './label.ts';
 import { NameBook } from './people.ts';
 import {
   filesAsRecorded,
@@ -29,7 +30,7 @@ import {
   viewPost,
 } from './send.ts';
 import type { SessionDeps } from './session.ts';
-import { requireWorkspace } from './workspaces.ts';
+import { botUserIdOf, requireWorkspace } from './workspaces.ts';
 
 /**
  * Approving a post, a reaction, an edit or a deletion at a terminal.
@@ -92,6 +93,8 @@ function renderReaction(workspace: string, record: ApprovalRecord, reaction: Rea
   const act = reaction.remove
     ? `Remove :${truncateDisplay(reaction.name, 60)}: from`
     : `Add :${truncateDisplay(reaction.name, 60)}: to`;
+  // Who reacts, when the label decided it (design 2026-10-15 S6): read from the flags the digest was just checked with.
+  const label = reactionLabelOf(record.riskFlags, undefined);
   return [
     [
       'REACTION PREVIEW',
@@ -99,6 +102,7 @@ function renderReaction(workspace: string, record: ApprovalRecord, reaction: Rea
       `approval ${record.approvalId}`,
       'nothing has been added — approving does not add it',
     ].join(' · '),
+    ...(label === undefined ? [] : [`From: ${reactionLine(label)}`]),
     `${act} the message at ${truncateDisplay(reaction.ts, 40)} in ${truncateDisplay(reaction.channel, 40)}, as ${truncateDisplay(record.inboxSub ?? 'this account', 60)}.`,
   ].join('\n');
 }
@@ -131,7 +135,8 @@ async function currentPost(
   const drafts = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
   const draft = await drafts.get(record.draftId);
   const gate = await gateDepsFor(context, workspace, deps);
-  const view = await viewPost(gate, draft, new NameBook());
+  // Decided as prepare decided it, with what the message asked for read back from the approval (design 2026-10-15 L3).
+  const view = await viewPost(gate, draft, new NameBook(), requestedOf(record.riskFlags));
   const edited = draft.revision !== record.draftMessageId;
   /*
    * A room that could not be read approves nothing, and the approval stays as it was, to be tried again.
@@ -261,7 +266,7 @@ async function currentEdit(
   const gate = await gateDepsFor(context, workspace, deps);
   // An edit that adds files reads each one again first, as `prepareMessageEdit` did: a changed file is refused here.
   await filesAsRecorded(gate, draft);
-  const view = await viewEdit(gate, draft, edit.ts, edit.removeFiles, new NameBook());
+  const view = await viewEdit(gate, draft, edit.ts, edit.removeFiles, new NameBook(), requestedOf(record.riskFlags));
   const edited = draft.revision !== record.draftMessageId;
   const notifiesRoom = view.preview.notifies.channel || view.preview.notifies.here;
   if (!edited && view.roomUnread && (notifiesRoom || view.digest !== record.contentDigest)) {
@@ -314,7 +319,7 @@ export async function beginApproval(
 ): Promise<ApprovalPrompt> {
   const { record, name, account } = await approvalAndWorkspace(context, approvalId);
 
-  const reaction = reactionOfApproval(record, account.workspace);
+  const reaction = reactionOfApproval(record, account.workspace, botUserIdOf(account));
   if (reaction) {
     const challenge = await context.core.approvals.issueChallenge(approvalId, 'send', context.platform);
     return { approvalId, kind: 'reaction', preview: renderReaction(name, record, reaction), challenge };
@@ -371,7 +376,7 @@ export async function finishApproval(
    * A reaction binds the record's own digest, checked again here as `beginApproval` checked it: there is no draft
    * to read, and reading its draft id as one is what made every reaction unapprovable.
    */
-  if (reactionOfApproval(record, account.workspace)) {
+  if (reactionOfApproval(record, account.workspace, botUserIdOf(account))) {
     await context.core.approvals.approve(
       approvalId,
       'terminal',
