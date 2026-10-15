@@ -34,6 +34,10 @@ export interface TargetMessage extends MessageAt {
   readonly files: readonly { readonly id: string; readonly name: string }[];
   /** When it was last edited, as Slack says: bound, so a change to it in Slack between preview and claim voids. */
   readonly editedTs: string | undefined;
+  /** Set on a message an app posted (design 2026-10-15 S5): attribution is `bot_id` and `user`, never `username` (D7). */
+  readonly botId?: string | undefined;
+  /** The display name an app chose for the message, when it chose one: shown as that, never matched on. */
+  readonly username?: string | undefined;
 }
 
 /*
@@ -99,6 +103,8 @@ function targetOf(where: MessageAt, raw: Raw): TargetMessage {
       return id === undefined ? [] : [{ id, name: str(file.name) ?? str(file.title) ?? id }];
     }),
     editedTs: str(edited.ts),
+    ...(str(raw.bot_id) === undefined ? {} : { botId: str(raw.bot_id) }),
+    ...(str(raw.username) === undefined ? {} : { username: str(raw.username) }),
   };
 }
 

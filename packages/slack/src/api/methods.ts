@@ -193,6 +193,12 @@ const RULES: Readonly<Record<string, MethodRule>> = {
   'files.list': { kind: 'read', requiredScopes: ['files:read'] },
 
   // ── Writes: everything that puts a message in front of somebody ───────────────────────────────────────────
+  /*
+   * Four of these may carry the send app's bot token as well as the person's (design 2026-10-15 S1): `chat.postMessage`
+   * for an app post, `chat.update` and `chat.delete` for an app message this account posted, and `reactions.add` and
+   * `reactions.remove` for a reaction the app makes. The bot's scopes are the manifest's four and no more, and every
+   * request either token carries is a write here, behind the same permit — the token does not change the door.
+   */
   'chat.postMessage': { kind: 'write', requiredScopes: ['chat:write'] },
   // Editing a message that people have already read changes what they saw, after they saw it.
   'chat.update': { kind: 'write', requiredScopes: ['chat:write'] },

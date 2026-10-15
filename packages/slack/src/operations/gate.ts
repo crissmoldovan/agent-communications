@@ -2,6 +2,7 @@ import { effectiveAccountSendPolicy, sendEpochOf } from '@agentcomms/core';
 import type { SlackCall } from '../api/call.ts';
 import { closedPermit, type WritePermit } from '../api/guard.ts';
 import type { SlackContext } from '../context.ts';
+import { appPostRecordFor } from './app-posts.ts';
 import { attachPolicyOf } from './drafts.ts';
 import { labelSettingsOf, noAppReason } from './label.ts';
 import type { PostDeps, PrepareDeps } from './send.ts';
@@ -52,6 +53,8 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     surface: context.surface,
     permit: closedPermit(),
     sendPacing: context.sendPacing,
+    // This account's own record of its app's posts (design 2026-10-15 S5).
+    appPosts: appPostRecordFor(context.core.paths.stateDir, account.id),
     // Who each act appears to come from (design 2026-10-15): the person's settings, and this account's app if it has one.
     label: {
       account: name,

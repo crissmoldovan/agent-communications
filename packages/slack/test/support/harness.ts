@@ -95,11 +95,12 @@ export function slackOk(over: SlackReplyOverrides = {}): Record<string, unknown>
   const { authed_user: user, scopes, bot, ...rest } = over;
   const granted = scopes ?? scopesForMode('read');
   /*
-   * The send app's bot half, at the top of the reply as Slack puts it (design 2026-10-15 S1): a grant that can post is
-   * the send app's, which now has a bot user. `bot: false` leaves it out — an app still on the manifest from before.
+   * The send app's bot half, at the top of the reply as Slack puts it (design 2026-10-15 S1): a full send grant is the
+   * send app's, which now has a bot user. `bot: false` leaves it out — an app still on the manifest from before, or a
+   * read sign-in, which asks Slack for no bot scope even when the grant it gets back still holds the send scopes.
    */
   const botHalf =
-    bot === false || !granted.includes('chat:write')
+    bot === false || !scopesForMode('send').every((scope) => granted.includes(scope))
       ? {}
       : {
           access_token: 'fake-bot-token-1',
