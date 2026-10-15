@@ -1399,6 +1399,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     cc: z.array(z.string()),
     bcc: z.array(z.string()),
     subject: z.string(),
+    identity: z
+      .string()
+      .describe('who it appears to come from: agent (labelled in its From line) or me (the bare address)'),
+    from: z.string().describe('the From line the draft carries, as a recipient will read it'),
     preview: z.string().describe('the message as the person must see it before approving anything'),
     attachments: z.array(
       z.object({ filename: z.string(), size: z.number(), mimeType: z.string(), source: z.string() }),
@@ -1422,6 +1426,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     .min(1)
     .describe(
       'the body as plain text; the HTML part is generated from it, so markup here is written out, not rendered',
+    );
+  // A word, checked by the operation: a word that is not one is refused as USAGE from either surface.
+  const asArgument = z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'who it appears to come from: agent (labelled "<name> (agent)" in the From line) or me (unlabelled). Pass `me` only when the person said so for this message; left out, their rules decide, and then agent',
     );
 
   server.registerTool(
@@ -2225,7 +2237,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Write a draft',
         description:
-          'Write a new message into Drafts and return the preview the person must read before anything is sent. Nothing is sent by this tool, or by any tool on this server: the person sends it from Gmail, or approves a send explicitly. Show the returned `preview` to the person verbatim.',
+          'Write a new message into Drafts and return the preview the person must read before anything is sent. Nothing is sent by this tool, or by any tool on this server: the person sends it from Gmail, or approves a send explicitly. Show the returned `preview` to the person verbatim. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           to: mcpStringArray().describe('who it goes to'),
@@ -2236,6 +2248,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           attach: mcpStringArray().optional().describe('local file paths; each is checked against the attachment jail'),
           signature: mcpBoolean().optional().describe('use the mailbox signature (default true)'),
           includeProfile: mcpBoolean().optional().describe('return the mailbox writing profile alongside the draft'),
+          as: asArgument,
         }),
         outputSchema: draftView,
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -2254,7 +2267,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Draft a reply or forward',
         description:
-          'Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. The original is quoted below your text as sanitised plain text, never its own HTML. A forward starts a new conversation and needs `to`. Nothing is sent by this tool.',
+          'Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. The original is quoted below your text as sanitised plain text, never its own HTML. A forward starts a new conversation and needs `to`. Nothing is sent by this tool. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           messageId: z.string().min(1).describe('the message being answered'),
@@ -2269,6 +2282,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           attach: mcpStringArray().optional(),
           signature: mcpBoolean().optional(),
           includeProfile: mcpBoolean().optional(),
+          as: asArgument,
         }),
         outputSchema: draftView,
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -2287,7 +2301,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Rewrite a draft',
         description:
-          'Change a draft: its body, recipients, subject or attachments. Anything not restated is kept — the body and the attachments included — so an update that only changes the subject keeps the message and its files. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later.',
+          'Change a draft: its body, recipients, subject or attachments. Anything not restated is kept — the body and the attachments included — so an update that only changes the subject keeps the message and its files. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           draftId: z.string().min(1),
@@ -2301,6 +2315,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             .describe('replaces the attachments; omit it to keep the ones already on the draft'),
           signature: mcpBoolean().optional(),
           includeProfile: mcpBoolean().optional(),
+          as: asArgument,
         }),
         outputSchema: draftView,
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -2511,16 +2526,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Prepare a send',
         description:
-          'Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.',
+          'Read a draft and return the preview the person must approve, with an approval id bound to exactly this content — who it appears to come from included: its From line is labelled `<name> (agent)` unless `as` is `me`, and a draft whose From does not say so has that header alone rewritten. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           draftId: z.string().min(1).describe('the draft to send, from gmail_draft_create or gmail_draft_list'),
+          as: asArgument,
         }),
         outputSchema: z.object({
           approvalId: z.string(),
           inbox: z.string(),
           draftId: z.string(),
           preview: z.string().describe('show this to the user exactly as it is'),
+          identity: z
+            .string()
+            .describe('who it appears to come from, bound by the approval: agent (labelled) or me (unlabelled)'),
+          fromRewritten: z
+            .boolean()
+            .describe('true when the draft’s From did not fit, and its From header alone was rewritten'),
           policy: z.string(),
           effectivePolicy: z.string(),
           riskFlags: z.array(z.string()),
@@ -2560,9 +2582,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         }),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       },
-      async ({ inbox, draftId }) => {
+      async ({ inbox, draftId, as }) => {
         try {
-          return reply(await prepareSend(context, targetInbox(inbox), draftId));
+          return reply(await prepareSend(context, targetInbox(inbox), draftId, { as }));
         } catch (error) {
           return fail(error);
         }

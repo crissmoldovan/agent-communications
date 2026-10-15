@@ -41,7 +41,14 @@ send, when you do not know them.
 
 `resend_send_prepare` takes `from` (at a domain the team has verified for sending), `to`, and optionally `cc`, `bcc`,
 `subject`, `text`, `html`, `attachments` (paths inside the allowed folders), `replyTo`, `inReplyTo` and `references`
-(to keep a thread), and `scheduledAt`.
+(to keep a thread), `scheduledAt`, and `as`.
+
+**The From says the person's agent sent it.** Prepare labels it `"<name> (agent)" <address>`: the name you put in
+`from`, or the label name the person set in the core when `from` is a bare address, then their word (`agent` unless
+they chose another). Pass `as: "me"` (CLI: `--as me`) only when the person said, for this email, that it should go as
+them, with `from` exactly as given. Never pass it on your own or to get past a refusal. Left out, their label rules
+decide — by account, by who it goes to (an address or `@domain`, matching only when every recipient does) — and then
+`agent`. With no name to label, or a label over 100 characters, prepare refuses and says how to set one.
 
 It refuses before any approval exists when:
 
@@ -62,7 +69,9 @@ A refusal is the answer. Say what it was and ask; do not reshape the email to sl
 The preview is what the person is agreeing to. **Show it in full**, then wait. Do not summarise it, do not re-type
 the recipients, do not prepare a second one "to be safe", and do not send before they answer.
 
-It lists what people get wrong when it is summarised:
+Its first line says who the email will appear to come from — labelled, or `Sent as you, with no label: it will look as
+if you wrote it yourself` — and the approval binds the whole From. It lists what people get wrong when it is
+summarised:
 
 - **every recipient**, BCC included, and a note on each address that came from mail read here and was never written
   to from here;
@@ -163,3 +172,5 @@ failed its integrity check, and is said, never skipped.
 - **Leaving a "no" unrevoked.** The server never hears it. Revoke the approval at once.
 - **Asking for a key.** A key is typed at a terminal by a person. Never in the chat.
 - **Widening an account to get an email out.** Moving to `send` or loosening a policy is the person's to ask for.
+- **Taking the label off.** `as: "me"` makes an email look as if the person wrote it. Pass it only when they said so
+  for that email.

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import {
+  AGENT_LABEL_WORDS,
   analyseOutboundHtml,
   type CliHandoffs,
   CommsError,
@@ -14,6 +15,7 @@ import {
   homeDirectory,
   isControl,
   isInvisible,
+  type MessageIdentity,
   safeFilename,
   sha256Hex,
 } from '@agentcomms/core';
@@ -91,6 +93,8 @@ export interface OutboundMessage {
 
 export interface BuiltMessage {
   message: OutboundMessage;
+  /** The name the caller put in From, or empty for a bare address: what an agent label is made from (L1). */
+  fromName: string;
   /** Every link in the message, with its full query string. */
   links: string[];
   /** Things a person should see before approving that are not refusals. */
@@ -136,16 +140,33 @@ function headerText(value: string, field: string, max: number): string {
   return trimmed;
 }
 
-function parseFrom(raw: string): { from: string; fromAddress: string; fromDomain: string } {
+function parseFrom(raw: string): { from: string; fromAddress: string; fromDomain: string; name: string } {
   const value = raw.trim();
   const angled = /^(.*)<([^<>]+)>$/.exec(value);
   const bare = angled ? (angled[2] ?? '') : value;
   const fromAddress = address(bare, 'from');
   const fromDomain = domainOf(fromAddress) ?? '';
-  if (!angled) return { from: fromAddress, fromAddress, fromDomain };
+  if (!angled) return { from: fromAddress, fromAddress, fromDomain, name: '' };
   const name = headerText((angled[1] ?? '').trim().replace(/^"(.*)"$/, '$1'), 'the From name', 100);
   if (/[<>"@,;]/.test(name)) throw bad('the From name may not contain < > " @ , or ;');
-  return { from: name ? `${name} <${fromAddress}>` : fromAddress, fromAddress, fromDomain };
+  return { from: name ? `${name} <${fromAddress}>` : fromAddress, fromAddress, fromDomain, name };
+}
+
+/**
+ * The From an agent's send carries (design 2026-10-15-agent-label, R1): L1's phrase, quoted — unquoted, `(agent)` is
+ * an RFC 5322 comment, which a mail client may drop — then the address. `parseFrom` never writes a quote, so a quoted
+ * From is always one this package labelled.
+ */
+export function labelledFrom(phrase: string, fromAddress: string): string {
+  return `"${phrase}" <${fromAddress}>`;
+}
+
+/** Who a prepared From says the email comes from: the label this package wrote, with its phrase, or the person. */
+export function identityOfFrom(from: string): { identity: MessageIdentity; phrase?: string } {
+  const phrase = /^"(.+)" <[^<>]+>$/.exec(from)?.[1];
+  return phrase !== undefined && AGENT_LABEL_WORDS.some((word) => phrase.endsWith(` (${word})`))
+    ? { identity: 'agent', phrase }
+    : { identity: 'me' };
 }
 
 /** A body: controls other than newline and tab are refused, invisible characters are counted for a warning. */
@@ -224,7 +245,7 @@ export async function buildMessage(
   options: { now: Date; attach: AttachPolicyInput },
 ): Promise<BuiltMessage> {
   const warnings: string[] = [];
-  const { from, fromAddress, fromDomain } = parseFrom(input.from);
+  const { from, fromAddress, fromDomain, name: fromName } = parseFrom(input.from);
   const to = list(input.to, 'to');
   const cc = list(input.cc, 'cc');
   const bcc = list(input.bcc, 'bcc');
@@ -336,6 +357,7 @@ export async function buildMessage(
       references,
       scheduledAt,
     },
+    fromName,
     links,
     warnings,
   };

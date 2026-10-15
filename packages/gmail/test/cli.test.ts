@@ -942,6 +942,8 @@ test('send execute rendering preserves every subject and every recipient list on
           inbox: 'work inbox',
           draftId: 'draft one',
           preview: 'Preview',
+          identity: 'agent',
+          fromRewritten: false,
           policy: 'chat',
           effectivePolicy: 'chat',
           riskFlags: [],
