@@ -3,6 +3,64 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**What an agent sends is now labelled as your agent's: "Cristian Moldovan (agent)", not just your name.** People who
+get a Slack message, a Gmail message or a Resend email that an agent sent through these tools can tell it came from
+your agent, not from you. You decide when it speaks as you, and every preview's first line says plainly which of the
+two a message will be.
+
+**The label.** The label is your name and a word in parentheses. The word comes from a fixed list: `agent` (the
+default), `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`. `agentcomms label` and the MCP tool `comms_label` show
+the word, the name and the rules, and how each connected account's messages will look. Choose who a message appears to
+come from at four levels:
+- per message: tell the agent "send this one as me", and its prepare gets `as: "me"`;
+- per account;
+- per conversation: a Slack channel, a person you message, or a mail address or `@domain`;
+- by kind: posts, replies, reactions, edits, files or sends.
+
+A message's own choice beats a rule. Among rules the most specific one wins, and between equally specific rules
+`agent` wins. Anything that could leave a message unlabelled applies only after you confirm its preview: a "send as
+me" rule, removing an "agent" rule, a new word, a new name, a new Slack icon. A change that only adds labelling applies
+at once. Rules record the account they were made for, so an account connected later under a removed account's name
+never inherits them.
+
+**Slack.**
+- Where the app can post, an agent's message is posted by your Slack app, named "Your Name (agent)", with Slack's APP
+  badge beside it. That means a public channel, or a private one the app is in. The icon is your own agent emoji, or
+  your photo until you add one.
+- Where the app cannot post (a direct message between two people, a private channel it isn't in, a file, or a
+  workspace whose app has no bot token on this machine), the message goes out as you, with the label at its start, so
+  the notification carries it too.
+- Reactions come from the app where it can post. An agent's edit of a message is labelled.
+- An app's bot token reaches this machine one of two local ways, with no server:
+  - a sign-in with the app's client secret, entered once at your terminal;
+  - pasting the app's bot token once at your terminal, with `workspace bot`.
+- `agent-slack icon make` (MCP `slack_icon_make`) turns your Slack photo into a square PNG with a small robot badge,
+  to upload as your agent emoji. Record its name with `agentcomms label icon`.
+
+**Gmail and Resend.**
+- A labelled message's From name is "Your Name (agent)".
+- Gmail drafts are labelled when written. A draft written in Gmail itself has only its From line rewritten when you
+  prepare to send it, leaving every other byte unchanged.
+- The send approval now covers the whole From line, name included, so it cannot change between the preview and the
+  send.
+
+Why: agents that read Slack and mail send acknowledgements and replies, and until now people saw those as yours. The
+label makes clear which messages your agent sent, without impersonating you and without a new service, and every
+unlabelled message rests on your yes to a preview that says so.
+
+**Upgrading.**
+- After updating, every message an agent sends is labelled unless you choose otherwise. `agentcomms update` (or
+  `comms_update`) moves each client to this release; restart the client afterwards. Older runtimes still running in
+  other clients send unlabelled until the update reaches them.
+- If Gmail has no display name for your address, or a Resend send has no From name, set one once with
+  `agentcomms label name "Your Name"`. Until then, a labelled draft or send is refused with that hint.
+- In Slack, nothing changes until you choose: your workspace's messages go out as you, labelled. To post as the app,
+  connect it with one of the two ways above. Each needs a Slack app created from this release's manifest:
+  `agent-slack manifest --with-client-secret` for the secret sign-in.
+- A Gmail send prepared before the upgrade, for a draft whose From has a display name, has to be prepared again.
+
 ## 0.18.2
 
 **A rule activation whose approval ran out or was withdrawn before anyone approved it is now cancelled, and the rule's

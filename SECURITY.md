@@ -36,6 +36,11 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   text from the sanitiser, or makes a tool act on instructions found in mail.
 - **Disclosure without a standing authorisation** — any webhook or subscriber stream receiving event-derived content, or any hosted or local judge being invoked with it, without an active, digest-bound standing disclosure authorisation for exact approved versions, or versions derived from them by a whitelisted tightening, including the complete validated derivation lineage for the exact effective rule, target, subscriber and judge versions; after that authorisation is revoked; while the judge's kind is not enabled; outside its approved mapping, retention or delivery rate cap; or without successful taint recording before disclosure.
 - **A standing disclosure authorisation is not approval of each event.** Once a person enables one at the terminal or in the app, future unseen content that matches its approved rule may leave automatically through its approved target or be evaluated by its approved judge. agent-events doctor and the app list every active authorisation. Disabling or removing any bound rule, target, subscriber or judge, or disabling a judge kind, revokes it immediately; content already in a network operation cannot be recalled.
+- **An unlabelled send nobody chose** — any way to make a Slack post, reaction, edit or file, a Gmail send or a
+  Resend send go out as the person, with no agent label, when neither the person's word for that message (`as`) nor
+  one of their confirmed label rules said so. Also in scope: any way to get the label's word, name or Slack icon
+  changed without an approval of that exact change, or to make the preview's first line state a different identity
+  from the one that is sent.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
@@ -92,3 +97,10 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   Under WSL, a file saved onto a Windows drive carries no internet mark.
 
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
+
+- **A Slack app's bot token can post under any name.** Posting as the app needs `chat:write.customize`, which lets
+  whoever holds the bot token choose any `username` and icon; Slack still shows its APP badge. This project only ever
+  sets the label's phrase and the person's own icon, but the token belongs to the workspace's installation of the app:
+  everyone who connected the same organisation app may hold it, and a program outside this project could use it to
+  post under another member's name, badged as the app. The client secret of an app connected with
+  `--with-client-secret` is kept in the secret store beside the tokens and is as sensitive as they are.
