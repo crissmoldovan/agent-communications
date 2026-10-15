@@ -504,25 +504,30 @@ test('the manifest names the port it was built with, and so does the command it 
   assert.match(result.stdout, /--port 51234/);
 });
 
-test('a manifest with no port is refused rather than guessed', async () => {
+test('a new app’s manifest with no port gets a free one chosen, rather than a refusal', async () => {
+  // Nobody has to pick a number: a new app's port is asked of the system, and then that app's (2026-10-15).
   const harness = await newHarness();
   const result = await cli(harness, ['--json', 'manifest']);
-  assert.equal(result.code, EXIT_CODES.USAGE);
-  const envelope = result.json<Envelope<never>>();
-  assert.equal(envelope.error?.code, 'USAGE');
+  assert.equal(result.code, EXIT_CODES.OK, result.stdout);
+  const data = result.json<Envelope<{ port: number; portFrom: string; redirectUrl: string }>>().data;
+  assert.equal(data?.portFrom, 'chosen');
+  assert.equal(data?.redirectUrl, `http://localhost:${data?.port}/slack/callback`);
 });
 
-test('the setup skill says `--port` may be left off `manifest` only when it names a workspace', async () => {
+test('the setup skill says a recorded port is used only by a `manifest` that names a workspace, and a new app’s is chosen', async () => {
   /*
-   * A recorded port is a workspace's. `manifest` alone names none, so it has nothing to fall back on and still needs
-   * the number given; `manifest --workspace` names one, and uses the port it signed in with. The skill listed
+   * A recorded port is a workspace's. `manifest` alone names none, so it is for a new app, and chooses a free port
+   * (2026-10-15); `manifest --workspace` names one, and uses the port it signed in with. The skill listed
    * `manifest` and `workspace reauth` as two steps and then said `--port` could be left out of "both", which sent a
    * reader to a refusal on the first of them — so each claim is checked against what the command does.
    */
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'read', redirectPort: 50123 });
   const bare = await cli(harness, ['--json', 'manifest', '--mode', 'send']);
-  assert.equal(bare.code, EXIT_CODES.USAGE, 'a recorded port does not reach a `manifest` that names no workspace');
+  assert.equal(bare.code, EXIT_CODES.OK, bare.stdout);
+  const chosen = bare.json<Envelope<{ port: number; portFrom: string }>>().data;
+  assert.equal(chosen?.portFrom, 'chosen', 'a `manifest` that names no workspace is for a new app: its port is chosen');
+  assert.notEqual(chosen?.port, 50123, 'and is never the port another workspace recorded');
   const named = await cli(harness, ['--json', 'manifest', '--mode', 'send', '--workspace', 'acme']);
   assert.equal(named.code, EXIT_CODES.OK, named.stdout);
   assert.equal(named.json<Envelope<{ port: number }>>().data?.port, 50123, 'and does reach one that names it');
@@ -540,7 +545,11 @@ test('the setup skill says `--port` may be left off `manifest` only when it name
       `names only commands that fill it in: ${claim}`,
     );
   }
-  assert.match(skill.replace(/\s+/g, ' '), /`agent-slack manifest` [^.]*needs `--port`/, 'and says manifest needs it');
+  assert.match(
+    skill.replace(/\s+/g, ' '),
+    /`agent-slack manifest` without `--workspace` [^.]*chooses a free port/,
+    'and says manifest alone chooses one',
+  );
 });
 
 test('--json puts exactly one document on stdout', async () => {

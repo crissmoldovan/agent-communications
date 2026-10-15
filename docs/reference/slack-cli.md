@@ -66,7 +66,7 @@ agent-slack manifest [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
-| `--port <port>` | the loopback port its redirect will use | — |
+| `--port <port>` | the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app | — |
 | `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
 | `--with-client-secret` | the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app | — |
 

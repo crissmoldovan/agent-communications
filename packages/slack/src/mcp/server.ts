@@ -471,7 +471,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'The Slack app manifest',
       description:
-        'The manifest for a Slack app in `read` or `send` mode, for a loopback port. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
+        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
       inputSchema: {
         workspace: z.string().optional().describe('a workspace already connected, as `organisation/slack`'),
         mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
@@ -479,7 +479,9 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .number()
           .int()
           .optional()
-          .describe('the loopback port its redirect uses; a connected workspace’s own when left out'),
+          .describe(
+            'the loopback port its redirect uses; left out, a connected workspace’s own, or a free one for a new app',
+          ),
         pkce: z
           .boolean()
           .optional()
