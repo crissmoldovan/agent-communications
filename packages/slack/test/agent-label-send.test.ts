@@ -33,6 +33,8 @@ function rooms(): Record<string, WorldRoom> {
     C1: { name: 'eng', members: ['U0001', 'U2'] },
     G1: { name: 'secret', is_private: true, members: ['U0001', 'U2', 'U0BOT0001'] },
     D1: { is_im: true, user: 'U2', members: ['U0001', 'U2'] },
+    // A DM with someone in an Enterprise Grid org, whose user id is a W….
+    D3: { is_im: true, user: 'W0042', members: ['U0001', 'W0042'] },
   };
 }
 
@@ -302,4 +304,21 @@ test('in a DM the person reacts, and the preview says the reaction is unlabelled
   );
   const screen = await beginApproval(confirm.context, approvalId, confirm.slack);
   assert.match(screen.preview, /From: as you, with no label/);
+});
+
+test('a rule naming a person decides a reaction in a DM with them, a Grid person’s W… id too (L4, S6)', async (t) => {
+  const w = await labelled(t);
+  await w.harness.core.config.update(
+    (config) => ({ ...config, agentLabel: { rules: [{ account: 'acme', conversation: 'W0042', as: 'me' }] } }),
+    { consent: { kind: 'loosening-consent', paths: ['agentLabel.rules'] } },
+  );
+  const done = await react(
+    w.context,
+    'acme',
+    { channel: 'D3', ts: '1700000000.000100', name: 'eyes' },
+    undefined,
+    w.slack,
+  );
+  assert.equal(done.label, undefined, 'the rule for W0042 did not decide the reaction in the DM with them');
+  assert.equal(calls(w, 'reactions.add')[0]?.authorization, USER);
 });

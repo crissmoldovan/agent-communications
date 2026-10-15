@@ -247,7 +247,7 @@ export async function decideLabel(
   };
   // A rule naming a person matches a DM with them: only then does the identity depend on the room.
   const personRules = (label.settings.rules ?? []).some(
-    (rule) => rule.account === label.account && rule.conversation?.startsWith('U') === true,
+    (rule) => rule.account === label.account && /^[UW]/.test(rule.conversation ?? ''),
   );
   if (personRules) await room();
   const decision = resolveIdentity(label.settings, {
