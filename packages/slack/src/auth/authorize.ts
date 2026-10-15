@@ -8,7 +8,7 @@ import {
 } from '@agentcomms/core';
 import { SLACK_ORIGIN } from '../api/methods.ts';
 import type { InstallMode } from '../manifest.ts';
-import { scopesForMode } from '../manifest.ts';
+import { BOT_SCOPES, botScopesForMode, scopesForMode } from '../manifest.ts';
 import { newPkcePair, newState, type PkcePair } from './pkce.ts';
 
 /**
@@ -46,9 +46,12 @@ export interface AuthorizeRequest {
 /**
  * The URL the person opens.
  *
- * Only `user_scope` is set, never `scope`. Two independent reasons, either sufficient: a user token is the only
- * one that reaches the person's DMs and unjoined public channels (research §1.3), and Slack states "desktop
- * redirects are not allowed to request bot scopes" — and this is a desktop redirect.
+ * Reading is always the user token's, in `user_scope`: it is the only one that reaches the person's DMs and unjoined
+ * public channels (research §1.3). The send app also asks, in `scope`, for its bot user's four posting scopes, so it can
+ * post as itself, named after the person (design 2026-10-15 S1); the read app asks for none. Slack's PKCE page states
+ * "desktop redirects are not allowed to request bot scopes", and this is a desktop redirect — whether Slack holds this
+ * app to that is the first thing the label design's live check (§10.1) settles. Until a sign-in from the new manifest
+ * succeeds, a send workspace keeps posting as the person, labelled (S1, S3).
  *
  * `team` is set whenever the workspace is known before Slack answers: a profile names it, and a renewal must come back
  * as the account's own. An app that is not distributed is authorised only in the workspace that created it, and with
@@ -72,6 +75,8 @@ export function buildAuthorizeUrl(options: {
 
   const url = new URL('/oauth/v2/authorize', SLACK_ORIGIN);
   url.searchParams.set('client_id', options.clientId);
+  const botScopes = botScopesForMode(options.mode);
+  if (botScopes.length > 0) url.searchParams.set('scope', botScopes.join(','));
   url.searchParams.set('user_scope', scopes.join(','));
   url.searchParams.set('redirect_uri', redirectUrl);
   url.searchParams.set('state', state);
@@ -149,6 +154,22 @@ export interface ExchangedToken {
   readonly workspaceName?: string | undefined;
   readonly appId?: string | undefined;
   readonly tokenType?: string | undefined;
+  /** The send app's bot token, with exactly the four posting scopes (S1). Never on a read sign-in. */
+  readonly bot?: ExchangedBot | undefined;
+}
+
+/**
+ * The send app's bot token, as the exchange returned it (design 2026-10-15 S1): the workspace's, not the person's — every
+ * member who installed the same organisation app holds it too — so it is kept, used only to post through the gate, and
+ * never revoked from here. Rotating, as the user token is, because the manifest turns rotation on for the whole app.
+ */
+export interface ExchangedBot {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly expiresInSeconds: number;
+  readonly scopes: readonly string[];
+  /** The bot user the app posts as: who an app post is from, and whose membership a private channel is checked for. */
+  readonly userId: string;
 }
 
 /**
@@ -192,6 +213,10 @@ interface OAuthResponse {
   team?: { id?: string; name?: string };
   access_token?: string;
   token_type?: string;
+  scope?: string;
+  bot_user_id?: string;
+  refresh_token?: string;
+  expires_in?: number;
   authed_user?: {
     id?: string;
     access_token?: string;
@@ -210,7 +235,7 @@ interface OAuthResponse {
  * label is a claim about a token nobody re-examined. `handoffs` make the commands a refusal names, located from the
  * installation printing them, or say why there is none here.
  */
-export function readExchange(body: unknown, handoffs: CliHandoffs): ExchangedToken {
+export function readExchange(body: unknown, handoffs: CliHandoffs, mode: InstallMode = 'read'): ExchangedToken {
   const response = body as OAuthResponse;
   if (response?.ok !== true) {
     const shown = safeSlackFailureText;
@@ -247,17 +272,19 @@ export function readExchange(body: unknown, handoffs: CliHandoffs): ExchangedTok
   }
 
   /*
-   * A bot token in the reply means the app asked for bot scopes.
+   * A bot token in a read app's reply means the app asked for bot scopes.
    *
    * It is not merely surplus: a bot token for this workspace would sit in the same app, outside everything this
    * package guards, and the whole read-mode guarantee is that no token exists which can post. Refused rather
-   * than dropped, because dropping it would leave that token in existence and unmentioned.
+   * than dropped, because dropping it would leave that token in existence and unmentioned. The send app's is read
+   * below, and held to exactly its four scopes (design 2026-10-15 S1).
    */
-  if (response.access_token) {
+  if (response.access_token && mode !== 'send') {
     throw new CommsError('AUTH_REQUIRED', 'Slack also issued a bot token, which this app must not request', {
       hint: 'Re-create the app from the manifest this prints; it requests user scopes only.',
     });
   }
+  const bot = mode === 'send' && response.access_token ? readBot(response, handoffs) : undefined;
 
   const tokenType = user.token_type;
   if (tokenType && tokenType !== 'user') {
@@ -312,7 +339,63 @@ export function readExchange(body: unknown, handoffs: CliHandoffs): ExchangedTok
     ...(response.team.name ? { workspaceName: response.team.name } : {}),
     ...(typeof response.app_id === 'string' ? { appId: response.app_id } : {}),
     ...(tokenType ? { tokenType } : {}),
+    ...(bot ? { bot } : {}),
   };
+}
+
+/** "…update the app from the send manifest, then sign in again." — the manifest located, or slack_manifest from a chat. */
+function updateFromManifest(handoffs: CliHandoffs): string {
+  return handoffSentence(
+    handoffs.own(['manifest', '--mode', 'send']),
+    (command) =>
+      `Update the app at https://api.slack.com/apps from the send manifest ${command} prints, so it has the bot user with exactly these scopes, then sign in again.`,
+    {
+      instead:
+        'Update the app at https://api.slack.com/apps from the send manifest slack_manifest prints, so it has the bot user with exactly these scopes, then sign in again.',
+    },
+  );
+}
+
+/**
+ * The send app's bot token, or a refusal (S1): a bot token, for a named bot user, rotating, and with exactly the four
+ * posting scopes — more could read, fewer could not name its posts. Nothing of the token goes into a refusal.
+ */
+function readBot(response: OAuthResponse, handoffs: CliHandoffs): ExchangedBot {
+  const refuse = (why: string): never => {
+    throw new CommsError('AUTH_REQUIRED', `Slack issued a bot token this app cannot use: ${why}`, {
+      hint: updateFromManifest(handoffs),
+    });
+  };
+  if (response.token_type !== 'bot') refuse(`its type is ${safeSlackFailureText(response.token_type) || 'not given'}`);
+  if (typeof response.bot_user_id !== 'string' || !/^[UW][A-Z0-9]{2,39}$/.test(response.bot_user_id))
+    refuse('it names no bot user');
+  if (!response.refresh_token || typeof response.expires_in !== 'number' || response.expires_in <= 0)
+    refuse('it cannot be renewed');
+  const scopes = (response.scope ?? '').split(',').filter(Boolean).sort();
+  const wanted = [...BOT_SCOPES].sort();
+  if (scopes.join(',') !== wanted.join(',')) {
+    refuse(
+      `it holds ${scopes.map((scope) => safeSlackFailureText(scope)).join(', ') || 'no scope'}, not exactly ${wanted.join(', ')}`,
+    );
+  }
+  return {
+    accessToken: response.access_token as string,
+    refreshToken: response.refresh_token as string,
+    expiresInSeconds: response.expires_in as number,
+    scopes,
+    userId: response.bot_user_id as string,
+  };
+}
+
+/**
+ * Refuses a send sign-in that came back with no bot token (S1): an app still on the manifest from before the label, which
+ * cannot post as itself. Checked after the user scopes, so an app never moved to send is told that first.
+ */
+export function requireBotForSend(token: ExchangedToken, mode: InstallMode, handoffs: CliHandoffs): void {
+  if (mode !== 'send' || token.bot !== undefined) return;
+  throw new CommsError('AUTH_REQUIRED', 'Slack issued no bot token, so this app cannot post as itself', {
+    hint: updateFromManifest(handoffs),
+  });
 }
 
 /**

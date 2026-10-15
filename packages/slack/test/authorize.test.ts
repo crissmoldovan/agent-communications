@@ -32,6 +32,24 @@ test('the authorisation url asks Slack for user scopes only', () => {
   assert.deepEqual(url.searchParams.get('user_scope')?.split(','), scopesForMode('read'));
 });
 
+test('a send sign-in also asks for the four bot scopes, and a read one for none (S1)', () => {
+  /*
+   * Design 2026-10-15 S1: the send app posts as itself, so its sign-in asks Slack for the bot user's four posting
+   * scopes in `scope`, beside the user scopes in `user_scope`. Slack's PKCE page says desktop redirects "are not
+   * allowed to request bot scopes"; whether that holds for this app is the first thing the live check (§10.1) settles.
+   */
+  const send = new URL(buildAuthorizeUrl({ clientId: CLIENT, mode: 'send', port: 51234 }).url);
+  assert.deepEqual(send.searchParams.get('scope')?.split(','), [
+    'chat:write',
+    'chat:write.customize',
+    'chat:write.public',
+    'reactions:write',
+  ]);
+  assert.deepEqual(send.searchParams.get('user_scope')?.split(','), scopesForMode('send'));
+  const read = new URL(buildAuthorizeUrl({ clientId: CLIENT, mode: 'read', port: 51234 }).url);
+  assert.equal(read.searchParams.get('scope'), null, 'a read sign-in asked for bot scopes');
+});
+
 test('the url carries the PKCE challenge, never the verifier', () => {
   const request = buildAuthorizeUrl({ clientId: CLIENT, mode: 'send', port: 51234 });
   const url = new URL(request.url);
@@ -145,6 +163,65 @@ test('a bot token in the reply is refused, not quietly dropped', () => {
    */
   assert.throws(
     () => readExchange(reply({ access_token: 'fake-bot-1' }), HANDOFFS),
+    (error: CommsError) => {
+      assert.equal(error.code, 'AUTH_REQUIRED');
+      assert.match(error.message, /bot token/);
+      return true;
+    },
+  );
+});
+
+/** Slack's reply for the send app: the user's token under `authed_user`, the bot's at the top (S1). */
+function sendReply(over: Record<string, unknown> = {}) {
+  return reply({
+    authed_user: { ...reply().authed_user, scope: scopesForMode('send').join(',') },
+    access_token: 'fake-bot-1',
+    token_type: 'bot',
+    scope: 'chat:write,chat:write.customize,chat:write.public,reactions:write',
+    bot_user_id: 'U0BOT0001',
+    refresh_token: 'fake-bot-refresh-1',
+    expires_in: 43_200,
+    ...over,
+  });
+}
+
+test('a send reply keeps its bot token beside the user token, with the bot user it posts as (S1)', () => {
+  const token = readExchange(sendReply(), HANDOFFS, 'send');
+  assert.equal(token.accessToken, 'fake-access-1', 'the user token is still the account’s own');
+  assert.deepEqual(token.bot, {
+    accessToken: 'fake-bot-1',
+    refreshToken: 'fake-bot-refresh-1',
+    expiresInSeconds: 43_200,
+    scopes: ['chat:write', 'chat:write.customize', 'chat:write.public', 'reactions:write'],
+    userId: 'U0BOT0001',
+  });
+});
+
+test('a send reply whose bot token has any other scope, or is not a rotating bot token, is refused (S1)', () => {
+  const refused = (over: Record<string, unknown>, pattern: RegExp) =>
+    assert.throws(
+      () => readExchange(sendReply(over), HANDOFFS, 'send'),
+      (error: CommsError) => {
+        assert.equal(error.code, 'AUTH_REQUIRED');
+        assert.match(error.message, pattern);
+        // Never the token itself, in the message or anywhere in what the refusal carries.
+        assert.equal(JSON.stringify({ ...error, message: error.message }).includes('fake-bot-1'), false);
+        return true;
+      },
+    );
+  // More than the four: a bot that can read is not this app.
+  refused({ scope: 'chat:write,chat:write.customize,chat:write.public,reactions:write,channels:history' }, /bot/);
+  // Fewer: it cannot name its posts, so they would go out as the app's own name.
+  refused({ scope: 'chat:write,chat:write.public,reactions:write' }, /bot/);
+  refused({ token_type: 'user' }, /bot/);
+  refused({ bot_user_id: undefined }, /bot/);
+  refused({ refresh_token: undefined }, /bot/);
+  refused({ expires_in: undefined }, /bot/);
+});
+
+test('a read reply carrying a bot token is still refused (S1)', () => {
+  assert.throws(
+    () => readExchange(sendReply({ authed_user: reply().authed_user }), HANDOFFS, 'read'),
     (error: CommsError) => {
       assert.equal(error.code, 'AUTH_REQUIRED');
       assert.match(error.message, /bot token/);

@@ -5,8 +5,8 @@ import { type AccountConfig, type Core, isInside, newAccountId, openCore, type R
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../../src/auth/bundle.ts';
 import { SLACK_CALLER } from '../../src/caller.ts';
 import { SlackContext, type SlackContextOptions } from '../../src/context.ts';
-import { type InstallMode, scopesForMode } from '../../src/manifest.ts';
-import { secretRefFor } from '../../src/operations/workspaces.ts';
+import { botScopesForMode, type InstallMode, scopesForMode } from '../../src/manifest.ts';
+import { botSecretRefFor, type SlackAccount, secretRefFor } from '../../src/operations/workspaces.ts';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -70,6 +70,11 @@ export interface Harness {
     /** The port the workspace last signed in with. Absent by default, as in a config written before it was kept. */
     redirectPort?: number | undefined;
     bundle?: Partial<TokenBundle>;
+    /**
+     * The send app's bot user and its token, as a sign-in from this release keeps them (design 2026-10-15 S1). Absent
+     * by default: a workspace connected before this release, which has none.
+     */
+    bot?: { userId: string; bundle?: Partial<TokenBundle> } | undefined;
   }): Promise<AccountConfig>;
 }
 
@@ -81,11 +86,29 @@ export interface Harness {
  * prove the identity check passes because of an unrelated refusal.
  */
 export function slackOk(over: SlackReplyOverrides = {}): Record<string, unknown> {
-  const { authed_user: user, scopes, ...rest } = over;
+  const { authed_user: user, scopes, bot, ...rest } = over;
+  const granted = scopes ?? scopesForMode('read');
+  /*
+   * The send app's bot half, at the top of the reply as Slack puts it (design 2026-10-15 S1): a grant that can post is
+   * the send app's, which now has a bot user. `bot: false` leaves it out — an app still on the manifest from before.
+   */
+  const botHalf =
+    bot === false || !granted.includes('chat:write')
+      ? {}
+      : {
+          access_token: 'fake-bot-token-1',
+          token_type: 'bot',
+          scope: botScopesForMode('send').join(','),
+          bot_user_id: 'U0BOT0001',
+          refresh_token: 'fake-bot-refresh-1',
+          expires_in: 43_200,
+          ...bot,
+        };
   return {
     ok: true,
     app_id: 'A0001',
     team: { id: 'T0001', name: 'Acme' },
+    ...botHalf,
     ...rest,
     authed_user: {
       id: 'U0001',
@@ -93,7 +116,7 @@ export function slackOk(over: SlackReplyOverrides = {}): Record<string, unknown>
       refresh_token: 'fake-refresh-token-1',
       expires_in: 43_200,
       token_type: 'user',
-      scope: (scopes ?? scopesForMode('read')).join(','),
+      scope: granted.join(','),
       ...user,
     },
   };
@@ -104,6 +127,8 @@ export interface SlackReplyOverrides extends Record<string, unknown> {
   authed_user?: Record<string, unknown>;
   /** What the person actually granted. Defaults to exactly what `read` asks for. */
   scopes?: readonly string[];
+  /** Laid over the bot half a send grant carries, or `false` for none. */
+  bot?: Record<string, unknown> | false;
 }
 
 /**
@@ -196,7 +221,7 @@ export async function newHarness(options: { version?: 1 | 2 } = {}): Promise<Har
     async addWorkspace(options) {
       const id = newAccountId();
       const mode = options.mode ?? 'read';
-      const account: AccountConfig = {
+      const account: SlackAccount = {
         id,
         platform: 'slack',
         workspace: options.workspaceId ?? 'T0001',
@@ -212,6 +237,7 @@ export async function newHarness(options: { version?: 1 | 2 } = {}): Promise<Har
         ...(options.appId === undefined ? { appId: 'A0001' } : { appId: options.appId }),
         ...(options.sendPolicy ? { sendPolicy: options.sendPolicy } : {}),
         ...(options.redirectPort === undefined ? {} : { redirectPort: options.redirectPort }),
+        ...(options.bot === undefined ? {} : { botUserId: options.bot.userId }),
         createdAt: new Date('2026-09-22T12:00:00.000Z').toISOString(),
       };
       const secrets = await core.secrets('file');
@@ -235,6 +261,17 @@ export async function newHarness(options: { version?: 1 | 2 } = {}): Promise<Har
         ...options.bundle,
       };
       await secrets.set(account.secretRef, serialiseBundle(bundle));
+      if (options.bot !== undefined) {
+        await secrets.set(
+          botSecretRefFor(id),
+          serialiseBundle({
+            ...bundle,
+            accessToken: 'fake-bot-token-0',
+            refreshToken: 'fake-bot-refresh-0',
+            ...options.bot.bundle,
+          }),
+        );
+      }
       // A workspace planted able to post stands for one a person connected and confirmed, so it carries that consent.
       await core.config.update(
         (config) => ({ ...config, accounts: { ...config.accounts, [options.alias]: account } }),

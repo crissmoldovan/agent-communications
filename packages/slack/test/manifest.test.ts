@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FILE_DOWNLOAD, methodRule, scopesFor, writeMethods } from '../src/api/methods.ts';
-import { buildManifest, NEVER_REQUESTED, READ_SCOPES, renderManifest, scopesForMode } from '../src/manifest.ts';
+import {
+  BOT_SCOPES,
+  botScopesForMode,
+  buildManifest,
+  NEVER_REQUESTED,
+  READ_SCOPES,
+  renderManifest,
+  scopesForMode,
+} from '../src/manifest.ts';
 
 /**
  * The manifests are the install. Whatever they ask for is what the token can do for as long as the workspace is
@@ -67,7 +75,7 @@ test('neither manifest asks for the scopes the design refused', () => {
    * the workspace id and name without any scope at all.
    */
   for (const mode of ['read', 'send'] as const) {
-    const scopes = scopesForMode(mode);
+    const scopes = [...scopesForMode(mode), ...botScopesForMode(mode)];
     for (const refused of NEVER_REQUESTED) {
       assert.equal(scopes.includes(refused), false, `${mode} mode asked for ${refused}`);
     }
@@ -119,12 +127,37 @@ test('the manifest carries only settings keys the research verified', () => {
   assert.equal(settings.org_deploy_enabled, false, 'this would install the app across an entire Grid org');
 });
 
-test('only user scopes are requested, never bot scopes', () => {
-  // Two reasons, and either alone would be enough: only a user token reaches the person's DMs and unjoined
-  // public channels, and Slack says "desktop redirects are not allowed to request bot scopes" — which is the
-  // redirect this package uses.
-  const manifest = buildManifest('send', 'http://localhost:3000/slack');
+test('the read app has no bot user and no bot scope, so no token it issues can post', () => {
+  // D1's guarantee, unchanged by the agent label (design 2026-10-15 S1): on this machine, no stored token for a read
+  // workspace can post. A bot user in the read manifest would be one.
+  const manifest = buildManifest('read', 'http://localhost:3000/slack');
   assert.deepEqual(Object.keys(manifest.oauth_config.scopes), ['user']);
+  assert.equal('features' in manifest, false, 'the read manifest declares a bot user');
+  assert.deepEqual(botScopesForMode('read'), []);
+});
+
+test('the send app has a bot user with exactly the four posting scopes, and none that reads or uploads', () => {
+  /*
+   * S1: the app posts as itself, named after the person, so the `send` manifest adds a bot user and exactly these
+   * four bot scopes — post, name each post, post in a public channel it has not joined, react. Nothing that reads
+   * (`*:history`, `*:read`) or uploads (`files:write`): a bot token here reads nothing, and files go out as the
+   * person. The user scopes are what they were.
+   */
+  const manifest = buildManifest('send', 'http://localhost:3000/slack');
+  assert.deepEqual(manifest.oauth_config.scopes.bot, [
+    'chat:write',
+    'chat:write.customize',
+    'chat:write.public',
+    'reactions:write',
+  ]);
+  assert.deepEqual(BOT_SCOPES, manifest.oauth_config.scopes.bot);
+  assert.deepEqual(botScopesForMode('send'), manifest.oauth_config.scopes.bot);
+  assert.deepEqual(manifest.oauth_config.scopes.user, scopesForMode('send'));
+  assert.ok(manifest.features?.bot_user, 'the send manifest has no bot user');
+  assert.equal(typeof manifest.features?.bot_user.display_name, 'string');
+  for (const scope of manifest.oauth_config.scopes.bot ?? []) {
+    assert.equal(/history|:read$|files:/.test(scope), false, `the bot asks for ${scope}, which reads or uploads`);
+  }
 });
 
 test('the redirect url is whatever the caller says, and it is the only one', () => {
