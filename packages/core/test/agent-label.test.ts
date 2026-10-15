@@ -160,3 +160,19 @@ test('agentLabelOf reads a configuration that has no agentLabel as the defaults'
   assert.deepEqual(agentLabelOf({}), {});
   assert.equal(agentLabelOf({ agentLabel: { word: 'minion' } }).word, 'minion');
 });
+
+test('a rule that recorded its account id never applies to another account given the same name later', () => {
+  const s = settings([{ account: 'cue/slack', accountId: 'acc_OLD', as: 'me' }]);
+  assert.equal(resolveIdentity(s, { account: 'cue/slack', accountId: 'acc_OLD', kind: 'post' }).identity, 'me');
+  assert.equal(resolveIdentity(s, { account: 'cue/slack', accountId: 'acc_NEW', kind: 'post' }).identity, 'agent');
+  assert.equal(
+    resolveIdentity(s, { account: 'cue/slack', kind: 'post' }).identity,
+    'agent',
+    'an unknown id never matches',
+  );
+  assert.equal(readAgentLabelSettings({ rules: [{ account: 'a/b', accountId: 7, as: 'me' }] }).rules, undefined);
+});
+
+test('setting the word agent when none is stored changes nothing a recipient sees, so it is no loosening', () => {
+  assert.deepEqual(classifyAgentLabelChange(undefined, { word: 'agent' }), []);
+});
