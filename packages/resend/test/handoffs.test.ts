@@ -33,6 +33,7 @@ import {
   resendInline,
   resendText,
   SUITE_COMMANDS,
+  THIS_NODE,
 } from './support/handoffs.ts';
 import { FULL, type Harness, newHarness, ok, refused, tempDir } from './support/harness.ts';
 
@@ -75,7 +76,7 @@ test('a Resend command is this Node, Resend’s own entry, its folders pinned, t
   const context = harness.context();
   const approve = context.handoffs.own(['approve', 'ap_1']);
   assert.ok(isCommand(approve));
-  assert.equal(approve.words[0], process.execPath);
+  assert.equal(approve.words[0], THIS_NODE);
   assert.ok(approve.words.includes(RESEND_SOURCE_CLI), approve.words.join(' '));
   const at = approve.words.indexOf(RESEND_SOURCE_CLI);
   assert.deepEqual(approve.words.slice(at + 1), [
@@ -94,7 +95,7 @@ test('a Resend command is this Node, Resend’s own entry, its folders pinned, t
   const doctor = context.handoffs.core(['doctor']);
   assert.ok(isCommand(doctor) && doctor.words.at(-1) === 'doctor');
   assert.ok(!doctor.words.includes(RESEND_SOURCE_CLI));
-  assert.equal(doctor.words[0], process.execPath);
+  assert.equal(doctor.words[0], THIS_NODE);
 });
 
 test('Resend’s context refuses a core that would print another package’s commands, or none', async () => {
@@ -502,7 +503,7 @@ test('from Resend, a Windows registration in another case is found and printed l
   const handoffs = resendHandoffs(harness.core.paths, 'win32').withRegistrations([registered]);
   const gmail = handoffs.of('gmail', ['approve', 'ap_1']);
   assert.ok(isCommand(gmail), 'message' in gmail ? gmail.message : '');
-  assert.equal(gmail.words[0], process.execPath);
+  assert.equal(gmail.words[0], THIS_NODE);
   assert.ok(
     gmail.words.some((word) => word.endsWith(join('gmail', 'dist', 'cli.mjs'))),
     gmail.words.join(' '),
