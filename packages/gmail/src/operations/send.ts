@@ -12,10 +12,12 @@ import {
   handoffSentence,
   LEASE_LOST_BEFORE_SEND,
   type LegacyDrainReport,
+  type MessageIdentity,
   type MessagePreview,
   newBoundary,
   ownerOf,
   type PublicApprovalView,
+  parseAddressList,
   renderMessagePreview,
   resolveName,
   type SendPolicy,
@@ -24,10 +26,26 @@ import {
   sendEpochOf,
   stricterPolicy,
   type TaintAggregate,
+  truncateDisplay,
   withApproval,
   withSendingLease,
 } from '@agentcomms/core';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
+import {
+  accountNameOf,
+  fromFits,
+  IDENTITIES,
+  IDENTITY_WORDS,
+  identityLine,
+  identityOfFrom,
+  labelSettingsOf,
+  mailDecision,
+  mailFrom,
+  mailKind,
+  rewriteFromField,
+  sendableAddresses,
+  shownFrom,
+} from '../domain/agent-label.ts';
 import { analyseDraft, type DraftAnalysis, type Unsendable, unsendable } from '../domain/outbound.ts';
 import {
   addressField,
@@ -38,8 +56,10 @@ import {
 } from '../domain/untrusted-fields.ts';
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
+import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
 import { type UnsentSection, unsentSection } from './unsent.ts';
+import { oneOf } from './words.ts';
 
 /**
  * The send gate: prepare → approve → execute.
@@ -62,6 +82,13 @@ export interface SendPreparation {
   draftId: string;
   /** What the person must read before approving. Show it verbatim; do not summarise it. */
   preview: string;
+  /**
+   * Who the message appears to come from (design 2026-10-15-agent-label, L3), settled here and bound by the approval
+   * with the From line that says it: `agent`, labelled, or `me`. The preview's first line says which.
+   */
+  identity: MessageIdentity;
+  /** True when the draft's From did not fit its identity, and its From header alone was rewritten (G2). */
+  fromRewritten: boolean;
   policy: SendPolicy;
   /** The stricter of the live policy and anything risk escalation raised. */
   effectivePolicy: SendPolicy;
@@ -655,6 +682,8 @@ function previewFor(options: {
   effectivePolicy: SendPolicy;
   /** The risk flags this look raised: one the preview says in words of its own. */
   flags?: readonly string[] | undefined;
+  /** The From line this prepare rewrote, as it was (G2): said on the line after the identity. */
+  rewrittenFrom?: string | undefined;
 }): string {
   const { analysis, facts, record, alias } = options;
   // Every way the draft writes a recipient carries that recipient's note: the note is this package's words alone.
@@ -704,14 +733,110 @@ function previewFor(options: {
         ? 'Policy: confirm — this send needs approval outside the chat before it can go.'
         : 'Policy: chat — send only after the user approves this exact preview.',
   };
-  return renderMessagePreview(preview);
+  // First, who it appears to come from — read from the From line the approval binds, so the terminal's approval says
+  // what the prepare said (L3); then, when this prepare rewrote that line, what it was.
+  const lines = [identityLine(identityOfFrom(analysis.from))];
+  if (options.rewrittenFrom !== undefined) {
+    lines.push(
+      `The From line was rewritten for this send, its header alone: it was ${truncateDisplay(options.rewrittenFrom, 120)}`,
+    );
+  }
+  return `${lines.join('\n')}\n${renderMessagePreview(preview)}`;
+}
+
+/** A draft as `readDraft` reads it. */
+type ReadDraft = Awaited<ReturnType<typeof readDraft>>;
+
+/**
+ * G2: settles who this send appears to come from and, when the draft's From does not say it, rewrites that header
+ * alone and replaces the draft with the result — read again, so the approval is bound to what Gmail now holds. A
+ * draft from an address this mailbox may not send as is refused rather than relabelled, and is left as it was.
+ */
+async function fitFrom(
+  context: GmailContext,
+  resolved: ResolvedInbox,
+  draftId: string,
+  read: ReadDraft,
+  requested: MessageIdentity | undefined,
+): Promise<{ read: ReadDraft; identity: MessageIdentity; rewrittenFrom: string | undefined }> {
+  const config = await context.config();
+  const transport = await context.transport(resolved.alias);
+  const settings = labelSettingsOf(config);
+  const { analysis } = read;
+  const decision = mailDecision({
+    settings,
+    account: accountNameOf(config, resolved),
+    kind: mailKind(analysis.inReplyTo),
+    requested,
+    recipients: [...analysis.to, ...analysis.cc, ...analysis.bcc],
+  });
+  const parsed = parseAddressList(analysis.from);
+  const address = parsed.length === 1 ? (parsed[0]?.address ?? resolved.inbox.email) : resolved.inbox.email;
+  // As `me`, a From that carries no label already fits, whatever address it names: nothing is rewritten, as before.
+  if (decision.identity === 'me' && parsed.length === 1 && !identityOfFrom(analysis.from).phrase) {
+    return { read, identity: 'me', rewrittenFrom: undefined };
+  }
+  const sendAs = await transport.listSendAs().catch(() => []);
+  if (!sendableAddresses(resolved.inbox.email, sendAs).has(address)) {
+    throw new CommsError(
+      'BAD_DATA',
+      'this draft is from an address this mailbox cannot send as, so it cannot be labelled',
+      {
+        hint: 'Review it and send it from Gmail, or write it again from one of this mailbox’s addresses.',
+      },
+    );
+  }
+  const wanted = mailFrom(decision, { address, sendAs, settings });
+  if (fromFits(analysis.from, wanted)) return { read, identity: wanted.identity, rewrittenFrom: undefined };
+
+  // A change to the draft, as `draft update` is one: never under a send that stands on it.
+  await refuseWhileSending(context, resolved.inbox.id, draftId);
+  const stored = await transport.getDraftRaw(draftId);
+  if (stored.messageId !== read.draftMessageId) {
+    throw new CommsError('APPROVAL_VOID', 'the draft changed while it was being prepared', {
+      hint: 'Prepare the send again to see what it says now.',
+    });
+  }
+  await transport.updateDraft(draftId, rewriteFromField(stored.raw, wanted.from), stored.threadId);
+  await context.core.audit.append({
+    inboxId: resolved.inbox.id,
+    alias: resolved.alias,
+    operation: 'draft.relabel',
+    outcome: 'ok',
+    surface: context.surface,
+    ids: { draftIds: [draftId], messageIds: [read.draftMessageId] },
+    reason: `From rewritten as ${wanted.identity}`,
+  });
+  const again = await readDraft(context, resolved.alias, draftId);
+  if (again.refusals.length > 0) {
+    throw unsendable(again.refusals, { boundary: newBoundary(), inbox: resolved.alias, id: draftId });
+  }
+  // What Gmail kept is what is bound: a From it did not keep as written is refused, never sent as something else.
+  if (!fromFits(again.analysis.from, wanted)) {
+    throw new CommsError('UNEXPECTED', 'Gmail did not keep the From line this draft was given', {
+      hint: 'Nothing was sent. Review the draft and send it from Gmail.',
+    });
+  }
+  return { read: again, identity: wanted.identity, rewrittenFrom: shownFrom(analysis.from) };
 }
 
 /**
  * Step one. Reads the draft, refuses it if an agent could not have written it, and records an approval bound to this
  * exact content. Nothing is sent, and preparing twice is free: each prepare is its own record.
  */
-export async function prepareSend(context: GmailContext, alias: string, draftId: string): Promise<SendPreparation> {
+export async function prepareSend(
+  context: GmailContext,
+  alias: string,
+  draftId: string,
+  options: {
+    /**
+     * `me` or `agent`: what the person said for this message (L3). Left out, the rules and then `agent` decide.
+     * Checked here, so a word that is not one is refused alike from either surface.
+     */
+    as?: string | undefined;
+  } = {},
+): Promise<SendPreparation> {
+  const requested = oneOf(options.as, IDENTITIES, IDENTITY_WORDS);
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const resolved = await context.inbox(alias);
@@ -729,13 +854,16 @@ export async function prepareSend(context: GmailContext, alias: string, draftId:
   }
 
   const transport = await context.transport(alias);
-  const { analysis, draftMessageId, refusals } = await readDraft(context, alias, draftId);
-  if (refusals.length > 0) {
-    throw unsendable(refusals, { boundary: newBoundary(), inbox: alias, id: draftId });
+  const first = await readDraft(context, alias, draftId);
+  if (first.refusals.length > 0) {
+    throw unsendable(first.refusals, { boundary: newBoundary(), inbox: alias, id: draftId });
   }
-  if (analysis.to.length === 0 && analysis.cc.length === 0 && analysis.bcc.length === 0) {
+  if (first.analysis.to.length === 0 && first.analysis.cc.length === 0 && first.analysis.bcc.length === 0) {
     throw new CommsError('BAD_DATA', 'this draft has no recipients', { hint: 'Add them and prepare the send again.' });
   }
+  // Who it appears to come from, and a From that says so — rewritten, its header alone, when it does not (G2).
+  const fitted = await fitFrom(context, resolved, draftId, first, requested);
+  const { analysis, draftMessageId } = fitted.read;
 
   const { facts, flags, correspondentHistory } = config.defaults.riskEscalation
     ? await studyRecipients(context, transport, resolved, analysis)
@@ -771,7 +899,17 @@ export async function prepareSend(context: GmailContext, alias: string, draftId:
     approvalId: record.approvalId,
     inbox: alias,
     draftId,
-    preview: previewFor({ analysis, facts, record, alias, effectivePolicy, flags }),
+    preview: previewFor({
+      analysis,
+      facts,
+      record,
+      alias,
+      effectivePolicy,
+      flags,
+      rewrittenFrom: fitted.rewrittenFrom,
+    }),
+    identity: fitted.identity,
+    fromRewritten: fitted.rewrittenFrom !== undefined,
     policy: livePolicy,
     effectivePolicy,
     riskFlags: flags,

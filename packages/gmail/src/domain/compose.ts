@@ -1,5 +1,6 @@
 import { analyseOutboundHtml, CommsError, type ParsedAddress } from '@agentcomms/core';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
+import MimeNode from 'nodemailer/lib/mime-node/index.js';
 
 /**
  * Building the message that will be sent.
@@ -128,6 +129,19 @@ export function formatAddress(entry: ParsedAddress | string): string {
   if (!entry.name) return entry.address;
   const name = /["\\,:;<>@[\]()]/.test(entry.name) ? `"${entry.name.replace(/(["\\])/g, '\\$1')}"` : entry.name;
   return `${name} <${entry.address}>`;
+}
+
+/**
+ * A From header field, folded and RFC 2047-encoded by the composer's own MIME writer, as a draft it composed would
+ * carry it: `From: "Jo Example (agent)" <jo@example.test>`, folded with CRLF when the name is long. For a header-only
+ * rewrite (design 2026-10-15-agent-label, G2).
+ */
+export function encodeFromField(from: string): string {
+  const node = new MimeNode('text/plain');
+  node.setHeader('From', from);
+  const field = /^From:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*/.exec(node.buildHeaders())?.[0];
+  if (field === undefined) throw new CommsError('UNEXPECTED', 'the composer wrote no From header');
+  return field;
 }
 
 /**

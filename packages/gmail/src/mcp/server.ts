@@ -2526,16 +2526,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Prepare a send',
         description:
-          'Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.',
+          'Read a draft and return the preview the person must approve, with an approval id bound to exactly this content — who it appears to come from included: its From line is labelled `<name> (agent)` unless `as` is `me`, and a draft whose From does not say so has that header alone rewritten. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           draftId: z.string().min(1).describe('the draft to send, from gmail_draft_create or gmail_draft_list'),
+          as: asArgument,
         }),
         outputSchema: z.object({
           approvalId: z.string(),
           inbox: z.string(),
           draftId: z.string(),
           preview: z.string().describe('show this to the user exactly as it is'),
+          identity: z
+            .string()
+            .describe('who it appears to come from, bound by the approval: agent (labelled) or me (unlabelled)'),
+          fromRewritten: z
+            .boolean()
+            .describe('true when the draft’s From did not fit, and its From header alone was rewritten'),
           policy: z.string(),
           effectivePolicy: z.string(),
           riskFlags: z.array(z.string()),
@@ -2575,9 +2582,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         }),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       },
-      async ({ inbox, draftId }) => {
+      async ({ inbox, draftId, as }) => {
         try {
-          return reply(await prepareSend(context, targetInbox(inbox), draftId));
+          return reply(await prepareSend(context, targetInbox(inbox), draftId, { as }));
         } catch (error) {
           return fail(error);
         }

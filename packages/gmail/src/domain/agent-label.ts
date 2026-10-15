@@ -15,7 +15,7 @@ import {
   UNLABELLED_PREVIEW_LINE,
 } from '@agentcomms/core';
 import type { SendAsAddress } from '../gmail-api/transport.ts';
-import { formatAddress } from './compose.ts';
+import { encodeFromField, formatAddress } from './compose.ts';
 
 /**
  * Labelling what an agent sends from Gmail (design 2026-10-15-agent-label, §3 and §5): who a draft appears to come
@@ -117,6 +117,36 @@ export interface MailIdentity {
   readonly from: string;
 }
 
+/** L3 for one mail act: the message's `as`, then the most specific rule, then `agent`. */
+export function mailDecision(options: {
+  readonly settings: AgentLabelSettings;
+  readonly account: string;
+  readonly kind: 'send' | 'reply';
+  readonly requested: MessageIdentity | undefined;
+  readonly recipients: readonly string[];
+}): IdentityDecision {
+  return resolveIdentity(options.settings, {
+    account: options.account,
+    kind: options.kind,
+    requested: options.requested,
+    mail: { recipients: options.recipients },
+  });
+}
+
+/** The From an identity writes for this address: the label for `agent`, the bare address for `me`. */
+export function mailFrom(
+  decision: IdentityDecision,
+  options: {
+    readonly address: string;
+    readonly sendAs: readonly SendAsAddress[];
+    readonly settings: AgentLabelSettings;
+  },
+): MailIdentity {
+  if (decision.identity === 'me') return { identity: 'me', decision, from: options.address };
+  const phrase = labelPhraseFor(options);
+  return { identity: 'agent', decision, phrase, from: formatAddress({ name: phrase, address: options.address }) };
+}
+
 /** L3 for one mail act, and the From it writes. */
 export function mailIdentity(options: {
   readonly settings: AgentLabelSettings;
@@ -127,15 +157,52 @@ export function mailIdentity(options: {
   readonly address: string;
   readonly sendAs: readonly SendAsAddress[];
 }): MailIdentity {
-  const decision = resolveIdentity(options.settings, {
-    account: options.account,
-    kind: options.kind,
-    requested: options.requested,
-    mail: { recipients: options.recipients },
-  });
-  if (decision.identity === 'me') return { identity: 'me', decision, from: options.address };
-  const phrase = labelPhraseFor(options);
-  return { identity: 'agent', decision, phrase, from: formatAddress({ name: phrase, address: options.address }) };
+  return mailFrom(mailDecision(options), options);
+}
+
+/**
+ * The addresses this mailbox may send as: its own, and each send-as address Gmail has verified. A draft from any
+ * other address is not relabelled (G2): its label would name somebody this mailbox cannot speak for.
+ */
+export function sendableAddresses(own: string, sendAs: readonly SendAsAddress[]): Set<string> {
+  const addresses = new Set([own.toLowerCase()]);
+  for (const entry of sendAs) {
+    if (entry.verificationStatus === undefined || entry.verificationStatus === 'accepted')
+      addresses.add(entry.sendAsEmail.toLowerCase());
+  }
+  return addresses;
+}
+
+/**
+ * G2: the raw message with its From header field replaced, and every other byte as it was — the header block's other
+ * fields, their order and folding, the blank line, the body and every part. The new field is the composer's own
+ * encoding of `from`, folded with the message's own line ending. A message with no From gains one at the top; one with
+ * two is refused, since which of them a recipient sees is not this package's to guess.
+ */
+export function rewriteFromField(raw: Buffer, from: string): Buffer {
+  // Byte for byte: every byte is one latin1 code unit, and the field written is ASCII.
+  const text = raw.toString('latin1');
+  const crlf = text.indexOf('\r\n\r\n');
+  const lf = text.indexOf('\n\n');
+  const usesCrlf = crlf >= 0 ? lf < 0 || crlf < lf : text.includes('\r\n');
+  const newline = usesCrlf ? '\r\n' : '\n';
+  const blank = usesCrlf ? crlf : lf;
+  const head = blank < 0 ? text : text.slice(0, blank + newline.length);
+  const field = encodeFromField(from).replaceAll('\r\n', newline);
+  const pattern = usesCrlf
+    ? /(^|\r\n)(From:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*)/gi
+    : /(^|\n)(From:[^\n]*(?:\n[ \t][^\n]*)*)/gi;
+  const found = [...head.matchAll(pattern)];
+  if (found.length > 1) {
+    throw new CommsError('BAD_DATA', 'this draft has more than one From line, so it cannot be labelled', {
+      hint: 'Review it and send it from Gmail.',
+    });
+  }
+  const match = found[0];
+  if (match === undefined) return Buffer.from(`${field}${newline}${text}`, 'latin1');
+  const start = (match.index ?? 0) + (match[1] ?? '').length;
+  const end = start + (match[2] ?? '').length;
+  return Buffer.from(`${text.slice(0, start)}${field}${text.slice(end)}`, 'latin1');
 }
 
 /** Whether a From name carries a label: it ends with ` (<word>)` for one of L2's words. */

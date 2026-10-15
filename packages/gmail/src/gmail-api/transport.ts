@@ -61,6 +61,11 @@ export interface GmailTransport {
   createDraft(raw: Buffer, threadId?: string | undefined): Promise<DraftHandle>;
   updateDraft(draftId: string, raw: Buffer, threadId?: string | undefined): Promise<DraftHandle>;
   getDraft(draftId: string): Promise<{ id: string; message?: RawMessage | undefined }>;
+  /**
+   * A draft's message exactly as Gmail stores it (`format=raw`): the bytes a header-only rewrite starts from, so that
+   * everything it does not rewrite is saved back as it was (design 2026-10-15-agent-label, G2).
+   */
+  getDraftRaw(draftId: string): Promise<RawDraft>;
   listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>>;
   deleteDraft(draftId: string): Promise<void>;
   /**
@@ -87,6 +92,13 @@ export interface GmailTransport {
   trashMessage(messageId: string): Promise<void>;
   untrashMessage(messageId: string): Promise<void>;
   createLabel(name: string): Promise<{ id: string; name: string }>;
+}
+
+export interface RawDraft {
+  draftId: string;
+  messageId: string;
+  threadId: string | undefined;
+  raw: Buffer;
 }
 
 export interface DraftHandle {
@@ -602,6 +614,17 @@ export class GoogleGmailTransport implements GmailTransport {
       this.gmail().users.drafts.get({ userId: 'me', id: draftId, format: 'full' }),
     );
     return { id: data.id ?? draftId, message: data.message ?? undefined };
+  }
+  async getDraftRaw(draftId: string): Promise<RawDraft> {
+    const { data } = await this.call('read a draft as it is stored', () =>
+      this.gmail().users.drafts.get({ userId: 'me', id: draftId, format: 'raw' }),
+    );
+    return {
+      draftId: data.id ?? draftId,
+      messageId: data.message?.id ?? '',
+      threadId: data.message?.threadId ?? undefined,
+      raw: Buffer.from(data.message?.raw ?? '', 'base64url'),
+    };
   }
 
   async listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>> {

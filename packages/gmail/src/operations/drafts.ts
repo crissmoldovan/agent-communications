@@ -660,7 +660,7 @@ export async function deleteDraft(context: GmailContext, alias: string, draftId:
  * the mail that was approved. Our own tools close it here — including two tool calls from the same agent in
  * parallel. What remains is an edit made in Gmail web at that exact moment, and that is documented, not claimed.
  */
-async function refuseWhileSending(context: GmailContext, inboxId: string, draftId: string): Promise<void> {
+export async function refuseWhileSending(context: GmailContext, inboxId: string, draftId: string): Promise<void> {
   // A send under way here, or one an earlier release has under way: either stands on the draft.
   const sending = await context.core.approvals.list({ inboxId, states: ['sending'] });
   const send = sending.find((stored) => (asV2(stored) ?? asLegacy(stored))?.draftId === draftId);
