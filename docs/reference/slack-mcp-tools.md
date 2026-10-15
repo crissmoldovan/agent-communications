@@ -95,6 +95,7 @@ The manifest for a Slack app in `read` or `send` mode, for a loopback port. Give
 | `workspace` | string | no | a workspace already connected, as `organisation/slack` |
 | `mode` | `read` \\| `send` | no | `read` when left out |
 | `port` | integer | no | the loopback port its redirect uses; a connected workspace’s own when left out |
+| `pkce` | boolean | no | `false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out |
 
 ### `slack_channels`
 

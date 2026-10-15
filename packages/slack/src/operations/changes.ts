@@ -28,7 +28,13 @@ import { checkedPort, type ManifestResult, manifestFor, modeWanted } from './man
 import { type ModeReport, modeReport, narrowingSteps, profileMoveSteps, wideningSteps } from './mode.ts';
 import { retryPendingRevocations } from './revocations.ts';
 import { type ListenerEntry, type StartedSignIn, startSignIn } from './signin.ts';
-import { checkAliasFree, type RemovedWorkspace, removeWorkspace, requireWorkspace } from './workspaces.ts';
+import {
+  checkAliasFree,
+  clientSecretRefOf,
+  type RemovedWorkspace,
+  removeWorkspace,
+  requireWorkspace,
+} from './workspaces.ts';
 
 /**
  * Changing a workspace — connecting it, signing it in again, moving its mode, setting its policies, removing it — as
@@ -120,7 +126,16 @@ export interface ConnectInput extends SignInSurface {
   readonly clientId?: string | undefined;
   /** The loopback port in the app's manifest; checked, never guessed. */
   readonly port?: unknown;
+  /**
+   * The app's client secret, typed at a person's hidden prompt: sign in with it rather than PKCE (design 2026-10-15 S1,
+   * revised). The command's only — no tool takes a secret — and never part of what an approval binds or shows.
+   */
+  readonly clientSecret?: string | undefined;
 }
+
+/** What a sign-in with the app's client secret does, as the person reads it in the preview. */
+const SECRET_SIGN_IN =
+  "signs in with the app's client secret rather than PKCE, keeps the secret in this machine's secret store by the app's id, and in send mode keeps the app's bot token";
 
 /**
  * The account a sign-in will add, as the classifier sees it before Slack has said who it is.
@@ -207,6 +222,7 @@ export function connectWorkspace(context: SlackContext, input: ConnectInput): Ga
             ? [
                 postingSignIn(input.alias, clientId),
                 ...(selection.profile ? profileSignInEffects(selection.profile) : []),
+                ...(input.clientSecret === undefined ? [] : [SECRET_SIGN_IN]),
               ]
             : [],
       };
@@ -223,6 +239,7 @@ export function connectWorkspace(context: SlackContext, input: ConnectInput): Ga
         detached: input.detached,
         ...(consent ? { consent } : {}),
         ...(input.listenerCommand ? { listenerCommand: input.listenerCommand } : {}),
+        ...(input.clientSecret === undefined ? {} : { clientSecret: input.clientSecret }),
       });
     },
   };
@@ -239,6 +256,11 @@ export interface ReauthInput extends SignInSurface {
   readonly mode?: unknown;
   /** The loopback port; the one the workspace last signed in with when left out. */
   readonly port?: unknown;
+  /**
+   * The app's client secret, typed at a person's hidden prompt (S1, revised). Left out, a workspace that already signs
+   * in with its app's secret uses the one kept for it, and any other signs in with PKCE.
+   */
+  readonly clientSecret?: string | undefined;
 }
 
 /** A workspace that does not record its app, refused with the one way back: removed, and added again. */
@@ -303,7 +325,13 @@ export function reauthWorkspace(context: SlackContext, input: ReauthInput): Gate
         before: config,
         after,
         summary: widens ? `Let ${found.alias} post to Slack` : `Sign ${found.alias} in to Slack again, in ${mode} mode`,
-        effects: widens ? [postingSignIn(found.alias), ...(profile ? profileSignInEffects(profile) : [])] : [],
+        effects: widens
+          ? [
+              postingSignIn(found.alias),
+              ...(profile ? profileSignInEffects(profile) : []),
+              ...(input.clientSecret === undefined ? [] : [SECRET_SIGN_IN]),
+            ]
+          : [],
       };
     },
     apply: async (consent, request) => {
@@ -328,6 +356,12 @@ export function reauthWorkspace(context: SlackContext, input: ReauthInput): Gate
         },
         ...(consent ? { consent } : {}),
         ...(input.listenerCommand ? { listenerCommand: input.listenerCommand } : {}),
+        // The secret just typed; else the one this workspace already signs in with, when it does (S1, revised).
+        ...(input.clientSecret !== undefined
+          ? { clientSecret: input.clientSecret }
+          : clientSecretRefOf(account) !== undefined
+            ? { clientSecretRef: clientSecretRefOf(account) }
+            : {}),
       });
     },
   };

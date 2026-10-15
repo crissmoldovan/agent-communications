@@ -166,7 +166,16 @@ export function botScopesForMode(mode: InstallMode): string[] {
  * `settings` carries only the three keys the research did verify: `org_deploy_enabled`, `socket_mode_enabled`
  * and `token_rotation_enabled`.
  */
-export function buildManifest(mode: InstallMode, redirectUrl: string): SlackManifest {
+export function buildManifest(
+  mode: InstallMode,
+  redirectUrl: string,
+  /**
+   * `pkce: false` for an app that signs in with its client secret (design 2026-10-15 S1, revised): its `localhost`
+   * redirect is then a server redirect, which may ask for the bot scopes. Slack's PKCE page: enabling PKCE "is a one-way
+   * operation" that "cannot be disabled without contacting Slack support" — so this is a new app, never an existing one.
+   */
+  options: { pkce?: boolean | undefined } = {},
+): SlackManifest {
   const bot = botScopesForMode(mode);
   return {
     display_information: DISPLAY,
@@ -174,7 +183,7 @@ export function buildManifest(mode: InstallMode, redirectUrl: string): SlackMani
     ...(bot.length > 0 ? { features: { bot_user: { display_name: DISPLAY.name, always_online: false } } } : {}),
     oauth_config: {
       redirect_urls: [redirectUrl],
-      pkce_enabled: true,
+      pkce_enabled: options.pkce !== false,
       scopes: { user: scopesForMode(mode), ...(bot.length > 0 ? { bot } : {}) },
     },
     settings: {
@@ -188,8 +197,12 @@ export function buildManifest(mode: InstallMode, redirectUrl: string): SlackMani
 }
 
 /** The manifest as a person pastes it: JSON, two-space indented, newline-terminated. */
-export function renderManifest(mode: InstallMode, redirectUrl: string): string {
-  return `${JSON.stringify(buildManifest(mode, redirectUrl), null, 2)}\n`;
+export function renderManifest(
+  mode: InstallMode,
+  redirectUrl: string,
+  options: { pkce?: boolean | undefined } = {},
+): string {
+  return `${JSON.stringify(buildManifest(mode, redirectUrl, options), null, 2)}\n`;
 }
 
 /**
