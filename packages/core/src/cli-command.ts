@@ -5,6 +5,7 @@ import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { normalizePathOptionWords } from './cli-runtime.ts';
 import { quoteCommand, quotedText } from './command-line.ts';
 import type { RegisteredServer } from './mcp-clients.ts';
+import { nodeProgram } from './node-program.ts';
 import { isWithin, nearestPackage, readPackageManifest, realpathOfExisting, suiteCommandOf } from './package-roots.ts';
 import { type PathName, type PathOverrides, type ResolvedPaths, withoutPathOptions } from './paths.ts';
 import {
@@ -135,9 +136,19 @@ export interface CliCommandRequest {
    * never read it.
    */
   readonly registrations?: readonly RegisteredServer[] | undefined;
+  /**
+   * The environment whose PATH this Node is named from (CUE-492): the printing process's own. The command names the
+   * first `node` there that is this very Node, as PATH spells it — a link such as `~/.local/bin/node` stays the link,
+   * as a registration names it — and otherwise `process.execPath`, which the system reports resolved. Left out,
+   * nothing is looked for and the command names `process.execPath`.
+   */
+  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
-/** The Node a command is located for: this process's, unless a test says otherwise. Its program is always this one's. */
+/**
+ * The Node a command is located for: this process's, unless a test says otherwise. Its program is always this Node —
+ * named as PATH finds it (`CliCommandRequest.env`), and checked to be this one's real file.
+ */
 export interface NodeRuntime {
   /** `process.version`, checked against the target's `engines.node`. */
   readonly version: string;
@@ -274,8 +285,10 @@ type Built =
 /**
  * Locates the command that runs `request.target`'s CLI with `request.words`, or says why there is none.
  *
- * The program is always this process's Node (`process.execPath`), which must satisfy the target's `engines.node`; no
- * interpreter named anywhere else is run, or asked its version. A TypeScript entry gets `--experimental-strip-types`,
+ * The program is always this process's Node, which must satisfy the target's `engines.node`; no interpreter named
+ * anywhere else is run, or asked its version. It is named as PATH finds it — the first `node` on `request.env`'s PATH
+ * that is the same real file as `process.execPath` — and otherwise by `process.execPath` (CUE-492): the real file only
+ * identifies it, and `process.version` is that file's. A TypeScript entry gets `--experimental-strip-types`,
  * which Node 22.12–22.17 needs, and `--experimental-transform-types` only when this source run was started with it;
  * no other flag this process was started with is carried — debug, preload, condition and memory flags are not what the
  * CLI needs. The suite directories the command uses go between the entry and its words, one canonical option each,
@@ -326,6 +339,8 @@ export function locateCliCommand(
     return fail('caller', `${nearest.root} cannot be resolved`);
   }
   if (!isAbsolute(process.execPath)) return fail('interpreter', `this Node, ${process.execPath}, is not a full path`);
+  // This Node, as PATH finds it: a link stays the link, so a command or a shim outlives its owner's moving the file.
+  const program = nodeProgram(request.env);
 
   const pins: PathOverrides = {};
   for (const key of request.uses) pins[key] = request.paths[key];
@@ -335,7 +350,7 @@ export function locateCliCommand(
   } catch (error) {
     return fail('arguments', error instanceof Error ? error.message : String(error));
   }
-  const build = (found: Found) => buildCommand(target, found, words, runtime, callerSource, platform);
+  const build = (found: Found) => buildCommand(target, found, words, runtime, callerSource, platform, program);
   // What every located command was decided from; each direction adds its own.
   const located = (
     built: Built & { ok: true },
@@ -492,6 +507,7 @@ function buildCommand(
   runtime: NodeRuntime,
   callerSource: boolean,
   platform: NodeJS.Platform,
+  program: string,
 ): Built {
   const engines = found.manifest.engines;
   const range = typeof engines === 'object' && engines !== null ? (engines as Record<string, unknown>).node : undefined;
@@ -539,12 +555,7 @@ function buildCommand(
   const flags = typescript
     ? [STRIP_TYPES, ...(callerSource && runtime.execArgv.includes(TRANSFORM_TYPES) ? [TRANSFORM_TYPES] : [])]
     : [];
-  const command = new PrintedCommand(
-    GATE,
-    [process.execPath, ...flags, checked.path, ...words],
-    platform,
-    checked.path,
-  );
+  const command = new PrintedCommand(GATE, [program, ...flags, checked.path, ...words], platform, checked.path);
   return { ok: true, command, entryKind: found.source ? 'source' : 'bin' };
 }
 

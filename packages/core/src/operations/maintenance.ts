@@ -17,6 +17,7 @@ import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requ
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
+import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
 import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
@@ -106,10 +107,12 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   const handoffs = await requireHandoffs(core, platform).registered();
   const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
   const nodeOk = major > 22 || (major === 22 && minor >= 12);
+  // The Node as a command names it — a link on PATH stays the link — and, when that is a link, the file it is (CUE-492).
+  const node = nodeProgram(env);
   checks.push({
     name: 'node',
     ok: nodeOk,
-    detail: `Node ${process.versions.node} at ${process.execPath}`,
+    detail: `Node ${process.versions.node} at ${node}${node === process.execPath ? '' : `, which resolves to ${process.execPath}`}`,
     ...(nodeOk ? {} : { fix: remedy('Install Node 22.12 or newer.') }),
   });
 
@@ -429,9 +432,10 @@ async function registrationChecks(
     );
     if (latestRuntime !== null && managedShimsSupported({ platform })) {
       const expectedEntry = managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version);
+      // A shim names this Node as a command does, so one naming the file a link resolves to is stale (CUE-492).
       const shim = await inspectManagedShim(
         { env, dataDir: core.paths.dataDir, platform },
-        { binary: channel.binary, expectedEntry },
+        { binary: channel.binary, expectedEntry, expectedNode: nodeProgram(env) },
       );
       if (shim.status !== 'current') {
         checks.push({
