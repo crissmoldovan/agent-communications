@@ -57,6 +57,11 @@ agent-events dryrun show <record-id>
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
 cannot run, the approval says why and still asks for its challenge.
 
+An approval that `rule enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
+approve it, nothing is turned on. On its next tick, or when it next starts, the service cancels the activation that
+was waiting for it, and `status` stops counting it as pending. Run `rule enable` again for a new approval. An update
+that lapsed this way no longer blocks the rule's next version.
+
 `rule.json`:
 
 ```json
