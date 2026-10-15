@@ -1,4 +1,5 @@
 export * from './addresses.ts';
+export * from './agent-label.ts';
 export * from './approval-binding.ts';
 /*
  * What a person and an agent are told while an approval waits for the person (design 2026-10-05 §D7): the person's
