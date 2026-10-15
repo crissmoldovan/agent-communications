@@ -1400,12 +1400,18 @@ test('only guarded transports send requests to Slack', async () => {
       (node) => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'send',
     ),
   );
+  /*
+   * `operations/identity.ts` and `operations/bot-token.ts` each make one `auth.test` with a closed permit, because what
+   * they need is Slack's `x-oauth-scopes` header, which `callSlack` does not return: doctor's drift check, and the
+   * check that a pasted bot token has exactly the send app's four bot scopes before it is kept (agent label design, S1).
+   */
   assert.deepEqual(sending.map((file) => file.path).sort(), [
     'api/avatar.ts',
     'api/call.ts',
     'api/download.ts',
     'api/upload.ts',
     'context.ts',
+    'operations/bot-token.ts',
     'operations/identity.ts',
   ]);
   for (const file of sending) {
