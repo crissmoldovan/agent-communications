@@ -163,6 +163,14 @@ agent-slack workspace mode [options] <alias> [mode]
 | `--no-browser` | print the link instead of opening it | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
+### `agent-slack workspace bot`
+
+keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal
+
+```
+agent-slack workspace bot [options] <alias>
+```
+
 ### `agent-slack workspace remove`
 
 disconnect a workspace from this machine, once a person approves it
