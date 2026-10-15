@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gmailCommand, handoffText } from '@agentcomms/gmail';
@@ -192,6 +201,46 @@ function helpCommand(help: string): string[] {
   return [...line.matchAll(/'([^']*)'|"([^"]*)"|(\S+)/g)].map((match) => (match[1] ?? match[2] ?? match[3]) as string);
 }
 
+/**
+ * This Node as a command printed with `env` names it (CUE-492), worked out here rather than asked of core: the first
+ * `node` on `env`'s PATH that is the same real file as `process.execPath`, as PATH spells it, and otherwise
+ * `process.execPath`. A `~/.local/bin/node` or Homebrew `/opt/homebrew/bin/node` link stays the link.
+ */
+function nodeAsPathFindsIt(env: NodeJS.ProcessEnv): string {
+  const own = process.execPath;
+  const windows = process.platform === 'win32';
+  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  let real: string;
+  try {
+    real = realpathSync(own);
+  } catch {
+    return own;
+  }
+  const names = windows
+    ? (env.PATHEXT ?? '.EXE;.CMD;.BAT')
+        .split(';')
+        .filter(Boolean)
+        .map((extension) => `node${extension.toLowerCase()}`)
+    : ['node'];
+  const folders = (env.PATH ?? env.Path ?? '')
+    .split(delimiter)
+    .filter((folder) => (windows ? /^[A-Za-z]:[\\/]/.test(folder) : folder !== '' && isAbsolute(folder)));
+  for (const folder of folders) {
+    for (const name of names) {
+      const candidate = join(folder, name);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        accessSync(candidate, constants.X_OK);
+        if (!same(realpathSync(candidate), real)) continue;
+        return same(candidate, own) ? own : candidate;
+      } catch {
+        // not here, or not runnable: keep looking
+      }
+    }
+  }
+  return own;
+}
+
 /** Gmail's built CLI, as the wrapper's dependency declares it: what a command located from Gmail runs. */
 function gmailBin(): string {
   const gmailEntry = fileURLToPath(new URL(import.meta.resolve('@agentcomms/gmail')));
@@ -215,8 +264,9 @@ test("--help names Gmail's own setup, located from the Gmail dependency for this
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /Set up mailboxes with Gmail's own CLI, from @agentcomms\/gmail: `/);
     const [program, entry, ...words] = helpCommand(result.stderr);
-    // This Node, then Gmail's checked CLI entry — the wrapper's dependency, never the wrapper itself.
-    assert.equal(program, process.execPath);
+    // This Node, as the bin's PATH finds it, then Gmail's checked CLI entry — the wrapper's dependency, never the
+    // wrapper itself.
+    assert.equal(program, nodeAsPathFindsIt(env));
     assert.equal(realpathSync(entry ?? ''), realpathSync(gmailBin()));
     assert.equal(owningPackage(entry ?? ''), '@agentcomms/gmail');
     assert.deepEqual(words.slice(-1), ['setup']);
