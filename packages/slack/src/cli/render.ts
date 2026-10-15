@@ -20,6 +20,7 @@ import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { DeletedDraft, DraftView } from '../operations/drafts.ts';
 import type { FileDownloadQuestion, FileDownloadResult } from '../operations/files.ts';
+import type { AgentIconResult } from '../operations/icon.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
@@ -778,6 +779,18 @@ export function renderPeople(result: PeopleResult, color: boolean): string {
   }
   if (!result.complete) lines.push('', paint(color, 'dim', 'More remain.'));
   return lines.join('\n');
+}
+
+/** `icon make`: the file made, then the two steps the person takes with it, then that nothing else changed. */
+export function renderAgentIcon(result: AgentIconResult, color: boolean): string {
+  return [
+    `made ${result.path} · ${result.width} × ${result.height} PNG · ${sizeOf(result.bytes)}`,
+    `suggested name ${result.suggestedName}`,
+    '',
+    renderSteps('Next:', result.steps, color),
+    '',
+    paint(color, 'dim', 'Nothing was uploaded, and nothing changed in Slack or in the configuration.'),
+  ].join('\n');
 }
 
 export function renderFiles(result: FilesResult, color: boolean): string {

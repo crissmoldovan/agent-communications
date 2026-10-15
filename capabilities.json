@@ -1316,6 +1316,14 @@
       "operation": "listPeople"
     },
     {
+      "id": "slack.icon.make",
+      "package": "slack",
+      "cli": "icon make",
+      "mcp": "slack_icon_make",
+      "status": "both",
+      "operation": "makeAgentIcon"
+    },
+    {
       "id": "slack.draft.create",
       "package": "slack",
       "cli": "draft create",

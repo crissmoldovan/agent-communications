@@ -584,6 +584,8 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       'slack_edit_send',
       // It writes files on this machine, as `gmail_attachment_download` does — never over one, so not destructive.
       'slack_file_download',
+      // It writes the agent emoji's PNG on this machine, made again over its own last one; nothing reaches Slack.
+      'slack_icon_make',
       'slack_mode_set',
       'slack_post_prepare',
       'slack_post_send',

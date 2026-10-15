@@ -40,6 +40,7 @@ import {
 import { runDoctor } from '../operations/doctor.ts';
 import { createDraft, deleteOwnDraft, listDrafts, showDraft, updateDraft } from '../operations/drafts.ts';
 import { downloadFiles, downloadSelection, type FileDownloader } from '../operations/files.ts';
+import { makeAgentIcon } from '../operations/icon.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
 import {
@@ -614,6 +615,26 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       try {
         const { call } = await session(await resolve(args.workspace));
         return reply(await listPeople(call, { limit: args.limit ?? 200 }));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_icon_make',
+    {
+      title: 'Make the agent emoji',
+      description:
+        'Make the person’s agent emoji: their own Slack profile photo with a small robot badge on its lower right, as a square PNG under 128 KB, saved in this machine’s data folder. It reads Slack with their token and fetches the photo with none; it uploads nothing and changes nothing in Slack or in the configuration, so it asks nobody. Returns the file’s `path`, the workspace’s emoji page (`emojiPage`, null when Slack did not say where the workspace is), a `suggestedName` such as `:sam-agent:`, and the `steps`: show them to the person, who uploads the file there under that name themselves. Once they have, record the name for the account with `comms_label`, so the app’s posts for their agent show it.',
+      inputSchema: { ...workspaceArg },
+      // It writes one file on this machine, as `slack_file_download` does, and reads Slack: no approval, any mode.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args, ctx) => {
+      try {
+        const name = await resolve(args.workspace);
+        return reply(await makeAgentIcon(context, await session(name), { signal: ctx.mcpReq.signal }));
       } catch (error) {
         return fail(error);
       }

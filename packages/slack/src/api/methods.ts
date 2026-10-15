@@ -41,6 +41,17 @@ export const SLACK_ORIGIN = 'https://slack.com';
  */
 export const SLACK_FILES_ORIGIN = 'https://files.slack.com';
 
+/**
+ * Where Slack keeps people's profile photos: the third origin, and the one no token ever goes to.
+ *
+ * Reached for one thing only: a `GET` of the signed-in person's own photo, the `profile.image_512` that `users.info`
+ * just returned, inside a grant for exactly that URL (`avatarWith` in `guard.ts`) — so `icon make` can put a badge on
+ * it. The photo host serves the picture to anybody who has its address, so the request carries no credential at all,
+ * and the guard refuses one that does. A photo kept anywhere else — a Gravatar, Slack's default picture on another
+ * host — is not fetched.
+ */
+export const SLACK_AVATARS_ORIGIN = 'https://avatars.slack-edge.com';
+
 export type MethodClass =
   /** Reads. No permit, no approval. */
   | 'read'

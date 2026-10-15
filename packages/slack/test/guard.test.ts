@@ -1401,6 +1401,7 @@ test('only guarded transports send requests to Slack', async () => {
     ),
   );
   assert.deepEqual(sending.map((file) => file.path).sort(), [
+    'api/avatar.ts',
     'api/call.ts',
     'api/download.ts',
     'api/upload.ts',
@@ -1785,5 +1786,20 @@ test('only the upload transport opens an upload grant', async () => {
       .filter((file) => file.path !== 'api/guard.ts' && reachOf('uploadWith', file.text).length > 0)
       .map((file) => [file.path, reachOf('uploadWith', file.text)]),
     [['api/upload.ts', ['names it in an import or export', 'calls it or reads it off an object']]],
+  );
+});
+
+test('only the photo transport opens a photo grant', async () => {
+  /*
+   * The grant is what makes Slack's photo host reachable at all, so the question is who can open one. One module:
+   * `api/avatar.ts`, which opens it only for the photo `users.info` named, checked and rebuilt on the photo host, and
+   * sends it no credential. Anything else that reached it could fetch from that host whatever it liked.
+   */
+  const files = await sources();
+  assert.deepEqual(
+    files
+      .filter((file) => file.path !== 'api/guard.ts' && reachOf('avatarWith', file.text).length > 0)
+      .map((file) => [file.path, reachOf('avatarWith', file.text)]),
+    [['api/avatar.ts', ['names it in an import or export', 'calls it or reads it off an object']]],
   );
 });

@@ -44,7 +44,10 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/server": "^2.3.1",
+    "@types/pngjs": "6.0.5",
     "commander": "^15.0.0",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0",
     "zod": "catalog:"
   },
   "publishConfig": {
@@ -88,7 +91,8 @@
     },
     "hosts": [
       "slack.com",
-      "files.slack.com"
+      "files.slack.com",
+      "avatars.slack-edge.com"
     ],
     "approve": "agent-slack approve",
     "approvalGrouping": "draft-revision-digest",
