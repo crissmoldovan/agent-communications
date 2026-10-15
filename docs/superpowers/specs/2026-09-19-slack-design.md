@@ -186,6 +186,14 @@ the impersonation; the payload tells the truth to anything that looks.
 - External participants in Slack Connect channels are identified from `is_stranger` and `team_id` together, as
   the research requires; `username` is never a key.
 
+> **The first bullet is reversed, 2026-10-15** — by [labelling what an agent sends](2026-10-15-agent-label-design.md)
+> (S1, S4). The send app now has a bot user with `chat:write.customize`, and an agent's post goes out as the app named
+> `<name> (<word>)`, with Slack's APP badge beside it, where the app can post; elsewhere it goes out as the person,
+> labelled in its text. This bullet was written against an app choosing any name and avatar, so that the channel cannot
+> tell. Here nobody passes a name or an icon: the name is the person's own with a word from a fixed list, and the
+> customisation discloses the agent rather than hiding one. The reading rules above are unchanged: attribution comes
+> from `bot_id` and `user`, and a `username` is shown only as a display name the app chose.
+
 ## 5. Installation, because the platform forces our hand
 
 ### D8 — Bring your own Slack app
