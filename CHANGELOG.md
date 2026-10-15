@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.18.1
 
 **A first events rule now works in the order the README gives, and `agentcomms doctor` stops warning about commands
 that are fine.** These are the four problems found while trying 0.18.0 on a real machine. Nothing breaks and there is
@@ -41,6 +41,10 @@ before breaking the one under test (CUE-472). The events owner tests now start w
 instead of reading the developer's own `~/.config`. The events CLI's control client now follows the environment the
 CLI is given, not `process.env`, so a test with its own state directory is never answered by an event service running
 on the machine.
+
+**Upgrading.** Nothing to change. `agentcomms update` (or `comms_update`) moves each client's managed runtime to
+0.18.1; restart the client afterwards. An event service started with `agent-events run` keeps running the version it
+started with until you stop it and start it again.
 
 ## 0.18.0
 
