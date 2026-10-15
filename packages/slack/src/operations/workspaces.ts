@@ -17,13 +17,7 @@ import {
   secretsStoreOf,
   shownText,
 } from '@agentcomms/core';
-import {
-  type ExchangedBot,
-  type ExchangedToken,
-  requireBotForSend,
-  safeSlackFailureText,
-  scopeMismatch,
-} from '../auth/authorize.ts';
+import { type ExchangedBot, type ExchangedToken, safeSlackFailureText, scopeMismatch } from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../auth/bundle.ts';
 import type { SlackFlow } from '../auth/flow.ts';
 import type { InstallMode } from '../manifest.ts';
@@ -292,8 +286,7 @@ export function validateExchange(options: {
       hint: 'Leave every permission ticked on the consent screen, or re-create the app from the manifest.',
     });
   }
-  // The send app's bot token, after the user scopes: an app never moved to send is told that first (S1).
-  requireBotForSend(token, mode, handoffs);
+
   if (extra.length > 0) {
     /*
      * Asking for `read` and getting posting back is not a broken app. Slack adds every scope a person has granted this

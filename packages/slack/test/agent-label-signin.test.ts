@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { CommsError } from '@agentcomms/core';
 import { parseBundle } from '../src/auth/bundle.ts';
 import { newFlowId, type SlackFlow } from '../src/auth/flow.ts';
 import { scopesForMode } from '../src/manifest.ts';
@@ -53,9 +52,10 @@ async function savedFlow(
   return { flow, context, methods };
 }
 
-test('a send sign-in keeps the bot token under slack/bot-token/<accountId>, and the bot user on the account', async () => {
+test('a send sign-in whose reply carries a bot token anyway keeps it under slack/bot-token/<accountId>', async () => {
+  // The PKCE sign-in asks for no bot scope (S1, revised), so Slack should send none; one with exactly the four is kept.
   const harness = await newHarness();
-  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send'), bot: {} });
   const { flow, context, methods } = await savedFlow(harness, { mode: 'send' });
 
   const view = await completeSignIn(context, flow.flowId, 'fake-code');
@@ -76,19 +76,20 @@ test('a send sign-in keeps the bot token under slack/bot-token/<accountId>, and 
   assert.deepEqual(methods, [], 'the sign-in asked Slack for something besides the exchange');
 });
 
-test('a send sign-in whose reply has no bot token is refused, and nothing is saved (S1)', async () => {
-  // An app still on the manifest from before this release: it grants the user's posting scopes and issues no bot.
+test('a send sign-in with no bot token is saved, and names no bot user (S1, revised)', async () => {
+  // The ordinary PKCE send sign-in: user scopes only. Its posts take the labelled fallback until a bot token comes.
   const harness = await newHarness();
-  harness.reply = () => slackOk({ scopes: scopesForMode('send'), bot: false });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
   const { flow, context } = await savedFlow(harness, { mode: 'send' });
 
-  await assert.rejects(completeSignIn(context, flow.flowId, 'fake-code'), (error: CommsError) => {
-    assert.equal(error.code, 'AUTH_REQUIRED');
-    assert.match(error.message, /bot/);
-    assert.match(error.hint ?? '', /manifest/, 'the refusal does not say to update the app from the manifest');
-    return true;
-  });
-  assert.equal((await harness.core.config.load()).accounts.acme, undefined, 'a workspace was saved');
+  const view = await completeSignIn(context, flow.flowId, 'fake-code');
+
+  const account = (await harness.core.config.load()).accounts.acme as unknown as Record<string, unknown>;
+  assert.equal(account.mode, 'send');
+  assert.equal(account.botUserId, undefined, 'a sign-in with no bot token named a bot user');
+  assert.equal(view.appUserId, undefined);
+  const secrets = await harness.core.secrets('file');
+  assert.equal(await secrets.get(botSecretRefFor(view.accountId)), null);
 });
 
 test('narrowing to read deletes the local bot token, and never revokes it (S1)', async () => {

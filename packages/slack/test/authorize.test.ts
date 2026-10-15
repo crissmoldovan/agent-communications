@@ -32,22 +32,21 @@ test('the authorisation url asks Slack for user scopes only', () => {
   assert.deepEqual(url.searchParams.get('user_scope')?.split(','), scopesForMode('read'));
 });
 
-test('a send sign-in also asks for the four bot scopes, and a read one for none (S1)', () => {
+test('the PKCE sign-in asks Slack for user scopes only, in either mode (S1, revised 2026-10-15)', () => {
   /*
-   * Design 2026-10-15 S1: the send app posts as itself, so its sign-in asks Slack for the bot user's four posting
-   * scopes in `scope`, beside the user scopes in `user_scope`. Slack's PKCE page says desktop redirects "are not
-   * allowed to request bot scopes"; whether that holds for this app is the first thing the live check (§10.1) settles.
+   * Slack's PKCE page: "Desktop redirects are not allowed to request bot scopes", and a `localhost` redirect from a PKCE
+   * app is one. So neither mode's sign-in sends `scope`: the send app's bot token comes from the app's own page, pasted
+   * once (`workspace bot`), or from the client-secret sign-in. The send manifest still declares the bot user, so the app's
+   * "Install to Workspace" can create it.
    */
-  const send = new URL(buildAuthorizeUrl({ clientId: CLIENT, mode: 'send', port: 51234 }).url);
-  assert.deepEqual(send.searchParams.get('scope')?.split(','), [
-    'chat:write',
-    'chat:write.customize',
-    'chat:write.public',
-    'reactions:write',
-  ]);
-  assert.deepEqual(send.searchParams.get('user_scope')?.split(','), scopesForMode('send'));
-  const read = new URL(buildAuthorizeUrl({ clientId: CLIENT, mode: 'read', port: 51234 }).url);
-  assert.equal(read.searchParams.get('scope'), null, 'a read sign-in asked for bot scopes');
+  for (const mode of ['read', 'send'] as const) {
+    const url = new URL(buildAuthorizeUrl({ clientId: CLIENT, mode, port: 51234 }).url);
+    assert.equal(url.searchParams.get('scope'), null, `the ${mode} sign-in asked for bot scopes`);
+    assert.deepEqual(url.searchParams.get('user_scope')?.split(','), scopesForMode(mode));
+    for (const bot of ['chat:write.customize', 'chat:write.public']) {
+      assert.equal(url.href.includes(encodeURIComponent(bot)), false, `the ${mode} sign-in carries ${bot}`);
+    }
+  }
 });
 
 test('the url carries the PKCE challenge, never the verifier', () => {
@@ -185,7 +184,7 @@ function sendReply(over: Record<string, unknown> = {}) {
   });
 }
 
-test('a send reply keeps its bot token beside the user token, with the bot user it posts as (S1)', () => {
+test('a send reply that carries a bot token anyway keeps it, held to exactly the four scopes (S1)', () => {
   const token = readExchange(sendReply(), HANDOFFS, 'send');
   assert.equal(token.accessToken, 'fake-access-1', 'the user token is still the account’s own');
   assert.deepEqual(token.bot, {
@@ -217,6 +216,16 @@ test('a send reply whose bot token has any other scope, or is not a rotating bot
   refused({ bot_user_id: undefined }, /bot/);
   refused({ refresh_token: undefined }, /bot/);
   refused({ expires_in: undefined }, /bot/);
+});
+
+test('a send reply with no bot token is a good one: the bot token comes another way (S1, revised)', () => {
+  const token = readExchange(
+    reply({ authed_user: { ...reply().authed_user, scope: scopesForMode('send').join(',') } }),
+    HANDOFFS,
+    'send',
+  );
+  assert.equal(token.bot, undefined);
+  assert.deepEqual(token.scopes, scopesForMode('send'));
 });
 
 test('a read reply carrying a bot token is still refused (S1)', () => {
