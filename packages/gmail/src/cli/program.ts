@@ -401,7 +401,11 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
       .option('--attach <path...>', 'attach these local files')
       .option('--no-signature', 'leave the mailbox signature off')
       .option('--no-quote', 'do not quote the original (a reply only; a forward needs it)')
-      .option('--profile', 'include the mailbox writing profile in the result', false);
+      .option('--profile', 'include the mailbox writing profile in the result', false)
+      .option(
+        '--as <who>',
+        'who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so)',
+      );
 
   const draftInput = async (
     options: Options,
@@ -415,6 +419,7 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     attach: options.attach as string[] | undefined,
     signature: options.signature !== false,
     includeProfile: Boolean(options.profile),
+    as: options.as === undefined ? undefined : String(options.as),
   });
 
   /**

@@ -116,11 +116,17 @@ export function textToHtml(text: string): string {
     .join('\n');
 }
 
-/** Formats an address for a header, quoting a display name that needs it. */
+/**
+ * Formats an address for a header, quoting a display name that needs it.
+ *
+ * Parentheses are quoted too: unquoted, `Jo Example (agent) <jo@…>` is a name and an RFC 5322 comment, and the
+ * composer — like many mail clients — drops the comment, so the agent label (design 2026-10-15-agent-label, G1) went
+ * out as `Jo Example <jo@…>`.
+ */
 export function formatAddress(entry: ParsedAddress | string): string {
   if (typeof entry === 'string') return entry;
   if (!entry.name) return entry.address;
-  const name = /["\\,:;<>@[\]]/.test(entry.name) ? `"${entry.name.replace(/(["\\])/g, '\\$1')}"` : entry.name;
+  const name = /["\\,:;<>@[\]()]/.test(entry.name) ? `"${entry.name.replace(/(["\\])/g, '\\$1')}"` : entry.name;
   return `${name} <${entry.address}>`;
 }
 
