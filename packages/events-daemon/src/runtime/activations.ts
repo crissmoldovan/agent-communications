@@ -314,6 +314,8 @@ export class ActivationRuntime {
         };
       }
       const oldId = `${input.ruleId}@${active.version}`;
+      // An earlier update whose approval lapsed unused would hold this rule's one replacement slot for good.
+      await this.#settleLapsedApprovals(oldId);
       const pending = this.#store.database
         .prepare(
           "SELECT 1 AS present FROM activation_intents WHERE replacement_of_version = ? AND status IN ('pending', 'pending-completion')",
@@ -632,6 +634,7 @@ export class ActivationRuntime {
         this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
+      if (this.#settleLapsedApproval(intent.id, intent.approval_id, record)) continue;
       if (record.record.state === 'approved') {
         const binding = this.#settleOnDrift(intent);
         if (binding === null) continue;
@@ -678,7 +681,8 @@ export class ActivationRuntime {
 
   /**
    * A live owner retries only work that core has already marked used. Unlike startup recovery this never claims an
-   * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path.
+   * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path. After
+   * that claimed work, it settles every unclaimed intent whose approval lapsed unused, as startup recovery does.
    */
   async resumeClaimedCompletions(): Promise<void> {
     const rows = this.#store.database
@@ -716,6 +720,48 @@ export class ActivationRuntime {
         throw error;
       }
     }
+    await this.#settleLapsedApprovals();
+  }
+
+  /** Settles the unclaimed pending intents — of one replacement slot, or every one — whose approval lapsed unused. */
+  async #settleLapsedApprovals(replacementOfVersion?: string): Promise<void> {
+    const rows = this.#store.database
+      .prepare(
+        "SELECT id, approval_id, replacement_of_version FROM activation_intents WHERE status = 'pending' AND claimed_at IS NULL AND approval_id IS NOT NULL ORDER BY id",
+      )
+      .all() as Array<{ id: string; approval_id: string; replacement_of_version: string | null }>;
+    for (const row of rows) {
+      if (replacementOfVersion !== undefined && row.replacement_of_version !== replacementOfVersion) continue;
+      this.#settleLapsedApproval(row.id, row.approval_id, await this.#approvals.get(row.approval_id));
+    }
+  }
+
+  /**
+   * CUE-491: a disclosure approval that core reads as expired or revoked can never be approved or claimed again, so
+   * its unclaimed intent is cancelled (D2: expired, revoked and absent drop). Left pending, every pass would carry it
+   * for good, and an update's would hold its rule's one replacement slot, refusing the next update as
+   * REPLACEMENT_PENDING. Core's answer crossed an await: the write re-reads the intent under its transaction and
+   * settles only the same unclaimed pending one. The failure code reuses APPROVAL_ABSENT — no usable approval
+   * remains, as the claimed path already records for a non-used one — because the B3 control and doctor v1 schemas
+   * that close the code set are pinned.
+   */
+  #settleLapsedApproval(
+    intentId: string,
+    approvalId: string,
+    record: Awaited<ReturnType<ActivationRuntimeOptions['approvals']['get']>>,
+  ): boolean {
+    if (record?.form !== 'v2' || record.record.kind !== 'disclosure') return false;
+    if (record.record.state !== 'expired' && record.record.state !== 'revoked') return false;
+    let settled = false;
+    this.#store.immediate(() => {
+      const latest = this.#store.database
+        .prepare('SELECT status, approval_id, claimed_at FROM activation_intents WHERE id = ?')
+        .get(intentId) as Pick<IntentRow, 'status' | 'approval_id' | 'claimed_at'> | undefined;
+      if (latest?.status !== 'pending' || latest.claimed_at !== null || latest.approval_id !== approvalId) return;
+      this.#cancel(intentId, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+      settled = true;
+    });
+    return settled;
   }
 
   /**

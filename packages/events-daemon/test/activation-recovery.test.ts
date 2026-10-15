@@ -2161,3 +2161,212 @@ test('APR-B1: a point published while the initial cursor is being computed makes
     await rm(setup.root, { recursive: true, force: true });
   }
 });
+
+// ── CUE-491: an approval that lapses unused settles its intent ─────────────────────────────────────────────────────
+// An intent whose core disclosure approval expired or was revoked before anyone approved it can never be claimed. It
+// is cancelled, so it no longer counts as pending and no longer holds its rule's one replacement slot.
+
+type Setup = Awaited<ReturnType<typeof fixture>>;
+
+function intentRow(setup: Setup, intentId: string): Record<string, unknown> {
+  return {
+    ...(setup.store.database
+      .prepare('SELECT status, claimed_at, failure_code FROM activation_intents WHERE id = ?')
+      .get(intentId) as Record<string, unknown>),
+  };
+}
+
+/** Moves the shared clock to the instant core's pending window for this approval closes (equality is expired). */
+async function lapse(setup: Setup, approvalId: string, before = 0): Promise<void> {
+  const stored = await setup.approvals.get(approvalId);
+  assert.ok(stored?.form === 'v2', 'the disclosure approval is a version-2 record');
+  setup.time.advance(Date.parse(stored.record.expiresAt) - before - setup.time.now());
+}
+
+/** Rule 1 active at version 1 through its own approval, with versions 2 and 3 waiting as updates. */
+async function activeRuleWithUpdates(setup: Setup): Promise<void> {
+  const versions = new ImmutableVersions(setup.store.database);
+  versions.createTarget(target);
+  versions.createRule(rule);
+  const first = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+  await setup.runtime.approve({
+    approvalId: first.approvalId,
+    answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+  });
+  versions.createRule({ ...rule, version: 2, mapping: { constant: 'safer' } });
+  versions.createRule({ ...rule, version: 3, mapping: { constant: 'safest' } });
+}
+
+test('CUE-491: the next owner tick cancels a pending activation whose approval expired unused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+    await lapse(setup, prepared.approvalId);
+    const stored = await setup.approvals.get(prepared.approvalId);
+    assert.equal(stored?.form === 'v2' ? stored.record.state : undefined, 'expired', 'core reads the approval expired');
+
+    await setup.runtime.resumeClaimedCompletions();
+
+    assert.deepEqual(
+      intentRow(setup, prepared.intentId),
+      { status: 'cancelled', claimed_at: null, failure_code: 'APPROVAL_ABSENT' },
+      'an approval that expired unused settles its intent as cancelled',
+    );
+    assert.equal(versions.activeVersion('rule', rule.ruleId), null, 'nothing is activated');
+    assert.equal(setup.profileCalls(), 0, 'settling calls no provider');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('CUE-491: startup recovery cancels a pending activation whose approval expired unused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+    await lapse(setup, prepared.approvalId);
+
+    await setup.runtime.recover();
+
+    assert.deepEqual(
+      intentRow(setup, prepared.intentId),
+      { status: 'cancelled', claimed_at: null, failure_code: 'APPROVAL_ABSENT' },
+      'recovery drops an intent whose approval expired unused',
+    );
+    assert.equal(setup.profileCalls(), 0, 'settling calls no provider');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test("CUE-491: after an update's approval expires unused, the rule's next update is prepared, not refused", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    await activeRuleWithUpdates(setup);
+    const lapsed = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 2 })) as PreparedActivation;
+    assert.equal(lapsed.replacementOfVersion, 'rule-1@1');
+    await lapse(setup, lapsed.approvalId);
+
+    const next = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 3 })) as PreparedActivation;
+
+    assert.equal(next.status, 'pending');
+    assert.equal(next.replacementOfVersion, 'rule-1@1', 'the fresh update takes the replacement slot');
+    assert.deepEqual(intentRow(setup, lapsed.intentId), {
+      status: 'cancelled',
+      claimed_at: null,
+      failure_code: 'APPROVAL_ABSENT',
+    });
+    assert.deepEqual(intentRow(setup, next.intentId), { status: 'pending', claimed_at: null, failure_code: null });
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('CUE-491: a pending activation whose approval is still live is left alone by the tick, recovery and the next update', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    await activeRuleWithUpdates(setup);
+    const live = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 2 })) as PreparedActivation;
+    await lapse(setup, live.approvalId, 1);
+
+    await setup.runtime.resumeClaimedCompletions();
+    await setup.runtime.recover();
+    await assert.rejects(
+      () => setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 3 }),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_PENDING',
+      'a live update still holds its rule replacement slot',
+    );
+    assert.deepEqual(intentRow(setup, live.intentId), { status: 'pending', claimed_at: null, failure_code: null });
+
+    const completion = await setup.runtime.approve({
+      approvalId: live.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(live.approvalId),
+    });
+    assert.equal(completion.status, 'completed', 'the live approval still completes its update');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('CUE-491: a claimed activation is left to its completion, whatever its approval reads', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    await activeRuleWithUpdates(setup);
+    const claimed = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 2 })) as PreparedActivation;
+    await lapse(setup, claimed.approvalId);
+    // Damaged or not, a row with claimedAt set belongs to the completion path; the lapse sweep never settles it.
+    const claimedAt = setup.time.now();
+    setup.store.database
+      .prepare(
+        "UPDATE activation_intents SET status = 'pending-completion', claimed_at = ?, completion_deadline = ? WHERE id = ?",
+      )
+      .run(claimedAt, claimedAt + 3_600_000, claimed.intentId);
+
+    await setup.runtime.recover();
+    await assert.rejects(
+      () => setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 3 }),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_PENDING',
+      'a claimed update still holds its rule replacement slot',
+    );
+
+    assert.deepEqual(intentRow(setup, claimed.intentId), {
+      status: 'pending-completion',
+      claimed_at: claimedAt,
+      failure_code: null,
+    });
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('CUE-491: a revoked approval settles its activation as an expired one does', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    await activeRuleWithUpdates(setup);
+    const revoked = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 2 })) as PreparedActivation;
+    await setup.approvals.revoke(revoked.approvalId, 'withdrawn', { disposition: 'person' });
+    const stored = await setup.approvals.get(revoked.approvalId);
+    assert.equal(stored?.form === 'v2' ? stored.record.state : undefined, 'revoked', 'core reads the approval revoked');
+
+    const next = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 3 })) as PreparedActivation;
+    assert.equal(next.replacementOfVersion, 'rule-1@1', 'the fresh update takes the replacement slot');
+    assert.deepEqual(intentRow(setup, revoked.intentId), {
+      status: 'cancelled',
+      claimed_at: null,
+      failure_code: 'APPROVAL_ABSENT',
+    });
+
+    await setup.approvals.revoke(next.approvalId, 'withdrawn', { disposition: 'person' });
+    await setup.runtime.resumeClaimedCompletions();
+    assert.deepEqual(
+      intentRow(setup, next.intentId),
+      { status: 'cancelled', claimed_at: null, failure_code: 'APPROVAL_ABSENT' },
+      'the owner tick settles a revoked approval too',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
