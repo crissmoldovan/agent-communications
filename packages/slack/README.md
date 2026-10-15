@@ -236,6 +236,49 @@ have joined: a post to a channel you are not a member of is refused (`SCOPE_MISS
 again. Direct messages and group DMs are exempt. When the room cannot be read, the preview says membership could not
 be checked.
 
+### Labelling what an agent sends
+
+Someone who reads a message an agent sent through this package can tell, without opening anything, that it came
+from your agent and not from you — unless you chose otherwise for that message. The preview's first line, the
+`From:`, says which before anything is sent, and the approval binds it ([design](../../docs/superpowers/specs/2026-10-15-agent-label-design.md)).
+
+- **As the app, named after you.** Where the app can post — a public channel not shared with another organisation,
+  or a private or shared one its bot user has joined — the message goes out as the app, with the name
+  `Jo Example (agent)` and Slack's APP badge beside it. The name is your Slack display name, else your real name, else
+  the name set with the core's `label name`; the word is the one set with `label word` — `agent` by default, or
+  `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`. A name that cannot make a label of at most 80 characters is
+  refused, never cut short. The icon is your agent emoji when one is recorded for the workspace, else your Slack
+  photo. Nobody passes a name, an icon or blocks: they come from your profile and settings, read at prepare.
+- **As you, labelled.** Where the app cannot post — a direct message, a group DM, your own DM, a room the app is not
+  in or whose membership could not be checked, every post with files, and every workspace signed in before the app
+  had a bot user — the message goes out with your own token, labelled in it: `Sent by Jo Example (agent)` above the
+  words, and `Jo Example (agent): …` at the front of the text a notification shows. A file post's comment starts the
+  same way. The preview names the reason.
+- **As you, with no label**, only when you say so for that message: `--as me` on `post prepare`, `react` and
+  `edit prepare`, or `as: "me"` on their tools. The preview's first line then reads `Sent as you, with no label: it
+  will look as if you wrote it yourself`. Rules for an account, a conversation or a kind of act are the core's
+  `label rule`; an agent passes `me` only when you said so for this one message.
+
+The route is chosen before the preview and never changed after it. An app post Slack refuses — the app removed from
+the room meanwhile — is a refused send: nothing is posted as you instead, because that would be a different message
+needing a new yes.
+
+**Edits and deletions use the token that posted.** A message you posted, by hand or labelled, is edited with your
+token; an agent's edit of it puts `Jo Example (agent): ` at the front of its new words. An app message is edited or
+deleted with the app's token, and only when this machine's own record of what this workspace's app posted holds it:
+others who installed the same app post as the same bot, and theirs are refused before any preview. **A reaction** is
+the app's where the app can post, and yours elsewhere — and since a reaction carries no words, the preview says it
+goes unlabelled.
+
+**Your agent emoji.** The icon is your Slack photo until you set an emoji: make one from your photo with a small robot
+badge with the Slack CLI's `icon make`, upload it at your workspace's emoji page, and record its name with the core's
+`label icon <workspace> :name:`, which you approve. Nothing is published outside Slack.
+
+**A workspace connected before this release** keeps working without a new sign-in: its agent's messages go out as
+you, labelled, and `agent-slack doctor` says how to post as the app instead — update the app from the send manifest
+(`agent-slack app update <name> --mode send`, or paste `agent-slack manifest --workspace <name> --mode send` on its
+App Manifest page), then `agent-slack workspace reauth <name> --mode send`.
+
 ### Files
 
 A post can carry up to ten local files, each up to 100 MiB, with or without words: `--file` on `draft create`, and
