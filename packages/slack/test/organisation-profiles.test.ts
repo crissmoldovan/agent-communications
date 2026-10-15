@@ -90,6 +90,8 @@ for (const mode of ['read', 'send'] as const) {
           team: { id: 'TRGC0001', name: 'RGC' },
           app_id: mode === 'read' ? 'A0READ' : 'A0SEND',
           scopes: scopesForMode(mode === 'read' ? 'send' : 'read'),
+          // A read sign-in asks Slack for no bot scope, so its reply carries no bot token (design 2026-10-15 S1).
+          bot: false,
         }),
     });
     context.secrets = async () => {

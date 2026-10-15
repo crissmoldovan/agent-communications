@@ -41,6 +41,7 @@ import type { SlackDraft } from '../compose/drafts.ts';
 import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/files.ts';
 import { mentionedUserIds, previewOf, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
+import type { AppPostRecord } from './app-posts.ts';
 import { requireConversation } from './destination.ts';
 import {
   appNameOf,
@@ -193,6 +194,8 @@ export interface PrepareDeps {
    * as the person did before the label, and is never what a surface runs.
    */
   readonly label?: LabelDeps | undefined;
+  /** This account's own record of what its app posted (S5): written after an app post, read before an app edit. */
+  readonly appPosts?: AppPostRecord | undefined;
 }
 
 /** The channel, and how many people are in it — or why that could not be established. */
@@ -1009,7 +1012,10 @@ async function postClassified(
   if (files.length > 0) requireFileSending(deps);
   // The payload sent below is this one: checked against the file, previewed, and the one the digest is taken over.
   // Decided again, as prepare decided it: a label or route that differs now is a different post, and is refused.
-  const { preview, digest, payload } = await viewPost(deps, draft, book, requested);
+  const { preview, digest, payload, sent } = await viewPost(deps, draft, book, requested);
+  // The call that posts it: the app's, for an app post, opened before the claim so nothing is spent on a token that
+  // cannot be read (design 2026-10-15 S4). It was opened to decide the route, so this asks nothing more of the store.
+  const poster = sent.via === 'app' ? await appCall(deps) : deps.call;
 
   // Cancelled while the room was looked up: the claim is next, and is not made. The store asks again as it claims.
   if (deps.signal?.aborted) throw cancelledPost(NOT_USED);
@@ -1029,7 +1035,8 @@ async function postClassified(
   // Claimed: from here until its outcome is recorded, the claim's lease is renewed while Slack's work is outstanding.
   return withSendingLease(deps.approvals, approvalId, claimToken, async () => {
     if (policy !== undefined) {
-      return postFiles(deps, approvalId, { claimToken, claimed }, draft.draftId, payload, files, policy);
+      // Files always go out as the person, labelled in their words when the post is an agent's (S2, S3).
+      return postFiles(deps, approvalId, { claimToken, claimed }, draft.draftId, sent.payload, files, policy);
     }
 
     const where = { channel: payload.channel };
@@ -1046,14 +1053,7 @@ async function postClassified(
       // Without the signal, deliberately: this is the request that posts, and it is never abandoned once it is out.
       () =>
         spendOn(deps.permit, approvalId, 'chat.postMessage', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.postMessage', {
-            channel: payload.channel,
-            text: payload.text,
-            blocks: JSON.stringify(payload.blocks),
-            thread_ts: payload.thread_ts,
-            unfurl_links: payload.unfurl_links,
-            unfurl_media: payload.unfurl_media,
-          }),
+          callSlack({ ...poster, permit: deps.permit }, 'chat.postMessage', postParams(sent)),
         ),
     );
     if (!attempted.ok) {
@@ -1070,7 +1070,9 @@ async function postClassified(
       channel: payload.channel,
       ...(ts === undefined ? {} : { ts }),
     });
-    const note = noteOf([ts === undefined ? NO_ID : undefined, late, ...unrecorded]);
+    // An app post goes in this account's own record, which is what lets it be edited or deleted from here (S5).
+    const unheld = sent.via === 'app' ? await recordAppPost(deps, approvalId, payload.channel, ts) : undefined;
+    const note = noteOf([ts === undefined ? NO_ID : undefined, late, ...unrecorded, unheld]);
     return {
       approvalId,
       channel: payload.channel,
@@ -1079,6 +1081,64 @@ async function postClassified(
       approval,
     };
   });
+}
+
+/**
+ * The call carrying the app's bot token, for an act the gate routed to the app (design 2026-10-15 S4). A gate with no
+ * app never routes one there; reaching this without one is a bug, refused rather than posted as the person.
+ */
+export async function appCall(deps: Pick<PrepareDeps, 'label'>): Promise<SlackCall> {
+  const app = deps.label?.app;
+  if (app === undefined) {
+    throw new CommsError(
+      'SEND_REFUSED',
+      'nothing was sent: this act was routed to an app this workspace does not have',
+      {
+        hint: 'This is a bug — please report it.',
+      },
+    );
+  }
+  return app.call();
+}
+
+/**
+ * What `chat.postMessage` is sent (S3, S4): the composer's payload as the route labels it, and for an app post the
+ * phrase as its `username` and one icon — `icon_emoji` for the account's agent emoji, else `icon_url` for its photo.
+ * Never both: Slack lets the emoji win, and the approval binds the one that shows.
+ */
+export function postParams(sent: SentPost): Record<string, string | boolean | undefined> {
+  const { payload } = sent;
+  return {
+    channel: payload.channel,
+    text: payload.text,
+    blocks: JSON.stringify(payload.blocks),
+    thread_ts: payload.thread_ts,
+    unfurl_links: payload.unfurl_links,
+    unfurl_media: payload.unfurl_media,
+    ...(sent.via === 'app' && sent.username !== undefined ? { username: sent.username } : {}),
+    ...(sent.via === 'app' && sent.icon !== undefined
+      ? 'emoji' in sent.icon
+        ? { icon_emoji: sent.icon.emoji }
+        : { icon_url: sent.icon.url }
+      : {}),
+  };
+}
+
+/** Records an app post in this account's own record (S5), returning what its result should say when that fails. */
+async function recordAppPost(
+  deps: PostDeps,
+  approvalId: string,
+  channel: string,
+  ts: string | undefined,
+): Promise<string | undefined> {
+  if (ts === undefined) return 'Slack gave the app’s post no ts, so it cannot be edited or deleted from here';
+  if (deps.appPosts === undefined) return undefined;
+  try {
+    await deps.appPosts.add({ channel, ts, approvalId, at: new Date().toISOString() });
+    return undefined;
+  } catch (error) {
+    return `the app’s post could not be recorded (${messageOf(error)}), so it cannot be edited or deleted from here`;
+  }
 }
 
 /**
@@ -1811,6 +1871,8 @@ export interface ReactionOptions {
 
 export interface ReactionResult {
   readonly approvalId: string;
+  /** Who reacted (design 2026-10-15 S6): the app, or the person — unlabelled, which it says. */
+  readonly label?: LabelView | undefined;
   readonly note?: string | undefined;
   /** Where the approval stands now (design 2026-10-05 §D8): `used`, or still `sending` when that was not recorded. */
   readonly approval: ApprovalObject;
@@ -2071,6 +2133,8 @@ export async function reactPrepared(
       ? undefined
       : await reactionLabel(deps, options, await requestedForApproval(deps, approvalId));
   const digest = reactionDigest(deps, options, label);
+  // The app's call for a reaction the app makes, opened before the claim (S6); the person's otherwise.
+  const reactor = label?.route === 'app' ? await appCall(deps) : deps.call;
   const claim = await claimOrHandOver(
     deps,
     approvalId,
@@ -2084,7 +2148,7 @@ export async function reactPrepared(
     waitingHint('reaction', deps.surface, approvalId, deps.handoffs),
   );
   // Claimed: the lease is renewed while Slack's answer is outstanding.
-  return withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
+  const done = await withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
     const method: PostingMethod = options.remove ? 'reactions.remove' : 'reactions.add';
     const attempted = await throttledRequest(
       deps,
@@ -2095,7 +2159,7 @@ export async function reactPrepared(
       () => fenceFirstStep(deps, approvalId, claim, reactionOperation(options), reactionIds(options)),
       () =>
         spendOn(deps.permit, approvalId, method, () =>
-          callSlack({ ...deps.call, permit: deps.permit }, method, {
+          callSlack({ ...reactor, permit: deps.permit }, method, {
             channel: options.channel,
             timestamp: options.ts,
             name: options.name,
@@ -2141,4 +2205,7 @@ export async function reactPrepared(
     }
     return recordReactionChanged(deps, approvalId, claim, options);
   });
+  // Said for an agent's reaction — the app's, or the person's with nothing on it to say so; one as the person is the
+  // reaction it always was.
+  return label?.identity === 'agent' ? { ...done, label: labelView(label, reactionLine(label)) } : done;
 }

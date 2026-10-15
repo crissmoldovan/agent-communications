@@ -436,7 +436,8 @@ export function decideEditLabel(
 
 /** An edit's first line (S7): the label it puts in the words, or none. */
 export function editLine(label: SlackLabel, appName?: string | undefined): string {
-  if (label.identity === 'me' || label.route === 'app') return identityLine(label, appName);
+  if (label.identity === 'me') return identityLine(label, appName);
+  if (label.route === 'app') return `${label.phrase ?? 'the app’s message'} · edited by the app, which posted it`;
   return `${label.name ?? ''} · labelled "${fallbackTextPrefix(label.phrase ?? '').trimEnd()}" at the start of the new words · ${label.reason ?? ''}`;
 }
 

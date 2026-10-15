@@ -43,6 +43,7 @@ import {
   ACCEPTED_WITHOUT_ID,
   type Attempted,
   type AuditSink,
+  appCall,
   approvalNow,
   attachPolicyFor,
   CONTAINS_FILES,
@@ -285,6 +286,37 @@ export interface EditFiles {
   readonly add: readonly SlackDraftFile[];
 }
 
+/**
+ * Whose token acts on a message (design 2026-10-15 S5): `chat.update` and `chat.delete` act only on the caller's own,
+ * so an edit or a deletion goes out with the token that posted it. The person's for a message they posted, by hand or
+ * through the fallback. The app's for an app message — and only one this account's own record holds, because the bot
+ * token is the workspace's and everyone who installed the same app holds it: Slack cannot tell one person's agent from
+ * another's. Anything else is somebody else's message, refused before anything is shown (E2).
+ */
+async function actorOf(
+  deps: Pick<PrepareDeps, 'postingAs' | 'label' | 'appPosts'>,
+  message: TargetMessage,
+  act: 'edit' | 'delete',
+): Promise<'person' | 'app'> {
+  const app = deps.label?.app;
+  if (app === undefined || message.botId === undefined || message.userId !== app.userId) {
+    requireOwnMessage(message, deps.postingAs, act);
+    return 'person';
+  }
+  if (deps.appPosts !== undefined && (await deps.appPosts.holds({ channel: message.channel, ts: message.ts }))) {
+    return 'app';
+  }
+  const done = act === 'edit' ? 'changed' : 'deleted';
+  throw new CommsError(
+    'SCOPE_MISSING',
+    `nothing was ${done}: the app posted the message at ${message.ts}, but not for this account`,
+    {
+      hint: 'Only an app message this account posted is edited or deleted from here: the app is shared, and others who installed it post as it too.',
+      details: { channel: message.channel, ts: message.ts, reason: 'not-own-app-message' },
+    },
+  );
+}
+
 /** An edit as it would be made now: what a person is shown, and the digest that binds exactly that. */
 export interface EditView {
   readonly preview: ChannelPreview;
@@ -299,6 +331,8 @@ export interface EditView {
   readonly keepsWords: boolean;
   /** Who the edit appears to come from (design 2026-10-15 S5): undefined for a gate built without the label's deps. */
   readonly label: SlackLabel | undefined;
+  /** Whose token makes it: the person's, or the app's for an app message this account posted (S5). */
+  readonly via: 'person' | 'app';
 }
 
 /**
@@ -406,7 +440,7 @@ function editWarnings(
  * counted from that text, as a post of it would be.
  */
 export async function viewEdit(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label'>,
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label' | 'appPosts'>,
   draft: SlackDraft,
   ts: string,
   removeFiles: readonly string[],
@@ -416,7 +450,8 @@ export async function viewEdit(
 ): Promise<EditView> {
   requireEditable(draft);
   const message = await messageAt(deps.call, { channel: draft.payload.channel, ts });
-  requireOwnMessage(message, deps.postingAs, 'edit');
+  const via = await actorOf(deps, message, 'edit');
+  if (via === 'app') requireAppEditable(draft, removeFiles, requested, ts);
   const files = filesOfEdit(message, draft, removeFiles);
   const keepsWords = draft.payload.text === '';
   if (keepsWords && files === null) {
@@ -429,16 +464,25 @@ export async function viewEdit(
   const words = keepsWords ? { ...draft, payload: payloadOf(message.text, draft.payload.channel, undefined) } : draft;
   // The words as a post of them would be read, without a post's label: an edit's label is its own (S5).
   const view = await viewPost({ ...deps, label: undefined }, words, book);
-  const label =
-    deps.label === undefined
-      ? undefined
-      : await decideEditLabel(
-          { call: deps.call, postingAs: deps.postingAs, label: deps.label },
-          { channelId: view.payload.channel, channel: book.channel(view.payload.channel), requested },
-        );
+  // An app message stays the app's: its name already says an agent wrote it, and only its bot token can change it.
+  const label: SlackLabel | undefined =
+    via === 'app'
+      ? {
+          identity: 'agent',
+          source: requested === undefined ? 'default' : 'message',
+          route: 'app',
+          botUserId: deps.label?.app?.userId,
+          ...(message.username === undefined ? {} : { phrase: message.username }),
+        }
+      : deps.label === undefined
+        ? undefined
+        : await decideEditLabel(
+            { call: deps.call, postingAs: deps.postingAs, label: deps.label },
+            { channelId: view.payload.channel, channel: book.channel(view.payload.channel), requested },
+          );
   // An agent's edit says so in its new words (S5): the fallback's prefix, at the front of what `chat.update` is sent.
   const text =
-    label?.identity === 'agent' && label.phrase !== undefined
+    label?.identity === 'agent' && label.route !== 'app' && label.phrase !== undefined
       ? labelledEditText(view.payload.text, label.phrase)
       : view.payload.text;
   const wordsChange = !keepsWords || text !== view.payload.text;
@@ -494,7 +538,33 @@ export async function viewEdit(
     files,
     keepsWords,
     label,
+    via,
   };
+}
+
+/**
+ * Refuses an app message's edit that this cannot make as the app (S5): one that changes its files — the bot has no
+ * `files:write`, and a file the person uploads is theirs, not the app's — or one asked to go out as the person, which an
+ * app message never can: it stays the app's, under its name.
+ */
+function requireAppEditable(
+  draft: SlackDraft,
+  removeFiles: readonly string[],
+  requested: 'agent' | 'me' | undefined,
+  ts: string,
+): void {
+  if (requested === 'me') {
+    throw new CommsError('USAGE', `the app posted the message at ${ts}, so it is edited as the app, not as you`, {
+      hint: 'Leave `as` out to edit it as the app, or post your own words as you.',
+      details: { ts, reason: 'app-message-as-me' },
+    });
+  }
+  if ((draft.files ?? []).length > 0 || removeFiles.length > 0) {
+    throw new CommsError('USAGE', `the app posted the message at ${ts}, and its files cannot be changed from here`, {
+      hint: 'Edit its words alone, or delete it and post the files as a new message.',
+      details: { ts, reason: 'app-message-files' },
+    });
+  }
 }
 
 export interface PreparedEdit {
@@ -717,6 +787,8 @@ async function editClassified(
   const where = { channel: view.request.channel, ts: target.ts };
   const ids = idsOf(where, draft.draftId);
 
+  // The token that posted it makes the edit (S5): the app's, opened before the claim, for an app message.
+  const editor = view.via === 'app' ? await appCall(deps) : deps.call;
   // Cancelled while Slack was read: the claim is next, and is not made. The store asks again as it claims.
   if (deps.signal?.aborted) throw cancelled('edit', notUsed('edit'));
   const claim = await claimOrHandOver(
@@ -801,7 +873,7 @@ async function editClassified(
       // Without the signal, deliberately: this is the request that edits, and it is never abandoned once it is out.
       () =>
         spendOn(deps.permit, approvalId, 'chat.update', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.update', {
+          callSlack({ ...editor, permit: deps.permit }, 'chat.update', {
             ...view.request,
             ...(fileIds === undefined ? {} : { file_ids: JSON.stringify(fileIds) }),
           }),
@@ -1142,6 +1214,8 @@ export interface DeletionView {
   readonly preview: DeletionPreview;
   readonly digest: string;
   readonly message: TargetMessage;
+  /** Whose token deletes it: the person's, or the app's for an app message this account posted (S5). */
+  readonly via: 'person' | 'app';
 }
 
 /** Where a deletion's approval says what it is for, in place of the draft an edit has: the message itself. */
@@ -1177,18 +1251,20 @@ function deletionWarnings(message: TargetMessage): string[] {
  * membership to require. One that cannot be read is named by its id.
  */
 export async function viewDeletion(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs'>,
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'label' | 'appPosts'>,
   where: { channel: string; ts: string },
   book: NameBook,
 ): Promise<DeletionView> {
   const message = await messageAt(deps.call, where);
-  requireOwnMessage(message, deps.postingAs, 'delete');
+  // The token that posted it deletes it (S5): the app's only for an app message this account's record holds.
+  const via = await actorOf(deps, message, 'delete');
   const { channel } = await roomOf(deps.call, where.channel);
   if (channel) book.addChannel(channel);
   const thread = threadShown(message);
   const preview: DeletionPreview = {
     workspace: deps.workspaceName,
-    postingAs: deps.postingAs,
+    postingAs:
+      via === 'app' ? `${message.username ?? 'the app'} · posted by the app, which deletes it` : deps.postingAs,
     channel: channelShown(channel, where.channel, book),
     ts: where.ts,
     ...(thread === undefined ? {} : { thread }),
@@ -1206,9 +1282,11 @@ export async function viewDeletion(
       channel: where.channel,
       ts: where.ts,
       message: targetDigest(message, 'delete'),
+      // Who deletes it, for an app message: a deletion by the app's token is not the person's (S5).
+      ...(via === 'app' ? { via: 'app', botUserId: deps.label?.app?.userId ?? null } : {}),
     }),
   );
-  return { preview, digest, message };
+  return { preview, digest, message, via };
 }
 
 /**
@@ -1416,6 +1494,8 @@ async function deleteClassified(
   requireChatWrite(deps, 'delete');
   const view = await viewDeletion(deps, where, book);
   const ids = idsOf(where);
+  // The token that posted it deletes it (S5): the app's, opened before the claim, for an app message.
+  const deleter = view.via === 'app' ? await appCall(deps) : deps.call;
 
   if (deps.signal?.aborted) throw cancelled('delete', notUsed('delete'));
   const claim = await claimOrHandOver(
@@ -1457,7 +1537,7 @@ async function deleteClassified(
     try {
       attempted = await throttledRequest(deps, 'chat.delete', 'deleted', readyToDelete, () =>
         spendOn(deps.permit, approvalId, 'chat.delete', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
+          callSlack({ ...deleter, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
         ),
       );
     } catch (stop) {
