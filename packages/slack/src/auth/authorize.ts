@@ -8,7 +8,7 @@ import {
 } from '@agentcomms/core';
 import { SLACK_ORIGIN } from '../api/methods.ts';
 import type { InstallMode } from '../manifest.ts';
-import { BOT_SCOPES, botScopesForMode, scopesForMode } from '../manifest.ts';
+import { BOT_SCOPES, scopesForMode } from '../manifest.ts';
 import { newPkcePair, newState, type PkcePair } from './pkce.ts';
 
 /**
@@ -46,12 +46,12 @@ export interface AuthorizeRequest {
 /**
  * The URL the person opens.
  *
- * Reading is always the user token's, in `user_scope`: it is the only one that reaches the person's DMs and unjoined
- * public channels (research §1.3). The send app also asks, in `scope`, for its bot user's four posting scopes, so it can
- * post as itself, named after the person (design 2026-10-15 S1); the read app asks for none. Slack's PKCE page states
- * "desktop redirects are not allowed to request bot scopes", and this is a desktop redirect — whether Slack holds this
- * app to that is the first thing the label design's live check (§10.1) settles. Until a sign-in from the new manifest
- * succeeds, a send workspace keeps posting as the person, labelled (S1, S3).
+ * Only `user_scope` is set, never `scope`, in either mode. Two independent reasons, either sufficient: a user token is
+ * the only one that reaches the person's DMs and unjoined public channels (research §1.3), and Slack states "desktop
+ * redirects are not allowed to request bot scopes" — and this is a desktop redirect. So the send app's bot token, which
+ * lets an agent's post appear as the app (design 2026-10-15 S1), comes another way: pasted once from the app's own page
+ * (`workspace bot`), or from the sign-in with the app's client secret. Until a workspace has one, its agent's posts go
+ * out as the person, labelled (S3).
  *
  * `team` is set whenever the workspace is known before Slack answers: a profile names it, and a renewal must come back
  * as the account's own. An app that is not distributed is authorised only in the workspace that created it, and with
@@ -75,8 +75,6 @@ export function buildAuthorizeUrl(options: {
 
   const url = new URL('/oauth/v2/authorize', SLACK_ORIGIN);
   url.searchParams.set('client_id', options.clientId);
-  const botScopes = botScopesForMode(options.mode);
-  if (botScopes.length > 0) url.searchParams.set('scope', botScopes.join(','));
   url.searchParams.set('user_scope', scopes.join(','));
   url.searchParams.set('redirect_uri', redirectUrl);
   url.searchParams.set('state', state);
@@ -276,8 +274,13 @@ export function readExchange(body: unknown, handoffs: CliHandoffs, mode: Install
    *
    * It is not merely surplus: a bot token for this workspace would sit in the same app, outside everything this
    * package guards, and the whole read-mode guarantee is that no token exists which can post. Refused rather
-   * than dropped, because dropping it would leave that token in existence and unmentioned. The send app's is read
-   * below, and held to exactly its four scopes (design 2026-10-15 S1).
+   * than dropped, because dropping it would leave that token in existence and unmentioned.
+   *
+   * A send app's reply should carry none either — the sign-in asks for no bot scope — but one that does is kept, held
+   * to exactly its four posting scopes, and anything else is refused (design 2026-10-15 S1). Kept rather than refused
+   * for the same reason a read reply's is refused rather than dropped: the token exists at Slack either way, and kept it
+   * is accounted for — under the one reference narrowing and removal delete — and passes the check a pasted token or
+   * the client-secret sign-in's must pass. Refusing it would fail a sign-in that is otherwise good, and leave it unnamed.
    */
   if (response.access_token && mode !== 'send') {
     throw new CommsError('AUTH_REQUIRED', 'Slack also issued a bot token, which this app must not request', {
@@ -388,8 +391,9 @@ function readBot(response: OAuthResponse, handoffs: CliHandoffs): ExchangedBot {
 }
 
 /**
- * Refuses a send sign-in that came back with no bot token (S1): an app still on the manifest from before the label, which
- * cannot post as itself. Checked after the user scopes, so an app never moved to send is told that first.
+ * Refuses a send sign-in that asked Slack for the bot scopes and came back with no bot token (S1): the client-secret
+ * sign-in of an app whose manifest has no bot user. The PKCE sign-in asks for none, so it never comes here. Checked
+ * after the user scopes, so an app never moved to send is told that first.
  */
 export function requireBotForSend(token: ExchangedToken, mode: InstallMode, handoffs: CliHandoffs): void {
   if (mode !== 'send' || token.bot !== undefined) return;

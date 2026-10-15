@@ -195,11 +195,6 @@ test('atomic hand-off journal: stage, one locked switch with ledger, then both r
   f.context.secrets = async () =>
     interceptStore(real, {
       async set(ref) {
-        // The send app's bot token, kept once the switch is saved (design 2026-10-15 S1): never staged, never revoked.
-        if (ref.startsWith('slack/bot-token/')) {
-          events.push('bot');
-          return;
-        }
         staged = ref;
         events.push('stage');
         assert.equal((await f.h.core.config.load()).accounts[alias]?.secretRef, source.secretRef);
@@ -250,7 +245,7 @@ test('atomic hand-off journal: stage, one locked switch with ledger, then both r
   });
   context.secrets = f.context.secrets;
   const result = await completeSignIn(context, flow.flowId, 'move');
-  assert.deepEqual(events, ['stage', 'switch', 'bot', 'revoke', 'revoke']);
+  assert.deepEqual(events, ['stage', 'switch', 'revoke', 'revoke']);
   assert.equal(result.cleanup?.cleaned, false);
   assert.deepEqual(
     result.cleanup?.tokens.map((t) => t.status),
@@ -333,8 +328,6 @@ for (const mode of ['read', 'send'] as const) {
         team: { id: 'TRGC0001', name: 'RGC' },
         app_id: mode === 'read' ? 'A0READ' : 'A0SEND',
         scopes: scopesForMode(mode === 'read' ? 'send' : 'read'),
-        // A read sign-in asks Slack for no bot scope, so its reply carries no bot token (design 2026-10-15 S1).
-        bot: false,
       });
     f.context.secrets = async () => {
       throw new Error('scope refusal must precede staging');
@@ -434,8 +427,6 @@ test('two distinct finishers racing the same source stage separately and only on
   f.context.secrets = async () =>
     interceptStore(real, {
       async set(ref) {
-        // The user tokens each finisher stages; the winner's bot token comes after its commit (design 2026-10-15 S1).
-        if (ref.startsWith('slack/bot-token/')) return;
         refs.push(ref);
         if (refs.length === 2) release();
         await gate;

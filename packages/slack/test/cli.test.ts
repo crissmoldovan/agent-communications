@@ -1953,8 +1953,7 @@ test('the command a narrowing refusal prints is one that works', async () => {
   // following it must print the procedure rather than fail for a missing port.
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'loud', mode: 'send' });
-  // A read sign-in asks for no bot scope, so the reply carries no bot token (design 2026-10-15 S1; §10 to confirm).
-  harness.reply = () => slackOk({ scopes: scopesForMode('send'), bot: false });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
   const port = await freePort();
   const refused = await cli(
     harness,
