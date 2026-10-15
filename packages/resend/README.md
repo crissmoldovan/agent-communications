@@ -30,7 +30,7 @@ send whose outcome is unknown (`SEND_OUTCOME_UNKNOWN`) is never repeated, only c
 "accepted", never "sent", until Resend's own last event for it says so.
 
 **An agent's email says so in its From.** Prepare labels it `"Acme (agent)" <hello@acme.test>`: the name the From
-gave, or, for a bare address, the label name the person set in the core (its CLI's `label name`), then their word —
+gave, or, for a bare address, the label name the person set in the core (its CLI's `label name`, or `comms_label`), then their word —
 `agent` unless they chose another ([design](../../docs/superpowers/specs/2026-10-15-agent-label-design.md), §6). With
 neither name, or a label over Resend's 100 characters, prepare refuses. `--as me` (`as: "me"` on
 `resend_send_prepare`) sends the From exactly as given, for when the person said so for that email; their label rules

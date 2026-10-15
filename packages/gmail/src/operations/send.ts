@@ -766,6 +766,7 @@ async function fitFrom(
   const decision = mailDecision({
     settings,
     account: accountNameOf(config, resolved),
+    accountId: resolved.inbox.id,
     kind: mailKind(analysis.inReplyTo),
     requested,
     recipients: [...analysis.to, ...analysis.cc, ...analysis.bcc],

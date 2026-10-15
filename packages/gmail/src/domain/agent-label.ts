@@ -121,12 +121,15 @@ export interface MailIdentity {
 export function mailDecision(options: {
   readonly settings: AgentLabelSettings;
   readonly account: string;
+  /** The inbox's stable id: a rule that recorded one matches only this inbox (`agent-label.ts`, `accountId`). */
+  readonly accountId: string;
   readonly kind: 'send' | 'reply';
   readonly requested: MessageIdentity | undefined;
   readonly recipients: readonly string[];
 }): IdentityDecision {
   return resolveIdentity(options.settings, {
     account: options.account,
+    accountId: options.accountId,
     kind: options.kind,
     requested: options.requested,
     mail: { recipients: options.recipients },
@@ -151,6 +154,7 @@ export function mailFrom(
 export function mailIdentity(options: {
   readonly settings: AgentLabelSettings;
   readonly account: string;
+  readonly accountId: string;
   readonly kind: 'send' | 'reply';
   readonly requested: MessageIdentity | undefined;
   readonly recipients: readonly string[];

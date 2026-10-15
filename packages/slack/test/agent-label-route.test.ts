@@ -328,3 +328,13 @@ test('a phrase longer than 80 characters is refused, naming `label name`, and is
   await setLabel(w.harness, { name: 'Jo Example' });
   assert.equal((await prepare(w, { channel: 'C1' })).label?.phrase, 'Jo Example (agent)');
 });
+
+test("a rule that recorded this workspace's id applies, and one that recorded another account's id does not", async (t) => {
+  const w = await labelled(t);
+  const id = (await w.context.core.config.load()).accounts.acme?.id;
+  assert.ok(id);
+  await setLabel(w.harness, { rules: [{ account: 'acme', accountId: id, as: 'me' }] });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'me');
+  await setLabel(w.harness, { rules: [{ account: 'acme', accountId: 'acc_ZZZZZZZZZZZZZZZZ', as: 'me' }] });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'agent');
+});

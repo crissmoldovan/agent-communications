@@ -252,6 +252,7 @@ export async function decideLabel(
   if (personRules) await room();
   const decision = resolveIdentity(label.settings, {
     account: label.account,
+    accountId: label.accountId,
     kind: request.kind,
     requested: request.requested,
     slack: { channel: request.channelId, dmWith: channel?.withUserId },

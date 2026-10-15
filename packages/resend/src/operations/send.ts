@@ -447,6 +447,7 @@ export const RESEND_LABEL_LIMIT = 100;
 function labelled(
   config: object,
   account: string,
+  accountId: string,
   built: BuiltMessage,
   requested: string | undefined,
 ): { message: OutboundMessage; identity: MessageIdentity } {
@@ -458,6 +459,7 @@ function labelled(
   const settings = agentLabelOf(config as { readonly agentLabel?: unknown });
   const decision = resolveIdentity(settings, {
     account,
+    accountId,
     kind: 'send',
     requested,
     mail: { recipients: uniqueRecipients(built.message) },
@@ -520,7 +522,7 @@ export async function prepareSend(context: ResendContext, name: string, input: P
   const composed = await buildMessage(email, { now: context.now(), attach: await attachPolicy(context) });
   const domainNote = await checkFromDomain(context, named, composed.message.fromDomain);
   // Who it appears to come from, and the From that says so (R1): settled before the digest, which binds it.
-  const { message: outbound, identity } = labelled(config, named.name, composed, requested);
+  const { message: outbound, identity } = labelled(config, named.name, named.account.id, composed, requested);
   const built: BuiltMessage = { ...composed, message: outbound };
   const study = await studyRecipients(context, named, built.message, config.defaults.riskEscalation);
   const requiredPolicy: SendPolicy = study.flags.length > 0 ? 'confirm' : 'chat';
