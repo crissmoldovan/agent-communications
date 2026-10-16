@@ -22,6 +22,7 @@ import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
+import { launcherCli, launcherName, launcherPaths, readPointer } from '../launcher.ts';
 import {
   type ManagedShimWriteResult,
   managedShimPath,
@@ -441,6 +442,9 @@ export function serverInstallChange(
           `installs ${facts.packageName}@${version} from npm into ${managedRuntimeDir(core.paths.dataDir, facts.packageName, version)}`,
         );
       }
+      if (request.print !== true && launcher === 'managed') {
+        effects.push(launcherSwitchEffect(core.paths.dataDir, facts.packageName, label, version));
+      }
       if (request.print !== true && launcher === 'managed' && managedShimsSupported(context)) {
         const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
         effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
@@ -475,6 +479,16 @@ export function serverInstallChange(
 }
 
 /**
+ * What a managed install or update does to the product's stable launcher, as the preview says it (design 2026-10-16,
+ * U6): it points it at the release's runtime, and every registration of the product that starts it — in any client —
+ * runs that release from its next start.
+ */
+export function launcherSwitchEffect(dataDir: string, packageName: string, label: string, version: string): string {
+  const { launcher } = launcherPaths(dataDir, launcherName(packageName));
+  return `points the stable launcher ${launcher} at ${managedRuntimeDir(dataDir, packageName, version)}: every ${label} registration on this machine that starts it runs ${version} from its next start`;
+}
+
+/**
  * A managed install's CLI shim (CUE-406), once the registration's outcome is known: the command the locator finds in
  * the runtime the entry starts, written where nothing is or over this installation's own unchanged shim, and never
  * over anything else. A shim that cannot be written leaves the registration as it went, and says how to repair both.
@@ -486,8 +500,6 @@ export async function withManagedShim(
   installed: InstallResult,
 ): Promise<InstallResult> {
   if (installed.launcher !== 'managed') return installed;
-  const cliEntry = installed.entry.args[0];
-  if (cliEntry === undefined) throw new CommsError('UNEXPECTED', 'the managed entry has no CLI path');
   const shimContext = { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform };
   if (!managedShimsSupported(shimContext)) {
     return { ...installed, shimNotice: managedShimUnsupportedNotice(shimContext) };
@@ -496,6 +508,19 @@ export async function withManagedShim(
   let shim: ManagedShimWriteResult | undefined;
   let shimFailure: string | undefined;
   try {
+    /*
+     * The shim starts the stable launcher, as the registration does (design 2026-10-16, U6), so an update that
+     * switches the launcher's pointer moves the command a person types too, and rewrites nothing. The CLI the launcher
+     * starts is still located first, from the runtime its pointer names: a runtime this Node cannot run, or whose
+     * package does not declare its command, gets no shim.
+     */
+    const name = launcherName(product.packageName);
+    const { launcher } = launcherPaths(context.core.paths.dataDir, name);
+    const pointer = await readPointer(context.core.paths.dataDir, name);
+    if (pointer === undefined) {
+      throw new CommsError('CONFIG', `the stable launcher ${launcher} has no pointer, so it starts nothing yet`);
+    }
+    const cliEntry = launcherCli(pointer.current, name);
     const located = locateCliCommand({
       caller: { url: pathToFileURL(cliEntry).href, packageName: product.packageName },
       target: {
@@ -514,8 +539,8 @@ export async function withManagedShim(
     }
     shim = await (context.writeShim ?? writeManagedShim)(shimContext, {
       binary: product.binary,
-      command: located.command.words,
-      entry: located.command.entry,
+      command: [launcher],
+      entry: launcher,
     });
   } catch (error) {
     shimFailure = error instanceof Error ? error.message : String(error);

@@ -44,7 +44,7 @@ import { compareVersions, isBehind, isVersion, npmGlobalPackages, npmInstallGlob
 import { launcherOf, registrationVersion } from '../registrations.ts';
 import { changeUpdateCheck, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
-import { serverProduct, withManagedShim } from './servers.ts';
+import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
 
 /**
  * Bringing a machine to the latest release, from a terminal (`agentcomms update`) or a chat (`comms_update`).
@@ -654,6 +654,8 @@ interface RegistrationStep {
   destination: string;
   /** The managed package CLI shim this registration writes or repoints. */
   shim?: string | undefined;
+  /** For a managed entry: what the install does to the product's stable launcher, as the preview says it. */
+  pointer?: string | undefined;
 }
 
 interface Planned {
@@ -697,6 +699,7 @@ function registrationEffects(step: RegistrationStep): string[] {
   // Where it goes and what it starts, as `mcp install` says it (#46): in the digest, so a claim from an environment
   // that resolves another config file or another command is another update.
   const effects = [entry, step.destination];
+  if (step.pointer) effects.push(step.pointer);
   if (step.shim)
     effects.push(`writes or repoints the owned CLI shim at ${step.shim}; a foreign file there is left unchanged`);
   if (item.launcher === 'npx') {
@@ -709,10 +712,19 @@ function registrationEffects(step: RegistrationStep): string[] {
 
 /** Every step as the sentences a person reads, in the order the steps are taken. */
 function effectsOf(planned: Planned): string[] {
+  // One launcher a product: said with the first of its registrations, which switches it, and not again.
+  const pointed = new Set<string>();
+  const once = (step: RegistrationStep): RegistrationStep => {
+    if (step.pointer === undefined || !pointed.has(step.pointer)) {
+      if (step.pointer !== undefined) pointed.add(step.pointer);
+      return step;
+    }
+    return { ...step, pointer: undefined };
+  };
   return [
     // The wording `mcp install` uses for the same act, so the two previews read alike.
     ...planned.runtimes.map((runtime) => `installs ${runtime.package}@${runtime.latest} from npm into ${runtime.path}`),
-    ...planned.registrations.flatMap(registrationEffects),
+    ...planned.registrations.map(once).flatMap(registrationEffects),
     ...planned.globals.map(
       (global) =>
         `updates the global ${global.package} from ${global.version} to ${global.latest}: \`npm install -g ${global.package}@${global.latest}\``,
@@ -779,6 +791,16 @@ async function planRegistrations(
       options,
       install: plannedInstall(preflight),
       destination: entryDestination(item.client, preflight.target, preflight.command, context.env),
+      ...(launcher === 'managed'
+        ? {
+            pointer: launcherSwitchEffect(
+              context.core.paths.dataDir,
+              product.packageName,
+              serverLabel(item.channel),
+              item.latest,
+            ),
+          }
+        : {}),
       ...(launcher === 'managed' && managedShimsSupported(context)
         ? {
             shim: managedShimPath(

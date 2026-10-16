@@ -4,7 +4,15 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { asV2, handoffText, isCommand, managedRuntimeDir, managedRuntimeEntry } from '@agentcomms/core';
+import {
+  asV2,
+  handoffText,
+  isCommand,
+  launcherPaths,
+  managedRuntimeDir,
+  managedRuntimeEntry,
+  readPointer,
+} from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { GmailContext } from '../src/context.ts';
@@ -188,7 +196,7 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
     ]);
 
     // ── Prepared at the command line, claimed in chat — with the default launcher, whose runtime is here ──
-    const runtime = await readyRuntime(harness);
+    await readyRuntime(harness);
     const gemini = join(home, '.gemini', 'settings.json');
     const asked = await cli(harness, ['mcp', 'install', '--client', 'gemini', '--no-verify', '--json'], { env });
     const approvalId = pendingApproval(asked);
@@ -202,8 +210,21 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
       await server.call('comms_server_install', { channel: 'gmail', client: 'gemini', noVerify: true, approvalId }),
     );
     assert.equal(done.applied, true);
-    const settings = JSON.parse(await readFile(gemini, 'utf8')) as { mcpServers: { gmail: { args: string[] } } };
-    assert.deepEqual(settings.mcpServers.gmail.args, [runtime, ...pinWords(harness.core.paths), 'mcp']);
+    const settings = JSON.parse(await readFile(gemini, 'utf8')) as {
+      mcpServers: { gmail: { command: string; args: string[] } };
+    };
+    // It starts Gmail's stable launcher — the program on POSIX, Node's first word on Windows — which starts the runtime.
+    const started = settings.mcpServers.gmail;
+    const { dataDir } = harness.core.paths;
+    assert.deepEqual(process.platform === 'win32' ? started.args : [started.command, ...started.args], [
+      launcherPaths(dataDir, 'gmail').launcher,
+      ...pinWords(harness.core.paths),
+      'mcp',
+    ]);
+    assert.equal(
+      (await readPointer(dataDir, 'gmail'))?.current,
+      managedRuntimeDir(dataDir, '@agentcomms/gmail', VERSION),
+    );
 
     // Spent: the same approval registers nothing a second time, from either surface.
     const again = await cli(

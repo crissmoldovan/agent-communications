@@ -24,6 +24,7 @@ import { inlineCommand } from '../src/cli-runtime.ts';
 import type { AccountConfig, InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER, isCommand } from '../src/handoffs.ts';
+import { launcherName, launcherPaths, readPointer } from '../src/launcher.ts';
 import { managedShimPath, managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { managedRuntimeDir, managedRuntimeEntry, whichExecutable } from '../src/mcp-install.ts';
@@ -242,6 +243,26 @@ function managed(m: Machine, packageName: string, version: string, flags: string
     args: [managedRuntimeEntry(m.dataDir, packageName, version), 'mcp', ...flags],
     env: { AGENT_COMMS_CONFIG_DIR: m.configDir },
   };
+}
+
+/**
+ * The entry a managed install writes now (design 2026-10-16, U6): the product's stable launcher with the folder pins,
+ * `mcp` and `flags` — the program on POSIX, Node's first word on Windows — never a versioned runtime.
+ */
+function launched(m: Machine, packageName: string, flags: string[] = []): { command: string; args: string[] } {
+  const { launcher } = launcherPaths(m.dataDir, launcherName(packageName));
+  const words = [...pinWords(m), 'mcp', ...flags];
+  return process.platform === 'win32'
+    ? { command: process.execPath, args: [launcher, ...words] }
+    : { command: launcher, args: words };
+}
+
+/** An entry's program and words, without its environment. */
+const startOf = (entry: Entry | undefined) => entry && { command: entry.command, args: entry.args };
+
+/** The runtime a product's stable launcher starts now. */
+async function pointedAt(m: Machine, packageName: string): Promise<string | undefined> {
+  return (await readPointer(m.dataDir, launcherName(packageName)))?.current;
 }
 
 /** An entry the npx launcher writes for `channel`. */
@@ -608,15 +629,20 @@ test('update discovers and moves a declared service registration, including its 
       SHIMS ? 'the service update repoints its owned CLI shim' : 'a Windows update writes no shim',
     );
     assert.deepEqual(
-      cursorEntries(m).events?.args,
-      [managedRuntimeEntry(m.dataDir, PACKAGES.events, LATEST), ...pinWords(m), 'mcp'],
-      'the client now starts the latest declared service runtime',
+      startOf(cursorEntries(m).events),
+      launched(m, PACKAGES.events),
+      'the client now starts the service’s stable launcher',
+    );
+    assert.equal(
+      await pointedAt(m, PACKAGES.events),
+      managedRuntimeDir(m.dataDir, PACKAGES.events, LATEST),
+      'which starts the latest declared service runtime',
     );
     if (SHIMS) {
-      assert.match(
-        readFileSync(managedShimPath({ env: m.env, dataDir: m.dataDir }, 'agent-events'), 'utf8'),
-        new RegExp(managedRuntimeEntry(m.dataDir, PACKAGES.events, LATEST).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-        'the owned shim now starts the latest service runtime',
+      assert.equal(
+        readFileSync(managedShimPath({ env: m.env, dataDir: m.dataDir }, 'agent-events'), 'utf8').split('\n')[2],
+        `exec '${launcherPaths(m.dataDir, 'events-daemon').launcher}' "$@"`,
+        'the owned shim now starts the same launcher, and so the latest service runtime',
       );
     }
   } finally {
@@ -671,11 +697,19 @@ test(
     } finally {
       await close();
     }
+    // The shim and the registration both start the stable launcher now, and the launcher starts the link PATH finds.
+    const { launcher } = launcherPaths(m.dataDir, 'events-daemon');
     const source = readFileSync(managedShimPath({ env: m.env, dataDir: m.dataDir }, 'agent-events'), 'utf8');
     const exec = source.split('\n')[2] ?? '';
-    assert.ok(exec.startsWith(`exec '${link}' `), `the shim now execs the link PATH finds: ${exec}`);
-    assert.ok(!source.includes(real), `and never the file it resolves to: ${source}`);
-    assert.equal(cursorEntries(m).events?.command, link, 'as the registration beside it starts it');
+    assert.equal(exec, `exec '${launcher}' "$@"`, `the shim now starts the launcher: ${exec}`);
+    const started = readFileSync(launcher, 'utf8');
+    assert.match(
+      started,
+      new RegExp(`^node='${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`, 'm'),
+      'which execs the link PATH finds',
+    );
+    assert.ok(!source.includes(real) && !started.includes(real), `and never the file it resolves to: ${started}`);
+    assert.equal(cursorEntries(m).events?.command, launcher, 'as the registration beside it starts it');
     assert.equal(await shimRow(), undefined, 'the doctor finds the repointed shim current');
   },
 );
@@ -855,6 +889,11 @@ test('update prepares one approval listing every step, writes nothing before it,
             `  - writes or repoints the owned CLI shim at ${join(m.home, '.local', 'bin', binary)}; a foreign file there is left unchanged`,
           ]
         : [];
+    // A managed entry starts the product's stable launcher: by its path, home as ~, on POSIX; Node on Windows.
+    const starts = (name: string) =>
+      process.platform === 'win32' ? process.execPath : join('~', 'data', 'launch', name);
+    const points = (name: string, label: string, packageName: string) =>
+      `  - points the stable launcher ${launcherPaths(m.dataDir, name).launcher} at ${managedRuntimeDir(m.dataDir, packageName, LATEST)}: every ${label} registration on this machine that starts it runs ${LATEST} from its next start`;
     assert.deepEqual(
       steps,
       [
@@ -864,10 +903,12 @@ test('update prepares one approval listing every step, writes nothing before it,
         goes(npx),
         `  - cursor will fetch ${PACKAGES.core}@${LATEST} from npm each time it starts "agentcomms"`,
         `  - registers the Gmail MCP server with cursor as "gmail" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the mailbox acme/gmail, read-only, as now`,
-        goes(process.execPath),
+        goes(starts('gmail')),
+        points('gmail', 'Gmail', PACKAGES.gmail),
         ...shim('agent-gmail'),
         `  - registers the Slack MCP server with cursor as "slack-acme" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the workspace acme/slack, as now`,
-        goes(process.execPath),
+        goes(starts('slack')),
+        points('slack', 'Slack', PACKAGES.slack),
         ...shim('agent-slack'),
         `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: \`npm install -g ${PACKAGES.core}@${LATEST}\``,
       ],
@@ -915,21 +956,11 @@ test('update prepares one approval listing every step, writes nothing before it,
     // Every entry is where it was, under the name it had, with the pins it had — at the latest version.
     const entries = cursorEntries(m);
     assert.deepEqual(Object.keys(entries).sort(), ['agentcomms', 'gmail', 'slack-acme']);
-    assert.deepEqual(entries.gmail?.args, [
-      managedRuntimeEntry(m.dataDir, PACKAGES.gmail, LATEST),
-      ...pinWords(m),
-      'mcp',
-      '--inbox',
-      'acme/gmail',
-      '--read-only',
-    ]);
-    assert.deepEqual(entries['slack-acme']?.args, [
-      managedRuntimeEntry(m.dataDir, PACKAGES.slack, LATEST),
-      ...pinWords(m),
-      'mcp',
-      '--workspace',
-      'acme/slack',
-    ]);
+    // A managed entry starts its product's stable launcher now, which starts the latest runtime (design 2026-10-16).
+    assert.deepEqual(startOf(entries.gmail), launched(m, PACKAGES.gmail, ['--inbox', 'acme/gmail', '--read-only']));
+    assert.deepEqual(startOf(entries['slack-acme']), launched(m, PACKAGES.slack, ['--workspace', 'acme/slack']));
+    assert.equal(await pointedAt(m, PACKAGES.gmail), managedRuntimeDir(m.dataDir, PACKAGES.gmail, LATEST));
+    assert.equal(await pointedAt(m, PACKAGES.slack), managedRuntimeDir(m.dataDir, PACKAGES.slack, LATEST));
     assert.deepEqual(entries.agentcomms?.args, ['-y', `${PACKAGES.core}@${LATEST}`, ...pinWords(m), 'mcp']);
     // This machine's folders are pins now, not the environment (CUE-403).
     assert.equal(entries.gmail?.env?.AGENT_COMMS_CONFIG_DIR, undefined);
@@ -1003,13 +1034,8 @@ test('a Resend registration pinned with the generic --account is registered agai
     const registration = (done.result as { steps: Item[] }).steps.find((step) => step.kind === 'registration');
     assert.equal(registration?.outcome, 'registered', String(registration?.detail));
     assert.deepEqual(registration?.narrowing, ['--account', 'acme/resend']);
-    assert.deepEqual(cursorEntries(m).resend?.args, [
-      managedRuntimeEntry(m.dataDir, PACKAGES.resend, LATEST),
-      ...pinWords(m),
-      'mcp',
-      '--account',
-      'acme/resend',
-    ]);
+    assert.deepEqual(startOf(cursorEntries(m).resend), launched(m, PACKAGES.resend, ['--account', 'acme/resend']));
+    assert.equal(await pointedAt(m, PACKAGES.resend), managedRuntimeDir(m.dataDir, PACKAGES.resend, LATEST));
     assert.deepEqual(startedWith(m, PACKAGES.resend, LATEST), [[...pinWords(m), 'mcp', '--account', 'acme/resend']]);
   } finally {
     await close();
@@ -1124,11 +1150,13 @@ test('a runtime that cannot be installed leaves its registrations as they were, 
       '--inbox',
       'acme/gmail',
     ]);
-    assert.deepEqual(entries.slack?.args, [
-      managedRuntimeEntry(m.dataDir, PACKAGES.slack, LATEST),
-      ...pinWords(m),
-      'mcp',
-    ]);
+    assert.deepEqual(startOf(entries.slack), launched(m, PACKAGES.slack));
+    assert.equal(await pointedAt(m, PACKAGES.slack), managedRuntimeDir(m.dataDir, PACKAGES.slack, LATEST));
+    assert.equal(
+      await pointedAt(m, PACKAGES.gmail),
+      undefined,
+      'the launcher of the one left as it was is not pointed',
+    );
     assert.match(result.next, /Restart cursor/);
   } finally {
     await close();
@@ -1793,8 +1821,12 @@ test('a WhatsApp registration pinned by `--account` is updated with its pin, as 
     );
     const second = await ok('comms_update', { noVerify: true, approvalId: first.approvalId });
     assert.equal(second.applied, true);
-    assert.deepEqual(cursorEntries(m).whatsapp?.args.slice(-3), ['mcp', '--account', 'personal/whatsapp']);
-    assert.ok(String(cursorEntries(m).whatsapp?.args[0]).includes(LATEST), 'at the latest release');
+    assert.deepEqual(startOf(cursorEntries(m).whatsapp), launched(m, packageName, ['--account', 'personal/whatsapp']));
+    assert.equal(
+      await pointedAt(m, packageName),
+      managedRuntimeDir(m.dataDir, packageName, LATEST),
+      'at the latest release',
+    );
   } finally {
     await close();
   }

@@ -6,6 +6,19 @@ import { inlineCommand } from './cli-runtime.ts';
 import { externalCommand } from './command-brands.ts';
 import { CommsError, type ErrorCode, EXIT_CODES } from './errors.ts';
 import { appendPrivateLine, replaceFileInPlace, writeFileAtomic } from './fs.ts';
+import {
+  exchangePointer,
+  type LauncherPointer,
+  launcherCanStart,
+  launcherCli,
+  launcherExists,
+  launcherName,
+  launcherPaths,
+  readPointer,
+  registeredLauncher,
+  restorePointer,
+  writeLauncher,
+} from './launcher.ts';
 import { type ManagedShimWriteResult, removeManagedShimsForRuntimes, type writeManagedShim } from './managed-shims.ts';
 import {
   codexServerFromGet,
@@ -14,6 +27,7 @@ import {
   type RegisteredServer,
   scanRegisteredServers,
 } from './mcp-clients.ts';
+import { nodeProgram } from './node-program.ts';
 import { homeDirectory, shortenHome, withoutPathOptions } from './paths.ts';
 import { absoluteSearchPath, childEnvironment } from './system-programs.ts';
 
@@ -415,6 +429,12 @@ export function isProductServer(
 ): boolean {
   const fold = platform === 'win32' ? (text: string) => text.toLowerCase() : (text: string) => text;
   /*
+   * The product's stable launcher (design 2026-10-16, U6), in the data directory the entry itself pins: what every
+   * managed install writes from 0.20.0. Its program is `<data>/launch/<name>`, nothing a package or a path below says.
+   */
+  const stable = registeredLauncher(server, platform);
+  if (stable !== null) return fold(stable.name) === fold(unscoped(product.packageName));
+  /*
    * The product's own command, by name or at the end of a path — `agent-slack`, `/usr/local/bin/agent-slack`,
    * `node_modules/.bin/agent-slack`, `agent-slack.cmd` on Windows. Missing it made a hand-written entry that
    * starts our own server "another Slack server with no approval step", with a fix that removed it.
@@ -451,11 +471,18 @@ export function isProductServer(
  * The interpreter, when the entry names it by path, and the script it runs. A runtime deleted by hand, or a
  * Node removed by a version manager, leaves an entry that looks right and a client that says only "failed".
  */
-export async function missingEntryFile(server: Pick<RegisteredServer, 'command' | 'args'>): Promise<string | null> {
+export async function missingEntryFile(
+  server: Pick<RegisteredServer, 'command' | 'args'>,
+  platform?: NodeJS.Platform,
+): Promise<string | null> {
   const wanted: { path: string; mode: number }[] = [];
   if (server.command && isAbsolute(server.command)) wanted.push({ path: server.command, mode: constants.X_OK });
   const script = server.args.find((argument) => isAbsolute(argument) && /\.(?:c|m)?[jt]s$/.test(argument));
   if (script) wanted.push({ path: script, mode: constants.R_OK });
+  // The stable launcher, and what it starts: Node runs it on Windows, so it is read there and run elsewhere.
+  const stable = registeredLauncher(server, platform);
+  if (stable !== null && stable.launcher !== server.command)
+    wanted.push({ path: stable.launcher, mode: constants.R_OK });
   for (const { path, mode } of wanted) {
     try {
       await access(path, mode);
@@ -463,7 +490,25 @@ export async function missingEntryFile(server: Pick<RegisteredServer, 'command' 
       return path;
     }
   }
-  return null;
+  return stable === null ? null : launcherRuntimeMissing(stable.dataDir, stable.name);
+}
+
+/**
+ * The CLI a stable launcher would start that is not there, or null when it can start one: its pointer's runtime, or —
+ * when that one is gone — the previous one it falls back to. A launcher with no pointer, or one that cannot be read,
+ * starts nothing, and the pointer is what is missing.
+ */
+async function launcherRuntimeMissing(dataDir: string, name: string): Promise<string | null> {
+  let pointer: LauncherPointer | undefined;
+  try {
+    pointer = await readPointer(dataDir, name);
+  } catch {
+    return launcherPaths(dataDir, name).pointer;
+  }
+  if (pointer === undefined) return launcherPaths(dataDir, name).pointer;
+  if (await launcherCanStart(pointer.current, name)) return null;
+  if (pointer.previous !== undefined && (await launcherCanStart(pointer.previous, name))) return null;
+  return launcherCli(pointer.current, name);
 }
 
 /**
@@ -622,34 +667,47 @@ async function buildEntry(
     };
   }
   /*
+   * A managed entry starts the stable launcher (design 2026-10-16, U6), never a versioned runtime: an update switches
+   * the launcher's pointer and leaves the entry, and every client's configuration, as it is.
+   *
    * `--print` installs nothing. It used to run the whole `npm install` before looking at whether it was only
    * printing, so "show me what you would write" downloaded a package into the data directory and left it there.
-   * The path is the same either way, because it is computed rather than discovered.
+   * The entry is the same either way, because it is computed rather than discovered; it starts something only when
+   * the launcher is there and points at exactly this release's runtime.
    */
+  const { dataDir } = context.core.paths;
+  const entry = { ...managedEntryShape(context, product, node, [...pathArgs, 'mcp', ...serverArgs]), env };
   if (!apply) {
-    const { dataDir } = context.core.paths;
+    const name = launcherName(product.packageName);
     const ready = await reusableRuntime(dataDir, product.packageName, product.version);
-    return {
-      entry: {
-        command: node,
-        args: [
-          ready ?? managedRuntimeEntry(dataDir, product.packageName, product.version),
-          ...pathArgs,
-          'mcp',
-          ...serverArgs,
-        ],
-        env,
-      },
-      launcher,
-      runtimeMissing: ready === null,
-    };
+    const pointer = await readPointer(dataDir, name).catch(() => undefined);
+    const pointed =
+      ready !== null &&
+      (await launcherExists(dataDir, name)) &&
+      pointer?.current === managedRuntimeDir(dataDir, product.packageName, product.version);
+    return { entry, launcher, runtimeMissing: !pointed };
   }
-  const installed = await installManagedRuntime(context, product, product.version);
-  return {
-    entry: { command: node, args: [installed, ...pathArgs, 'mcp', ...serverArgs], env },
-    launcher,
-    runtimeMissing: false,
-  };
+  // The launcher and its pointer are written by `mcpInstall` once nothing can refuse the install any more.
+  await installManagedRuntime(context, product, product.version);
+  return { entry, launcher, runtimeMissing: false };
+}
+
+/**
+ * Points this product's stable launcher at the runtime of the release being installed — every registration of it on
+ * this machine starts that from its next start — and writes the launcher afresh, with the Node the preview named.
+ * Returns how to put the pointer back (`restorePointer`) if what comes after does not land.
+ */
+async function pointLauncher(
+  context: InstallContext,
+  product: Pick<McpProduct, 'packageName' | 'version'>,
+  node: string,
+): Promise<{ name: string; runtime: string; before: LauncherPointer | undefined }> {
+  const { dataDir } = context.core.paths;
+  const name = launcherName(product.packageName);
+  const runtime = managedRuntimeDir(dataDir, product.packageName, product.version);
+  await writeLauncher(dataDir, name, node, { platform: platformOf(context) });
+  const before = await exchangePointer(dataDir, name, runtime);
+  return { name, runtime, before };
 }
 
 /**
@@ -1121,10 +1179,45 @@ export async function preflightInstall(
     if (reported) previous = claimName(product, options, name, [reported], context.platform);
   }
   const { options: effective, kept } = keepNarrowing(product, options, previous);
-  // After the client's own CLI is looked for, so that look stays the first this makes of PATH.
-  const node = await resolveNode(context.env);
-  const command = (options.launcher ?? 'managed') === 'npx' ? await resolveNpx(context.env, node) : node;
+  const launcher = options.launcher ?? 'managed';
+  /*
+   * After the client's own CLI is looked for, so that look stays the first this makes of PATH. A managed entry starts
+   * the stable launcher, which runs this Node as the locator names it — as PATH spells it, a link left a link (CUE-492)
+   * — so that the shim beside it, which starts the same launcher, runs the same Node the person's command would.
+   */
+  const node = launcher === 'managed' ? nodeProgram(context.env, platformOf(context)) : await resolveNode(context.env);
+  const command =
+    launcher === 'npx'
+      ? await resolveNpx(context.env, node)
+      : launcher === 'managed'
+        ? managedEntryShape(context, product, node, []).command
+        : node;
   return { scan, target, previous, effective, kept, node, command };
+}
+
+function platformOf(context: Pick<InstallContext, 'platform'>): NodeJS.Platform {
+  return context.platform ?? process.platform;
+}
+
+/** A product's stable launcher in this installation's data directory: `<data>/launch/<name>`. */
+export function productLauncher(dataDir: string, product: Pick<McpProduct, 'packageName'>): string {
+  return launcherPaths(dataDir, launcherName(product.packageName)).launcher;
+}
+
+/**
+ * A managed entry: the stable launcher with `words`. On POSIX it is the program; on Windows Node is, with the launcher
+ * as its first word, since a client starts no script there without a shell (see `launcher.ts`).
+ */
+function managedEntryShape(
+  context: InstallContext,
+  product: Pick<McpProduct, 'packageName'>,
+  node: string,
+  words: readonly string[],
+): { command: string; args: string[] } {
+  const launcher = productLauncher(context.core.paths.dataDir, product);
+  return platformOf(context) === 'win32'
+    ? { command: node, args: [launcher, ...words] }
+    : { command: launcher, args: [...words] };
 }
 
 /**
@@ -1394,108 +1487,126 @@ export async function mcpInstall(
   let applied = false;
   let notApplied: string | undefined;
 
-  if (cliName && cliPath && writes) {
-    const codexEnv = (values: Record<string, string> | undefined) =>
-      Object.entries(values ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
-    const args =
-      options.client === 'claude-code'
-        ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
-        : ['mcp', 'add', name, ...codexEnv(entry.env), '--', entry.command, ...entry.args];
+  /*
+   * A managed entry starts the stable launcher, so from here on that launcher points at this release's runtime — for
+   * every registration of the product on this machine, which is what an install of a release means. If the entry does
+   * not land, or lands and does not start, the pointer goes back to what it was: an install that failed leaves the
+   * other clients starting what they started before.
+   */
+  const pointed = launcher === 'managed' && apply ? await pointLauncher(context, product, preflight.node) : null;
+  const unpoint = async (): Promise<boolean> =>
+    pointed !== null &&
+    (await restorePointer(context.core.paths.dataDir, pointed.name, pointed.before, pointed.runtime).catch(
+      () => false,
+    ));
 
-    /*
-     * The entry records an exact version — `runtime/<version>-<name>/…`, pinned on purpose so an upgrade elsewhere
-     * cannot change what a client runs. So a published upgrade reaches nobody until someone re-registers, and
-     * that is `--force`: remove, then add. `claimName` has already refused unless the entry is ours and `--force`
-     * was given, so a removal here only ever removes this product's own older entry.
-     */
-    const replacing = previous.find((server) => server.client === options.client);
-    if (replacing) {
-      const removal =
-        options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
-      try {
-        await run(context.env, cliPath, removal);
-      } catch (error) {
-        // Nothing registered under that name is the state we wanted anyway. Anything else is a real failure and
-        // must not be swallowed: proceeding would add beside an entry we failed to remove.
-        const message = error instanceof CommsError ? error.message : String(error);
-        if (!/no (mcp )?server|not found|does not exist/i.test(message)) throw error;
-      }
+  try {
+    if (cliName && cliPath && writes) {
+      const codexEnv = (values: Record<string, string> | undefined) =>
+        Object.entries(values ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
+      const args =
+        options.client === 'claude-code'
+          ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
+          : ['mcp', 'add', name, ...codexEnv(entry.env), '--', entry.command, ...entry.args];
 
-      try {
-        await run(context.env, cliPath, args);
-      } catch (error) {
-        // What was there goes back if the replacement does not land. Otherwise `--force` removes a working entry
-        // and leaves the client with no server at all — strictly worse than the stale one it was asked to replace.
-        const restore =
-          options.client === 'claude-code'
-            ? [
-                'mcp',
-                'add-json',
-                name,
-                // The env too: an entry restored without its own launch environment may not find the same
-                // interpreter or, on Linux, the same system keychain session.
-                JSON.stringify({
-                  command: replacing.command,
-                  args: replacing.args,
-                  ...(replacing.env ? { env: replacing.env } : {}),
-                }),
-                '--scope',
-                'user',
-              ]
-            : ['mcp', 'add', name, ...codexEnv(replacing.env), '--', replacing.command, ...replacing.args];
-
-        // Only claim the entry is back if it is. Saying so after a failed restore leaves somebody believing
-        // their working server survived, when in fact nothing is registered at all.
-        let restored = true;
+      /*
+       * Replacing an entry is `--force`: remove, then add. A managed entry starts the stable launcher, whose pointer
+       * an update switches without coming here; an entry from before it named an exact runtime, and is moved to the
+       * launcher this way once. `claimName` has already refused unless the entry is ours and `--force` was given, so a
+       * removal here only ever removes this product's own older entry.
+       */
+      const replacing = previous.find((server) => server.client === options.client);
+      if (replacing) {
+        const removal =
+          options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
         try {
-          await run(context.env, cliPath, restore);
-        } catch {
-          restored = false;
+          await run(context.env, cliPath, removal);
+        } catch (error) {
+          // Nothing registered under that name is the state we wanted anyway. Anything else is a real failure and
+          // must not be swallowed: proceeding would add beside an entry we failed to remove.
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (!/no (mcp )?server|not found|does not exist/i.test(message)) throw error;
         }
-        if (restored) {
-          throw new CommsError('CONFIG', `could not register "${name}"; the previous entry was put back`, {
-            hint: 'Check the client is not running, then try again.',
-            cause: error,
-          });
-        }
-        throw refusedWithRemedy(
-          'CONFIG',
-          `could not register "${name}", and the previous entry could not be put back either — ${cliName} now has no server called "${name}"`,
-          {
-            binary: product.binary,
-            words: installWords(product, effective, name, []),
-            say: (command) => `Re-register it with ${command}. The old entry is in ${backupPath}.`,
-          },
-          { cause: error },
-        );
-      }
-    } else {
-      try {
-        await run(context.env, cliPath, args);
-      } catch (error) {
-        const message = error instanceof CommsError ? error.message : String(error);
-        if (/already exists/i.test(message)) {
-          // Registered somewhere this could not read, so there is no telling whose it is — and so no removing it.
-          throw new CommsError(
-            'CONFIG',
-            `${cliName} already has an MCP server called "${name}", somewhere this could not read`,
-            {
-              hint: `Look at it with ${clientCommandHint([cliName, 'mcp', 'get', name], context.platform, `${cliName}'s own \`mcp get\`, for the entry called "${name}"`)}. If it is an older copy of this server, remove it with ${clientCommandHint([cliName, 'mcp', 'remove', name], context.platform, `${cliName}'s own \`mcp remove\``)} and run this again; if not, choose another --name.`,
+
+        try {
+          await run(context.env, cliPath, args);
+        } catch (error) {
+          // What was there goes back if the replacement does not land. Otherwise `--force` removes a working entry
+          // and leaves the client with no server at all — strictly worse than the stale one it was asked to replace.
+          const restore =
+            options.client === 'claude-code'
+              ? [
+                  'mcp',
+                  'add-json',
+                  name,
+                  // The env too: an entry restored without its own launch environment may not find the same
+                  // interpreter or, on Linux, the same system keychain session.
+                  JSON.stringify({
+                    command: replacing.command,
+                    args: replacing.args,
+                    ...(replacing.env ? { env: replacing.env } : {}),
+                  }),
+                  '--scope',
+                  'user',
+                ]
+              : ['mcp', 'add', name, ...codexEnv(replacing.env), '--', replacing.command, ...replacing.args];
+
+          // Only claim the entry is back if it is. Saying so after a failed restore leaves somebody believing
+          // their working server survived, when in fact nothing is registered at all.
+          let restored = true;
+          try {
+            await run(context.env, cliPath, restore);
+          } catch {
+            restored = false;
+          }
+          if (restored) {
+            throw new CommsError('CONFIG', `could not register "${name}"; the previous entry was put back`, {
+              hint: 'Check the client is not running, then try again.',
               cause: error,
+            });
+          }
+          throw refusedWithRemedy(
+            'CONFIG',
+            `could not register "${name}", and the previous entry could not be put back either — ${cliName} now has no server called "${name}"`,
+            {
+              binary: product.binary,
+              words: installWords(product, effective, name, []),
+              say: (command) => `Re-register it with ${command}. The old entry is in ${backupPath}.`,
             },
+            { cause: error },
           );
         }
-        throw error;
+      } else {
+        try {
+          await run(context.env, cliPath, args);
+        } catch (error) {
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (/already exists/i.test(message)) {
+            // Registered somewhere this could not read, so there is no telling whose it is — and so no removing it.
+            throw new CommsError(
+              'CONFIG',
+              `${cliName} already has an MCP server called "${name}", somewhere this could not read`,
+              {
+                hint: `Look at it with ${clientCommandHint([cliName, 'mcp', 'get', name], context.platform, `${cliName}'s own \`mcp get\`, for the entry called "${name}"`)}. If it is an older copy of this server, remove it with ${clientCommandHint([cliName, 'mcp', 'remove', name], context.platform, `${cliName}'s own \`mcp remove\``)} and run this again; if not, choose another --name.`,
+                cause: error,
+              },
+            );
+          }
+          throw error;
+        }
       }
+      method = 'cli';
+      applied = true;
+    } else if (cliName && apply) {
+      notApplied = `${cliName} was not found ${clientCliSearch(context.env)}, so nothing was registered`;
+    } else if (configPath && writes) {
+      await mergeIntoJsonConfig(configPath, options.client, name, entry);
+      method = 'file';
+      applied = true;
     }
-    method = 'cli';
-    applied = true;
-  } else if (cliName && apply) {
-    notApplied = `${cliName} was not found ${clientCliSearch(context.env)}, so nothing was registered`;
-  } else if (configPath && writes) {
-    await mergeIntoJsonConfig(configPath, options.client, name, entry);
-    method = 'file';
-    applied = true;
+  } catch (error) {
+    await unpoint();
+    throw error;
   }
 
   if (record && !applied) {
@@ -1521,12 +1632,19 @@ export async function mcpInstall(
   let verifyDetail: string | undefined;
   if (!options.noVerify) {
     if (runtimeMissing) {
-      verifyDetail = 'the managed runtime is not installed, and --print installs nothing';
+      verifyDetail =
+        "the stable launcher does not start this release's managed runtime yet, and --print installs nothing";
     } else {
       const check = await verifyEntry(entry, product);
       verified = check.ok;
       verification = check.ok ? 'passed' : 'failed';
       verifyDetail = check.detail;
+      if (!check.ok && pointed !== null && (await unpoint())) {
+        verifyDetail =
+          pointed.before === undefined
+            ? `${check.detail}; so the stable launcher's pointer was taken away again, as there was none before this install`
+            : `${check.detail}; so the stable launcher was pointed back at ${pointed.before.current}, which it starts until this is fixed`;
+      }
     }
   }
 
@@ -1848,6 +1966,28 @@ export async function pruneManagedRuntimes(
   const mentions = (aliases: string[], text: string) =>
     aliases.some((alias) => text === alias || text.includes(`${alias}${sep}`) || text.includes(`${alias}/`));
 
+  /*
+   * What the stable launcher starts, and what it falls back to and a rollback goes back to: in use by every registration
+   * that starts the launcher, though none of them names a runtime. A pointer that cannot be read keeps everything.
+   */
+  const name = launcherName(product.packageName);
+  let pointer: LauncherPointer | undefined;
+  try {
+    pointer = await readPointer(context.core.paths.dataDir, name);
+  } catch {
+    const at = launcherPaths(context.core.paths.dataDir, name).pointer;
+    return refuse(`${at} could not be read, so none of these can be shown not to be what the stable launcher starts`);
+  }
+  const pointed = (aliases: string[]): string | null => {
+    const named = (runtime: string | undefined) =>
+      runtime !== undefined && aliases.some((alias) => resolve(alias) === resolve(runtime));
+    if (named(pointer?.current)) return 'the stable launcher starts it';
+    if (named(pointer?.previous)) {
+      return "the stable launcher's previous runtime: what it falls back to, and what a rollback goes back to";
+    }
+    return null;
+  };
+
   const current = managedRuntimeDir(context.core.paths.dataDir, product.packageName, product.version);
   for (const { path, version, aliases } of candidates) {
     const owner = registered.find((server) => [server.command, ...server.args].some((part) => mentions(aliases, part)));
@@ -1858,14 +1998,15 @@ export async function pruneManagedRuntimes(
     const reason =
       path === current
         ? 'this release'
-        : owner
-          ? // Where, when it is not a file this shell would think of: otherwise the runtime looks kept for nothing.
-            `registered with ${owner.client} as "${owner.name}"${known.has(owner.path) ? '' : ` in ${owner.path}`}`
-          : printed
-            ? `printed for ${printed.client} as "${printed.name}" on ${printed.at.slice(0, 10)}, and where that entry went cannot be read; once it is gone, \`mcp prune --include-printed\` removes this`
-            : processes.some((line) => mentions(aliases, line))
-              ? 'a running process uses it'
-              : null;
+        : (pointed(aliases) ??
+          (owner
+            ? // Where, when it is not a file this shell would think of: otherwise the runtime looks kept for nothing.
+              `registered with ${owner.client} as "${owner.name}"${known.has(owner.path) ? '' : ` in ${owner.path}`}`
+            : printed
+              ? `printed for ${printed.client} as "${printed.name}" on ${printed.at.slice(0, 10)}, and where that entry went cannot be read; once it is gone, \`mcp prune --include-printed\` removes this`
+              : processes.some((line) => mentions(aliases, line))
+                ? 'a running process uses it'
+                : null));
     if (reason) {
       result.kept.push({ path, version, reason });
       continue;
