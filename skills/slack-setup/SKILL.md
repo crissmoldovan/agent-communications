@@ -305,7 +305,8 @@ scopes. So a `send` workspace is in one of three states; `doctor`'s "Posting as 
    When the profile names the agent app, `doctor` says to ask the organisation's admin for its token and then run
    `workspace bot`, and `workspace bot` refuses any other app's token. Without it, `doctor` keeps a note and names no
    command, because state 2 refuses the shared app's rotating tokens and state 3 refuses a profile account. Never ask
-   for the token in the chat.
+   for the token in the chat. When the admin revokes the token, the first act made with the old one is refused and the
+   token is removed, so posts go out as the person, labelled, and `doctor` says when — until the new one is pasted.
 2. **Pasted once.** The app's manifest must be the `send` one (it declares the bot user and its four scopes); the
    person presses **Install to Workspace** on the app's **OAuth & Permissions** page, copies the **Bot User OAuth
    Token** (`xoxb-…`), and runs `agent-slack workspace bot <name>` **in their own terminal**, which asks for it without

@@ -260,7 +260,9 @@ export async function storeBotToken(
           hint: 'Look at the workspace, and paste the token again if it should still have one.',
         });
       }
-      const next: SlackAccount = { ...held.account, botUserId };
+      // A token pasted again replaces one Slack refused: the record of that refusal goes with it (CUE-493).
+      const { appTokenRevoked: _replaced, ...kept } = held.account as SlackAccount & { appTokenRevoked?: unknown };
+      const next: SlackAccount = { ...kept, botUserId };
       return { ...current, accounts: { ...current.accounts, [held.alias]: next } };
     });
   } catch (error) {

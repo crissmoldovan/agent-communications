@@ -448,8 +448,10 @@ Resend gets no live check: no real key is used while developing.
   in a companion file, `<profile>.agent-app.json` (organisation profiles design, §D2), so that `workspace bot` checks a
   pasted token's app with `bots.info` and refuses another's, and `doctor` tells a member to ask the admin for it. Every
   member holds the same token, which can post under any name with the APP badge; S5's own-record rule still decides
-  edits and deletes. A revoked token is not detected at prepare: until a member pastes the new one, their app posts are
-  refused at send and nothing is posted under another identity.)
+  edits and deletes. A token Slack refuses on an act made with it — `token_revoked`, `invalid_auth` or
+  `account_inactive` — ends that act as refused, never sent under the other identity; the token is then deleted, as
+  narrowing deletes it, the account stops naming the bot user and records when and why (`appTokenRevoked`), so the next
+  prepare takes the labelled fallback (S2) and `doctor` says what brings a token back. Any other refusal keeps it.)
 
 ## 11. Release
 

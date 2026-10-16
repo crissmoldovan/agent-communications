@@ -266,8 +266,9 @@ Weigh before sharing:
 - **One token for everyone.** Slack lets it post under any name, with the APP badge. These tools always name a post
   after the member who approved it, but the token is not bound to anyone: share it only with members.
 - **When someone leaves**, revoke the token on **OAuth & Permissions**, install the app again for a new one, and share
-  that. Until a member pastes it, their agent's posts as the app are refused by Slack and nothing goes out under
-  another identity; direct messages and files, which the app never posts, still go out as them, labelled.
+  that. In between, the first act a member's agent makes with the old token is refused, and nothing goes out under
+  another identity; the old token is then removed from their machine, so their agent's posts go out as them, labelled,
+  and `doctor` says when it was revoked, until they paste the new one.
 - **Slack's free plan holds at most 10 apps per workspace**, and the agent app is one of them.
 
 The [Slack README](../packages/slack/README.md#an-organisations-agent-app) has the details.

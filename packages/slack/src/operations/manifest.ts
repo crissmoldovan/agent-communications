@@ -243,7 +243,7 @@ function agentAppSteps(handoffs: CliHandoffs): { steps: string[]; notes: string[
       ),
     ],
     notes: [
-      'Token rotation is off, and has to stay off: a pasted token that rotates would stop working within twelve hours. The token lasts until it is revoked. When someone leaves, revoke it on "OAuth & Permissions", install the app again and share the new token; members paste it again. Until they do, their agents\' posts as the app are refused by Slack, and nothing is posted under another identity.',
+      'Token rotation is off, and has to stay off: a pasted token that rotates would stop working within twelve hours. The token lasts until it is revoked. When someone leaves, revoke it on "OAuth & Permissions", install the app again and share the new token; members paste it again. In between, the first act a member\'s agent makes with the old token is refused — nothing is posted under another identity — and the token is forgotten, so their agents\' posts go out as them, labelled, until they paste the new one.',
       'Everyone who pastes it holds the same token, and Slack lets it post under any name, with the APP badge beside it. Posts made through these tools are always named after the member who approved them; the token itself is not bound to anyone, so share it only with members.',
       "On Slack's free plan a workspace holds at most 10 apps, and this one counts toward them.",
       handoffSentenceToFill(

@@ -384,9 +384,13 @@ the profile names the app, and otherwise notes that posts go out as you, labelle
    never opens this file.
 
 **When someone leaves**, revoke the token on the app's **OAuth & Permissions** page and press **Install to Workspace**
-again for a new one, then share it; each member runs `workspace bot` again with it. Until a member does, their agent's
-posts that would go out as the app are refused by Slack and nothing is posted — never under another identity — while
-what the app could not post anyway (a direct message, a file) still goes out as them, labelled.
+again for a new one, then share it; each member runs `workspace bot` again with it. In between, the first post,
+reaction, edit or deletion a member's agent makes with the old token comes back from Slack as `token_revoked`,
+`invalid_auth` or `account_inactive`. That act is refused — nothing goes out, and never under another identity, which
+would need its own preview — and the old token is removed from that member's machine, as narrowing or removal removes
+it. From the next prepare on, their agent's posts go out as them, labelled, and `doctor` says when the token was revoked
+and to ask you for the new one. Editing or deleting a message the app posted waits for the new token: only the app can
+change its own messages. Any other refusal keeps the token.
 
 **What one shared token means.** Everyone who pastes it holds the same token, and Slack lets it post under any name,
 with the APP badge beside it. These tools always name a post after the member who approved it, and an app message can
