@@ -548,7 +548,7 @@ export function doctor(input: DoctorInput): DoctorResult {
          * - Paste-once, either way, only where its credential does not rotate: rotation is the app's setting, so a
          *   rotating credential says the bot token on the app's page rotates too, and paste-once refuses that.
          */
-        const account = input.config.accounts[workspace.alias];
+        const account = lookupName(input.config, 'account', workspace.alias);
         const secretApp = account !== undefined && clientSecretRefOf(account) !== undefined;
         const pasteOnce = !rotates(bundle);
         const reauth = handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']);
