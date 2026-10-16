@@ -21,7 +21,6 @@ import {
   commandsIn,
   environmentAssignments,
   FOUR_FOLDERS,
-  filesUnder,
   freshShell,
   inWindowsShells,
   isCanonical,
@@ -623,11 +622,12 @@ test('every kind of command a handoff names pins exactly the folders it declares
     );
   }
 
-  held_ = held(m.print(['update', '--later', '--json']));
+  // A level that updates less, held for the person as "not now" was before it was retired (design 2026-10-16, U2).
+  held_ = held(m.print(['update', '--level', 'never', '--json']));
   add(
     'update',
-    commandEndingWith(held_.hint, ['update', '--later', '--approval', held_.id], platform),
-    ['update', '--later', '--approval', held_.id],
+    commandEndingWith(held_.hint, ['update', '--level', 'never', '--approval', held_.id], platform),
+    ['update', '--level', 'never', '--approval', held_.id],
     FOUR_FOLDERS,
   );
 
@@ -699,9 +699,12 @@ test('every kind of command a handoff names pins exactly the folders it declares
     platform === 'win32',
     'prune removed the declared data’s runtime, where it can list what is running',
   );
-  assert.ok(
-    filesUnder(m.folders.stateDir).some((file) => /update/.test(file)),
-    `update --later is in the declared state: ${filesUnder(m.folders.stateDir)}`,
+  // The level the pasted `update --level never` set is in the declared configuration (it once wrote "not now" to the
+  // declared state; that is retired with the stop, design 2026-10-16).
+  assert.equal(
+    JSON.parse(readFileSync(join(m.folders.configDir, 'config.json'), 'utf8')).defaults?.updates,
+    'never',
+    'update --level is in the declared configuration',
   );
 });
 

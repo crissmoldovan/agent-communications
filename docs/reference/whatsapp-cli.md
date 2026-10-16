@@ -22,7 +22,6 @@ Scripts should read these rather than parse output.
 | `0` | it worked |
 | `1` | unexpected failure |
 | `10` | only a person may do that — add, remove, the chat lists, opening a draft — or a change needs approval |
-| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |

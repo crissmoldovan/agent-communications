@@ -1010,16 +1010,16 @@ test('a table without its array, a row that is not an object, and a side that is
   );
 });
 
-test('the daily update check’s two settings each have a row, as a flag of `update` and an argument of comms_update', async () => {
+test('how this machine updates has a row for each of its settings, as a flag of `update` and an argument of comms_update', async () => {
   /*
-   * A flag is not a command, so nothing in the registries misses a row for `--later` or `--auto`: without these two,
-   * the command and the tool could each reach something else and the check would never drive either (design
-   * 2026-09-28).
+   * A flag is not a command, so nothing in the registries misses a row for `--level`, `--pause` or `--resume`:
+   * without these three, the command and the tool could each reach something else and the check would never drive
+   * either (design 2026-10-16, U2 and U3). They replace 0.18's `--later` and `--auto`, retired with the stop.
    */
   const { capabilities } = await readTable();
   const row = (id) => capabilities.find((entry) => entry.id === id);
   assert.deepEqual(
-    [row('core.update.later'), row('core.update.auto')].map((entry) => ({
+    [row('core.update.level'), row('core.update.pause'), row('core.update.resume')].map((entry) => ({
       cli: entry?.cli,
       mcp: entry?.mcp,
       operation: entry?.operation,
@@ -1027,22 +1027,25 @@ test('the daily update check’s two settings each have a row, as a flag of `upd
       args: entry?.args,
     })),
     [
-      { cli: 'update', mcp: 'comms_update', operation: 'updateLaterChange', argv: ['--later'], args: { later: true } },
       {
         cli: 'update',
         mcp: 'comms_update',
-        operation: 'updateAutoChange',
-        argv: ['--auto', 'off'],
-        args: { auto: 'off' },
+        operation: 'updateLevelChange',
+        argv: ['--level', 'never'],
+        args: { level: 'never' },
       },
+      { cli: 'update', mcp: 'comms_update', operation: 'updatePause', argv: ['--pause'], args: { pause: true } },
+      { cli: 'update', mcp: 'comms_update', operation: 'updateResume', argv: ['--resume'], args: { resume: true } },
     ],
   );
-  assert.deepEqual(row('core.update.auto')?.expect, { setting: 'off' });
+  assert.deepEqual(row('core.update.level')?.expect, { level: 'never' });
+  assert.equal(row('core.update.later'), undefined, '0.18’s "not now" is retired');
+  assert.equal(row('core.update.auto'), undefined, '0.18’s switch is retired');
 });
 
 test('one command and one tool may be several rows, told apart by what each runs them with, and not otherwise', () => {
-  // `agentcomms update --later` and `comms_update` with `later: true` are one capability; the same pair with
-  // `--auto off` and `auto: "off"` is another. Each is driven with its own words to its own operation.
+  // `agentcomms update --pause` and `comms_update` with `pause: true` are one capability; the same pair with
+  // `--level never` and `level: "never"` is another. Each is driven with its own words to its own operation.
   assert.deepEqual(
     breaking(({ table }) => {
       table.capabilities.push({

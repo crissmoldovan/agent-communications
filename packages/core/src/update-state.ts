@@ -1,17 +1,17 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
-import { type UpdateCheckSetting, updateCheckSetting } from './config.ts';
+import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
-import { type CliHandoffs, type Handoff, handoffSentence, requireHandoffs } from './handoffs.ts';
 import { withFileLock } from './lock.ts';
+import { organisationsOf, updatesPathFor } from './organisations.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
 /**
- * The daily update check, as every server and command reads it (design 2026-09-28): one file per machine,
- * `update-check.json` in the state directory, saying when the registry was last asked, the latest release it named,
- * whether this machine's registrations were behind it, and any "not now" with when it runs out.
+ * The daily update check, as every server and command reads it (design 2026-09-28, and 2026-10-16 for the notice that
+ * replaced its stop): one file per machine, `update-check.json` in the state directory, saying when the registry was
+ * last asked, the latest release it named, whether this machine's registrations were behind it, any "not now" with when
+ * it runs out, and when a command last said so.
  *
  * This is the reader, and it has **no network code at all**: it reads and writes that file, and says what it means.
  * Asking the registry is the checker's (`update-check.ts`), which every server and command but WhatsApp's also
@@ -23,25 +23,38 @@ import { isBehind, isPrerelease, isVersion } from './versions.ts';
 export const UPDATE_CHECK_FILE = 'update-check.json';
 
 /**
- * The switch that turns the whole thing off for one process — no check, no stop — whatever the setting says. Every
+ * The switch that turns the whole thing off for one process — no check, no notice — whatever the setting says. Every
  * test harness and every script here that runs a command or a server sets it, so no test and no verify step asks the
  * real registry.
  */
 export const UPDATE_CHECK_ENV: 'AGENT_COMMS_UPDATE_CHECK' = 'AGENT_COMMS_UPDATE_CHECK';
 
 /**
+ * The level for one process, whatever the machine's (design 2026-10-16, U2): `never` switches it all off as
+ * `AGENT_COMMS_UPDATE_CHECK=off` does. Any other word leaves the machine's level as it is.
+ */
+export const UPDATES_ENV: 'AGENT_COMMS_UPDATES' = 'AGENT_COMMS_UPDATES';
+
+/**
  * Set by what starts a server from a release it pins itself — the Claude Code plugin's launcher, the Gemini
  * extension's manifest — to say so: `claude-code-plugin`, `gemini-extension`. No registration here names that server,
- * and `comms_update` never moves it; it changes when the plugin or the extension is updated. So its stop always says
- * "update", whatever the channel's registrations say: restarting would start the release the plugin pins.
+ * and `comms_update` never moves it; it changes when the plugin or the extension is updated. So its notice always says
+ * where it is updated, whatever the channel's registrations say: restarting would start the release the plugin pins.
  */
 export const UPDATE_STARTED_BY_ENV: 'AGENT_COMMS_STARTED_BY' = 'AGENT_COMMS_STARTED_BY';
 
-/** How long a check is good for: the registry is asked at most once in this long, by the whole machine. */
-export const UPDATE_CHECK_INTERVAL_MS: number = 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** What the stop says first, word for word: the owner's words. */
-export const UPDATE_FIRST = "Hang on a minute, there's an update. Let's update first.";
+/** How long a check is good for on `auto`: the registry is asked at most once in this long, by the whole machine. */
+export const UPDATE_CHECK_INTERVAL_MS: number = DAY_MS;
+
+/** How long a check, and a notice, is good for on `every-14-days`. */
+export const SPACED_INTERVAL_MS: number = 14 * DAY_MS;
+
+/** How long a pause may be, in days (design 2026-10-16, U3): 7 when no length is given. */
+export const PAUSE_DAYS: readonly number[] = Object.freeze([1, 7, 14]);
+export const DEFAULT_PAUSE_DAYS = 7;
+const LONGEST_PAUSE_MS = 14 * DAY_MS;
 
 export interface UpdateCheckRecord {
   /**
@@ -65,7 +78,11 @@ export interface UpdateCheckRecord {
   current: UpdateCurrent | null;
   /** Why the last ask got no answer, when it got none. Kept for the doctor; nothing is stopped on its account. */
   lastError: string | null;
-  /** A person's "not now": nothing stops until this ISO time, the local midnight after they said it. */
+  /**
+   * 0.18's "not now", which this release no longer reads: a release before 0.20 stops nothing until this ISO time. A
+   * pause writes its end here too, so a server of such a release, still running until its client restarts, keeps quiet
+   * for the pause as well; `resume` clears it.
+   */
   snoozedUntil: string | null;
   /**
    * A check under way: when a process claimed it. Nobody else asks while it is younger than `UPDATE_CHECK_LEASE_MS`.
@@ -75,11 +92,41 @@ export interface UpdateCheckRecord {
    */
   checking: string | null;
   /**
+   * When a command on this machine last printed the update notice (design 2026-10-16, U1): commands say it at most once
+   * a day for the whole machine. Additive: a release that does not know it reads the rest of the file as it always did.
+   */
+  commandNoticeAt: string | null;
+  /** When anything on this machine — a server or a command — last gave the notice: what `every-14-days` spaces by. */
+  noticeAt: string | null;
+  /**
+   * A pause (design 2026-10-16, U3): when it was asked, and when it ends. It holds notices — never one of a security
+   * fix — until then, and holds only while it ends at most 14 days after it was asked.
+   */
+  pausedAt: string | null;
+  pausedUntil: string | null;
+  /**
+   * What the latest release's core manifest declares, as the last check read it (`agentcommsRelease`): a security fix,
+   * and a release that needs a decision from the person. Null when it was not read. Counts only for `version`.
+   */
+  release: ReleaseFacts | null;
+  /**
+   * The security release a send or post preview has already carried the line for (design 2026-10-16, U7): it is asked
+   * once, and the person's yes to that preview is the answer.
+   */
+  securityAsked: string | null;
+  /**
    * What the last background run left for the next session to say (design 2026-10-16 U5 step 7): a release it
    * installed, which a restart picks up, or one it would not install, and why. Null when it left nothing. Additive:
    * a release that does not know the field ignores it.
    */
   backgroundNotice?: BackgroundNotice | null | undefined;
+}
+
+/** What a release's core manifest declares under `agentcommsRelease`, for its version. */
+export interface ReleaseFacts {
+  version: string;
+  security: boolean;
+  needsDecision: boolean;
 }
 
 /** A background run's word for the next session: what happened, to which release, and the line to show. */
@@ -144,6 +191,12 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   lastError: null,
   snoozedUntil: null,
   checking: null,
+  commandNoticeAt: null,
+  noticeAt: null,
+  pausedAt: null,
+  pausedUntil: null,
+  release: null,
+  securityAsked: null,
   backgroundNotice: null,
 });
 
@@ -155,6 +208,13 @@ const isTime = (value: unknown): value is string => typeof value === 'string' &&
 
 const isWords = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((word) => typeof word === 'string');
+
+function readRelease(value: unknown): ReleaseFacts | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { version, security, needsDecision } = value as Record<string, unknown>;
+  if (!isVersion(version)) return null;
+  return { version, security: security === true, needsDecision: needsDecision === true };
+}
 
 function readCurrent(value: unknown): UpdateCurrent | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -182,6 +242,12 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     lastError: typeof held.lastError === 'string' ? held.lastError.slice(0, 300) : null,
     snoozedUntil: isTime(held.snoozedUntil) ? held.snoozedUntil : null,
     checking: isTime(held.checking) ? held.checking : null,
+    commandNoticeAt: isTime(held.commandNoticeAt) ? held.commandNoticeAt : null,
+    noticeAt: isTime(held.noticeAt) ? held.noticeAt : null,
+    pausedAt: isTime(held.pausedAt) ? held.pausedAt : null,
+    pausedUntil: isTime(held.pausedUntil) ? held.pausedUntil : null,
+    release: readRelease(held.release),
+    securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
     backgroundNotice: readBackgroundNotice(held.backgroundNotice),
   };
 }
@@ -213,10 +279,19 @@ export async function changeUpdateCheck<T = void>(
  * minutes in the future. A few minutes are allowed for, because two processes' clocks are read at slightly different
  * moments, and a check just claimed by one must not look due to the other.
  */
-export function updateCheckDue(record: UpdateCheckRecord, now: Date): boolean {
-  if (record.lastChecked === null) return true;
-  const since = now.getTime() - Date.parse(record.lastChecked);
-  return !(since >= -CLOCK_SKEW_MS && since < UPDATE_CHECK_INTERVAL_MS);
+export function updateCheckDue(
+  record: UpdateCheckRecord,
+  now: Date,
+  intervalMs: number = UPDATE_CHECK_INTERVAL_MS,
+): boolean {
+  return !within(record.lastChecked, now, intervalMs);
+}
+
+/** Whether `at` is less than `intervalMs` ago — a time from more than a few minutes in the future is not trusted. */
+export function within(at: string | null, now: Date, intervalMs: number): boolean {
+  if (at === null) return false;
+  const since = now.getTime() - Date.parse(at);
+  return since >= -CLOCK_SKEW_MS && since < intervalMs;
 }
 
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -235,40 +310,142 @@ export function updateCheckUnderway(record: UpdateCheckRecord, now: Date): boole
   return since >= -CLOCK_SKEW_MS && since < UPDATE_CHECK_LEASE_MS;
 }
 
-/** What turned the check off for this process, from its environment: `CI`, or the switch. Null when neither did. */
-export function updateCheckSwitchedOff(env: NodeJS.ProcessEnv): 'CI' | typeof UPDATE_CHECK_ENV | null {
+/** What turned updates off for this process, from its environment: `CI`, or a switch. Null when nothing did. */
+export function updateCheckSwitchedOff(
+  env: NodeJS.ProcessEnv,
+): 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV | null {
   // `CI` as `canPrompt` reads it: set, and not `0` or `false`.
   if (env.CI && env.CI !== '0' && env.CI !== 'false') return 'CI';
   const value = env[UPDATE_CHECK_ENV]?.trim().toLowerCase();
   if (value !== undefined && ['off', '0', 'false', 'no'].includes(value)) return UPDATE_CHECK_ENV;
+  if (env[UPDATES_ENV]?.trim().toLowerCase() === 'never') return UPDATES_ENV;
   return null;
 }
 
-/** Whether a check may run at all, and if not, what turned it off: the environment first, then the machine's setting. */
-export async function updateCheckEnabled(
-  core: Core,
-  env: NodeJS.ProcessEnv,
-): Promise<{ on: true } | { on: false; by: 'CI' | typeof UPDATE_CHECK_ENV | 'setting' }> {
-  const switched = updateCheckSwitchedOff(env);
-  if (switched !== null) return { on: false, by: switched };
-  return (await machineSetting(core)) === 'off' ? { on: false, by: 'setting' } : { on: true };
+/** An organisation profile's cap, and where it comes from: the organisation, and the file beside its profile. */
+export interface UpdateCapSource {
+  organisation: string;
+  source: string;
+}
+
+/** How this machine updates for this process, and why (design 2026-10-16, U2, U8). */
+export interface EffectiveUpdates {
+  /** The level in force: the machine's, capped by its organisations', unless the environment switched it all off. */
+  level: UpdateLevel;
+  /** The level the configuration sets. */
+  set: UpdateLevel;
+  /** What decided `level`: the configuration and its caps, or the environment. */
+  by: 'setting' | 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV;
+  /**
+   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up
+   * (`updateJobInstalled`). Until then `auto` behaves as a daily check with a notice (U2).
+   */
+  background: boolean;
+  /** The strictest `max` an organisation profile here names, when it is below the level set: the cap in force. */
+  cap?: (UpdateCapSource & { level: 'every-14-days' | 'never' }) | undefined;
+  /** The organisation whose profile turns background updates off, when one does. */
+  backgroundOff?: UpdateCapSource | undefined;
+}
+
+/** How much a level updates: `auto` 2, `every-14-days` 1, `never` 0. */
+const rankOf = (level: UpdateLevel): number => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
+
+/**
+ * The caps the organisation profiles here name (design 2026-10-16, U8): the strictest `max`, and the first profile
+ * with `background: false`, each with where it comes from. A `max` word this release does not know counts as `never`,
+ * the strictest it could mean: caps only ever tighten.
+ */
+export function organisationCaps(config: Config): Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> {
+  let cap: EffectiveUpdates['cap'];
+  let backgroundOff: EffectiveUpdates['backgroundOff'];
+  for (const [organisation, record] of Object.entries(organisationsOf(config)).sort(([a], [b]) => a.localeCompare(b))) {
+    const caps = record.updates;
+    if (caps === undefined) continue;
+    const where = { organisation, source: updatesPathFor(record.source.path) };
+    if (caps.max !== undefined) {
+      const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
+      if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { ...where, level };
+    }
+    if (caps.background === false && backgroundOff === undefined) backgroundOff = where;
+  }
+  return { cap, backgroundOff };
 }
 
 /**
- * The machine's setting, from `config.json`. A configuration that cannot be read counts as `on`, the default: what is
- * wrong with it is for the doctor and the tools to say, and it must not quietly turn this off.
+ * The level in force here, read from the environment first, then the configuration and its organisations' caps. A
+ * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
+ * tools to say, and it must not quietly turn updates off.
  */
-async function machineSetting(core: Core): Promise<UpdateCheckSetting> {
+export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Promise<EffectiveUpdates> {
+  let set: UpdateLevel = 'auto';
+  let caps: Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> = {};
   try {
-    return updateCheckSetting(await core.config.load());
+    const config = await core.config.load();
+    set = updateLevelOf(config);
+    caps = organisationCaps(config);
   } catch {
-    return 'on';
+    // The default, as above.
+  }
+  // A cap only ever lowers the level: one at or above the level set is not the one in force.
+  const cap = caps.cap !== undefined && rankOf(caps.cap.level) < rankOf(set) ? caps.cap : undefined;
+  const extra = { ...(cap ? { cap } : {}), ...(caps.backgroundOff ? { backgroundOff: caps.backgroundOff } : {}) };
+  const switched = updateCheckSwitchedOff(env);
+  if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
+  const level = cap?.level ?? set;
+  const background = level === 'auto' && caps.backgroundOff === undefined && (await updateJobInstalled(core));
+  return { level, set, by: 'setting', background, ...extra };
+}
+
+/** Whether a check may run at all, how often, and if not, what turned it off: the environment, then the level. */
+export async function updateCheckEnabled(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+): Promise<
+  { on: true; intervalMs: number } | { on: false; by: 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV | 'setting' }
+> {
+  const updates = await effectiveUpdates(core, env);
+  if (updates.level === 'never') return { on: false, by: updates.by };
+  return { on: true, intervalMs: updates.level === 'every-14-days' ? SPACED_INTERVAL_MS : UPDATE_CHECK_INTERVAL_MS };
+}
+
+/**
+ * The marker the background job's installer writes (design 2026-10-16, U4), in the state directory:
+ * `<state>/update-job.json`. Track C writes it when the person's yes has set the job up, and removes it with the job;
+ * until then `auto` is a daily check with a notice.
+ */
+export const UPDATE_JOB_MARKER = 'update-job.json';
+
+/** Whether the background update job is set up on this machine: its marker is a file in the state directory. */
+export async function updateJobInstalled(core: Pick<Core, 'paths'>): Promise<boolean> {
+  try {
+    return (await stat(join(core.paths.stateDir, UPDATE_JOB_MARKER))).isFile();
+  } catch {
+    return false;
   }
 }
 
-/** The start of the next local day: when a "not now" runs out. */
-export function nextLocalMidnight(now: Date): Date {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+/**
+ * When a pause ends, while one holds at `now` — or null. A pause holds from when it was asked until its end, and only
+ * while that end is at most 14 days after it was asked: a clock gone back to before it was asked, or an end written by
+ * hand further off, holds nothing, so no pause ever lasts longer than 14 days from when it was asked.
+ */
+export function pauseEnd(record: UpdateCheckRecord, now: Date): Date | null {
+  if (record.pausedAt === null || record.pausedUntil === null) return null;
+  const asked = Date.parse(record.pausedAt);
+  const ends = Date.parse(record.pausedUntil);
+  if (ends - asked > LONGEST_PAUSE_MS + CLOCK_SKEW_MS) return null;
+  if (now.getTime() < asked - CLOCK_SKEW_MS || now.getTime() >= ends) return null;
+  return new Date(ends);
+}
+
+/**
+ * The security fix this record says is out, for a process running `running`: the latest release, when its manifest
+ * declares one and `running` is behind it. Null otherwise.
+ */
+export function securityRelease(record: UpdateCheckRecord, running: string): string | null {
+  const latest = countedLatest(record);
+  if (latest === null || record.release?.version !== latest || !record.release.security) return null;
+  return isVersion(running) && isBehind(running, latest) ? latest : null;
 }
 
 /** A local time as a person reads it in a preview: `2026-09-29 00:00`. */
@@ -277,14 +454,9 @@ export function localStamp(at: Date): string {
   return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
 }
 
-/** Whether a person's "not now" still holds. */
-export function updateSnoozed(record: UpdateCheckRecord, now: Date): boolean {
-  return record.snoozedUntil !== null && now.getTime() < Date.parse(record.snoozedUntil);
-}
-
 /**
  * The latest release as the check counts it: a version, and not a prerelease — 0.8.0-rc.1 is never an update anybody
- * is stopped for. Null when the file names none.
+ * is told of. Null when the file names none.
  */
 export function countedLatest(record: UpdateCheckRecord): string | null {
   return record.latest !== null && isVersion(record.latest) && !isPrerelease(record.latest) ? record.latest : null;
@@ -298,7 +470,7 @@ export interface UpdateSurface {
   surface: 'server' | 'command';
 }
 
-/** An update that stops a server or a command running `running`. */
+/** An update a server or a command running `running` is behind: what its notice says. */
 export interface PendingUpdate {
   /**
    * `update`: a newer release is out, and this process is not known to have it anywhere to restart into. `restart`:
@@ -317,7 +489,7 @@ export interface PendingUpdate {
  * registration names `latest`, or a command whose package is installed globally at `latest`. Anything else — no
  * registration the scan could see (a plugin's, an extension's, one written by hand), one that pins no release, a
  * configuration it could not read, a check that found out nothing — is `update`: restarting would start the same old
- * code, and a reply that said to restart would stop every call with advice that cannot work.
+ * code, and a notice that said to restart would give advice that cannot work.
  */
 export function updateVerdict(record: UpdateCheckRecord, running: string, where: UpdateSurface): PendingUpdate | null {
   const latest = countedLatest(record);
@@ -327,7 +499,8 @@ export function updateVerdict(record: UpdateCheckRecord, running: string, where:
 }
 
 /**
- * The update that stops this process now, from the file as it is — or null: switched off, snoozed, or nothing newer.
+ * The update this process is behind now, from the file as it is — or null: switched off, `never`, or nothing newer.
+ * What a notice makes of it — a pause, the level's spacing, a security fix — is the notice's (`update-gate.ts`).
  * Reads two files and asks nobody.
  *
  * "Restart" is decided per channel, from its registrations, and a server a plugin or an extension started is not one
@@ -344,90 +517,8 @@ export async function pendingUpdate(
 ): Promise<PendingUpdate | null> {
   if (!(await updateCheckEnabled(options.core, options.env)).on) return null;
   const record = await readUpdateCheck(options.core.paths.stateDir);
-  if (updateSnoozed(record, (options.now ?? (() => new Date()))())) return null;
   const verdict = updateVerdict(record, options.running, options);
   const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
   if (verdict?.kind === 'restart' && options.surface === 'server' && startedBy) return { ...verdict, kind: 'update' };
   return verdict;
-}
-
-/**
- * The update and "not now" as commands a person runs at a terminal: core's, located from whatever is printing
- * (`core.handoffs`) — a channel finds the core it is installed with — or, for each, why there is none here.
- */
-export interface UpdateCommands {
-  readonly update: Handoff;
-  readonly later: Handoff;
-}
-
-export function updateCommands(
-  core: { readonly handoffs?: CliHandoffs | undefined },
-  platform?: NodeJS.Platform | undefined,
-): UpdateCommands {
-  const handoffs = requireHandoffs(core, platform);
-  return { update: handoffs.core(['update']), later: handoffs.core(['update', '--later']) };
-}
-
-/** One of them in a sentence `say` makes: in backticks, or, with no command here, the sentence saying why. */
-export function updateCommandSaid(
-  commands: UpdateCommands,
-  which: 'update' | 'later',
-  say: (command: string) => string,
-): string {
-  return handoffSentence(commands[which], say);
-}
-
-/**
- * The two ways on, as a stop's details give them: the tool, and the command — core's own, located, or the sentence
- * saying why there is none here. Written out as text where the details leave the process (`PrintedCommand.toJSON`):
- * its line, or its words as JSON with what to do, or that sentence — as these fields always carried.
- */
-export interface UpdateWays {
-  readonly update: { readonly tool: 'comms_update'; readonly command: Handoff };
-  readonly later: {
-    readonly tool: 'comms_update';
-    readonly arguments: { readonly later: true };
-    readonly command: Handoff;
-  };
-}
-
-export function updateWaysOf(commands: UpdateCommands): UpdateWays {
-  return {
-    update: { tool: 'comms_update', command: commands.update },
-    later: { tool: 'comms_update', arguments: { later: true }, command: commands.later },
-  };
-}
-
-/** A channel's product name, from core's snapshot of the manifests: `Gmail`. */
-function labelOf(channel: string): string {
-  return CHANNEL_SNAPSHOT.find((entry) => entry.manifest.channel === channel)?.manifest.label ?? channel;
-}
-
-/**
- * What a stopped tool call says, in words an agent passes on: the owner's sentence first, then the versions, then the
- * two ways on — the update, from chat or a terminal, or "not now", which the person approves like any other change.
- */
-export function updateStopMessage(
-  pending: PendingUpdate,
-  where: { server: string; channel: string; tool: string },
-  commands: UpdateCommands,
-): string {
-  // The server by its product — never its name as a client lists it, which reads as a command to run (CUE-403).
-  const server = where.channel === 'core' ? 'the core server' : `the ${labelOf(where.channel)} server`;
-  const didNotRun = `Nothing was done: ${where.tool} did not run.`;
-  const later = `Not now: call comms_update with \`later: true\` — a change the person approves — and nothing stops again until midnight; the next request after it asks again. ${updateCommandSaid(commands, 'later', (command) => `At a terminal: ${command}.`)}`;
-  if (pending.kind === 'restart') {
-    return [
-      "Hang on a minute, the update is installed, but this server isn't running it yet. Restart the client first.",
-      `This is ${server}, ${pending.running}; ${pending.latest} is installed on this machine — every registration of this server names it — and a client starts it only once it is restarted. ${didNotRun}`,
-      `Ask the person to restart the MCP client — quit it and open it again — and carry on after. ${later}`,
-    ].join('\n');
-  }
-  return [
-    UPDATE_FIRST,
-    `This is ${server}, ${pending.running}; the latest release is ${pending.latest}. ${didNotRun}`,
-    'Ask the person which they want:',
-    `- Update now: call comms_update on the core server. It shows every step and asks before it changes anything; restart the client after. ${updateCommandSaid(commands, 'update', (command) => `At a terminal: ${command}.`)} A server comms_update does not find registered here — a plugin's, an extension's — is updated where it was installed.`,
-    `- ${later}`,
-  ].join('\n');
 }

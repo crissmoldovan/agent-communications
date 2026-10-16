@@ -48,11 +48,11 @@ function inbox(id: string, overrides: Partial<InboxConfig> = {}): InboxConfig {
 test('every error code maps to a documented exit status', () => {
   const exits = new Set(Object.values(ERROR_REGISTRY).map((spec) => spec.exit));
   for (const exit of exits) {
-    assert.ok([1, 10, 11, 64, 65, 66, 69, 75, 77, 78].includes(exit), `unexpected exit ${exit}`);
+    assert.ok([1, 10, 64, 65, 66, 69, 75, 77, 78].includes(exit), `unexpected exit ${exit}`);
   }
   assert.equal(new CommsError('POLICY_NEVER', 'x').exitCode, 10);
-  // Its own status: a script that meets it has exactly two things to do, update or put it off (design 2026-09-28).
-  assert.equal(new CommsError('UPDATE_REQUIRED', 'x').exitCode, 11);
+  // 11, the update check's stop, is retired with it (design 2026-10-16, U1): nothing is refused for being behind.
+  assert.equal(Object.hasOwn(ERROR_REGISTRY, 'UPDATE_REQUIRED'), false);
   assert.equal(new CommsError('KEYCHAIN_APPROVAL_PENDING', 'x').exitCode, 75);
   assert.equal(new CommsError('SCOPE_MISSING', 'x').exitCode, 77);
   assert.equal(new CommsError('RATE_CAPPED', 'x').retryable, true);

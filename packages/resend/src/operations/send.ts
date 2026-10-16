@@ -25,6 +25,7 @@ import {
   renderMessagePreview,
   resolveIdentity,
   type SendPolicy,
+  securityNotice,
   sendEpochOf,
   sha256Hex,
   stateOf,
@@ -53,6 +54,7 @@ import {
 } from '../compose/message.ts';
 import { type PreparedMessage, PreparedStore, SendRecords, type SendSummary } from '../compose/store.ts';
 import type { ResendContext } from '../context.ts';
+import { VERSION } from '../version.ts';
 import { type CurrentOutcome, outcomeOf, outcomeUnavailable } from './last-event.ts';
 
 /**
@@ -361,6 +363,8 @@ function previewOf(options: {
   effective: SendPolicy;
   flags: readonly string[];
   handoffs: CliHandoffs;
+  /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
+  security?: string | null | undefined;
 }): string {
   const { message } = options.built;
   const reach = uniqueRecipients(message);
@@ -416,9 +420,11 @@ function previewOf(options: {
     warnings,
     policy: describePolicy(options.effective, options.approvalId, options.flags, options.handoffs),
   };
-  // First, who it appears to come from, read from the From the approval binds: the terminal's approval says what the
-  // prepare said (L3).
-  return `${identityLine(identityOfFrom(message.from))}\n${renderMessagePreview(preview)}`;
+  // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
+  // appears to come from, read from the From the approval binds: the terminal's approval says what the prepare said
+  // (L3).
+  const security = options.security ? `${options.security}\n` : '';
+  return `${security}${identityLine(identityOfFrom(message.from))}\n${renderMessagePreview(preview)}`;
 }
 
 /** L3: the first line of a preview — the label recipients will see, or that there is none. */
@@ -565,6 +571,8 @@ export async function prepareSend(context: ResendContext, name: string, input: P
   });
 
   const reach = uniqueRecipients(built.message).length;
+  // Asked once, once the approval exists: a prepare refused before here asks nothing (design 2026-10-16, U7).
+  const security = await securityNotice({ core: context.core, env: context.env, running: VERSION, act: 'send' });
   return {
     approvalId: record.approvalId,
     account: name,
@@ -578,6 +586,7 @@ export async function prepareSend(context: ResendContext, name: string, input: P
       effective,
       flags: study.flags,
       handoffs: context.handoffs,
+      security,
     }),
     policy: livePolicy,
     effectivePolicy: effective,

@@ -1,4 +1,10 @@
-import { type CommsError, strictToolArguments, toCommsError, UNTRUSTED_NOTICE, updateToolGate } from '@agentcomms/core';
+import {
+  type CommsError,
+  strictToolArguments,
+  toCommsError,
+  UNTRUSTED_NOTICE,
+  updateToolNotice,
+} from '@agentcomms/core';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { WhatsAppContext, type WhatsAppContextOptions } from '../context.ts';
@@ -114,17 +120,16 @@ export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}):
   };
 
   /*
-   * The daily update check's stop (design 2026-09-28), from the file alone: this package has no network code, so it
-   * never asks the registry itself — there is no `refresh` — and learns of an update once any other server or command
-   * on the machine has asked. `whatsapp_status` is its doctor, and is never stopped.
+   * The update notice (design 2026-10-16, U1), from the file alone: this package has no network code, so it never asks
+   * the registry itself — there is no `refresh` — and learns of an update once any other server or command on the
+   * machine has asked. Nothing is refused for being behind. `whatsapp_status` is its doctor, and never carries it.
    */
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-whatsapp',
       channel: 'whatsapp',
       running: VERSION,
       exempt: ['whatsapp_status'],

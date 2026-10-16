@@ -74,10 +74,12 @@ import { updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
 import {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
 import { profileSourcePath, shownPath } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
@@ -89,7 +91,7 @@ import {
   runBackgroundUpdate,
 } from './update-background.ts';
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
-import { CHANGE_CLAIM, exemptFromUpdateGate, updateGateAtTerminal } from './update-gate.ts';
+import { exemptFromUpdateNotice, updateNoticeAtTerminal } from './update-gate.ts';
 import type { UpdateJobDeps } from './update-job.ts';
 import { VERSION } from './version.ts';
 
@@ -167,10 +169,12 @@ Usage — run these with this CLI, each as the words after its program:
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
-  update --later [--approval <id>]
-                                not now: nothing stops for the update until midnight
-  update --auto on|off [--approval <id>]
-                                turn the daily update check on or off for this machine
+  update --level auto|every-14-days|never [--approval <id>]
+                                how this machine updates: a level that updates less is approved
+                                first; one that updates more applies at once
+  update --pause [1|7|14]       hold every update notice on this machine for that many days (7);
+                                asks nobody, and never holds a security fix
+  update --resume               end a pause at once
   update --rollback [--approval <id>]
                                 switch every stable launcher back to the release before; edits no client config
   update --background-job on|off [--approval <id>]
@@ -191,10 +195,10 @@ person has agreed: in the chat under the \`chat\` change policy, with \`approve\
 policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies
 at once and asks nobody, and a --dry-run changes nothing.
 
-Once a day this machine asks npm whether a newer release is out. When one is, every command but update, doctor,
-paths, approve and approvals stops first: at a terminal it asks "Update now, later today, or cancel?"; anywhere else
-it exits 11 and names the commands for update and update --later. Putting it off (--later) and turning the check
-off (--auto off) are changes a person approves. CI, and AGENT_COMMS_UPDATE_CHECK=off, skip it.
+On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
+once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
+day for the machine, and runs; nothing is stopped for being behind. CI, AGENT_COMMS_UPDATE_CHECK=off and
+AGENT_COMMS_UPDATES=never switch it all off for one process.
 
 Options:
   --config-dir <dir>     use this configuration directory for this run
@@ -207,7 +211,7 @@ Options:
   -h, --help    show this help
   -v, --version show the version
 
-Exit codes: 0 ok · 1 unexpected · 10 approval required · 11 an update is out: update first, or put it off
+Exit codes: 0 ok · 1 unexpected · 10 approval required
             64 usage · 65 bad data · 66 not found · 69 provider unavailable · 75 transient
             77 auth or scope missing · 78 config error
 `;
@@ -270,6 +274,10 @@ function parse(argv: string[]) {
       'no-verify': { type: 'boolean', default: false },
       'include-printed': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
+      level: { type: 'string' },
+      pause: { type: 'boolean', default: false },
+      resume: { type: 'boolean', default: false },
+      // Retired with the stop (design 2026-10-16): kept so that each is refused with what replaced it.
       later: { type: 'boolean', default: false },
       auto: { type: 'string' },
       rollback: { type: 'boolean', default: false },
@@ -321,11 +329,6 @@ const CLIENT_NAMES = ['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemin
  * `mcp install`, `mcp prune`, `names migrate`, `secrets migrate` and `update` — where it is how the second run claims
  * that change. Every one of them is a change, so what it claims is a change approval.
  */
-/** Whether a command is a wait for an approval: `approval wait <approvalId>`, a look-up past the update's stop. */
-function waitsFor(command: string | undefined, sub: string | undefined): boolean {
-  return command === 'approval' && sub === 'wait';
-}
-
 function takesApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
     case 'policy':
@@ -350,8 +353,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
 /**
  * Refuses `--approval` on a command that takes none, as USAGE.
  *
- * Parsed as one option for every command, it was carried to the update check's stop whatever the command, and the
- * stop lets a command claiming an approval through (§2): `agentcomms channels --approval <id>`, with an old "not now"
+ * Parsed as one option for every command, it was once carried to the update check's stop whatever the command, and
+ * the stop let a command claiming an approval through: `agentcomms channels --approval <id>`, with an old "not now"
  * the person had turned down, ran past it. Over MCP the same calls are refused an `approvalId` their tools do not
  * declare, and every channel's command is refused an option it does not take, before anything runs. So is this one.
  */
@@ -501,34 +504,24 @@ export async function main(
   }
 
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
-  // stopped by the gate it is part of — it is run before the gate, as the server is.
+  // given the notice it is part of — it is run before the notice, as the server is.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
     return runCommand(output, () => runUpdateCheckChild(core, env, sub));
   }
 
-  // The daily update check (design 2026-09-28 §3): before any command but the exempt ones, an update that is out
-  // stops it — a person is asked, anything else ends with UPDATE_REQUIRED. One carrying an approval the person
-  // already gave goes ahead, as the same call over MCP does: only a command that takes one carries it, and every one
-  // of those claims a change.
-  if (!exemptFromUpdateGate(positionals.slice(0, 2))) {
-    let ended: number | null = null;
-    const gated = await runCommand(output, async () => {
-      ended = await updateGateAtTerminal({
-        core,
-        env,
-        binary: 'agentcomms',
-        channel: 'core',
-        running: VERSION,
-        output,
-        streams: defaultStreams,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        approvals: takesApproval(command, sub) ? [values.approval] : waitsFor(command, sub) ? [arg] : [],
-        approvalClaim: waitsFor(command, sub) ? { lookup: true } : CHANGE_CLAIM,
-        ...terminalUpdateHooks(core, env, { channel: 'core', output, streams: defaultStreams }),
-      });
+  // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for
+  // about three seconds at most, and — when a newer release is out and no command here said so today — one line on
+  // stderr. It never stops the command.
+  if (!exemptFromUpdateNotice(positionals.slice(0, 2))) {
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'core',
+      running: VERSION,
+      output,
+      streams: defaultStreams,
+      ...terminalUpdateHooks(core, env),
     });
-    if (gated !== EXIT_CODES.OK) return gated;
-    if (ended !== null) return ended;
   }
 
   const code = await runCommand(output, async () => {
@@ -909,25 +902,37 @@ export async function main(
         throw usage('usage: mcp [install|prune]');
       }
       case 'update': {
-        if (sub !== undefined) {
+        if (values.later) {
+          throw new CommsError('USAGE', '--later no longer exists: nothing is stopped for an update any more', {
+            hint: 'To hold the update notice, use --pause [1|7|14] — it asks nobody — and --resume to end it.',
+          });
+        }
+        if (values.auto !== undefined) {
+          throw new CommsError('USAGE', '--auto no longer exists: the daily check is now one of three levels', {
+            hint: 'Use --level auto, --level every-14-days or --level never.',
+          });
+        }
+        // `--pause` takes the days after it as a word of its own: `update --pause 14`.
+        const days = values.pause ? sub : undefined;
+        if ((sub !== undefined && !values.pause) || positionals.length > 2) {
           throw usage(
-            'usage: update [--check | --later | --auto on|off | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
+            'usage: update [--check | --level <level> | --pause [1|7|14] | --resume | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
           );
         }
         const job = values['background-job'];
-        const settings =
-          values.later || values.auto !== undefined || values.rollback || job !== undefined || values.background;
-        const modes = [
-          values.check,
-          values.later,
-          values.auto !== undefined,
+        // One mode at a time, every mode counted: only the update itself, with none of them, takes --no-verify.
+        const settings = [
+          values.level !== undefined,
+          values.pause,
+          values.resume,
           values.rollback,
           job !== undefined,
           values.background,
-        ].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && settings)) {
+        ];
+        const modes = [values.check, ...settings].filter(Boolean).length;
+        if (modes > 1 || (values['no-verify'] && settings.some(Boolean))) {
           throw usage(
-            '--check, --later, --auto, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
+            '--check, --level, --pause, --resume, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
           );
         }
         if (values['dry-run'] && !values.background) {
@@ -972,25 +977,27 @@ export async function main(
           writeResult(result, output, renderUpdateJob);
           return;
         }
-        if (values.later) {
-          const result = await gatedChangeAtTerminal(core, updateLaterChange(core), {
-            ...approval,
-            rerun: ['update', '--later'],
-          });
-          writeResult(result, output, renderLater);
-          return;
-        }
-        if (values.auto !== undefined) {
-          if (values.auto !== 'on' && values.auto !== 'off') throw usage('--auto takes on or off');
+        if (values.level !== undefined) {
           const result = await gatedChangeAtTerminal(
             core,
-            updateAutoChange(core, values.auto, { env, platform, job: deps.updateJob }),
-            {
-              ...approval,
-              rerun: ['update', '--auto', values.auto],
-            },
+            updateLevelChange(core, values.level, { env, platform, job: deps.updateJob }),
+            { ...approval, rerun: ['update', '--level', values.level] },
           );
-          writeResult(result, output, renderAuto);
+          writeResult(result, output, renderLevel);
+          return;
+        }
+        if (values.pause || values.resume) {
+          refuseUnclaimedApproval(values.approval, {
+            message: '--pause and --resume ask nobody, so they take no --approval',
+            hint: 'Run it without --approval: it applies at once.',
+          });
+          if (values.resume) {
+            writeResult(await updateResume(core), output, renderResume);
+            return;
+          }
+          if (days !== undefined && !/^\d+$/.test(days)) throw usage('--pause takes 1, 7 or 14 days');
+          const result = await updatePause(core, { days: days === undefined ? undefined : Number(days) });
+          writeResult(result, output, renderPause);
           return;
         }
         if (values.check) {
@@ -1320,18 +1327,28 @@ function renderOrgRemove(result: OrgRemoveResult): string {
   return lines.join('\n');
 }
 
-function renderLater(result: UpdateLaterResult): string {
-  if (result.snoozedUntil === null) return 'Nothing was put off: no update has been found on this machine.';
-  const what = result.latest ? `The update to ${result.latest} is` : 'The daily update check is';
-  return `${what} put off until ${new Date(result.snoozedUntil).toString()}${result.changed ? '' : ' (it already was)'}: nothing stops for it until then, and the first command after asks again.`;
+function renderLevel(result: UpdateLevelResult): string {
+  const words = {
+    auto: 'auto: a check every day, and installs in the background once that is set up',
+    'every-14-days': 'every-14-days: a check at most once every 14 days, and installs only with your yes',
+    never: 'never: nothing on this machine asks npm for a newer release; update by hand',
+  } as const;
+  const capped = result.cappedAt
+    ? ` ${result.cappedAt.organisation}'s profile caps it at ${result.cappedAt.level}, so that is how it updates while the cap stands.`
+    : '';
+  return `This machine updates ${words[result.level]}${result.changed ? '' : ' (it already did)'}.${capped}`;
 }
 
-function renderAuto(result: UpdateAutoResult): string {
-  const state =
-    result.updateCheck === 'on'
-      ? 'on: once a day this machine asks npm for a newer release, and stops until it is updated or put off'
-      : 'off: nothing on this machine asks npm for a newer release, and nothing stops for one';
-  return `The daily update check is ${state}${result.changed ? '' : ' (it already was)'}.`;
+function renderPause(result: UpdatePauseResult): string {
+  const lines = [
+    `Update notices are paused until ${new Date(result.pausedUntil).toString()} (${result.days} day${result.days === 1 ? '' : 's'}). A security fix is not held.`,
+  ];
+  if (result.security !== null) lines.push(`A security fix is out now (${result.security}): update soon.`);
+  return lines.join('\n');
+}
+
+function renderResume(result: UpdateResumeResult): string {
+  return result.resumed ? 'The pause is over: update notices are back.' : 'Nothing was paused.';
 }
 
 function renderRollback(result: UpdateRollbackResult): string {

@@ -12,7 +12,7 @@ import { CORE_CALLER } from '../src/handoffs.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { doctor } from '../src/operations/maintenance.ts';
 import { updateJobChange } from '../src/operations/update-job.ts';
-import { updateAutoChange } from '../src/operations/update-settings.ts';
+import { updateLevelChange } from '../src/operations/update-settings.ts';
 import {
   backgroundJobAtRun,
   inspectUpdateJob,
@@ -441,7 +441,8 @@ test('setting it up: the preview names the file, what it runs, when, what macOS 
     assert.deepEqual(calls, []);
 
     // One at a time, as the other modes are.
-    assert.equal(codeOf(await call('comms_update', { backgroundJob: 'on', later: true })), 'USAGE');
+    assert.equal(codeOf(await call('comms_update', { backgroundJob: 'on', pause: true })), 'USAGE');
+    assert.equal(codeOf(await call('comms_update', { backgroundJob: 'on', level: 'auto' })), 'USAGE');
     assert.equal(codeOf(await call('comms_update', { backgroundJob: 'on', check: true })), 'USAGE');
     // Rollback is a mode as well: with the job, or with `noVerify`, it is refused before anything runs.
     assert.equal(codeOf(await call('comms_update', { backgroundJob: 'off', rollback: true })), 'USAGE');
@@ -547,7 +548,8 @@ test('the command: on waits for the approval and applies with it; off applies at
   assert.equal(existsSync(plistOf(m)), false);
 
   assert.equal((await cli(['update', '--background-job', 'maybe'])).code, 64);
-  assert.equal((await cli(['update', '--background-job', 'on', '--later'])).code, 64);
+  assert.equal((await cli(['update', '--background-job', 'on', '--pause'])).code, 64);
+  assert.equal((await cli(['update', '--background-job', 'on', '--level', 'auto'])).code, 64);
   assert.equal((await cli(['update', '--background-job', 'off', '--no-verify'])).code, 64);
   assert.equal((await cli(['update', '--background-job', 'off', '--rollback'])).code, 64);
   assert.equal((await cli(['update', '--rollback', '--no-verify'])).code, 64);
@@ -639,13 +641,13 @@ test('a level that installs nothing in the background removes the job: its previ
   calls.length = 0;
   const { call, close } = await connect(m, { platform: 'darwin', updateJob: deps(run) });
   try {
-    // `updateCheck: off` reads as the level `never` (design 2026-10-16 U2).
-    const off = (await call('comms_update', { auto: 'off' })).structuredContent as Record<string, unknown>;
+    // At the level `never` nothing installs in the background (design 2026-10-16 U2, U4).
+    const off = (await call('comms_update', { level: 'never' })).structuredContent as Record<string, unknown>;
     assert.equal(off.approvalRequired, true);
     assert.ok(String(off.preview).includes(`removes the background update job, ${plistOf(m)}`), String(off.preview));
     assert.deepEqual(calls, [], 'nothing before the yes');
     assert.equal(existsSync(plistOf(m)), true);
-    const turned = (await call('comms_update', { auto: 'off', approvalId: off.approvalId })).structuredContent as {
+    const turned = (await call('comms_update', { level: 'never', approvalId: off.approvalId })).structuredContent as {
       applied: boolean;
     };
     assert.equal(turned.applied, true);
@@ -659,7 +661,7 @@ test('a level that installs nothing in the background removes the job: its previ
   }
   // With no job, the level change says nothing of one.
   const fresh = machine();
-  const request = await updateAutoChange(fresh.core, 'off', {
+  const request = await updateLevelChange(fresh.core, 'never', {
     env: fresh.env,
     platform: 'darwin',
     job: deps(recorder().run),

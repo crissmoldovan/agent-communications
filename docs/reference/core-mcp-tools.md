@@ -251,8 +251,9 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 |---|---|---|---|
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
-| `later` | boolean | no | not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
-| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`, and also removes the background update job; `on` applies at once |
+| `level` | `auto` \\| `every-14-days` \\| `never` | no | how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once |
+| `pause` | any | no | hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held |
+| `resume` | boolean | no | end a pause at once |
 | `backgroundJob` | `on` \\| `off` | no | set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once |
 | `rollback` | boolean | no | switch every stable launcher back to the release it started before its last switch, editing no client configuration. A change the person approves: the first call returns its preview and an approvalId |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |

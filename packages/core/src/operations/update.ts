@@ -51,9 +51,19 @@ import {
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
-import { compareVersions, isBehind, isVersion, npmGlobalPackages, npmInstallGlobal, npmLatestVersion } from '../npm.ts';
+import {
+  compareVersions,
+  isBehind,
+  isPrerelease,
+  isVersion,
+  npmGlobalPackages,
+  npmInstallGlobal,
+  npmLatestVersion,
+  npmReleaseDeclaration,
+  type ReleaseDeclaration,
+} from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
-import { changeUpdateCheck, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
+import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
 import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
 
@@ -102,6 +112,12 @@ export interface UpdateDeps {
   installGlobal?: ((spec: string) => Promise<void>) | undefined;
   /** Installs a managed runtime of exactly this version, as the managed launcher would. */
   installRuntime?: ((packageName: string, version: string) => Promise<void>) | undefined;
+  /**
+   * What a release's core manifest declares — a security fix, a decision it needs (design 2026-10-16, U7). Defaults to
+   * the registry's own document of that release, but only beside the registry's own `latest`: a test that hands in a
+   * `latestVersion` hands in this too, or the facts are not read. Null: never read them.
+   */
+  releaseFacts?: ((packageName: string, version: string) => Promise<ReleaseDeclaration>) | null | undefined;
   /** The clock a check or an update is recorded by in the daily check's file. */
   now?: (() => Date) | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
@@ -613,8 +629,29 @@ export async function updateCheck(
   claim?: string,
 ): Promise<UpdateReport> {
   const { report } = await inspect(core, env, deps);
-  await recordFound(core, env, report, deps, null, claim);
+  await recordFound(core, env, report, deps, null, claim, await releaseOf(report, env, deps));
   return report;
+}
+
+/**
+ * What the latest release's core manifest declares, for the daily check's file — or null, where it is not to be read
+ * or could not be: never a reason for the check to fail. Read only for a release newer than nothing — a counted one.
+ */
+async function releaseOf(report: UpdateReport, env: NodeJS.ProcessEnv, deps: UpdateDeps): Promise<ReleaseFacts | null> {
+  const latest = report.latest[CORE_PACKAGE];
+  if (latest === undefined || !isVersion(latest) || isPrerelease(latest)) return null;
+  const read =
+    deps.releaseFacts !== undefined
+      ? deps.releaseFacts
+      : deps.latestVersion === undefined
+        ? (name: string, version: string) => npmReleaseDeclaration(name, version, { env })
+        : null;
+  if (read === null) return null;
+  try {
+    return { version: latest, ...(await read(CORE_PACKAGE, latest)) };
+  } catch {
+    return null;
+  }
 }
 
 const CORE_PACKAGE = serverFacts('core').packageName;
@@ -659,15 +696,30 @@ async function recordFound(
   deps: Pick<UpdateDeps, 'now'>,
   after: UpdateResult | null = null,
   claim?: string,
+  release?: ReleaseFacts | null,
 ): Promise<void> {
   const latest = report.latest[CORE_PACKAGE];
   if (updateCheckSwitchedOff(env) !== null || latest === undefined || !isVersion(latest)) return;
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const { behind, current } = updateCheckFindings(report, latest, after);
+  // What the release declares, when this read it; what an earlier read found of another release counts for nothing.
+  const facts = (record: { release: ReleaseFacts | null }) =>
+    release !== undefined ? release : record.release?.version === latest ? record.release : null;
   await changeUpdateCheck(core.paths.stateDir, (record) =>
     claim !== undefined && record.checking !== claim
       ? null
-      : { record: { ...record, lastChecked: at, latest, behind, current, lastError: null, checking: null } },
+      : {
+          record: {
+            ...record,
+            lastChecked: at,
+            latest,
+            behind,
+            current,
+            lastError: null,
+            checking: null,
+            release: facts(record),
+          },
+        },
   ).catch(() => undefined);
 }
 

@@ -196,6 +196,12 @@ export interface PrepareDeps {
   readonly label?: LabelDeps | undefined;
   /** This account's own record of what its app posted (S5): written after an app post, read before an app edit. */
   readonly appPosts?: AppPostRecord | undefined;
+  /**
+   * The line a post preview opens with when a security fix is out and this machine does not install it on its own
+   * (design 2026-10-16, U7): core's `securityNotice`, asked once. `gateDepsFor` always sets it; a gate built by hand
+   * without it shows none. Display only — never in the digest.
+   */
+  readonly securityNotice?: ((act: 'post') => Promise<string | null>) | undefined;
 }
 
 /** The channel, and how many people are in it — or why that could not be established. */
@@ -652,10 +658,13 @@ export async function preparePost(
     ...(deps.surface ? { surface: deps.surface } : {}),
   });
 
+  // Asked once, once the approval exists: a prepare refused before here asks nothing (design 2026-10-16, U7).
+  const security = (await deps.securityNotice?.('post')) ?? null;
   return {
     approvalId: record.approvalId,
     draftId: draft.draftId,
     preview: {
+      ...(security === null ? {} : { security }),
       ...preview,
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describePolicy(stricterPolicy(deps.policy, requiredPolicy)),

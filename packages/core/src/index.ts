@@ -140,10 +140,12 @@ export {
 } from './operations/servers.ts';
 export { type UpdateDeps, updateChange } from './operations/update.ts';
 export {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
 /*
  * Organisation profiles (design 2026-10-02): what a channel needs to read the record — whether a client row is an

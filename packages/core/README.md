@@ -28,18 +28,17 @@ npx @agentcomms/core channels      # which servers exist, which are installed, a
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
-npx @agentcomms/core update --later  # not now: nothing stops for the update until midnight (a change you approve)
-npx @agentcomms/core update --auto off  # no daily update check on this machine (a change you approve); --auto on
+npx @agentcomms/core update --pause 7  # hold update notices for 1, 7 or 14 days (no approval); --resume ends it
+npx @agentcomms/core update --level every-14-days  # auto, every-14-days or never; updating less is approved first
 ```
 
-**Once a day this machine asks npm whether a newer release is out.** When one is, every server and every command
-stops before doing anything — "Hang on a minute, there's an update. Let's update first." — until it is updated or put
-off until midnight. At a terminal you are asked "Update now, later today, or cancel?"; anything without a terminal
-exits `11` (`UPDATE_REQUIRED`), naming `agentcomms update` and `agentcomms update --later`. `update`, `doctor`,
-`paths`, `approve`, `approvals` and `mcp` on its own (the server, which stops each call itself — `mcp install` and
-`mcp prune` are stopped) are never stopped, and neither is a call or a command carrying the id of an approval already
-given on this machine. A registry that cannot be reached stops nothing. The check is skipped when `CI` is set, or
-`AGENT_COMMS_UPDATE_CHECK=off`; `doctor` shows it on one line.
+**On `auto`, the default, this machine asks npm once a day whether a newer release is out** — at most once every 14
+days on `every-14-days`, and never on `never`. Nothing is ever stopped for it. When one is, a
+server's first tool result carries one line beside it (an `update` field), and a command prints the same line once on
+stderr, at most once a day for the machine, and runs. `update`, `doctor`, `paths`, `approve`, `approvals` and `mcp` on
+its own never print it. A pause holds the notice for 1, 7 or 14 days, and never one of a security fix. A registry that
+cannot be reached changes nothing. The check is skipped when `CI` is set, `AGENT_COMMS_UPDATE_CHECK=off` or
+`AGENT_COMMS_UPDATES=never`; `doctor` shows it on one line.
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
 `{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`.
@@ -72,7 +71,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_channels_available` | which declared servers exist — core, Gmail, Resend, Slack, WhatsApp and events — which are installed and at which version, and which clients start each |
 | `comms_server_install` | register a declared channel or service server with a client; the server appears once the client restarts |
 | `comms_server_prune` | remove the managed runtimes old releases left behind; `dryRun` lists them |
-| `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `later` puts the daily check's stop off until midnight, `auto` turns the check on or off |
+| `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
 | `comms_label` | how what an agent sends is labelled, as `label`; `word`, `name`, `icon`, `addRule` with `as: "me"` and `removeRule` of an `agent` rule are approved first, and the other rule changes apply at once |

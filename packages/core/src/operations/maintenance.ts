@@ -20,17 +20,18 @@ import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
-import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
+import { organisationDrift, organisationsOf, orphanMarkedRows, shownPath, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import { inspectUpdateJob, type UpdateJobDeps, updateJobContext } from '../update-job.ts';
 import {
   countedLatest,
+  effectiveUpdates,
+  localStamp,
+  pauseEnd,
   readUpdateCheck,
-  UPDATE_CHECK_ENV,
-  updateCheckEnabled,
-  updateSnoozed,
+  securityRelease,
   updateVerdict,
 } from '../update-state.ts';
 import { VERSION } from '../version.ts';
@@ -342,30 +343,47 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
 }
 
 /**
- * The daily update check, in one line (design 2026-09-28 §4): on or off — and what turned it off — when the registry
- * was last asked, the latest release it named, and the release running here. Never a failure: an update that is out
- * is something to look at, with the two ways on, and the rest is information.
+ * How this machine updates, in one line (design 2026-09-28 §4, 2026-10-16 U2 and U3): the level — and what set it — when
+ * the registry was last asked, the latest release it named, the release running here, and a pause with when it ends.
+ * Never a failure: an update that is out is something to look at, with the way on, and the rest is information.
  */
 async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: CliHandoffs): Promise<DoctorCheck> {
-  const enabled = await updateCheckEnabled(core, env);
+  const updates = await effectiveUpdates(core, env);
   const record = await readUpdateCheck(core.paths.stateDir);
   const now = new Date();
-  const off = enabled.on
-    ? 'on'
-    : `off (${enabled.by === 'setting' ? 'set off with update --auto off' : enabled.by === 'CI' ? 'CI is set' : `${UPDATE_CHECK_ENV} is set`})`;
+  // Where a cap or a profile's `background: false` comes from (design 2026-10-16, U8): the organisation and its file.
+  const fromProfile = (where: { organisation: string; source: string }) =>
+    `${shownText(where.organisation, 40)}’s profile, ${shownPath(where.source)}`;
+  const level =
+    updates.by !== 'setting'
+      ? `never (${updates.by === 'CI' ? 'CI is set' : `${updates.by} is set`})`
+      : updates.cap
+        ? `${updates.level} (capped by ${fromProfile(updates.cap)})`
+        : updates.level === 'auto' && !updates.background
+          ? updates.backgroundOff
+            ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
+            : 'auto (a daily check with a notice: background updates are not set up)'
+          : updates.level;
   const latest =
     record.latest === null
       ? 'unknown'
       : countedLatest(record) === null
         ? `${record.latest} (a prerelease, not counted)`
         : record.latest;
-  const snoozed = updateSnoozed(record, now);
-  const parts = [off, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
-  if (snoozed && record.snoozedUntil !== null) parts.push(`put off until ${record.snoozedUntil}`);
+  const pause = pauseEnd(record, now);
+  const security = securityRelease(record, VERSION);
+  const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
+  if (updates.backgroundOff && !(updates.level === 'auto' && !updates.cap)) {
+    parts.push(`background updates off by ${shownText(updates.backgroundOff.organisation, 40)}’s profile`);
+  }
+  if (security !== null) parts.push(`${security} fixes a security problem`);
+  if (pause !== null) parts.push(`paused until ${localStamp(pause)}`);
   if (record.lastError !== null) parts.push(`the last check got no answer: ${record.lastError}`);
-  // The core's server and its command, each as its own stop reads it: installed only when both would start `latest`.
+  // The core's server and its command, each as its own notice reads it: installed only when both would start `latest`.
   const verdict = (surface: 'server' | 'command') =>
-    enabled.on && !snoozed ? updateVerdict(record, VERSION, { channel: 'core', surface }) : null;
+    updates.level !== 'never' || security !== null
+      ? updateVerdict(record, VERSION, { channel: 'core', surface })
+      : null;
   const [asServer, asCommand] = [verdict('server'), verdict('command')];
   const pending = asServer ?? asCommand;
   return {
@@ -381,8 +399,9 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
               ? `${pending.latest} is installed on this machine: restart the MCP clients, and run commands from it.`
               : handoffSentence(handoffs.core(['update']), (update) =>
                   handoffSentence(
-                    handoffs.core(['update', '--later']),
-                    (later) => `Run ${update} (comms_update from a chat), or ${later} to put it off until tomorrow.`,
+                    handoffs.core(['update', '--pause']),
+                    (later) =>
+                      `Run ${update} (comms_update from a chat) when it suits you, or ${later} to hold the notice for a week.`,
                   ),
                 ),
           ),

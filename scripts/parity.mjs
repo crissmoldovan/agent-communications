@@ -119,8 +119,8 @@ const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
  *
  * A row repeats another when it names the same command and tool *and* runs them with the same `argv` and `args`. One
  * command and one tool can be several capabilities, each reached by a flag and an argument of its own —
- * `agentcomms update --later` and `comms_update` with `later: true` put the update off, while the same pair with
- * `--auto off` and `auto: "off"` turns the daily check off — and each such row is driven with its own words to the
+ * `agentcomms update --pause` and `comms_update` with `pause: true` hold the update notice, while the same pair with
+ * `--level never` and `level: "never"` changes the level — and each such row is driven with its own words to the
  * operation it names, so telling them apart by those words checks every one of them.
  */
 export function checkParity(table, registries, { strict = false } = {}) {

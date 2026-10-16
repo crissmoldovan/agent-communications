@@ -5,6 +5,7 @@ import { waitCallOptions } from '../approval-wait-surface.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
+import { UPDATE_LEVELS } from '../config.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
@@ -32,11 +33,11 @@ import {
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
 import { updateJobChange } from '../operations/update-job.ts';
 import { updateRollbackChange } from '../operations/update-rollback.ts';
-import { updateAutoChange, updateLaterChange } from '../operations/update-settings.ts';
+import { updateLevelChange, updatePause, updateResume } from '../operations/update-settings.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
-import { CHANGE_CLAIM, updateToolGate } from '../update-gate.ts';
+import { updateToolNotice } from '../update-gate.ts';
 import type { UpdateJobDeps } from '../update-job.ts';
 import { VERSION } from '../version.ts';
 
@@ -181,38 +182,30 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     };
   };
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
-  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the daily update check's stop
-  // (design 2026-09-28): an update that is out stops every tool but the update's own, the doctor and the paths, and
-  // the check itself runs in the background, never delaying a call.
+  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the update notice (design
+  // 2026-10-16, U1): nothing is refused for being behind; the first result of this process that finds a newer release
+  // carries one line beside it, and the check itself runs in the background, never delaying a call.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core,
       env,
-      server: 'agentcomms',
       channel: 'core',
       running: VERSION,
+      // Each says what is behind in its own words already.
       exempt: ['comms_update', 'comms_doctor', 'comms_paths'],
-      // Every tool here that takes an approval claims a change with it, as the same command does at a terminal.
-      // `comms_approval_revoke` takes either kind: it is how a person's no reaches a send or a change.
-      approvals: {
-        comms_attach: CHANGE_CLAIM,
-        comms_change_policy: CHANGE_CLAIM,
-        comms_label: CHANGE_CLAIM,
-        comms_server_install: CHANGE_CLAIM,
-        comms_server_prune: CHANGE_CLAIM,
-        comms_names_migrate: CHANGE_CLAIM,
-        comms_secrets_migrate: CHANGE_CLAIM,
-        comms_org_add: CHANGE_CLAIM,
-        comms_org_update: CHANGE_CLAIM,
-        comms_org_remove: CHANGE_CLAIM,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        comms_approval_wait: { lookup: true },
-      },
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),
+    {
+      // 0.18's two settings, replaced (design 2026-10-16, U2, U3): nothing is stopped any more to put off.
+      comms_update: {
+        later:
+          'Nothing is stopped for an update any more: to hold its notice, call comms_update with `pause` (1, 7 or 14 days) — no approval needed.',
+        auto: 'The daily check is now one of three levels: call comms_update with `level` — `auto`, `every-14-days` or `never`.',
+      },
+    },
   );
   /** One changing call: the change this tool plans, run through the one flow, returned in its one shape. */
   const change = async <T>(build: () => GatedChange<T>, approvalId: string | undefined) => {
@@ -791,18 +784,19 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       inputSchema: {
         check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
         noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
-        later: z
-          .boolean()
+        level: z
+          .enum(UPDATE_LEVELS)
           .optional()
           .describe(
-            'not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId',
+            'how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once',
           ),
-        auto: z
-          .enum(['on', 'off'])
+        pause: z
+          .union([z.literal(true), z.literal(1), z.literal(7), z.literal(14)])
           .optional()
           .describe(
-            'turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`, and also removes the background update job; `on` applies at once',
+            'hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held',
           ),
+        resume: z.literal(true).optional().describe('end a pause at once'),
         backgroundJob: z
           .enum(['on', 'off'])
           .optional()
@@ -820,35 +814,26 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
-      const settings =
-        args.later === true || args.auto !== undefined || args.rollback === true || args.backgroundJob !== undefined;
-      const modes = [
-        args.check === true,
-        args.later === true,
-        args.auto !== undefined,
+      // One mode at a time, every mode counted: only the update itself, with none of them, takes `noVerify`.
+      const settings = [
+        args.level !== undefined,
+        args.pause !== undefined,
+        args.resume === true,
         args.rollback === true,
         args.backgroundJob !== undefined,
-      ].filter(Boolean).length;
-      if (modes > 1 || (args.noVerify !== undefined && settings)) {
+      ];
+      const modes = [args.check === true, ...settings];
+      if (modes.filter(Boolean).length > 1 || (args.noVerify !== undefined && settings.some(Boolean))) {
         return fail(
           new CommsError(
             'USAGE',
-            '`check`, `later`, `auto`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
+            '`check`, `level`, `pause`, `resume`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
             { hint: 'Call comms_update with one of them — or none, to update.' },
           ),
         );
       }
       if (args.rollback === true) {
         return change(() => updateRollbackChange(core), args.approvalId);
-      }
-      if (args.later === true) {
-        return change(() => updateLaterChange(core, { now: updateDeps.now }), args.approvalId);
-      }
-      if (args.auto !== undefined) {
-        return change(
-          () => updateAutoChange(core, args.auto as 'on' | 'off', { env, platform, job: options.updateJob }),
-          args.approvalId,
-        );
       }
       if (args.backgroundJob !== undefined) {
         return change(
@@ -860,6 +845,24 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
             }),
           args.approvalId,
         );
+      }
+      if (args.level !== undefined) {
+        return change(
+          () => updateLevelChange(core, args.level as string, { env, platform, job: options.updateJob }),
+          args.approvalId,
+        );
+      }
+      if (args.pause !== undefined || args.resume === true) {
+        return read(() => {
+          // A plain answer asks nobody, so an approval here is refused rather than dropped (`refuseUnclaimedApproval`).
+          refuseUnclaimedApproval(args.approvalId, {
+            message: '`pause` and `resume` ask nobody, so they take no approvalId',
+            hint: 'Call comms_update with `pause` or `resume` alone: either applies at once.',
+          });
+          return args.resume === true
+            ? updateResume(core, { now: updateDeps.now })
+            : updatePause(core, { days: args.pause === true ? undefined : args.pause, now: updateDeps.now });
+        });
       }
       if (args.check === true) {
         return read(() => {

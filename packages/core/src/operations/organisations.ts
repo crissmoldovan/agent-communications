@@ -30,6 +30,7 @@ import { chooseSecretStore, clientSecretRef, gmailClientRow, writeSecretWithRest
 import {
   accountsOfOrganisation,
   activeGeneration,
+  capsText,
   type GenerationState,
   generationState,
   mailboxesOn,
@@ -322,6 +323,11 @@ function changedWhileRunning(): CommsError {
  */
 function sourceLine(file: ProfileFile): string {
   return `reads it from ${shownPath(file.path)} (path SHA-256 ${pathDigest(file.path)}), profile SHA-256 ${file.sha256}`;
+}
+
+/** Where the update caps were read from, bound as the profile's source is: its path, and both digests. */
+function capsSourceLine(caps: NonNullable<ProfileFile['updates']>): string {
+  return `read from ${shownPath(caps.path)} (path SHA-256 ${pathDigest(caps.path)}), updates SHA-256 ${caps.sha256}`;
 }
 
 const PROFILE_SHA = /, profile SHA-256 ([0-9a-f]{64})$/;
@@ -863,6 +869,27 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
      */
     repairs.unshift(...changes.splice(0));
   }
+  /*
+   * The update caps, from the file beside the profile (design 2026-10-16, U8): their own file and their own SHA-256,
+   * so their own judgement. Another file — a new one, a changed one, one gone — is a change of what the organisation
+   * says, approved first even with the profile's bytes unchanged; the same file with the record saying otherwise is
+   * drift, put back at once. Judged after the profile's drift is sorted above, which would otherwise count it a repair.
+   */
+  const capsWere = previous?.updates;
+  const capsNow = file.updates;
+  let capsChanged = false;
+  if (input.mode === 'update') {
+    if ((capsWere?.sha256 ?? null) !== (capsNow?.sha256 ?? null)) {
+      capsChanged = true;
+      changes.push(
+        `updates: ${capsText(capsWere)} → ${capsText(capsNow)}${capsNow ? `, ${capsSourceLine(capsNow)}` : ''}`,
+      );
+    } else if (capsWere && capsNow && capsText(capsWere) !== capsText(capsNow)) {
+      repairs.push(
+        `the update caps recorded for ${organisation} were changed here, to ${capsText(capsWere)}; they are ${capsText(capsNow)} again, as their file says`,
+      );
+    }
+  }
   if (turningOn && input.mode === 'update') {
     changes.push(`for other addresses: off → on — ${organisation}'s client may also serve your mailboxes outside it`);
   }
@@ -885,6 +912,13 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
   else delete next.gmail;
   if (slack) next.slack = slack;
   else delete next.slack;
+  if (capsNow) {
+    next.updates = {
+      ...(capsNow.max === undefined ? {} : { max: capsNow.max }),
+      ...(capsNow.background === undefined ? {} : { background: capsNow.background }),
+      sha256: capsNow.sha256,
+    };
+  } else delete next.updates;
 
   return {
     organisation,
@@ -896,7 +930,7 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     immediate,
     repairs,
     reports,
-    needsApproval: input.mode === 'add' || input.sourceGiven || shaChanged || turningOn,
+    needsApproval: input.mode === 'add' || input.sourceGiven || shaChanged || turningOn || capsChanged,
     gmail,
   };
 }
@@ -1145,6 +1179,15 @@ function previewLines(mode: 'add' | 'update', plan: ProfilePlan, file: ProfileFi
         ? `for other addresses: on — ${plan.organisation}'s client may also serve your mailboxes outside it`
         : `for other addresses: off — ${plan.organisation}'s client serves only its own addresses`,
     );
+    // Only when the organisation names caps, so a profile without them is previewed exactly as before.
+    const caps = file.updates;
+    if (caps) {
+      const what = [
+        ...(caps.max === undefined ? [] : [`caps how this machine updates at ${caps.max}`]),
+        ...(caps.background === false ? ['turns off background updates on this machine'] : []),
+      ];
+      if (what.length > 0) lines.push(`${what.join(', and ')}, ${capsSourceLine(caps)}`);
+    }
   }
   lines.push(...plan.changes, ...plan.immediate, ...plan.repairs.map((repair) => `repairs: ${repair}`));
   if (plan.secret && store)

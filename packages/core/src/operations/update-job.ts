@@ -176,8 +176,8 @@ export function updateJobChange(
       if (level !== 'auto') {
         throw new CommsError('CONFIG', `nothing was set up: at the level ${level} nothing installs in the background`, {
           hint: handoffSentence(
-            handoffs.core(['update', '--auto', 'on']),
-            (command) => `Turn updates back on with ${command} first, then set up the job.`,
+            handoffs.core(['update', '--level', 'auto']),
+            (command) => `Move this machine to the level auto with ${command} first, then set up the job.`,
           ),
         });
       }

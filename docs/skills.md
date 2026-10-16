@@ -84,7 +84,7 @@ Set a person up with agent-communications from chat: which channels and accounts
 
 Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions.
 
-**Reach for it when:** 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a tool answering 'Hang on a minute, there's an update. Let's update first.' (UPDATE_REQUIRED), 'not now', 'stop asking me to update'
+**Reach for it when:** 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'
 
 **Not for** first-time setup — comms-onboarding does that — nor for one account's settings.
 

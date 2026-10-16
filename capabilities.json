@@ -327,27 +327,38 @@
       "reason": "One change for every step: each registration registered again at the latest release with its own name, client, scope, launcher and pins, the runtimes that needs, and the global packages. `update --check` and `check: true` are `updateCheck`, the read both sides run instead, which asks nobody."
     },
     {
-      "id": "core.update.later",
+      "id": "core.update.level",
       "package": "core",
       "cli": "update",
       "mcp": "comms_update",
       "status": "both",
-      "operation": "updateLaterChange",
-      "argv": ["--later"],
-      "args": { "later": true },
-      "reason": "Not now: the daily update check's stop put off until local midnight, for the whole machine — a change the person approves, so an agent cannot clear the stop by itself (design 2026-09-28)."
+      "operation": "updateLevelChange",
+      "argv": ["--level", "never"],
+      "args": { "level": "never" },
+      "expect": { "level": "never" },
+      "reason": "How this machine updates — auto, every-14-days or never — in config.json: a level that updates less is a loosening the person approves, one that updates more applies at once (design 2026-10-16, U2)."
     },
     {
-      "id": "core.update.auto",
+      "id": "core.update.pause",
       "package": "core",
       "cli": "update",
       "mcp": "comms_update",
       "status": "both",
-      "operation": "updateAutoChange",
-      "argv": ["--auto", "off"],
-      "args": { "auto": "off" },
-      "expect": { "setting": "off" },
-      "reason": "The daily update check on or off for this machine, in config.json: off is a loosening the person approves, on applies at once (design 2026-09-28)."
+      "operation": "updatePause",
+      "argv": ["--pause"],
+      "args": { "pause": true },
+      "reason": "Holds every update notice on this machine for 1, 7 or 14 days, 7 by default: a plain answer with no approval, since nothing is stopped any more, and never for a security fix (design 2026-10-16, U3)."
+    },
+    {
+      "id": "core.update.resume",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateResume",
+      "argv": ["--resume"],
+      "args": { "resume": true },
+      "reason": "Ends a pause at once, with no approval (design 2026-10-16, U3)."
     },
     {
       "id": "core.update.rollback",

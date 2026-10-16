@@ -9,7 +9,6 @@ import {
   CommsError,
   changeToolResult,
   checkForUpdates,
-  DOWNLOAD_CLAIM,
   defaultChangePolicy,
   downloadQuestionForm,
   findById,
@@ -27,7 +26,7 @@ import {
   stricterPolicy,
   strictToolArguments,
   toCommsError,
-  updateToolGate,
+  updateToolNotice,
   waitCallOptions,
   waitForApproval,
 } from '@agentcomms/core';
@@ -320,24 +319,21 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
    * the SDK stripped a key a tool did not declare, which is how `client` and `contacts` were once dropped from
    * `gmail_inbox_add` without a word.
    *
-   * Then the daily update check's stop (design 2026-09-28): an update that is out stops every tool but the doctor,
-   * and the check itself runs in the background, never delaying a call. A download carrying the id of the question
-   * the person just answered goes past it, as a claimed approval does; the answer alone does not.
+   * Then the update notice (design 2026-10-16, U1): nothing is refused for being behind; the first result of this
+   * process that finds a newer release carries one line beside it, and the check itself runs in the background, never
+   * delaying a call.
    *
    * `out` is refused with what replaced it: the person chooses where a download is saved now.
    */
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-gmail',
       channel: 'gmail',
       running: VERSION,
       exempt: ['gmail_doctor'],
-      // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-      approvals: { gmail_attachment_download: DOWNLOAD_CLAIM, gmail_send_wait: { lookup: true } },
       refresh: () => checkForUpdates(context.core, context.env),
     }),
     { gmail_attachment_download: { out: retiredOutHint('mcp') } },

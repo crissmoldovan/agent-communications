@@ -54,58 +54,80 @@ one whose client's own command is not on `PATH` — is left as it was and listed
 each step as it went, then says which clients to restart. Restart them, then prune the old runtimes from the restarted
 server, as in step 7.
 
-### The daily check
+### The daily check, and its notice
 
-From the release that adds it, a machine does not wait to be asked. Once a day — at most, for the whole machine — the
-first server or command to run asks npm for the latest release of `@agentcomms/core`, runs the same "what is behind"
-check as `update --check`, and records what it found in `update-check.json` in the state directory. When a newer
-release is out:
+Once a day — at most, for the whole machine — the first server or command to run asks npm for the latest release of
+`@agentcomms/core`, runs the same "what is behind" check as `update --check`, and records what it found in
+`update-check.json` in the state directory.
 
-- **every MCP tool call stops** — except `comms_update`, `comms_doctor`, `comms_paths`, each channel's doctor, and a
-  call carrying the `approvalId` of an approval the person already gave that is still waiting to be used (an empty or
-  made-up id does not count, nor one already used, revoked or expired; Resend's send status, which looks a send up by
-  its approval, counts the send's whatever became of it; and a call that takes one but would not use it — a report, a
-  dry run — refuses it) — and answers "Hang on a minute, there's an update. Let's
-  update first.", with the running and latest versions and the two ways on. When every registration of that server on
-  this machine already names the latest release, and only the running server is old, it says to restart the client
-  instead. The Claude Code plugin's Gmail server and the Gemini extension's servers are always told to update — each
-  says, as it starts, that the plugin or the extension started it — because they run the release it pins, which
-  restarting starts again: update them where they were installed, or put it off. So is a server of a channel with a
-  registration that pins no release — a checkout's own, or an entry written by hand. A server started from a client
-  configuration the check does not read goes by its channel's registrations;
-- **every command stops** — except `update`, `doctor`, `paths`, `approve`, `approvals`, `mcp` on its own (the server,
-  which stops each call itself; `mcp install` and `mcp prune` are stopped like any other command), the listener a
-  sign-in starts (`agent-gmail oauth-listen`, `agent-slack sign-in-listen`), the hidden `update-check-child` a
-  command starts to finish the day's check, WhatsApp's `status`, and a command
-  that takes `--approval` carrying one still waiting to be used (a command that takes none refuses it, and so does
-  one that would not use it: a report, a dry run, a `--finish`) — and at a
-  terminal asks "Update now, later today, or
-  cancel?". Now runs `update`, with its own preview, and says "Updated. Run your command again." only when it
-  brought this command to the latest release; otherwise it says what is left and exits non-zero. Later puts it off;
-  cancel does nothing. Anything without a terminal — a script, an agent, `--json` — exits `11` (`UPDATE_REQUIRED`),
-  naming this installation's own `update` and `update --later` commands — its Node and core's CLI file, its folders
-  pinned — to run exactly as given; on Windows with Node under `C:\Program Files` they come as a line labelled for
-  PowerShell, beginning with its `&` call operator. A word that cannot be represented safely still comes as inert JSON
-  to type yourself. A command whose release is installed globally while an
-  older copy of it runs — from npx's cache, or a project's own install — stops the same way, and says to run the
-  installed one.
+**From 0.20.0, nothing is stopped for being behind.** When a newer release is out:
 
-"Not now" (`agentcomms update --later`, or `comms_update` with `later: true`) is a change the person approves, like
-any other, and lasts until midnight, local time, for the whole machine. `agentcomms update --auto off` (or `auto:
-"off"`) turns the check off for this machine, also approved; `--auto on` turns it back on at once. `doctor` shows the
-check on one line: on or off, when it last asked, the latest release, and the one running.
+- **a server's first tool result of its process** carries one line beside the result — an `update` field, and a text
+  block of its own — and that process never repeats it: `agent-communications 0.20.0 is out; say "update" when it
+  suits you.` When every registration of that server on this machine already names the latest release, and only the
+  running server is old, it says `agent-communications 0.20.0 is installed; restart the client (in Claude Code, /mcp →
+  Reconnect) to use it.` instead. The Claude Code plugin's Gmail server and the Gemini extension's servers are told to
+  update where they were installed, because restarting starts the release the plugin or the extension pins. A tool's
+  output schema is published with room for the `update` field, so a client that checks results against it takes the
+  one carrying it. `comms_update`, `comms_doctor`, `comms_paths` and each channel's doctor never carry it;
+- **a command** prints the same line once on stderr — never on stdout, where its result and `--json` are — at most
+  once a day for the machine, and runs. It names this installation's own `update` command, located as every printed
+  command is. `update`, `doctor`, `paths`, `approve`, `approvals`, `mcp` on its own, the listener a sign-in starts, the
+  hidden `update-check-child` and WhatsApp's `status` never print it.
 
-It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result, stops nothing,
-and is not tried again that day. A prerelease never counts as an update. A command at a terminal waits about three
-seconds for the answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from;
-a server never waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the
-command's output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a
-pipe into `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's
-registry or `npm ls` behind it. Where that process cannot be started, the command asks in its own process, as before, and ends
-once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a
-couple of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm
-themselves; they stop once any other server or command on the machine has found an update. The check is skipped
-entirely when `CI` is set, or when `AGENT_COMMS_UPDATE_CHECK=off`.
+The `UPDATE_REQUIRED` error and exit status `11` are retired. A client that still sees one is talking to a server
+older than 0.20.0, and a script that branched on `11` can drop that branch.
+
+**Levels.** `defaults.updates` in `config.json` is one of three, and `agentcomms update --level <level>` (or
+`comms_update` with `level`) sets it:
+
+| Level | Checks | Notices |
+|---|---|---|
+| `auto` (the default) | daily | until background updates are set up, a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
+| `every-14-days` | at most once every 14 days | at most once every 14 days |
+| `never` | never: no registry request | none |
+
+A level that updates less (`auto` → `every-14-days` → `never`) is a change the person approves, and its preview says
+what stops happening; moving back applies at once. 0.18's `updateCheck` reads as a level until one is set — `on` as
+`auto`, `off` as `never` — and every level written keeps `updateCheck` beside it in step, so an earlier release sharing
+the file checks, or does not, as the person chose. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never`
+switch it all off for one process.
+
+**A pause.** `agentcomms update --pause [1|7|14]` (or `comms_update` with `pause`) holds every notice on this machine
+for that many days, 7 when no length is given. It is a plain answer with no approval: nothing is stopped any more, so a
+pause clears nothing. A new pause replaces the old one, and none lasts longer than 14 days from when it was asked,
+however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` says when it ends.
+
+**A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
+`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up —
+whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
+preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
+send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
+the line is shown, never part of what the approval binds.
+
+**An organisation's caps.** An organisation can only make its members' updates stricter, in a file beside its
+profile — `acme.agentcomms.updates.json` beside `acme.agentcomms.json` — holding
+`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. It is not in the
+profile itself: every release from 0.13.0 to 0.19.0 refuses a profile with a key it does not know, at every level, and a
+member not yet on 0.20.0 would lose `org update` for the whole profile. Those releases never open the file beside it.
+`org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
+file is approved first even when the profile's bytes are unchanged, and a record edited by hand is put back at once. A
+member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
+`max` other than those two words is refused. `doctor` names the cap and the profile it comes from.
+
+`--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
+
+It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result and is not tried
+again that day. A prerelease never counts as an update. A command at a terminal waits about three seconds for the
+answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from; a server never
+waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
+output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
+`jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
+`npm ls` behind it. The check reads the latest release's own document too, for what its manifest declares. Where that process cannot be started, the command asks in its own process, as before, and ends
+once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
+of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
+the notice once any other server or command on the machine has found an update. The check is skipped entirely when
+`CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when `AGENT_COMMS_UPDATES=never`.
 
 ### The background update job
 
@@ -126,8 +148,8 @@ pinned, so it reads the same configuration whatever the environment it starts in
 "Background Items Added" once and lists the job under System Settings → General → Login Items, where it can be switched
 off.
 
-`agentcomms update --background-job off` (or `backgroundJob: "off"`) removes it at once, and so does turning updates
-off with `update --auto off`. Run it before you uninstall: npm runs no script of a package as it removes it. A job at
+`agentcomms update --background-job off` (or `backgroundJob: "off"`) removes it at once, and so does choosing a level
+at which nothing installs in the background, `update --level every-14-days` or `--level never`. Run it before you uninstall: npm runs no script of a package as it removes it. A job at
 the same place that this installation did not write is never changed or removed by it. Setting the job up is refused
 when an organisation profile here turns background updates off, and a job set up before such a profile arrived is
 removed by its next run. `doctor` reports the job as installed, missing, foreign or stale, with what fixes each; on a

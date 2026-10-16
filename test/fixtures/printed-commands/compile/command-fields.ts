@@ -28,7 +28,6 @@ import {
 import type { LooserOverride } from '../../../../packages/core/src/operations/change-policy.ts';
 import type { DoctorCheck } from '../../../../packages/core/src/operations/maintenance.ts';
 import type { LegacyServerFinding } from '../../../../packages/core/src/other-servers.ts';
-import type { UpdateWays } from '../../../../packages/core/src/update-state.ts';
 import type { FinishRegistration, SetupHandoff } from '../../../../packages/gmail/src/cli/render.ts';
 import type { Check as GmailCheck } from '../../../../packages/gmail/src/operations/doctor.ts';
 import type { ImportResult } from '../../../../packages/gmail/src/operations/import-legacy.ts';
@@ -48,20 +47,6 @@ declare const alias: string;
 declare const slackHandoffs: Parameters<typeof approveCommand>[1];
 
 // ── core ────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-export const ways: UpdateWays = {
-  update: {
-    tool: 'comms_update',
-    // @ts-expect-error the update is core's own command, located — not its bare name
-    command: 'agentcomms update',
-  },
-  later: {
-    tool: 'comms_update',
-    arguments: { later: true },
-    // @ts-expect-error nor the bare name of its "not now"
-    command: 'agentcomms update --later',
-  },
-};
 
 export const looser: LooserOverride['tighten'] = {
   tool: 'comms_change_policy',
@@ -190,7 +175,11 @@ export const lists: Pick<ChatListsResult, 'next'> = {
 // ── What each field does take ───────────────────────────────────────────────────────────────────────────────────
 
 export const accepted = {
-  ways: { tool: 'comms_update', command: located } satisfies UpdateWays['update'],
+  tighten: {
+    tool: 'comms_change_policy',
+    arguments: { set: 'confirm' },
+    command: located,
+  } satisfies LooserOverride['tighten'],
   check: { name: 'x', ok: true, detail: 'x', fix: remedy(located, 'words around it') } satisfies DoctorCheck,
   removal: remedy([located, ', then restart the client']) satisfies Remedy,
   returned: (command: PrintedCommand): PrintedCommand => command,
