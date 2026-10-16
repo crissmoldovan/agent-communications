@@ -34,17 +34,31 @@ never inherits them.
   the notification carries it too.
 - Reactions come from the app where it can post. An agent's edit of a message is labelled.
 - An app's bot token reaches this machine one of two local ways, with no server:
-  - a sign-in with the app's client secret, entered once at your terminal;
-  - pasting the app's bot token once at your terminal, with `workspace bot`.
+  - a sign-in with the app's client secret, entered once at your terminal: `workspace add … --with-client-secret`.
+    Slack allows it only for an app that has never turned PKCE on, so it needs a new app made from
+    `agent-slack manifest --with-client-secret`, which also picks a free loopback port for you;
+  - pasting the app's bot token once at your terminal, with `workspace bot`, for an app whose tokens do not rotate.
+- A workspace connected through an organisation's shared app still posts as you, labelled. Posting as the app through
+  an organisation's app is not available yet.
+- An agent reading Slack sees each message's reactions, as before, with no new permission.
 - `agent-slack icon make` (MCP `slack_icon_make`) turns your Slack photo into a square PNG with a small robot badge,
   to upload as your agent emoji. Record its name with `agentcomms label icon`.
 
 **Gmail and Resend.**
-- A labelled message's From name is "Your Name (agent)".
+- A labelled message's From name is "Your Name (agent)". Gmail keeps that name on the sent message, as the live check
+  on 2026-10-16 confirmed.
 - Gmail drafts are labelled when written. A draft written in Gmail itself has only its From line rewritten when you
   prepare to send it, leaving every other byte unchanged.
 - The send approval now covers the whole From line, name included, so it cannot change between the preview and the
   send.
+
+**Also fixed.**
+- **Your commands and shims no longer break if the Node they start moves** (CUE-492). When `node` on your PATH is a link,
+  for example one another app installed, a printed command and a managed CLI shim now name the link, as client
+  registrations already did, not the file it pointed to at the time. `doctor` reports an older shim as stale, and
+  `update` repoints it.
+- **An events rule tick no longer judges Gmail mail by the wall clock** instead of the scheduler's own. This only showed
+  in tests, but a test would have failed on any machine from 2026-10-15 on.
 
 Why: agents that read Slack and mail send acknowledgements and replies, and until now people saw those as yours. The
 label makes clear which messages your agent sent, without impersonating you and without a new service, and every
@@ -56,9 +70,12 @@ unlabelled message rests on your yes to a preview that says so.
   other clients send unlabelled until the update reaches them.
 - If Gmail has no display name for your address, or a Resend send has no From name, set one once with
   `agentcomms label name "Your Name"`. Until then, a labelled draft or send is refused with that hint.
-- In Slack, nothing changes until you choose: your workspace's messages go out as you, labelled. To post as the app,
-  connect it with one of the two ways above. Each needs a Slack app created from this release's manifest:
-  `agent-slack manifest --with-client-secret` for the secret sign-in.
+- In Slack, nothing changes until you choose: your workspace's messages go out as you, labelled. To post as the app:
+  1. Create a new app from `agent-slack manifest --mode send --with-client-secret`.
+  2. Only one connection per person per workspace is kept, so an existing connection to that workspace has to be
+     removed first, with `workspace remove`.
+  3. Connect the new app with `workspace add … --with-client-secret`.
+  - On Slack's free plan, a workspace holds at most 10 apps, and this one counts toward them.
 - A Gmail send prepared before the upgrade, for a draft whose From has a display name, has to be prepared again.
 
 ## 0.18.2

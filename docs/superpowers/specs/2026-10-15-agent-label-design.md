@@ -415,6 +415,27 @@ Every test runs against the fakes: Slack's loopback (`packages/slack/test/suppor
 
 Resend gets no live check: no real key is used while developing.
 
+**Results, 2026-10-16**, each step with the owner's yes, from a local build of the branch:
+- **The client-secret sign-in works.** Slack accepted the `http://localhost` redirect for a new app with PKCE off,
+  and returned the bot token with the four scopes. `doctor` reported the app's bot user.
+- **One connection per person per workspace.** The new app could not be added beside the existing `cue/slack`
+  ("already connected"), and `reauth` cannot switch apps. The connection was removed and added again through the new
+  app.
+- **Slack's free plan holds at most 10 apps per workspace.** CUE++ was full, so the owner removed an unused app first.
+- **An app post** in #codex-test read back with `app: true`, the chosen name "Cristian Moldovan (agent)" and
+  `mismatch: false`. The owner confirmed the name and the APP badge in Slack.
+- **A labelled fallback post** in the owner's own DM read back with `mismatch: false`. Slack also tags a user-token
+  post with the app that made it (`app: true`, app name).
+- **Gmail kept the From name.** A send to the owner's own address arrived as `"Cristian Moldovan (agent)"
+  <criss@cueplusplus.com>`. The name came from `label name`, because the address has no send-as name. No body footer
+  is needed (§8).
+- **The agent emoji was skipped by the owner's choice.** Whether `icon_emoji` takes a custom emoji is not yet seen
+  live. Until one is set, the post shows the profile photo.
+- **A gap:** a workspace connected through an **organisation profile** cannot post as the app in this release.
+  Organisation apps have PKCE on, so the secret sign-in is refused for them, and their tokens rotate, so paste-once
+  refuses them. They get the labelled fallback. Posting as the app through an organisation's shared app needs its
+  own design, perhaps an organisation app made with PKCE off whose administrator connects the bot once.
+
 ## 11. Release
 
 A minor release: a new capability, and a change in what recipients see by default.

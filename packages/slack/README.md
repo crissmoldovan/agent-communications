@@ -312,8 +312,17 @@ redirects are not allowed to request bot scopes"). So a `send` workspace is in o
 
    ```sh
    agent-slack workspace add acme/slack --mode send --client-id <id> --port <port> --with-client-secret
-   agent-slack workspace reauth acme/slack --mode send --with-client-secret    # an existing workspace, moved to it
    ```
+
+   **One connection per person per workspace.** If you are already connected to that workspace through another app,
+   the new sign-in stops with "already connected", and `workspace reauth` keeps the app a workspace already has. So
+   remove the old connection first (`agent-slack workspace remove acme/slack`), then add the new app under the same
+   name. On Slack's free plan a workspace holds at most 10 apps, and this new one counts toward them: if Slack says the
+   limit is reached, remove an app you no longer use, in **Tools & settings → Manage apps**.
+
+   **A workspace connected through an organisation's profile** cannot post as the app in this release. The
+   organisation's shared app has PKCE on and rotating tokens, so neither way above works for it. Its agent's messages
+   go out as you, labelled, and `doctor` says so.
 
    It asks for the client secret (the app's **Basic Information** page, under **App Credentials**) at a hidden prompt —
    a person's, at a terminal, as for `workspace bot` — keeps it in the secret store by the app's id, sends it only to
