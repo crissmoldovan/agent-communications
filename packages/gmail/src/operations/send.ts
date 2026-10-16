@@ -725,7 +725,15 @@ function previewFor(options: {
       note: 'nothing has been sent',
     },
     recipientNotes: notes,
-    thread: analysis.threadId ? `reply in conversation ${analysis.threadId}` : undefined,
+    /*
+     * Only for a reply. Gmail gives every draft a thread id, a new message's too, so the id alone said "reply" for
+     * everything. What makes a draft a reply is In-Reply-To or References. Display text only: the digest binds the
+     * thread id and both headers, and is unchanged by this.
+     */
+    thread:
+      analysis.threadId && (analysis.inReplyTo?.trim() || analysis.references.length > 0)
+        ? `reply in conversation ${analysis.threadId}`
+        : undefined,
     links: analysis.links,
     warnings,
     policy:
