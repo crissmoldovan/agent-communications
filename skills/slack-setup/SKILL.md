@@ -298,6 +298,9 @@ scopes. So a `send` workspace is in one of three states; `doctor`'s "Posting as 
 
 1. **No bot token.** The state after the ordinary sign-in, and of every workspace connected before this release. It
    works as it is: posts go out as the person, labelled. Do nothing unless the person wants posts to appear as the app.
+   A workspace connected through an organisation profile stays here: posting as the app is not available through an
+   organisation's shared app yet. `doctor` says so as a note and names no command, because state 2 refuses its
+   rotating tokens and state 3 refuses a profile account.
 2. **Pasted once.** The app's manifest must be the `send` one (it declares the bot user and its four scopes); the
    person presses **Install to Workspace** on the app's **OAuth & Permissions** page, copies the **Bot User OAuth
    Token** (`xoxb-…`), and runs `agent-slack workspace bot <name>` **in their own terminal**, which asks for it without
@@ -355,7 +358,9 @@ installed in the workspace; removing it there is the person's step in Slack's se
 - other Slack MCP servers registered on this machine. Where it says *not checked*, it could not look, and that is
   not the same as "none": open the client's MCP server list and look for another Slack entry yourself;
 - for a `send` workspace, whether its app's bot token is actually stored — so whether an agent's posts can appear as
-  the app — and, when it is not, both ways to give it one (see above).
+  the app — and, when it is not, the ways that can work for it (see above): for a person's own app, the client-secret
+  sign-in, and pasting once only if its tokens do not rotate; for a workspace connected through an organisation
+  profile, a note and no command.
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
 the files can say, and `--workspace <name>` checks one workspace. `slack_doctor` runs the same checks and returns

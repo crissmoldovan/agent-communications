@@ -519,23 +519,53 @@ export function doctor(input: DoctorInput): DoctorResult {
           fix: null,
           workspace: workspace.alias,
         });
+      } else if (workspace.organisation !== undefined) {
+        /*
+         * Connected through an organisation profile's shared app. Neither way works for it: the client-secret sign-in
+         * refuses a profile account — the administrator holds the secret, not its members — and paste-once refuses the
+         * rotating token an organisation's app has. So this names no command. And it is `ok`, a note rather than a
+         * warning, as the read install's `files` row is: posting as the person, labelled, is how such a workspace
+         * works, nothing its person can do changes that, and a warning on every healthy one is one people stop reading.
+         */
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'ok',
+          detail:
+            "connected through an organisation profile, so an agent's posts go out as you, labelled in their text. Posting as the app is not available through an organisation’s shared app yet",
+          fix: null,
+          workspace: workspace.alias,
+        });
       } else {
+        /*
+         * A person's own app. The client-secret sign-in is always offered. Paste-once only where it can work: it refuses
+         * a rotating token, and rotation is the app's setting rather than one token's, so a person's own credential that
+         * rotates says the bot token on the app's page rotates too. Every sign-in asks for rotation, so that is the
+         * usual case; offering paste-once there would send the person to a refusal.
+         */
+        const pasteOnce = !rotates(bundle);
         checks.push({
           id: 'app-identity',
           title,
           status: 'warn',
-          detail:
-            "no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, give it the bot token one of two ways",
-          fix: remedy(
-            [
-              handoffs.own(['workspace', 'bot', workspace.alias]),
-              ' — paste the "Bot User OAuth Token" once, from the app’s OAuth & Permissions page after Install to Workspace; or',
-            ],
-            [
-              handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
-              ' — sign in with the app’s client secret, for an app with PKCE off',
-            ],
-          ),
+          detail: pasteOnce
+            ? "no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, give it the bot token one of two ways"
+            : "no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, sign in with the app's client secret. Pasting its bot token is not offered: this app's tokens rotate, so a pasted one would stop working within twelve hours, and pasting refuses it",
+          fix: pasteOnce
+            ? remedy(
+                [
+                  handoffs.own(['workspace', 'bot', workspace.alias]),
+                  ' — paste the "Bot User OAuth Token" once, from the app’s OAuth & Permissions page after Install to Workspace; or',
+                ],
+                [
+                  handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
+                  ' — sign in with the app’s client secret, for an app with PKCE off',
+                ],
+              )
+            : remedy([
+                handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
+                ' — sign in with the app’s client secret, for an app with PKCE off',
+              ]),
           workspace: workspace.alias,
         });
       }
@@ -579,6 +609,11 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks, ...(input.cleanup ? { cleanup: input.cleanup } : {}) };
+}
+
+/** Whether the person's own credential shows its app rotates tokens: a refresh token, a refresh expiry, or a refresh under way or spent. */
+function rotates(bundle: TokenBundle): boolean {
+  return bundle.refreshToken !== undefined || bundle.refreshExpiresAt !== undefined || bundle.state !== 'ready';
 }
 
 export interface DoctorRun {
