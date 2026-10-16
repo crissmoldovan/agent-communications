@@ -108,6 +108,11 @@ export interface UpdateCheckRecord {
    * and a release that needs a decision from the person. Null when it was not read. Counts only for `version`.
    */
   release: ReleaseFacts | null;
+  /**
+   * The security release a send or post preview has already carried the line for (design 2026-10-16, U7): it is asked
+   * once, and the person's yes to that preview is the answer.
+   */
+  securityAsked: string | null;
 }
 
 /** What a release's core manifest declares under `agentcommsRelease`, for its version. */
@@ -145,6 +150,7 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   pausedAt: null,
   pausedUntil: null,
   release: null,
+  securityAsked: null,
 });
 
 export function updateCheckPath(stateDir: string): string {
@@ -194,6 +200,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     pausedAt: isTime(held.pausedAt) ? held.pausedAt : null,
     pausedUntil: isTime(held.pausedUntil) ? held.pausedUntil : null,
     release: readRelease(held.release),
+    securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
   };
 }
 

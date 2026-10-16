@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -61,6 +61,29 @@ async function commandNotice(m: Machine, now: () => Date, env: Record<string, st
     now,
   });
   return said;
+}
+
+/**
+ * The core's command, run in a process of its own without blocking this one: `spawnSync` would hold this process's
+ * event loop, and with it any lock a server here had just taken, for as long as the command ran.
+ */
+function cli(
+  env: Record<string, string>,
+  args: readonly string[],
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [...NODE_FLAGS, CLI, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('close', (status) => resolve({ status, stdout, stderr }));
+  });
 }
 
 const levelConfig = (updates: string | undefined, updateCheck?: string) => ({
@@ -150,16 +173,12 @@ test('moving to a level that updates less waits for a yes, says what stops, and 
     await close();
   }
   // The same from a terminal: an agent gets the preview and an id (exit 10); back is at once.
-  const run = (args: string[]) =>
-    spawnSync(process.execPath, [...NODE_FLAGS, CLI, ...args], {
-      encoding: 'utf8',
-      env: { ...m.env, CLAUDECODE: '1' },
-    });
-  const less = run(['update', '--level', 'never', '--json']);
+  const run = (args: readonly string[]) => cli({ ...m.env, CLAUDECODE: '1' }, args);
+  const less = await run(['update', '--level', 'never', '--json']);
   assert.equal(less.status, 10, less.stdout + less.stderr);
-  assert.equal(run(['update', '--level', 'every-14-days', '--json']).status, 10);
-  assert.equal(run(['update', '--level', 'auto', '--json']).status, 0);
-  assert.equal(run(['update', '--level', 'weekly', '--json']).status, 64);
+  assert.equal((await run(['update', '--level', 'every-14-days', '--json'])).status, 10);
+  assert.equal((await run(['update', '--level', 'auto', '--json'])).status, 0);
+  assert.equal((await run(['update', '--level', 'weekly', '--json'])).status, 64);
   const outcome = await gatedChange(m.core, updateLevelChange(m.core, 'never'), { channel: 'core', surface: 'mcp' });
   assert.equal(outcome.status, 'approval-required');
 });
@@ -347,23 +366,19 @@ test('the pause and resume over MCP and at a terminal: no approval, and the reti
   } finally {
     await close();
   }
-  const run = (args: string[]) =>
-    spawnSync(process.execPath, [...NODE_FLAGS, CLI, ...args], {
-      encoding: 'utf8',
-      env: { ...m.env, CLAUDECODE: '1' },
-    });
-  const pause = run(['update', '--pause', '--json']);
+  const run = (args: readonly string[]) => cli({ ...m.env, CLAUDECODE: '1' }, args);
+  const pause = await run(['update', '--pause', '--json']);
   assert.equal(pause.status, 0, pause.stdout + pause.stderr);
   assert.equal((JSON.parse(pause.stdout) as { data: { days: number } }).data.days, 7);
-  const one = run(['update', '--pause', '1', '--json']);
+  const one = await run(['update', '--pause', '1', '--json']);
   assert.equal((JSON.parse(one.stdout) as { data: { days: number } }).data.days, 1, one.stdout + one.stderr);
-  assert.equal(run(['update', '--pause', '5', '--json']).status, 64);
-  assert.equal(run(['update', '--resume', '--json']).status, 0);
+  assert.equal((await run(['update', '--pause', '5', '--json'])).status, 64);
+  assert.equal((await run(['update', '--resume', '--json'])).status, 0);
   for (const [args, words] of [
     [['update', '--later', '--json'], /--pause/],
     [['update', '--auto', 'off', '--json'], /--level/],
   ] as const) {
-    const refused = run([...args]);
+    const refused = await run(args);
     assert.equal(refused.status, 64, refused.stdout + refused.stderr);
     assert.match((JSON.parse(refused.stdout) as { error: { hint: string } }).error.hint, words);
   }

@@ -83,6 +83,7 @@ const EMPTY: UpdateCheckRecord = {
   pausedAt: null,
   pausedUntil: null,
   release: null,
+  securityAsked: null,
 };
 
 interface Machine {

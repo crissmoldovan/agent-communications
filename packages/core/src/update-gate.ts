@@ -142,8 +142,8 @@ async function decideNotice(
   const updates = await effectiveUpdates(options.core, options.env);
   const now = options.now ?? (() => new Date());
   const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
-  const decided = await changeUpdateCheck<Notice>(options.core.paths.stateDir, (record) => {
-    const at = now();
+  /** The notice due now, spacing included, or null: decided once on the file as read, then again under its lock. */
+  const due = (record: UpdateCheckRecord, at: Date): Notice | null => {
     const notice = noticeOf(record, options.running, where, updates, at);
     if (notice === null) return null;
     const spacing = spacingOf(updates, where.surface);
@@ -156,6 +156,14 @@ async function decideNotice(
       // command would be the stop's noise again.
       return null;
     }
+    return notice;
+  };
+  // Most calls have nothing to say: they read the file and take no lock, so a server's calls never queue behind one.
+  if (due(await readUpdateCheck(options.core.paths.stateDir), now()) === null) return null;
+  const decided = await changeUpdateCheck<Notice>(options.core.paths.stateDir, (record) => {
+    const at = now();
+    const notice = due(record, at);
+    if (notice === null) return null;
     const stamp = at.toISOString();
     const written: UpdateCheckRecord = {
       ...record,
@@ -232,6 +240,49 @@ function whatItIs(notice: Partial<Notice>): string {
 function pausedWords(notice: Partial<Notice>): string {
   if (!notice.pausedUntil) return '';
   return ` Updates are paused until ${localStamp(notice.pausedUntil)}; a security fix is not held.`;
+}
+
+// ── The security line, in a send or post preview ────────────────────────────────────────────────────────────
+
+/**
+ * The line a send or post preview opens with when a security fix is out and this machine does not install it on its
+ * own (design 2026-10-16, U7): `A security fix is out (0.20.1): update first, or approve to send anyway` — or null.
+ *
+ * Every channel's send and post prepare calls this, once it has prepared the approval. On `every-14-days`, on `never`,
+ * and on `auto` while its background job is not set up, a release whose manifest declares a security fix — one this
+ * process is behind — is asked about once, in the next preview: what it returns is recorded as asked, under the
+ * file's lock, so the preview after it is as it always was. The person's yes to that preview is the answer; the line
+ * is display only, never in what an approval binds. A pause never holds it. Nothing at all where the environment
+ * switched updates off, and it never throws: a preview is never refused on its account.
+ */
+export async function securityNotice(options: {
+  core: Core;
+  env: NodeJS.ProcessEnv;
+  /** The version the preparing process is. */
+  running: string;
+  /** What the person approves: `send` for mail, `post` for a channel message. */
+  act?: string | undefined;
+}): Promise<string | null> {
+  try {
+    if (updateCheckSwitchedOff(options.env) !== null) return null;
+    const updates = await effectiveUpdates(options.core, options.env);
+    // The background job installs a security fix within a day: nothing to ask (U7).
+    if (updates.background) return null;
+    const asked = (record: UpdateCheckRecord): string | null => {
+      const version = securityRelease(record, options.running);
+      return version === null || record.securityAsked === version ? null : version;
+    };
+    // Nothing to ask, as nearly always: read, and no lock taken.
+    if (asked(await readUpdateCheck(options.core.paths.stateDir)) === null) return null;
+    const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
+      const version = asked(record);
+      return version === null ? null : { record: { ...record, securityAsked: version }, result: version };
+    });
+    if (decided.result === undefined) return null;
+    return `A security fix is out (${decided.result}): update first, or approve to ${options.act ?? 'send'} anyway`;
+  } catch {
+    return null;
+  }
 }
 
 // ── A command at a terminal ──────────────────────────────────────────────────────────────────────────────────────

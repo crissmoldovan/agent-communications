@@ -228,6 +228,11 @@ export interface PreviewNotifies {
 }
 
 export interface ChannelPreview {
+  /**
+   * A security fix is out and this machine does not install it on its own (design 2026-10-16, U7): the line the
+   * preview opens with, asked once. Display only — never in what the approval binds.
+   */
+  security?: string | undefined;
   workspace: string;
   /**
    * Who this will be posted as, as a person should read it: `Acme Bot (U024BE7LH)`.
@@ -341,6 +346,7 @@ export function describeSize(bytes: number): string {
  */
 export function renderChannelPreview(preview: ChannelPreview): string {
   const lines: string[] = [];
+  if (preview.security) lines.push(escapeForDisplay(preview.security));
   const context = preview.context ?? {};
   const { replaces } = preview;
   lines.push(

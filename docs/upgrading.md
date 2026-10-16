@@ -100,7 +100,10 @@ however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` s
 
 **A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
 `every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up —
-whatever the pause or the 14-day spacing, and with when the pause ends.
+whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
+preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
+send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
+the line is shown, never part of what the approval binds.
 
 `--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
 
