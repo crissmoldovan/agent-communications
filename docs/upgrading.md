@@ -160,7 +160,7 @@ runs, what macOS shows, and how to remove it.
 | Platform | The job | When it runs |
 |---|---|---|
 | macOS | `~/Library/LaunchAgents/com.agentcomms.update.plist`, loaded with `launchctl bootstrap gui/<uid>` | daily at 10:00 local time and a minute chosen at random when it is set up; at the next wake if the Mac was asleep |
-| Linux | `~/.config/systemd/user/agentcomms-update.service` and `.timer`, enabled with `systemctl --user enable --now` | daily, at a random moment in the hour after midnight; at the next start if the computer was off |
+| Linux | `~/.config/systemd/user/agentcomms-update.service` and `.timer`, enabled with `systemctl --user enable --now` — the system's own `systemctl`, from `/usr/bin` or `/bin`, never one found through PATH; with neither, nothing is set up | daily, at a random moment in the hour after midnight; at the next start if the computer was off |
 | Windows | the task `agentcomms-update` in Task Scheduler, registered without elevation | daily at 10:00 local time, after a random delay of up to an hour; as soon as it can after a missed start, on battery too |
 
 It runs the stable core launcher, `<data>/launch/core`, with `update --background` and this installation's four folders

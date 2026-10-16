@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, readFile, rm, stat } from 'node:fs/promises';
 import { join, posix, win32 } from 'node:path';
 import type { AuditLog } from './audit.ts';
 import { CommsError } from './errors.ts';
@@ -8,7 +9,7 @@ import { launcherPaths } from './launcher.ts';
 import { withFileLock } from './lock.ts';
 import { nodeProgram } from './node-program.ts';
 import { homeDirectory } from './paths.ts';
-import { childEnvironment, windowsSystemProgram } from './system-programs.ts';
+import { absoluteSearchPath, childEnvironment, windowsSystemProgram } from './system-programs.ts';
 
 /**
  * The per-user background update job (design 2026-10-16 U4; plan Track C): one writer per platform, each needing no
@@ -88,6 +89,8 @@ export interface UpdateJobDeps {
    * (`nodeProgram`, CUE-492), as a managed registration's is.
    */
   node?: string | undefined;
+  /** Where `systemctl` is looked for: `SYSTEMCTL_DIRECTORIES` unless a test hands in a folder of its own. */
+  systemDirectories?: readonly string[] | undefined;
 }
 
 /** Everything one platform's writer needs, resolved once. */
@@ -101,6 +104,8 @@ export interface UpdateJobContext {
   node: string;
   /** The folder pins every registration carries, in the installer's order, before `update --background`. */
   pins: readonly string[];
+  /** Where `systemctl` is looked for, in order (`systemctlProgram`). */
+  systemDirectories: readonly string[];
   env: NodeJS.ProcessEnv;
   run: UpdateJobRunner;
   uid: number;
@@ -147,6 +152,7 @@ export function updateJobContext(
     launcher: options.launcher ?? coreLauncherPath(dataDir),
     node,
     pins: ['--config-dir', configDir, '--state-dir', stateDir, '--data-dir', dataDir, '--secrets-dir', secretsDir],
+    systemDirectories: deps.systemDirectories ?? SYSTEMCTL_DIRECTORIES,
     env,
     run: deps.run ?? systemRunner(env, platform),
     uid: deps.uid ?? process.getuid?.() ?? 0,
@@ -378,7 +384,41 @@ function hasControlCharacter(word: string): boolean {
 
 // ── Linux ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const SYSTEMCTL = 'systemctl';
+/**
+ * Where `systemctl` is looked for, in order: the system's own folders, never PATH — as `launchctl` is `/bin/launchctl`
+ * and `ps` is `/bin/ps` or `/usr/bin/ps`. A name is looked up, and a lookup can reach the folder this was started from,
+ * where a download may have saved a stranger's `systemctl`, which would then run with the person's rights.
+ */
+export const SYSTEMCTL_DIRECTORIES: readonly string[] = Object.freeze(['/usr/bin', '/bin']);
+
+/** The first executable `systemctl` in `directories` — absolute folders only — or null when none holds one. */
+export async function systemctlProgram(directories: readonly string[] = SYSTEMCTL_DIRECTORIES): Promise<string | null> {
+  for (const directory of absoluteSearchPath(directories)) {
+    const candidate = join(directory, 'systemctl');
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not here.
+    }
+  }
+  return null;
+}
+
+/** `systemctl` for this context, or refused — before anything is written or run — when the system has none of its own. */
+async function requireSystemctl(context: UpdateJobContext, removing = false): Promise<string> {
+  const found = await systemctlProgram(context.systemDirectories);
+  if (found !== null) return found;
+  throw new CommsError(
+    'CONFIG',
+    `systemd's systemctl is not in ${context.systemDirectories.join(' or ')}, so ${removing ? 'the background update job was left as it is' : 'nothing was set up'}`,
+    {
+      hint: 'It is looked for only where the system keeps it, never through PATH. A systemd user session is what the background update job needs on Linux.',
+    },
+  );
+}
+
 const UNIT_HEADER = '# Written by agent-communications. Its update --background-job off removes it.';
 const UNIT_DESCRIPTION = 'agent-communications: install verified releases in the background';
 
@@ -734,6 +774,7 @@ export async function installUpdateJob(
       throw commandFailed('launchd did not load the background update job', loaded);
     }
   } else if (platform === 'linux') {
+    const systemctl = await requireSystemctl(context);
     const units = systemdUnitPaths(context.home);
     await replaceFileInPlace(units.service, systemdService(command));
     await replaceFileInPlace(units.timer, systemdTimer());
@@ -741,10 +782,10 @@ export async function installUpdateJob(
       ['--user', 'daemon-reload'],
       ['--user', 'enable', '--now', `${UPDATE_JOB_NAME}.timer`],
     ]) {
-      const answer = await context.run(SYSTEMCTL, args);
+      const answer = await context.run(systemctl, args);
       if (answer.status !== 0) {
         await Promise.all([rm(units.service, { force: true }), rm(units.timer, { force: true })]);
-        await context.run(SYSTEMCTL, ['--user', 'daemon-reload']);
+        await context.run(systemctl, ['--user', 'daemon-reload']);
         throw commandFailed('systemd did not enable the background update timer', answer);
       }
     }
@@ -822,7 +863,8 @@ export async function removeUpdateJob(
   } else if (platform === 'linux') {
     const units = systemdUnitPaths(context.home);
     if (seen.state !== 'missing') {
-      const answer = await context.run(SYSTEMCTL, ['--user', 'disable', '--now', `${UPDATE_JOB_NAME}.timer`]);
+      const systemctl = await requireSystemctl(context, true);
+      const answer = await context.run(systemctl, ['--user', 'disable', '--now', `${UPDATE_JOB_NAME}.timer`]);
       if (answer.status !== 0 && !/not loaded|does not exist|no such file/i.test(answer.stderr)) {
         throw commandFailed('systemd did not disable the background update timer; it was left as it is', answer, true);
       }
@@ -830,7 +872,7 @@ export async function removeUpdateJob(
         if (await exists(file)) deleted.push(file);
         await rm(file, { force: true });
       }
-      await context.run(SYSTEMCTL, ['--user', 'daemon-reload']);
+      await context.run(systemctl, ['--user', 'daemon-reload']);
     }
   } else if (platform === 'win32' && seen.state !== 'missing') {
     const answer = await runPowerShell(context, windowsUnregisterScript());

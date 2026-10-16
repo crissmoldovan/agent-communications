@@ -20,6 +20,8 @@ import {
   installUpdateJob,
   launchAgentPlist,
   removeUpdateJob,
+  SYSTEMCTL_DIRECTORIES,
+  systemctlProgram,
   systemdService,
   systemdTimer,
   type UpdateJobDeps,
@@ -109,12 +111,17 @@ function pins(core: Core): string[] {
 const FIXED = new Date('2026-10-16T09:00:00.000Z');
 /** The Node a Windows task starts the launcher with, as the test names it. */
 const NODE = 'C:\\Program Files\\nodejs\\node.exe';
+/** A system folder of the test's own, holding a `systemctl` nothing runs: the runner only records it. */
+const SYSTEM_BIN = tempDir('comms-update-job-system-');
+const SYSTEMCTL = join(SYSTEM_BIN, 'systemctl');
+writeFileSync(SYSTEMCTL, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 const deps = (run: UpdateJobRunner, over: Partial<UpdateJobDeps> = {}): UpdateJobDeps => ({
   run,
   uid: 501,
   random: () => 0.5,
   now: () => FIXED,
   node: NODE,
+  systemDirectories: [SYSTEM_BIN],
   ...over,
 });
 
@@ -364,8 +371,8 @@ test('Linux: install writes both units, reloads and enables the timer; remove di
   assert.equal(readFileSync(units.service, 'utf8'), systemdService(updateJobCommand(context)));
   assert.equal(readFileSync(units.timer, 'utf8'), systemdTimer());
   assert.deepEqual(calls, [
-    { program: 'systemctl', args: ['--user', 'daemon-reload'] },
-    { program: 'systemctl', args: ['--user', 'enable', '--now', 'agentcomms-update.timer'] },
+    { program: SYSTEMCTL, args: ['--user', 'daemon-reload'] },
+    { program: SYSTEMCTL, args: ['--user', 'enable', '--now', 'agentcomms-update.timer'] },
   ]);
   assert.equal(
     JSON.parse(readFileSync(updateJobMarkerPath(m.core.paths.stateDir), 'utf8')).label,
@@ -375,12 +382,57 @@ test('Linux: install writes both units, reloads and enables the timer; remove di
   calls.length = 0;
   assert.equal((await removeUpdateJob(context)).removed, true);
   assert.deepEqual(calls, [
-    { program: 'systemctl', args: ['--user', 'disable', '--now', 'agentcomms-update.timer'] },
-    { program: 'systemctl', args: ['--user', 'daemon-reload'] },
+    { program: SYSTEMCTL, args: ['--user', 'disable', '--now', 'agentcomms-update.timer'] },
+    { program: SYSTEMCTL, args: ['--user', 'daemon-reload'] },
   ]);
   assert.equal(existsSync(units.service), false);
   assert.equal(existsSync(units.timer), false);
   assert.equal(await updateJobInstalled(m.core), false);
+});
+
+test('Linux: systemctl is the system’s own, from /usr/bin or /bin, never found through PATH — and with none there, nothing is done', async () => {
+  assert.deepEqual(SYSTEMCTL_DIRECTORIES, ['/usr/bin', '/bin']);
+  const empty = tempDir('comms-update-job-empty-');
+  // The first folder that holds it; a relative folder is never looked in, whatever it holds.
+  assert.equal(await systemctlProgram(['relative/bin', empty, SYSTEM_BIN]), SYSTEMCTL);
+  assert.equal(await systemctlProgram([empty]), null);
+  if (process.platform !== 'win32') {
+    // A file that cannot be run is not the program.
+    const plain = tempDir('comms-update-job-plain-');
+    writeFileSync(join(plain, 'systemctl'), 'not a program\n', { mode: 0o644 });
+    assert.equal(await systemctlProgram([plain]), null);
+  }
+
+  // A systemctl on PATH — in the folder this was started from, a download's — is never the one run.
+  const m = machine();
+  const onPath = join(m.home, 'bin');
+  mkdirSync(onPath, { recursive: true });
+  writeFileSync(join(onPath, 'systemctl'), '#!/bin/sh\n', { mode: 0o755 });
+  const { calls, run } = recorder();
+  const context = updateJobContext(m.core, m.env, {
+    platform: 'linux',
+    launcher: m.launcher,
+    deps: deps(run, { systemDirectories: [empty] }),
+  });
+  await assert.rejects(installUpdateJob(context), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'CONFIG');
+    assert.match(error.message, /systemctl/);
+    assert.ok(error.message.includes(empty), `it names where it looked: ${error.message}`);
+    return true;
+  });
+  assert.deepEqual(calls, [], 'nothing was run');
+  assert.equal(existsSync(unitsOf(m).service), false, 'nothing was written');
+  assert.equal(existsSync(unitsOf(m).timer), false);
+  assert.equal(await updateJobInstalled(m.core), false);
+
+  // Set up where it is there; then, gone, removing it is refused and the job is left as it is.
+  await installUpdateJob(updateJobContext(m.core, m.env, { platform: 'linux', launcher: m.launcher, deps: deps(run) }));
+  calls.length = 0;
+  await assert.rejects(removeUpdateJob(context), /systemctl/);
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(unitsOf(m).service), true, 'the job was taken away without systemd being told');
+  assert.equal(await updateJobInstalled(m.core), true);
 });
 
 test('Windows: install registers the task through PowerShell; remove unregisters it — each looked up first', async () => {
