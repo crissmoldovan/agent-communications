@@ -10,12 +10,14 @@ import {
   listRegisteredServers,
   lookupName,
   missingEntryFile,
+  organisationAgentApp,
   otherSlackServerRemoval,
   pinnedVersion,
   type RegisteredServer,
   type Remedy,
   remedy,
   type SecretStore,
+  shownText,
   toCommsError,
 } from '@agentcomms/core';
 import { scopeMismatch } from '../auth/authorize.ts';
@@ -520,6 +522,35 @@ export function doctor(input: DoctorInput): DoctorResult {
           fix: null,
           workspace: workspace.alias,
         });
+      } else if (
+        workspace.organisation !== undefined &&
+        organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId) !== undefined
+      ) {
+        /*
+         * Connected through an organisation profile that names its agent app (CUE-493): the organisation's bot-only
+         * app, whose one non-rotating token its admin shares. Pasting it is the one way, and changes nothing else of the
+         * member's connection. A warning, as an own app missing its token is: there is something to do, and it is
+         * theirs to choose — a member who does nothing keeps the labelled fallback.
+         */
+        const agent = organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId);
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'warn',
+          detail: `no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. Your organisation's profile names its agent app (${displayed(agent?.appId)}), whose bot token its admin shares with members: pasted here once, an agent's posts go out as that app`,
+          fix: remedy(
+            handoffSentence(
+              handoffs.own(['workspace', 'bot', workspace.alias]),
+              (command) =>
+                `Ask your organisation's admin for the agent app's token, then run ${command} in your own terminal and paste it there, never into a chat.`,
+              {
+                instead:
+                  "Ask your organisation's admin for the agent app's token, then paste it with `workspace bot` in your own terminal, never into a chat.",
+              },
+            ),
+          ),
+          workspace: workspace.alias,
+        });
       } else if (workspace.organisation !== undefined) {
         /*
          * Connected through an organisation profile's shared app. Neither way works for it: the client-secret sign-in
@@ -644,6 +675,11 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks, ...(input.cleanup ? { cleanup: input.cleanup } : {}) };
+}
+
+/** A value read back from the configuration, as a finding shows it: neutralised and on one line. */
+function displayed(value: unknown): string {
+  return shownText(value, 64);
 }
 
 /** Whether the person's own credential shows its app rotates tokens: a refresh token, a refresh expiry, or a refresh under way or spent. */

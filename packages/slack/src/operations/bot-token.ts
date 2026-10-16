@@ -1,11 +1,12 @@
-import { CommsError, findById, handoffSentence } from '@agentcomms/core';
+import { CommsError, findById, handoffSentence, organisationAgentApp, toCommsError } from '@agentcomms/core';
+import { callSlack } from '../api/call.ts';
 import { closedPermit, guardSlackRequests } from '../api/guard.ts';
 import { SLACK_ORIGIN } from '../api/methods.ts';
 import { displaySlackFailureText } from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle } from '../auth/bundle.ts';
 import type { SlackContext } from '../context.ts';
 import { BOT_SCOPES } from '../manifest.ts';
-import type { SessionDeps } from './session.ts';
+import { openWorkspace, type SessionDeps } from './session.ts';
 import { botSecretRefFor, requireWorkspace, type SlackAccount } from './workspaces.ts';
 
 /**
@@ -19,6 +20,11 @@ import { botSecretRefFor, requireWorkspace, type SlackAccount } from './workspac
  * Nothing is kept until Slack has said what the token is: a bot token, for this workspace's team, with exactly the four
  * posting scopes the send manifest declares. And not one that rotates: a token copied from the page of an app whose
  * tokens rotate stops working within twelve hours, and nothing here could renew it.
+ *
+ * And, for a workspace connected through an organisation's profile that names its agent app (CUE-493), that app's: the
+ * organisation's bot-only app, whose one token its administrator shares and each member pastes here. `bots.info`, asked
+ * with the member's own token, says which app the pasted token's bot belongs to, and another app's is refused by name.
+ * A profile that names none is checked as before.
  */
 
 export interface StoredBotToken {
@@ -112,6 +118,63 @@ async function askSlack(token: string, deps: SessionDeps): Promise<{ body: AuthT
   return { body, scopes };
 }
 
+interface BotsInfo {
+  readonly bot?: { readonly app_id?: unknown; readonly name?: unknown };
+}
+
+/**
+ * Refuses a bot token that is not the organisation's agent app's: `bots.info` about the bot `auth.test` named, asked
+ * with the member's own user token (`users:read`), never with the pasted one, and its `app_id` compared exactly. An
+ * answer that names no app — or none could be had — keeps nothing: the check is the reason to ask.
+ */
+async function requireAgentApp(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  botId: string,
+  expected: string,
+  deps: SessionDeps,
+): Promise<void> {
+  const ask = 'Ask your organisation’s admin for the agent app’s "Bot User OAuth Token", and paste that one.';
+  let answer: BotsInfo;
+  try {
+    const session = await openWorkspace(context, alias, deps);
+    answer = (await callSlack(session.call, 'bots.info', { bot: botId })) as BotsInfo;
+  } catch (error) {
+    const failure = toCommsError(error);
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'Slack could not say which app that token belongs to, so nothing was kept',
+      {
+        hint: `${organisation}'s profile names its agent app, so the token is kept only once Slack says it is that app's. ${displaySlackFailureText(failure.message)}. Try again in a moment.`,
+        details: { reason: 'app-unknown' },
+      },
+    );
+  }
+  const appId = typeof answer.bot?.app_id === 'string' ? answer.bot.app_id : '';
+  if (appId === '') {
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'Slack did not say which app that token belongs to, so nothing was kept',
+      {
+        hint: `${organisation}'s profile names its agent app, so the token is kept only once Slack says it is that app's. Try again in a moment.`,
+        details: { reason: 'app-unknown' },
+      },
+    );
+  }
+  if (appId === expected) return;
+  const shownId = displaySlackFailureText(appId);
+  const shownName = displaySlackFailureText(answer.bot?.name);
+  throw new CommsError(
+    'CONFIG',
+    `that token is the app ${shownId}${shownName ? ` ("${shownName}")` : ''}'s, not ${organisation}'s agent app, ${displaySlackFailureText(expected)}`,
+    {
+      hint: `Nothing was kept. ${ask}`,
+      details: { reason: 'another-app', appId: shownId, expected: displaySlackFailureText(expected) },
+    },
+  );
+}
+
 /**
  * Checks a pasted bot token with Slack and keeps it for the workspace, under `slack/bot-token/<accountId>`, with
  * `auth.test`'s `user_id` as the account's `botUserId`. Never prints it, and never keeps one Slack has not vouched for.
@@ -162,6 +225,11 @@ export async function storeBotToken(
     throw new CommsError('AUTH_REQUIRED', 'Slack did not say which bot user the token posts as', {
       hint: 'Nothing was kept. Try again in a moment.',
     });
+  }
+  // Whose app, when the organisation says whose it should be: before the scopes, as the more basic of the two.
+  if (account.organisation !== undefined) {
+    const named = organisationAgentApp(config, account.organisation, account.workspace);
+    if (named !== undefined) await requireAgentApp(context, name, account.organisation, body.bot_id, named.appId, deps);
   }
   const wanted = [...BOT_SCOPES].sort();
   if (scopes === undefined || scopes.join(',') !== wanted.join(',')) {
