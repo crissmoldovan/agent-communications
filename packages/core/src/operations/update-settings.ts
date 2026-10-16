@@ -2,7 +2,14 @@ import type { GatedChange } from '../change-flow.ts';
 import { type Config, isUpdateLevel, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
-import { changeUpdateCheck, DEFAULT_PAUSE_DAYS, PAUSE_DAYS, pauseEnd, securityRelease } from '../update-state.ts';
+import {
+  changeUpdateCheck,
+  DEFAULT_PAUSE_DAYS,
+  organisationCaps,
+  PAUSE_DAYS,
+  pauseEnd,
+  securityRelease,
+} from '../update-state.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -24,6 +31,20 @@ export interface UpdateLevelResult {
   level: UpdateLevel;
   /** False when it already was, and nothing was written. */
   changed: boolean;
+  /**
+   * An organisation profile's cap below that level (design 2026-10-16, U8): the level in force, and whose. A member
+   * can never update past it; the level set takes over if the cap is lifted.
+   */
+  cappedAt?: { level: UpdateLevel; organisation: string } | undefined;
+}
+
+/** The cap below `level` the configuration's organisations name, as a result says it; absent when there is none. */
+function cappedAt(config: Config, level: UpdateLevel): UpdateLevelResult['cappedAt'] {
+  const { cap } = organisationCaps(config);
+  const rank = (each: UpdateLevel) => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(each);
+  return cap !== undefined && rank(cap.level) < rank(level)
+    ? { level: cap.level, organisation: cap.organisation }
+    : undefined;
 }
 
 /** `level` as the setting, and 0.18's switch beside it, so a release before 0.20 sharing the file reads the same. */
@@ -59,9 +80,11 @@ export function updateLevelChange(core: Core, level: string): GatedChange<Update
       };
     },
     apply: async (consent, request) => {
-      if (request.after === request.before) return { level: updateLevelOf(request.before), changed: false };
+      const capped = cappedAt(request.before, level);
+      const said = capped === undefined ? {} : { cappedAt: capped };
+      if (request.after === request.before) return { level: updateLevelOf(request.before), changed: false, ...said };
       await core.config.update((config) => withLevel(config, level), consent ? { consent } : {});
-      return { level, changed: true };
+      return { level, changed: true, ...said };
     },
   };
 }

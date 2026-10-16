@@ -48,6 +48,11 @@ ends it at once. A pause never holds a security fix: its notice is said at once,
 - `every-14-days`: a check, and a notice, at most once every 14 days; an update only with their yes.
 - `never`: nothing asks npm; they update by hand.
 
+An organisation's profile can cap this: `<profile>.updates.json`, beside the `.agentcomms.json` file, may say every 14
+days at most, or never, and may turn background updates off. It is read and approved with the profile (`comms_org_add`,
+`comms_org_update`), only ever tightens, and a level set above it waits until the cap is lifted; `comms_doctor` names
+the cap and the profile it comes from. Say so when a person asks for a level the cap holds back.
+
 A level that updates less is a change the person approves: show the preview, which says what stops happening, and
 wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and
 `comms_approval_wait` to learn when they have), then call again with the `approvalId`. Moving back to one that updates

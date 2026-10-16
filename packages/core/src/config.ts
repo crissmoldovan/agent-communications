@@ -321,6 +321,17 @@ export interface OrganisationSlackApp {
 }
 
 /**
+ * An organisation's update caps, as the file beside its profile names them (design 2026-10-16, U8), and the SHA-256 of
+ * that file, so `org update` can tell the organisation changing them from the record drifting. A `max` word this release
+ * does not know reads as `never`, the strictest it could mean: caps only ever tighten.
+ */
+export interface OrganisationUpdates {
+  max?: string | undefined;
+  background?: boolean | undefined;
+  sha256: string;
+}
+
+/**
  * What this machine records of one organisation profile: never its bytes and never its secret — where it was read
  * from, the SHA-256 of what was read and when, the generations of its Google client, and its Slack apps.
  */
@@ -343,6 +354,8 @@ export interface OrganisationRecord {
         apps: { read?: OrganisationSlackApp | undefined; send?: OrganisationSlackApp | undefined };
       }
     | undefined;
+  /** The organisation's update caps, from the file beside its profile; absent when it names none. */
+  updates?: OrganisationUpdates | undefined;
 }
 
 export interface ConfigV2 extends ConfigBody {
@@ -635,6 +648,9 @@ const organisationRecordSchema = z.looseObject({
       redirectPort: z.number().int().min(1).max(65535),
       apps: z.looseObject({ read: slackAppRecordSchema.optional(), send: slackAppRecordSchema.optional() }).default({}),
     })
+    .optional(),
+  updates: z
+    .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
     .optional(),
 });
 

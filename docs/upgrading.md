@@ -105,6 +105,16 @@ preview, or Slack post preview, opens with one line — `A security fix is out (
 send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
 the line is shown, never part of what the approval binds.
 
+**An organisation's caps.** An organisation can only make its members' updates stricter, in a file beside its
+profile — `acme.agentcomms.updates.json` beside `acme.agentcomms.json` — holding
+`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. It is not in the
+profile itself: every release from 0.13.0 to 0.19.0 refuses a profile with a key it does not know, at every level, and a
+member not yet on 0.20.0 would lose `org update` for the whole profile. Those releases never open the file beside it.
+`org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
+file is approved first even when the profile's bytes are unchanged, and a record edited by hand is put back at once. A
+member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
+`max` other than those two words is refused. `doctor` names the cap and the profile it comes from.
+
 `--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
 
 It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result and is not tried

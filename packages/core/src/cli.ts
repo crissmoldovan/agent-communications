@@ -1250,7 +1250,10 @@ function renderLevel(result: UpdateLevelResult): string {
     'every-14-days': 'every-14-days: a check at most once every 14 days, and installs only with your yes',
     never: 'never: nothing on this machine asks npm for a newer release; update by hand',
   } as const;
-  return `This machine updates ${words[result.level]}${result.changed ? '' : ' (it already did)'}.`;
+  const capped = result.cappedAt
+    ? ` ${result.cappedAt.organisation}'s profile caps it at ${result.cappedAt.level}, so that is how it updates while the cap stands.`
+    : '';
+  return `This machine updates ${words[result.level]}${result.changed ? '' : ' (it already did)'}.${capped}`;
 }
 
 function renderPause(result: UpdatePauseResult): string {

@@ -19,7 +19,7 @@ import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
-import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
+import { organisationDrift, organisationsOf, orphanMarkedRows, shownPath, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
@@ -341,12 +341,19 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
   const updates = await effectiveUpdates(core, env);
   const record = await readUpdateCheck(core.paths.stateDir);
   const now = new Date();
+  // Where a cap or a profile's `background: false` comes from (design 2026-10-16, U8): the organisation and its file.
+  const fromProfile = (where: { organisation: string; source: string }) =>
+    `${shownText(where.organisation, 40)}’s profile, ${shownPath(where.source)}`;
   const level =
     updates.by !== 'setting'
       ? `never (${updates.by === 'CI' ? 'CI is set' : `${updates.by} is set`})`
-      : updates.level === 'auto' && !updates.background
-        ? 'auto (a daily check with a notice: background updates are not set up)'
-        : updates.level;
+      : updates.cap
+        ? `${updates.level} (capped by ${fromProfile(updates.cap)})`
+        : updates.level === 'auto' && !updates.background
+          ? updates.backgroundOff
+            ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
+            : 'auto (a daily check with a notice: background updates are not set up)'
+          : updates.level;
   const latest =
     record.latest === null
       ? 'unknown'
@@ -356,6 +363,9 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
   const pause = pauseEnd(record, now);
   const security = securityRelease(record, VERSION);
   const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
+  if (updates.backgroundOff && !(updates.level === 'auto' && !updates.cap)) {
+    parts.push(`background updates off by ${shownText(updates.backgroundOff.organisation, 40)}’s profile`);
+  }
   if (security !== null) parts.push(`${security} fixes a security problem`);
   if (pause !== null) parts.push(`paused until ${localStamp(pause)}`);
   if (record.lastError !== null) parts.push(`the last check got no answer: ${record.lastError}`);

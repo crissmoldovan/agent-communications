@@ -314,6 +314,8 @@ export interface ProfileFile {
   path: string;
   sha256: string;
   profile: OrganisationProfile;
+  /** The organisation's update caps, from the file beside the profile (`updatesPathFor`); absent when there is none. */
+  updates?: UpdatesFile | undefined;
 }
 
 /**
@@ -355,7 +357,14 @@ export async function readProfileFile(path: string): Promise<ProfileFile> {
   } catch {
     throw new CommsError('BAD_DATA', 'the organisation profile is not UTF-8 text');
   }
-  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), profile: parseProfile(text) };
+  const profile = parseProfile(text);
+  const updates = await readUpdatesFile(updatesPathFor(path), profile);
+  return {
+    path,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    profile,
+    ...(updates === undefined ? {} : { updates }),
+  };
 }
 
 // ── The record ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1057,4 +1066,126 @@ export function unmanagedSlackAccounts(config: Config, organisation: string, wor
     })
     .map(([name]) => name)
     .sort();
+}
+
+// ── The organisation's update caps ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An organisation's update caps (design 2026-10-16, U8): the most its members' machines may update — `max`,
+ * `every-14-days` or `never` — and `background: false`, no background job. They only ever tighten: a member's level is
+ * capped at `max`, and nothing a member sets goes past it.
+ *
+ * **They are named in a file beside the profile, not in it.** Every object of a version-1 profile is strict in every
+ * release since profiles were added (0.13.0 to 0.19.0): a key such as `updates` anywhere refuses the whole document,
+ * and a member still on an older release would lose `org update` for everything else the organisation changes. So the
+ * profile stays exactly as those releases read it, and the caps go in `<profile>.updates.json`, which they never open.
+ * This release reads it whenever it reads the profile, binds it by its own SHA-256 in the same approval, and records it
+ * as the organisation's `updates`, where the configuration's loose schema lets older releases keep it through their
+ * writes.
+ */
+export const UPDATE_CAPS = ['every-14-days', 'never'] as const;
+export type UpdateCap = (typeof UPDATE_CAPS)[number];
+
+/** The updates file for a profile: in the same folder, the profile's name with `.updates.json` for its `.json`. */
+export function updatesPathFor(profilePath: string): string {
+  return /\.json$/i.test(profilePath)
+    ? `${profilePath.slice(0, -'.json'.length)}.updates.json`
+    : `${profilePath}.updates.json`;
+}
+
+/** The caps as they were read: from where, the SHA-256 of the exact bytes, and what they say. */
+export interface UpdatesFile {
+  path: string;
+  sha256: string;
+  max?: UpdateCap | undefined;
+  background?: false | undefined;
+}
+
+const updatesSchema = z.strictObject({
+  organisation: z.string(),
+  max: z
+    .enum(UPDATE_CAPS, { message: 'max is every-14-days or never: a cap only ever makes updates less frequent' })
+    .optional(),
+  background: z
+    .literal(false, { message: 'background is false or left out: a cap can only turn background updates off' })
+    .optional(),
+});
+
+/**
+ * Reads the updates file, if there is one, and holds it to the profile it sits beside: the same organisation. Strict as
+ * the profile is, read in one bounded read as the profile is, and refused naming each problem by where it is, never by
+ * the value found there — but naming this file, so the person knows which of the two to fix. Only a file that is not
+ * there is no caps: one that is there and cannot be opened is refused, since read as none it would lift the caps.
+ */
+async function readUpdatesFile(path: string, profile: OrganisationProfile): Promise<UpdatesFile | undefined> {
+  const where = shownPath(path);
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new CommsError('NOT_FOUND', `the updates file at ${where} could not be opened`, { cause: error });
+  }
+  let bytes: Buffer;
+  try {
+    if (!(await handle.stat()).isFile()) throw new CommsError('USAGE', `${where} is not a file`);
+    const buffer = Buffer.allocUnsafe(PROFILE_MAX_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, PROFILE_MAX_BYTES + 1, 0);
+    if (bytesRead > PROFILE_MAX_BYTES) {
+      throw new CommsError('BAD_DATA', `${where} is larger than an updates file can be (64 KiB)`);
+    }
+    bytes = Buffer.from(buffer.subarray(0, bytesRead));
+  } catch (error) {
+    if (error instanceof CommsError) throw error;
+    throw new CommsError('NOT_FOUND', `the updates file at ${where} could not be read`, { cause: error });
+  } finally {
+    await handle.close();
+  }
+  const refuse = (problem: string): never => {
+    throw new CommsError('BAD_DATA', `the updates file ${where} is not valid: ${problem}`, {
+      hint: 'It names the organisation, and the caps on how its members update and nothing else: `max` (every-14-days or never) and `background` (false). Ask your organisation for its current one.',
+    });
+  };
+  let raw: unknown;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    raw = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text);
+  } catch {
+    return refuse('it is not valid UTF-8 JSON');
+  }
+  const parsed = updatesSchema.safeParse(raw);
+  if (!parsed.success) {
+    return refuse(
+      parsed.error.issues
+        .slice(0, 6)
+        .map((issue) => {
+          const at = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the file';
+          return issue.code === 'unrecognized_keys'
+            ? `${at}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} it has`
+            : `${at}: ${issue.message}`;
+        })
+        .join('; '),
+    );
+  }
+  const document = parsed.data;
+  if (document.organisation !== profile.organisation) {
+    return refuse(
+      `it names the organisation ${shownText(document.organisation, 40)}, not ${profile.organisation}, whose profile it sits beside`,
+    );
+  }
+  return {
+    path,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    ...(document.max === undefined ? {} : { max: document.max }),
+    ...(document.background === undefined ? {} : { background: false as const }),
+  };
+}
+
+/** The caps, as a preview and the doctor say them: "at most never, no background updates", or "no caps". */
+export function capsText(caps: { max?: string | undefined; background?: boolean | undefined } | undefined): string {
+  const parts = [
+    ...(caps?.max === undefined ? [] : [`at most ${shownText(caps.max, 20)}`]),
+    ...(caps?.background === false ? ['no background updates'] : []),
+  ];
+  return parts.length === 0 ? 'no caps' : parts.join(', ');
 }

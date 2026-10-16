@@ -1,9 +1,10 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type UpdateLevel, updateLevelOf } from './config.ts';
+import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
+import { organisationsOf, updatesPathFor } from './organisations.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -274,37 +275,78 @@ export function updateCheckSwitchedOff(
   return null;
 }
 
-/** How this machine updates for this process, and why (design 2026-10-16, U2). */
+/** An organisation profile's cap, and where it comes from: the organisation, and the file beside its profile. */
+export interface UpdateCapSource {
+  organisation: string;
+  source: string;
+}
+
+/** How this machine updates for this process, and why (design 2026-10-16, U2, U8). */
 export interface EffectiveUpdates {
-  /** The level in force: the machine's, unless the environment switched it all off. */
+  /** The level in force: the machine's, capped by its organisations', unless the environment switched it all off. */
   level: UpdateLevel;
   /** The level the configuration sets. */
   set: UpdateLevel;
-  /** What decided `level`: the configuration, or the environment. */
+  /** What decided `level`: the configuration and its caps, or the environment. */
   by: 'setting' | 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV;
   /**
-   * Whether the background job installs updates: `auto`, and the job set up (`updateJobInstalled`). Until then `auto`
-   * behaves as a daily check with a notice (U2).
+   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up
+   * (`updateJobInstalled`). Until then `auto` behaves as a daily check with a notice (U2).
    */
   background: boolean;
+  /** The strictest `max` an organisation profile here names, when it is below the level set: the cap in force. */
+  cap?: (UpdateCapSource & { level: 'every-14-days' | 'never' }) | undefined;
+  /** The organisation whose profile turns background updates off, when one does. */
+  backgroundOff?: UpdateCapSource | undefined;
+}
+
+/** How much a level updates: `auto` 2, `every-14-days` 1, `never` 0. */
+const rankOf = (level: UpdateLevel): number => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
+
+/**
+ * The caps the organisation profiles here name (design 2026-10-16, U8): the strictest `max`, and the first profile
+ * with `background: false`, each with where it comes from. A `max` word this release does not know counts as `never`,
+ * the strictest it could mean: caps only ever tighten.
+ */
+export function organisationCaps(config: Config): Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> {
+  let cap: EffectiveUpdates['cap'];
+  let backgroundOff: EffectiveUpdates['backgroundOff'];
+  for (const [organisation, record] of Object.entries(organisationsOf(config)).sort(([a], [b]) => a.localeCompare(b))) {
+    const caps = record.updates;
+    if (caps === undefined) continue;
+    const where = { organisation, source: updatesPathFor(record.source.path) };
+    if (caps.max !== undefined) {
+      const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
+      if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { ...where, level };
+    }
+    if (caps.background === false && backgroundOff === undefined) backgroundOff = where;
+  }
+  return { cap, backgroundOff };
 }
 
 /**
- * The level in force here, read from the environment first and then the configuration. A configuration that cannot be
- * read counts as `auto`, the default: what is wrong with it is for the doctor and the tools to say, and it must not
- * quietly turn updates off.
+ * The level in force here, read from the environment first, then the configuration and its organisations' caps. A
+ * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
+ * tools to say, and it must not quietly turn updates off.
  */
 export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Promise<EffectiveUpdates> {
   let set: UpdateLevel = 'auto';
+  let caps: Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> = {};
   try {
-    set = updateLevelOf(await core.config.load());
+    const config = await core.config.load();
+    set = updateLevelOf(config);
+    caps = organisationCaps(config);
   } catch {
     // The default, as above.
   }
+  // A cap only ever lowers the level: one at or above the level set is not the one in force.
+  const cap = caps.cap !== undefined && rankOf(caps.cap.level) < rankOf(set) ? caps.cap : undefined;
+  const extra = { ...(cap ? { cap } : {}), ...(caps.backgroundOff ? { backgroundOff: caps.backgroundOff } : {}) };
   const switched = updateCheckSwitchedOff(env);
-  if (switched !== null) return { level: 'never', set, by: switched, background: false };
-  const background = set === 'auto' && (await updateJobInstalled(core));
-  return { level: set, set, by: 'setting', background };
+  if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
+  const level = cap?.level ?? set;
+  const background = level === 'auto' && caps.backgroundOff === undefined && (await updateJobInstalled(core));
+  return { level, set, by: 'setting', background, ...extra };
 }
 
 /** Whether a check may run at all, how often, and if not, what turned it off: the environment, then the level. */
