@@ -30,11 +30,14 @@ import {
   serverPruneChange,
 } from '../operations/servers.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
+import { updateJobChange } from '../operations/update-job.ts';
+import { updateRollbackChange } from '../operations/update-rollback.ts';
 import { updateAutoChange, updateLaterChange } from '../operations/update-settings.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
 import { CHANGE_CLAIM, updateToolGate } from '../update-gate.ts';
+import type { UpdateJobDeps } from '../update-job.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -72,6 +75,11 @@ export interface CoreMcpOptions {
    * the clock the daily update check reads and records by.
    */
   update?: UpdateDeps | undefined;
+  /**
+   * For a test: the runner the background update job's commands go through — `launchctl`, `systemctl`, the Windows
+   * scheduler — its user, its random minute and its clock, so that no test schedules a real job.
+   */
+  updateJob?: UpdateJobDeps | undefined;
 }
 
 export interface CoreMcpServer {
@@ -261,6 +269,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         doctor(core, env, {
           platform,
           ...(options.keyring !== undefined ? { keyring: options.keyring } : {}),
+          ...(options.updateJob !== undefined ? { updateJob: options.updateJob } : {}),
         }),
       ),
   );
@@ -778,7 +787,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_update',
     {
       title: 'Update to the latest release',
-      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, unreadable }\` — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune.`,
+      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, moves, unreadable }\`, \`moves\` being the registrations the next update moves onto the stable launcher — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. \`rollback: true\` switches every stable launcher back to the release before, also a change the person approves.`,
       inputSchema: {
         check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
         noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
@@ -792,26 +801,65 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           .enum(['on', 'off'])
           .optional()
           .describe(
-            'turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once',
+            'turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`, and also removes the background update job; `on` applies at once',
+          ),
+        backgroundJob: z
+          .enum(['on', 'off'])
+          .optional()
+          .describe(
+            'set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once',
+          ),
+        rollback: z
+          .boolean()
+          .optional()
+          .describe(
+            'switch every stable launcher back to the release it started before its last switch, editing no client configuration. A change the person approves: the first call returns its preview and an approvalId',
           ),
         ...approvalArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
-      const modes = [args.check === true, args.later === true, args.auto !== undefined].filter(Boolean).length;
-      if (modes > 1 || (args.noVerify !== undefined && (args.later === true || args.auto !== undefined))) {
+      const settings =
+        args.later === true || args.auto !== undefined || args.rollback === true || args.backgroundJob !== undefined;
+      const modes = [
+        args.check === true,
+        args.later === true,
+        args.auto !== undefined,
+        args.rollback === true,
+        args.backgroundJob !== undefined,
+      ].filter(Boolean).length;
+      if (modes > 1 || (args.noVerify !== undefined && settings)) {
         return fail(
-          new CommsError('USAGE', '`check`, `later` and `auto` are one at a time, and `noVerify` is for the update', {
-            hint: 'Call comms_update with one of them — or none, to update.',
-          }),
+          new CommsError(
+            'USAGE',
+            '`check`, `later`, `auto`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
+            { hint: 'Call comms_update with one of them — or none, to update.' },
+          ),
         );
+      }
+      if (args.rollback === true) {
+        return change(() => updateRollbackChange(core), args.approvalId);
       }
       if (args.later === true) {
         return change(() => updateLaterChange(core, { now: updateDeps.now }), args.approvalId);
       }
       if (args.auto !== undefined) {
-        return change(() => updateAutoChange(core, args.auto as 'on' | 'off'), args.approvalId);
+        return change(
+          () => updateAutoChange(core, args.auto as 'on' | 'off', { env, platform, job: options.updateJob }),
+          args.approvalId,
+        );
+      }
+      if (args.backgroundJob !== undefined) {
+        return change(
+          () =>
+            updateJobChange(core, env, args.backgroundJob as 'on' | 'off', {
+              platform,
+              deps: options.updateJob,
+              surface: 'mcp',
+            }),
+          args.approvalId,
+        );
       }
       if (args.check === true) {
         return read(() => {

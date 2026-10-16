@@ -11,9 +11,9 @@ import {
   lookupName,
   missingEntryFile,
   otherSlackServerRemoval,
-  pinnedVersion,
   type RegisteredServer,
   type Remedy,
+  registrationVersion,
   remedy,
   type SecretStore,
   toCommsError,
@@ -901,7 +901,8 @@ function registrationChecks(input: DoctorInput): Check[] {
   const stale = ours
     .map((server) => ({
       server,
-      version: server.args.map((argument) => pinnedVersion(argument, SLACK_MCP)).find((pin) => pin !== null),
+      // What it pins, or — for the stable launcher — the release its pointer names (design 2026-10-16, U6).
+      version: registrationVersion(server, SLACK_MCP),
     }))
     .filter((entry): entry is { server: RegisteredServer; version: string } => Boolean(entry.version))
     .filter((entry) => entry.version !== VERSION);

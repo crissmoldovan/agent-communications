@@ -107,6 +107,59 @@ couple of minutes later. WhatsApp's server and command, which never reach the ne
 themselves; they stop once any other server or command on the machine has found an update. The check is skipped
 entirely when `CI` is set, or when `AGENT_COMMS_UPDATE_CHECK=off`.
 
+### The background update job
+
+`agentcomms update --background-job on` (or `comms_update` with `backgroundJob: "on"`) sets up a job of your own that
+runs once a day and installs a verified release in the background. It needs no administrator, and it never sends, posts
+or approves anything. Setting it up is a change you approve: the preview names the job's file and what it runs, when it
+runs, what macOS shows, and how to remove it.
+
+| Platform | The job | When it runs |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/com.agentcomms.update.plist`, loaded with `launchctl bootstrap gui/<uid>` | daily at 10:00 local time and a minute chosen at random when it is set up; at the next wake if the Mac was asleep |
+| Linux | `~/.config/systemd/user/agentcomms-update.service` and `.timer`, enabled with `systemctl --user enable --now` | daily, at a random moment in the hour after midnight; at the next start if the computer was off |
+| Windows | the task `agentcomms-update` in Task Scheduler, registered without elevation | daily at 10:00 local time, after a random delay of up to an hour; as soon as it can after a missed start, on battery too |
+
+It runs the stable core launcher, `<data>/launch/core`, with `update --background` and this installation's four folders
+pinned, so it reads the same configuration whatever the environment it starts in. Setting it up writes
+`update-job.json` in the state directory; removing it deletes that file. On macOS 13 and later, macOS shows
+"Background Items Added" once and lists the job under System Settings → General → Login Items, where it can be switched
+off.
+
+`agentcomms update --background-job off` (or `backgroundJob: "off"`) removes it at once, and so does turning updates
+off with `update --auto off`. Run it before you uninstall: npm runs no script of a package as it removes it. A job at
+the same place that this installation did not write is never changed or removed by it. Setting the job up is refused
+when an organisation profile here turns background updates off, and a job set up before such a profile arrived is
+removed by its next run. `doctor` reports the job as installed, missing, foreign or stale, with what fixes each; on a
+machine that never set one up it says nothing.
+
+### What one background run does
+
+`agentcomms update --background` is what the job runs. It never sends, posts or approves anything, and it installs
+nothing unless all of this holds:
+
+- **The level is `auto`**, and no organisation profile turns background updates off; otherwise it stops, and removes a
+  job such a profile forbids. `CI` and `AGENT_COMMS_UPDATE_CHECK=off` turn it off for that process.
+- **The release waits for nobody.** A major version, a release whose core manifest declares
+  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. A
+  release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
+  state directory).
+- **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest
+  declares `agentcommsRelease.security: true`. The clock is the earlier of this machine's and the registry's, so a clock
+  set ahead skips no hold. A pause holds everything but a security fix.
+- **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
+  sigstore-js — the copy npm carries beside your Node — must be issued by `https://token.actions.githubusercontent.com`
+  for exactly `https://github.com/crissmoldovan/agent-communications/.github/workflows/release.yml@refs/tags/v<version>`,
+  built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
+  version with no attestation, or any other identity, is refused, and nothing at all is installed.
+
+Then it installs each package into a runtime of its own, checks that npm installed the tarball whose provenance was
+verified, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
+reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
+switches nothing. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
+launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
+or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing.
+
 ## 0.14.0: the configuration moves to version 3
 
 0.14.0 adds a send epoch to the shared configuration — the counter that makes turning sending off (`never`) final for

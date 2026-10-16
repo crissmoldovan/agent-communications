@@ -243,7 +243,7 @@ Remove a declared server’s managed runtimes that no client config names, no pr
 
 ### `comms_update`
 
-Bring this machine to the latest published release. `check: true` reads the npm registry and this machine and returns what is behind — `{ latest, behind, upToDate, unpinned, unreadable }` — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of core, Gmail, Resend, Slack or WhatsApp registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune.
+Bring this machine to the latest published release. `check: true` reads the npm registry and this machine and returns what is behind — `{ latest, behind, upToDate, unpinned, moves, unreadable }`, `moves` being the registrations the next update moves onto the stable launcher — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of core, Gmail, Resend, Slack or WhatsApp registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. `rollback: true` switches every stable launcher back to the release before, also a change the person approves.
 
 *writes*
 
@@ -252,7 +252,9 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
 | `later` | boolean | no | not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
-| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once |
+| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`, and also removes the background update job; `on` applies at once |
+| `backgroundJob` | `on` \\| `off` | no | set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once |
+| `rollback` | boolean | no | switch every stable launcher back to the release it started before its last switch, editing no client configuration. A change the person approves: the first call returns its preview and an approvalId |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_names_migrate`

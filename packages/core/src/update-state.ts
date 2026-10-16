@@ -74,6 +74,51 @@ export interface UpdateCheckRecord {
    * process asks.
    */
   checking: string | null;
+  /**
+   * What the last background run left for the next session to say (design 2026-10-16 U5 step 7): a release it
+   * installed, which a restart picks up, or one it would not install, and why. Null when it left nothing. Additive:
+   * a release that does not know the field ignores it.
+   */
+  backgroundNotice?: BackgroundNotice | null | undefined;
+}
+
+/** A background run's word for the next session: what happened, to which release, and the line to show. */
+export interface BackgroundNotice {
+  /** When the run left it, as an ISO time. */
+  at: string;
+  /**
+   * `installed`: switched to, and running once each client restarts its servers. `skipped`: a release that waits for
+   * the person — a major version, one that needs a decision, a downgrade. `refused`: its provenance did not verify.
+   * `failed`: installing or checking it did not work, and nothing was switched. `job-removed`: an organisation turned
+   * background updates off, and the job is gone.
+   */
+  outcome: 'installed' | 'skipped' | 'refused' | 'failed' | 'job-removed';
+  /** The release it is about, when it is about one. */
+  version: string | null;
+  /** The line itself, in words a person reads. */
+  text: string;
+}
+
+const NOTICE_OUTCOMES: readonly BackgroundNotice['outcome'][] = [
+  'installed',
+  'skipped',
+  'refused',
+  'failed',
+  'job-removed',
+];
+
+function readBackgroundNotice(value: unknown): BackgroundNotice | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { at, outcome, version, text } = value as Record<string, unknown>;
+  if (!isTime(at) || !NOTICE_OUTCOMES.includes(outcome as BackgroundNotice['outcome']) || typeof text !== 'string') {
+    return null;
+  }
+  return {
+    at,
+    outcome: outcome as BackgroundNotice['outcome'],
+    version: isVersion(version) ? version : null,
+    text: text.slice(0, 600),
+  };
 }
 
 /**
@@ -99,6 +144,7 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   lastError: null,
   snoozedUntil: null,
   checking: null,
+  backgroundNotice: null,
 });
 
 export function updateCheckPath(stateDir: string): string {
@@ -136,6 +182,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     lastError: typeof held.lastError === 'string' ? held.lastError.slice(0, 300) : null,
     snoozedUntil: isTime(held.snoozedUntil) ? held.snoozedUntil : null,
     checking: isTime(held.checking) ? held.checking : null,
+    backgroundNotice: readBackgroundNotice(held.backgroundNotice),
   };
 }
 

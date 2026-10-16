@@ -894,10 +894,12 @@ for (const launcher of ['managed', 'npx', 'local']) {
     assert.deepEqual(pinsOf(entry.args), Object.fromEntries(FOUR_FOLDERS.map((key) => [key, m.folders[key]])));
     assert.ok(!entry.args.includes(PATH_OPTIONS.downloadsDir), 'downloads are a handoff’s, never a registration’s');
     assert.equal(entry.args.at(-1), 'mcp');
+    // A managed entry starts the stable launcher (design 2026-10-16, U6): the program itself on POSIX, so the pins come
+    // first; Node's first word on Windows, as a local entry's script is.
     assert.equal(
       entry.args.indexOf(PATH_OPTIONS.configDir),
-      launcher === 'npx' ? 2 : 1,
-      'the pins come after the entry or the package, before `mcp`',
+      launcher === 'npx' ? 2 : launcher === 'managed' && process.platform !== 'win32' ? 0 : 1,
+      'the pins come after the launcher, the entry or the package, before `mcp`',
     );
     assert.equal(m.print(['policy', 'confirm']).status, 0);
 

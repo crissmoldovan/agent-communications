@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { corruptStubOf, type StoredApproval, stateOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -16,6 +17,14 @@ import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { type CliHandoffs, type Handoff, handoffChoices, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
+import {
+  exchangePointer,
+  launcherExists,
+  launcherName,
+  launcherPaths,
+  restorePointer,
+  writeLauncher,
+} from '../launcher.ts';
 import { type ManagedShimWriteResult, managedShimPath, managedShimsSupported } from '../managed-shims.ts';
 import { type RegisteredServer, scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
 import {
@@ -38,13 +47,15 @@ import {
   preflightInstall,
   reusableRuntime,
   type SupportedClient,
+  verifyEntry,
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
+import { nodeProgram } from '../node-program.ts';
 import { compareVersions, isBehind, isVersion, npmGlobalPackages, npmInstallGlobal, npmLatestVersion } from '../npm.ts';
-import { launcherOf, registrationVersion } from '../registrations.ts';
+import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
 import { changeUpdateCheck, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
-import { serverProduct, withManagedShim } from './servers.ts';
+import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
 
 /**
  * Bringing a machine to the latest release, from a terminal (`agentcomms update`) or a chat (`comms_update`).
@@ -60,6 +71,11 @@ import { serverProduct, withManagedShim } from './servers.ts';
  * The check reads and asks nobody. The update is a change whose effects are every step, one sentence each, so the
  * approval is bound to exactly that list — the versions in it included: a release published between the question and
  * the yes is a different change, and the claim is refused. Nothing behind, nothing is prepared.
+ *
+ * A registration that starts the stable launcher (design 2026-10-16, U6) is not registered again: the update installs
+ * the latest runtime and switches the launcher's pointer, and no client's configuration is touched. A managed
+ * registration from before the launcher names a versioned runtime; the update registers it again on the launcher —
+ * the one update that edits it — even when it is already at the latest release.
  */
 
 /**
@@ -114,6 +130,11 @@ export interface RegistrationItem {
   latest: string;
   /** Its pin and `--read-only`, as `mcp install` writes them. An update keeps exactly these. */
   narrowing: string[];
+  /**
+   * The stable launcher the entry starts, when it starts one (design 2026-10-16, U6): its version is the release the
+   * launcher's pointer names, and an update switches that pointer and leaves the entry as it is.
+   */
+  launches?: string | undefined;
   /** On an entry that is behind: whether the update can register it again from here. */
   updatable?: boolean | undefined;
   /** Why not, and what a person can do instead; or, for one that pins nothing, why it is not compared. */
@@ -151,6 +172,11 @@ export interface UpdateReport {
   upToDate: UpdateItem[];
   /** Registrations that pin no version — a checkout's own code, or an entry written by hand — so are not compared. */
   unpinned: RegistrationItem[];
+  /**
+   * Managed registrations at the latest release that still name a versioned runtime: the next update registers each
+   * again on the stable launcher, once, after which updates switch the launcher's pointer and edit no client config.
+   */
+  moves?: RegistrationItem[] | undefined;
   /** Client configs, and the global package list, that could not be read: what they hold is not known. */
   unreadable: UnreadableConfig[];
 }
@@ -192,6 +218,24 @@ export type UpdateStep =
       to: string;
       outcome: 'updated' | 'failed';
       detail?: string | undefined;
+    }
+  | {
+      /** A stable launcher switched to the latest runtime: every registration that starts it, and no client config. */
+      kind: 'pointer';
+      channel: ServerId;
+      package: string;
+      launcher: string;
+      /** The release it started before, or null when its pointer named none. */
+      from: string | null;
+      to: string;
+      /** The runtime it starts now. */
+      runtime: string;
+      /** The registrations that start it, which run `to` once their client restarts them. */
+      registrations: { client: string; name: string; scope: 'user' | 'project'; path: string }[];
+      outcome: 'switched' | 'failed' | 'skipped';
+      /** Whether a registration that starts it was started and answered, as `mcp install` checks an entry. */
+      verification?: InstallResult['verification'] | undefined;
+      detail?: string | undefined;
     };
 
 export interface UpdateResult {
@@ -224,6 +268,10 @@ interface Inspection {
   handoffs: CliHandoffs;
   /** Behind, and updatable as far as the files show. */
   candidates: Found[];
+  /** At the latest release, naming a versioned runtime, and updatable: registered again on the stable launcher. */
+  moving: Found[];
+  /** Behind, starting this installation's stable launcher: its pointer is switched. */
+  launched: Found[];
   /** Behind, and not updatable from here. */
   manual: RegistrationItem[];
   globals: GlobalItem[];
@@ -434,9 +482,13 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   const behind: UpdateItem[] = [];
   const upToDate: UpdateItem[] = [];
   const unpinned: RegistrationItem[] = [];
+  const moves: RegistrationItem[] = [];
   const candidates: Found[] = [];
+  const moving: Found[] = [];
+  const launched: Found[] = [];
   const manual: RegistrationItem[] = [];
   for (const entry of found) {
+    const stable = stableLauncherOf(entry.server, serverFacts(entry.channel));
     const item: RegistrationItem = {
       kind: 'registration',
       channel: entry.channel,
@@ -449,19 +501,47 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
       version: entry.version,
       latest: latest[entry.package] ?? '',
       narrowing: narrowingArgs(entry.channel, entry.narrowing),
+      ...(stable === null ? {} : { launches: stable.launcher }),
     };
     if (item.version === null) {
       unpinned.push({
         ...item,
         reason:
-          item.launcher === 'local'
-            ? "it starts a checkout's own code, which pins no release"
-            : 'it pins no release, so there is nothing to compare: it was not written by `mcp install`',
+          stable !== null
+            ? `it starts the stable launcher ${stable.launcher}, whose pointer is not there or names no release; a managed install or update writes it afresh`
+            : item.launcher === 'local'
+              ? "it starts a checkout's own code, which pins no release"
+              : 'it pins no release, so there is nothing to compare: it was not written by `mcp install`',
       });
       continue;
     }
     if (!isBehind(item.version, item.latest)) {
       upToDate.push(item);
+      // At the latest release, and still naming a runtime by its version: moved to the stable launcher, once.
+      if (stable === null && item.launcher === 'managed') {
+        const reason = await whyNotUpdatable(context, config, item, entry.narrowing, handoffs);
+        if (reason === undefined) {
+          const listed: RegistrationItem = { ...item, updatable: true };
+          moves.push(listed);
+          moving.push({ server: entry.server, item: listed });
+        }
+      }
+      continue;
+    }
+    if (stable !== null) {
+      // The launcher's pointer is switched, which needs no client and edits no configuration — but only this
+      // installation's launcher is this update's to switch.
+      const own = resolve(stable.dataDir) === resolve(core.paths.dataDir);
+      const listed: RegistrationItem = own
+        ? { ...item, updatable: true }
+        : {
+            ...item,
+            updatable: false,
+            reason: `it starts the stable launcher of another data directory, ${stable.dataDir}: update it from the installation that uses that directory`,
+          };
+      behind.push(listed);
+      if (own) launched.push({ server: entry.server, item: listed });
+      else manual.push(listed);
       continue;
     }
     const reason = await whyNotUpdatable(context, config, item, entry.narrowing, handoffs);
@@ -471,11 +551,12 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
     else manual.push(listed);
   }
 
-  // The runtimes: behind when a registration being moved needs the latest one; up to date when it is on disk.
+  // The runtimes: behind when a registration being moved, or a launcher being switched, needs the latest one; up to date
+  // when it is on disk.
   const needed = await runtimesNeeded(
     core.paths.dataDir,
     latest,
-    candidates.map((candidate) => candidate.item),
+    [...candidates, ...launched].map((candidate) => candidate.item),
   );
   behind.push(...needed);
   for (const channel of SERVERS) {
@@ -505,9 +586,11 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   }
 
   return {
-    report: { core: VERSION, latest, behind, upToDate, unpinned, unreadable },
+    report: { core: VERSION, latest, behind, upToDate, unpinned, moves, unreadable },
     handoffs,
     candidates,
+    moving,
+    launched,
     manual,
     globals,
   };
@@ -614,6 +697,11 @@ export function updateCheckFindings(
     if (step.kind === 'registration' && step.outcome === 'registered' && step.verification !== 'failed') {
       moved.add(registrationKey(step));
     }
+    // A switched launcher moved every registration that starts it, without registering any of them again.
+    if (step.kind === 'pointer' && step.outcome === 'switched' && step.verification !== 'failed') {
+      for (const registration of step.registrations)
+        moved.add(registrationKey({ channel: step.channel, ...registration }));
+    }
     if (step.kind === 'global' && step.outcome === 'updated') installed.add(step.package);
   }
   const atLatest = (version: string | null) => version !== null && isVersion(version) && !isBehind(version, latest);
@@ -654,6 +742,26 @@ interface RegistrationStep {
   destination: string;
   /** The managed package CLI shim this registration writes or repoints. */
   shim?: string | undefined;
+  /** For a managed entry: what the install does to the product's stable launcher, as the preview says it. */
+  pointer?: string | undefined;
+}
+
+/** A stable launcher an update switches to the latest runtime (design 2026-10-16, U6). */
+interface PointerStep {
+  channel: ServerId;
+  package: string;
+  name: string;
+  launcher: string;
+  /** The release its pointer names now, or null. */
+  version: string | null;
+  latest: string;
+  /** The runtime it is switched to. */
+  runtime: string;
+  /** The launcher file is not there, and is written again with this Node before the switch. */
+  rewrite: string | null;
+  /** The registrations that start it, as their client config has them: the first is started to check the switch. */
+  servers: RegisteredServer[];
+  items: RegistrationItem[];
 }
 
 interface Planned {
@@ -662,10 +770,13 @@ interface Planned {
   handoffs: CliHandoffs;
   latest: Record<string, string>;
   runtimes: RuntimeItem[];
+  pointers: PointerStep[];
   registrations: RegistrationStep[];
   globals: GlobalItem[];
   manual: RegistrationItem[];
   nothingBehind: boolean;
+  /** Whether each switched launcher is started, through a registration of it, to check that it answers. */
+  verify: boolean;
 }
 
 /**
@@ -693,10 +804,20 @@ function reachOf(channel: ServerId, narrowing: Narrowing): string {
 function registrationEffects(step: RegistrationStep): string[] {
   const { item } = step;
   const reach = reachOf(item.channel, serverFacts(item.channel).narrowingOf(item.narrowing));
-  const entry = `registers the ${serverLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
+  const entry =
+    item.version === item.latest
+      ? `moves the ${serverLabel(item.channel)} MCP server registered with ${item.client} as "${item.name}" to the stable launcher (${item.scope} scope), at ${item.latest} as it is${reach ? ` — ${reach}, as now` : ''}`
+      : `registers the ${serverLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
   // Where it goes and what it starts, as `mcp install` says it (#46): in the digest, so a claim from an environment
   // that resolves another config file or another command is another update.
   const effects = [entry, step.destination];
+  if (step.pointer) effects.push(step.pointer);
+  // Every managed step replaces an entry that names a versioned runtime: one on the launcher is switched instead.
+  if (item.launcher === 'managed') {
+    effects.push(
+      `from then on, an update switches that launcher's pointer and leaves this entry in ${item.client}'s configuration as it is`,
+    );
+  }
   if (step.shim)
     effects.push(`writes or repoints the owned CLI shim at ${step.shim}; a foreign file there is left unchanged`);
   if (item.launcher === 'npx') {
@@ -709,15 +830,74 @@ function registrationEffects(step: RegistrationStep): string[] {
 
 /** Every step as the sentences a person reads, in the order the steps are taken. */
 function effectsOf(planned: Planned): string[] {
+  // One launcher a product: said with the first of its registrations, which switches it, and not again.
+  const pointed = new Set<string>();
+  const once = (step: RegistrationStep): RegistrationStep => {
+    if (step.pointer === undefined || !pointed.has(step.pointer)) {
+      if (step.pointer !== undefined) pointed.add(step.pointer);
+      return step;
+    }
+    return { ...step, pointer: undefined };
+  };
   return [
     // The wording `mcp install` uses for the same act, so the two previews read alike.
     ...planned.runtimes.map((runtime) => `installs ${runtime.package}@${runtime.latest} from npm into ${runtime.path}`),
-    ...planned.registrations.flatMap(registrationEffects),
+    ...planned.pointers.flatMap(pointerEffects),
+    ...planned.registrations.map(once).flatMap(registrationEffects),
     ...planned.globals.map(
       (global) =>
         `updates the global ${global.package} from ${global.version} to ${global.latest}: \`npm install -g ${global.package}@${global.latest}\``,
     ),
   ];
+}
+
+/** A launcher switch as the sentences a person reads: the switch, who starts it, and a launcher written again. */
+function pointerEffects(step: PointerStep): string[] {
+  const who = step.items.map((item) => `${item.client} as "${item.name}"`);
+  const starters = who.length === 1 ? who[0] : `${who.slice(0, -1).join(', ')} and ${who.at(-1)}`;
+  return [
+    ...(step.rewrite === null
+      ? []
+      : [
+          `writes the stable launcher ${step.launcher} again, which is not there, to start its runtime with ${step.rewrite}`,
+        ]),
+    `switches the ${serverLabel(step.channel)} stable launcher ${step.launcher} from ${step.version ?? 'no release'} to ${step.latest}; no client configuration is changed`,
+    `${starters} ${who.length === 1 ? 'starts' : 'start'} it, and ${who.length === 1 ? 'runs' : 'run'} ${step.latest} once restarted`,
+  ];
+}
+
+/**
+ * The launchers the registrations in `launched` start, one a product: each switched to the latest runtime. Only this
+ * installation's own launchers are in `launched` (see `inspect`).
+ */
+async function planPointers(
+  context: InstallContext,
+  latest: Record<string, string>,
+  launched: readonly Found[],
+): Promise<PointerStep[]> {
+  const { dataDir } = context.core.paths;
+  const steps: PointerStep[] = [];
+  for (const channel of SERVERS) {
+    const own = launched.filter((entry) => entry.item.channel === channel);
+    const { packageName } = serverFacts(channel);
+    const version = latest[packageName];
+    if (own.length === 0 || version === undefined) continue;
+    const name = launcherName(packageName);
+    const platform = context.platform ?? process.platform;
+    steps.push({
+      channel,
+      package: packageName,
+      name,
+      launcher: launcherPaths(dataDir, name).launcher,
+      version: own[0]?.item.version ?? null,
+      latest: version,
+      runtime: managedRuntimeDir(dataDir, packageName, version),
+      rewrite: (await launcherExists(dataDir, name)) ? null : nodeProgram(context.env, platform),
+      servers: own.map((entry) => entry.server),
+      items: own.map((entry) => entry.item),
+    });
+  }
+  return steps;
 }
 
 function counted(count: number, one: string, many: string): string {
@@ -779,6 +959,16 @@ async function planRegistrations(
       options,
       install: plannedInstall(preflight),
       destination: entryDestination(item.client, preflight.target, preflight.command, context.env),
+      ...(launcher === 'managed'
+        ? {
+            pointer: launcherSwitchEffect(
+              context.core.paths.dataDir,
+              product.packageName,
+              serverLabel(item.channel),
+              item.latest,
+            ),
+          }
+        : {}),
       ...(launcher === 'managed' && managedShimsSupported(context)
         ? {
             shim: managedShimPath(
@@ -809,24 +999,32 @@ export function updateChange(
   return {
     plan: async (config) => {
       const inspection = await inspect(core, env, deps);
-      const { steps, manual } = await planRegistrations(context, inspection.candidates, request, inspection.handoffs);
-      const runtimes = await runtimesNeeded(
-        core.paths.dataDir,
-        inspection.report.latest,
-        steps.map((step) => step.item),
+      const { steps, manual } = await planRegistrations(
+        context,
+        [...inspection.candidates, ...inspection.moving],
+        request,
+        inspection.handoffs,
       );
+      const pointers = await planPointers(context, inspection.report.latest, inspection.launched);
+      const runtimes = await runtimesNeeded(core.paths.dataDir, inspection.report.latest, [
+        ...steps.map((step) => step.item),
+        ...pointers.flatMap((step) => step.items),
+      ]);
       planned = {
         report: inspection.report,
         latest: inspection.report.latest,
         runtimes,
+        pointers,
         registrations: steps,
         globals: inspection.globals,
         handoffs: inspection.handoffs,
         manual: [...inspection.manual, ...manual],
-        nothingBehind: inspection.report.behind.length === 0,
+        nothingBehind: inspection.report.behind.length === 0 && (inspection.report.moves ?? []).length === 0,
+        verify: request.noVerify !== true,
       };
       const parts = [
         steps.length > 0 ? counted(steps.length, 'registration', 'registrations') : '',
+        pointers.length > 0 ? counted(pointers.length, 'launcher', 'launchers') : '',
         runtimes.length > 0 ? counted(runtimes.length, 'runtime', 'runtimes') : '',
         inspection.globals.length > 0 ? counted(inspection.globals.length, 'global package', 'global packages') : '',
       ].filter(Boolean);
@@ -968,6 +1166,58 @@ function message(error: unknown): string {
   return error instanceof CommsError ? error.message : error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Switches one stable launcher to the runtime just installed: the launcher written again first when it is not there,
+ * then its pointer, in one rename. With `verify`, the first registration that starts it is started as its client would
+ * start it and must answer; when it does not, the pointer is put back as it was — unless something has switched it
+ * since — and the step failed. Nothing of either runtime is changed, and no client configuration is touched.
+ */
+async function switchLauncher(
+  context: InstallContext,
+  pointer: PointerStep,
+  verify: boolean,
+  runtimeMissing: boolean,
+): Promise<UpdateStep> {
+  const { dataDir } = context.core.paths;
+  const base = {
+    kind: 'pointer' as const,
+    channel: pointer.channel,
+    package: pointer.package,
+    launcher: pointer.launcher,
+    from: pointer.version,
+    to: pointer.latest,
+    runtime: pointer.runtime,
+    registrations: pointer.items.map(({ client, name, scope, path }) => ({ client, name, scope, path })),
+  };
+  if (runtimeMissing) {
+    return {
+      ...base,
+      outcome: 'skipped',
+      detail: `its runtime ${pointer.package}@${pointer.latest} could not be installed, so the launcher was left as it was`,
+    };
+  }
+  try {
+    if (pointer.rewrite !== null) {
+      await writeLauncher(dataDir, pointer.name, pointer.rewrite, { platform: context.platform });
+    }
+    const before = await exchangePointer(dataDir, pointer.name, pointer.runtime);
+    const [first] = pointer.servers;
+    if (!verify || first === undefined) return { ...base, outcome: 'switched', verification: 'skipped' };
+    const product = await serverProduct(pointer.channel, 'managed', pointer.latest);
+    const check = await verifyEntry({ command: first.command, args: first.args, env: first.env ?? {} }, product);
+    if (check.ok) return { ...base, outcome: 'switched', verification: 'passed', detail: check.detail };
+    const back = await restorePointer(dataDir, pointer.name, before, pointer.runtime).catch(() => false);
+    return {
+      ...base,
+      outcome: 'failed',
+      verification: 'failed',
+      detail: `${first.client} as "${first.name}" did not start through it: ${check.detail}; ${back ? `so the launcher was switched back to ${pointer.version ?? 'what it started before'}` : 'and the launcher could not be switched back, because something has switched it since'}`,
+    };
+  } catch (error) {
+    return { ...base, outcome: 'failed', detail: message(error) };
+  }
+}
+
 async function applyUpdate(context: InstallContext, planned: Planned, deps: UpdateDeps): Promise<UpdateResult> {
   const installRuntime =
     deps.installRuntime ??
@@ -994,6 +1244,11 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
       missing.add(runtime.package);
       steps.push({ ...base, outcome: 'failed', detail: message(error) });
     }
+  }
+
+  // Then each stable launcher: its pointer switched to the runtime just installed, and no client configuration touched.
+  for (const pointer of planned.pointers) {
+    steps.push(await switchLauncher(context, pointer, planned.verify, missing.has(pointer.package)));
   }
 
   for (const { item, product, options, install } of planned.registrations) {
@@ -1058,13 +1313,21 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   const worked = (step: UpdateStep) =>
     step.kind === 'registration'
       ? step.outcome === 'registered' && step.verification !== 'failed'
-      : step.outcome !== 'failed';
+      : step.kind === 'pointer'
+        ? step.outcome === 'switched' && step.verification !== 'failed'
+        : step.outcome !== 'failed';
   const ok = steps.every(worked);
   const status: UpdateResult['status'] =
     steps.length === 0 ? (planned.nothingBehind ? 'up-to-date' : 'manual') : ok ? 'updated' : 'failed';
   const clients = [
     ...new Set(
-      steps.flatMap((step) => (step.kind === 'registration' && step.outcome === 'registered' ? [step.client] : [])),
+      steps.flatMap((step) =>
+        step.kind === 'registration' && step.outcome === 'registered'
+          ? [step.client]
+          : step.kind === 'pointer' && step.outcome === 'switched'
+            ? step.registrations.map((registration) => registration.client)
+            : [],
+      ),
     ),
   ];
   const next =

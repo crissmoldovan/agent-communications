@@ -17,6 +17,7 @@ import { type Core, openCore } from '../src/core.ts';
 import { CommsError, ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { CORE_CALLER, handoffText, isCommand } from '../src/handoffs.ts';
 import { newApprovalId } from '../src/ids.ts';
+import { launcherPaths, readPointer } from '../src/launcher.ts';
 import { managedShimPath, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { type McpProduct, managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
@@ -1355,7 +1356,9 @@ test('printing an entry registers nothing, and so asks nobody', async () => {
     assert.equal(result.applied, false);
     assert.equal(result.restart, null);
     assert.match(String(result.snippet), /"slack"/);
-    assert.match(String(result.snippet), new RegExp(`runtime[/\\\\]+${VERSION.replaceAll('.', '\\.')}-slack`));
+    // It starts Slack's stable launcher, never a versioned runtime (design 2026-10-16, U6).
+    assert.match(String(result.snippet), /launch[/\\\\]+slack"/);
+    assert.doesNotMatch(String(result.snippet), /runtime[/\\\\]/);
     assert.deepEqual(await m.core.approvals.list(), []);
   } finally {
     await close();
@@ -1831,11 +1834,15 @@ test(
       assert.equal(result.shimFailure, undefined, 'the locator reads the service declaration, so the shim is written');
       assert.equal(result.shim?.status, 'created', 'the managed events install creates its CLI shim');
       assert.equal(result.shim?.path, path, 'named for the binary the service declares');
+      // It starts the service's stable launcher, as the registration does, and that starts the events runtime's CLI.
       assert.ok(
-        readFileSync(path, 'utf8').includes(
-          managedRuntimeEntry(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION),
-        ),
-        "and it starts the events runtime's own CLI",
+        readFileSync(path, 'utf8').includes(launcherPaths(m.core.paths.dataDir, 'events-daemon').launcher),
+        'and it starts the stable launcher',
+      );
+      assert.equal(
+        (await readPointer(m.core.paths.dataDir, 'events-daemon'))?.current,
+        managedRuntimeDir(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION),
+        "which starts the events runtime's own CLI",
       );
 
       const printed = await ok('comms_server_install', { ...args, print: true });

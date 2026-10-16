@@ -19,10 +19,10 @@ import {
   listRegisteredServers,
   lookupName,
   missingEntryFile,
-  pinnedVersion,
   probeKeychain,
   type RegisteredServer,
   type Remedy,
+  registrationVersion,
   remedy,
   secretsStoreOf,
   UNSENT_ROWS,
@@ -38,8 +38,8 @@ import { VERSION } from '../version.ts';
 import { orphanedSecretsPath } from './inboxes.ts';
 
 /*
- * Which version a registered entry runs is read with core's `pinnedVersion`, the same code that knows how the
- * installer lays a runtime out. This file used to carry its own pattern for `runtime/<version>/…`; when the
+ * Which version a registered entry runs is read with core's `registrationVersion`, the same code that knows how the
+ * installer lays a runtime out, and which release a stable launcher's pointer names. This file used to carry its own pattern for `runtime/<version>/…`; when the
  * installer moved to `runtime/<version>-gmail/…` the pattern captured `0.4.0-gmail`, never equal to `0.4.0`, and
  * every install made since was "stale" — with a repair that re-created the same path.
  */
@@ -637,7 +637,8 @@ async function mcpChecks(context: GmailContext, scope: Scope | undefined): Promi
   const registered = ours.filter((entry) => isProductServer(entry, GMAIL_MCP));
   const stale = ours
     .map((server) => {
-      const pin = server.args.map((arg) => pinnedVersion(arg, GMAIL_MCP)).find((version) => version !== null);
+      // What it pins, or — for the stable launcher — the release its pointer names (design 2026-10-16, U6).
+      const pin = registrationVersion(server, GMAIL_MCP);
       return pin ? { server, version: pin } : null;
     })
     .filter((entry): entry is { server: RegisteredServer; version: string } => entry !== null)
