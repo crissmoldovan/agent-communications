@@ -3,6 +3,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { asV2, type CommsError, renderChannelPreview, UNLABELLED_PREVIEW_LINE } from '@agentcomms/core';
+import type { TokenBundle } from '../src/auth/bundle.ts';
 import { beginApproval } from '../src/operations/approve.ts';
 import { runDoctor } from '../src/operations/doctor.ts';
 import { FALLBACK_REASONS, noAppReason } from '../src/operations/label.ts';
@@ -54,6 +55,8 @@ async function labelled(
     sendPolicy?: 'chat' | 'confirm';
     users?: SlackWorld['users'];
     agentLabel?: Record<string, unknown>;
+    /** The person's own credential, laid over the harness's — which rotates, as every sign-in's does. */
+    bundle?: Partial<TokenBundle>;
   } = {},
 ): Promise<Labelled> {
   const harness = await newHarness();
@@ -63,6 +66,7 @@ async function labelled(
     identity: 'agent',
     ...(options.bot === false ? {} : { bot: { userId: 'U0BOT0001' } }),
     ...(options.sendPolicy ? { sendPolicy: options.sendPolicy } : {}),
+    ...(options.bundle ? { bundle: options.bundle } : {}),
   });
   if (options.agentLabel) await setLabel(harness, options.agentLabel);
   const fake = await startFakeSlack();
@@ -176,7 +180,7 @@ test('a post with files always takes the labelled fallback (S2)', async (t) => {
   assert.equal(prepared.label?.reason, FALLBACK_REASONS.file);
 });
 
-test('a send workspace with no bot token takes the fallback, and doctor names both ways to give it one (Review focus 1)', async (t) => {
+test('a send workspace with no bot token takes the fallback, and doctor names the way to give it one (Review focus 1)', async (t) => {
   const w = await labelled(t, { bot: false });
   const prepared = await prepare(w, { channel: 'C1' });
   assert.equal(prepared.label?.identity, 'agent', 'a workspace with no bot went out unlabelled');
@@ -186,12 +190,56 @@ test('a send workspace with no bot token takes the fallback, and doctor names bo
   const check = await appIdentityCheck(w);
   assert.equal(check?.status, 'warn');
   assert.match(check?.detail ?? '', /as you, labelled/);
-  // Both ways, located: paste the bot token once, or sign in with the app's client secret.
-  assert.match(String(check?.fix), / workspace bot acme`?/);
+  // The person's own app, whose tokens rotate as every sign-in's do: the client-secret sign-in, located.
   assert.match(String(check?.fix), / workspace reauth acme --mode send --with-client-secret`?/);
 
   // With its bot token stored, the same check is ok.
   assert.equal((await appIdentityCheck(await labelled(t)))?.status, 'ok');
+});
+
+test("doctor does not offer paste-once for a person's own app whose tokens rotate, and says why", async (t) => {
+  const check = await appIdentityCheck(await labelled(t, { bot: false }));
+  assert.equal(check?.status, 'warn');
+  // `workspace bot` refuses a rotating token, so naming it would send the person to a refusal.
+  assert.doesNotMatch(String(check?.fix), / workspace bot /);
+  assert.doesNotMatch(check?.detail ?? '', / workspace bot /);
+  assert.match(`${check?.detail} ${check?.fix}`, /rotate/);
+  assert.match(String(check?.fix), / workspace reauth acme --mode send --with-client-secret`?/);
+});
+
+test("doctor names both ways for a person's own app whose tokens do not rotate", async (t) => {
+  const check = await appIdentityCheck(
+    await labelled(t, { bot: false, bundle: { refreshToken: undefined, refreshExpiresAt: undefined } }),
+  );
+  assert.equal(check?.status, 'warn');
+  // Both ways, located: paste the bot token once, or sign in with the app's client secret.
+  assert.match(String(check?.fix), / workspace bot acme`?/);
+  assert.match(String(check?.fix), / workspace reauth acme --mode send --with-client-secret`?/);
+});
+
+test("a workspace connected through an organisation's app gets a note that names no command it would refuse", async (t) => {
+  for (const bundle of [undefined, { refreshToken: undefined, refreshExpiresAt: undefined }]) {
+    const w = await labelled(t, { bot: false, ...(bundle ? { bundle } : {}) });
+    // As a profile sign-in records it: the organisation whose app made the account, and that app's role.
+    await w.harness.core.config.update((config) => {
+      const acme = config.accounts.acme;
+      assert.ok(acme);
+      return {
+        ...config,
+        accounts: { ...config.accounts, acme: { ...acme, organisation: 'rgc', profileApp: 'send' } },
+      };
+    });
+    const check = await appIdentityCheck(w);
+    // A note: posting as the person, labelled, is how an organisation's workspace works, and nothing here changes it.
+    assert.equal(check?.status, 'ok', 'a profile workspace warned about something its person cannot change');
+    assert.equal(check?.fix, null, 'a profile workspace was given a command to run');
+    assert.match(check?.detail ?? '', /as you, labelled/);
+    assert.match(check?.detail ?? '', /organisation’s shared app/);
+    // Paste-once refuses its rotating tokens; the client-secret sign-in refuses a profile account outright.
+    const said = `${check?.detail} ${check?.fix}`;
+    assert.doesNotMatch(said, /workspace bot/);
+    assert.doesNotMatch(said, /with-client-secret|client secret/);
+  }
 });
 
 test('doctor checks the bot token is stored, not only that a bot user is recorded', async (t) => {
@@ -199,7 +247,7 @@ test('doctor checks the bot token is stored, not only that a bot user is recorde
   await (await w.harness.core.secrets('file')).delete(botSecretRefFor(w.accountId));
   const check = await appIdentityCheck(w);
   assert.equal(check?.status, 'warn', 'a bot user with no stored token read as able to post as the app');
-  assert.match(String(check?.fix), / workspace bot acme/);
+  assert.match(String(check?.fix), / workspace reauth acme --mode send --with-client-secret/);
 });
 
 /** Doctor's app-identity finding for the workspace, read as `doctor` reads everything, offline. */
