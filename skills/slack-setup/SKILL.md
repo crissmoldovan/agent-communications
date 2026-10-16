@@ -358,9 +358,10 @@ installed in the workspace; removing it there is the person's step in Slack's se
 - other Slack MCP servers registered on this machine. Where it says *not checked*, it could not look, and that is
   not the same as "none": open the client's MCP server list and look for another Slack entry yourself;
 - for a `send` workspace, whether its app's bot token is actually stored — so whether an agent's posts can appear as
-  the app — and, when it is not, the ways that can work for it (see above): for a person's own app, the client-secret
-  sign-in, and pasting once only if its tokens do not rotate; for a workspace connected through an organisation
-  profile, a note and no command.
+  the app — and, when it is not, the ways that can work for it (see above): for a person's own app connected with its
+  client secret, signing in again with it; for one connected by PKCE, the three steps to a new app with PKCE off (state
+  3, after `workspace remove`, since one connection per person per workspace is kept); pasting once only if its tokens
+  do not rotate; and for a workspace connected through an organisation profile, a note and no command.
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
 the files can say, and `--workspace <name>` checks one workspace. `slack_doctor` runs the same checks and returns
