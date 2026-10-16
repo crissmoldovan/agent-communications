@@ -292,7 +292,8 @@ test('for a person’s own app, doctor names the client-secret sign-in instead',
     ),
     fix,
   );
-  assert.doesNotMatch(fix, /admin/);
+  // The organisation's wording, not a bare "admin": a runner's home can be C:\Users\runneradmin, inside the command.
+  assert.doesNotMatch(fix, /organisation['’]s admin/);
 });
 
 test('pasting the new token takes the record of the refused one away, and posts go as the app again', async (t) => {
