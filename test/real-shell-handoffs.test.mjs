@@ -21,7 +21,6 @@ import {
   commandsIn,
   environmentAssignments,
   FOUR_FOLDERS,
-  filesUnder,
   freshShell,
   inWindowsShells,
   isCanonical,
