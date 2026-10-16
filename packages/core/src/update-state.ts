@@ -4,7 +4,7 @@ import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './c
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
-import { organisationsOf, updatesPathFor } from './organisations.ts';
+import { organisationsOf, profileTarget, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
@@ -365,6 +365,15 @@ export interface EffectiveUpdates {
 /** How much a level updates: `auto` 2, `every-14-days` 1, `never` 0. */
 const rankOf = (level: UpdateLevel): number => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
 
+/** `profileTarget`, for a path read back from the configuration: one it cannot follow is shown as it is. */
+function safeTarget(path: string): string {
+  try {
+    return profileTarget(path);
+  } catch {
+    return path;
+  }
+}
+
 /**
  * The caps the organisation profiles here name (design 2026-10-16, U8): the strictest `max`, and the first profile
  * with `background: false`, each with where it comes from. A `max` word this release does not know counts as `never`,
@@ -376,7 +385,8 @@ export function organisationCaps(config: Config): Pick<EffectiveUpdates, 'cap' |
   for (const [organisation, record] of Object.entries(organisationsOf(config)).sort(([a], [b]) => a.localeCompare(b))) {
     const caps = record.updates;
     if (caps === undefined) continue;
-    const where = { organisation, source: updatesPathFor(record.source.path) };
+    // Beside the file the profile's path names, where it was read from: not beside a link to it (`profileTarget`).
+    const where = { organisation, source: updatesPathFor(safeTarget(record.source.path)) };
     if (caps.max !== undefined) {
       const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
       if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { ...where, level };

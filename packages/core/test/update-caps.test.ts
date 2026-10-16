@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { type GatedChange, gatedChange } from '../src/change-flow.ts';
@@ -136,6 +136,45 @@ test('the caps file only tightens, names its own organisation, and is as strict 
       return true;
     });
   }
+});
+
+test('a profile named through a symbolic link has its side files read beside the file it links to, not beside the link', {
+  skip: process.platform === 'win32' ? 'a symbolic link needs Developer Mode on Windows' : false,
+}, async () => {
+  const o = org({ max: 'never', background: false });
+  const agentApp = join(dirname(o.profile), 'acme.agentcomms.agent-app.json');
+  writeFileSync(
+    agentApp,
+    `${JSON.stringify({
+      agentcomms: 'organisation-agent-app',
+      version: 1,
+      organisation: 'acme',
+      slack: { workspace: 'TACME0001', appId: 'A0AGENT0001' },
+    })}\n`,
+  );
+  // The person keeps a link to the organisation's checkout, by a path relative to the link's folder.
+  const elsewhere = join(o.m.home, 'elsewhere');
+  mkdirSync(elsewhere);
+  const link = join(elsewhere, 'acme.json');
+  symlinkSync(relative(elsewhere, o.profile), link);
+  // Beside the link is not where the organisation keeps its caps: a file there says nothing.
+  writeFileSync(
+    join(elsewhere, 'acme.updates.json'),
+    `${JSON.stringify({ organisation: 'acme', max: 'every-14-days' })}\n`,
+  );
+  const read = await readProfileFile(link);
+  assert.equal(read.path, link, 'the path the person chose is the one recorded, and read again');
+  assert.deepEqual([read.updates?.max, read.updates?.background, read.updates?.path], ['never', false, o.updates]);
+  assert.equal(read.agentApp?.appId, 'A0AGENT0001');
+  assert.equal(read.agentApp?.path, agentApp);
+  // A link to the link: followed to the file at the end.
+  const chain = join(elsewhere, 'chain.json');
+  symlinkSync(link, chain);
+  assert.equal((await readProfileFile(chain)).updates?.path, o.updates);
+  // Added through the link, the caps are in force, and where they come from is the file they were read from.
+  await approved(o, (approvalId) => orgAddChange(o.m.core, { file: link, approvalId }, options(o.m)));
+  const capped = await effectiveUpdates(o.m.core, o.m.env);
+  assert.deepEqual([capped.level, capped.cap?.source, capped.backgroundOff?.source], ['never', o.updates, o.updates]);
 });
 
 // ── Adding and changing them ─────────────────────────────────────────────────────────────────────────────────────

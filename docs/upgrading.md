@@ -121,7 +121,9 @@ the line is shown, never part of what the approval binds.
 
 **An organisation's caps.** An organisation can only make its members' updates stricter, in a file beside its
 profile — `acme.agentcomms.updates.json` beside `acme.agentcomms.json` — holding
-`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. It is not in the
+`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. A profile
+named through a symbolic link has its files read beside the file the link names, where the organisation keeps them,
+never beside the link. It is not in the
 profile itself: every release from 0.13.0 to 0.19.0 refuses a profile with a key it does not know, at every level, and a
 member not yet on 0.20.0 would lose `org update` for the whole profile. Those releases never open the file beside it.
 `org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
