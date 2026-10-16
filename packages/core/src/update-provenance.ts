@@ -1,7 +1,3 @@
-import { existsSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join, sep } from 'node:path';
-
 /**
  * Provenance before a background install (design 2026-10-16 U5 step 3; §2): a release is installed in the background
  * only when npm's attestation for it says it was built by this repository's own release workflow, on a tag of exactly
@@ -460,46 +456,28 @@ export interface SigstoreModules {
 }
 
 /**
- * Where sigstore-js is: the copy npm carries beside the Node running this. npm verifies registry signatures with it,
- * and it is the npm that installs the runtimes (`findNpmCli`, which looks in the same two places), so it is trusted no
- * less than the install it guards. It is looked for there and nowhere else: a package name resolved the usual way
- * would also be looked for in every `node_modules` above this one, a home folder's included.
+ * sigstore-js's verification modules — `@sigstore/verify`, `/bundle`, `/tuf` and `/protobuf-specs`, at the versions
+ * sigstore-js 3.1.0 carries — imported by name as this package's own declared dependencies, and only when a bundle is
+ * to be verified: nothing else here, and nothing a channel's server or command starts, loads them. Core's bundle keeps
+ * them external, so npm installs them beside it, each with its own licence (Apache-2.0), and no channel's bundle
+ * inlines them (`pnpm run licenses` counts what each bundle inlines).
+ *
+ * Not `sigstore` itself: its `createVerifier` takes the identity as a string, which it then reads as an unanchored
+ * regular expression, and always reads the trust root through TUF. The parts it is made of take the anchored pattern
+ * and, in a test, a trust root of the test's own.
  */
-export function sigstoreLocations(execPath: string = process.execPath): string[] {
-  const found: string[] = [];
-  for (const npm of [
-    join(dirname(execPath), 'node_modules', 'npm'),
-    join(dirname(execPath), '..', 'lib', 'node_modules', 'npm'),
-  ]) {
-    const entry = join(npm, 'node_modules', 'sigstore', 'dist', 'index.js');
-    if (existsSync(entry)) found.push(entry);
-  }
-  return found;
-}
-
-/** sigstore-js's verification modules, from the first place it is found; throws, verifying nothing, when it is not. */
-export async function loadSigstore(locations: readonly string[] = sigstoreLocations()): Promise<SigstoreModules> {
-  const [first] = locations;
-  if (first === undefined) {
-    throw new Error('sigstore-js is not installed beside this Node, so no provenance can be verified');
-  }
-  // Its own parts, from npm's own folder of the packages it carries — and from there only: one npm does not carry is
-  // not looked for in the folders above it.
-  const entry = realpathSync(first);
-  const carried = dirname(dirname(dirname(entry)));
-  const from = createRequire(entry);
-  const part = (name: string): unknown => {
-    const path = realpathSync(from.resolve(name));
-    if (!path.startsWith(`${carried}${sep}`)) {
-      throw new Error(`${name} is not among the packages npm carries in ${carried}, so no provenance can be verified`);
-    }
-    return from(path);
-  };
+export async function loadSigstore(): Promise<SigstoreModules> {
+  const [verify, bundle, tuf, protobuf] = await Promise.all([
+    import('@sigstore/verify'),
+    import('@sigstore/bundle'),
+    import('@sigstore/tuf'),
+    import('@sigstore/protobuf-specs'),
+  ]);
   return {
-    verify: part('@sigstore/verify') as SigstoreModules['verify'],
-    bundle: part('@sigstore/bundle') as SigstoreModules['bundle'],
-    tuf: part('@sigstore/tuf') as SigstoreModules['tuf'],
-    protobuf: part('@sigstore/protobuf-specs') as SigstoreModules['protobuf'],
+    verify: verify as unknown as SigstoreModules['verify'],
+    bundle: bundle as unknown as SigstoreModules['bundle'],
+    tuf: tuf as unknown as SigstoreModules['tuf'],
+    protobuf: protobuf as unknown as SigstoreModules['protobuf'],
   };
 }
 

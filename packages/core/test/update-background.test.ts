@@ -37,8 +37,8 @@ import { tempDir } from './helpers/temp.ts';
  * holds, provenance, install, self-check, switch, audit, prune and the next session's notice.
  *
  * Nothing here reaches npm or Sigstore, installs a package or schedules a job. The registry is a function; the
- * attestations are bundles `./helpers/provenance-fixture.ts` signs for the test, which sigstore-js — npm's own copy,
- * beside this Node — verifies against the test's trust root; the installer writes a runtime directory the way npm
+ * attestations are bundles `./helpers/provenance-fixture.ts` signs for the test, which sigstore-js — this package's own
+ * dependency — verifies against the test's trust root; the installer writes a runtime directory the way npm
  * leaves one; the self-check, the process list and the job's runner are stand-ins; the clock is fixed.
  */
 

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   type AttestationFetch,
   attestationsUrl,
@@ -9,7 +11,6 @@ import {
   type ProvenanceVerdict,
   provenanceIdentity,
   sigstoreBundleVerifier,
-  sigstoreLocations,
   verifyProvenance,
 } from '../src/update-provenance.ts';
 import {
@@ -26,7 +27,7 @@ import {
  * registry names. Anything else, and a version with no attestation, is refused, naming the field.
  *
  * Nothing here reaches npm or Sigstore. The attestations come from `./helpers/provenance-fixture.ts`, signed for real
- * by keys the test makes, and sigstore-js — the copy npm carries beside this Node — verifies them against a trust root
+ * by keys the test makes, and sigstore-js — this package's own dependency — verifies them against a trust root
  * naming those keys. No bundle recorded from npm is used: none could be had without the network.
  */
 
@@ -61,13 +62,34 @@ function refusal(verdict: ProvenanceVerdict): { field: string; reason: string } 
   return verdict as { field: string; reason: string };
 }
 
-test('sigstore-js is found beside this Node, as npm is, and nowhere else', async () => {
-  const locations = sigstoreLocations();
-  assert.ok(locations.length > 0, 'npm beside this Node carries sigstore-js');
-  for (const location of locations) assert.match(location, /[/\\]npm[/\\]node_modules[/\\]sigstore[/\\]/);
+test('sigstore-js is this package’s own dependency, imported by name, at the versions sigstore-js 3.1.0 carries', async () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    dependencies: Record<string, string>;
+  };
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(manifest.dependencies).filter(([name]) => name.startsWith('@sigstore/'))),
+    {
+      '@sigstore/bundle': '3.1.0',
+      '@sigstore/protobuf-specs': '0.4.3',
+      '@sigstore/tuf': '3.1.1',
+      '@sigstore/verify': '2.1.1',
+    },
+  );
+  for (const name of ['@sigstore/verify', '@sigstore/bundle', '@sigstore/tuf', '@sigstore/protobuf-specs']) {
+    // Resolved as any dependency is, from this package: never from the npm beside this Node.
+    const where = fileURLToPath(import.meta.resolve(name));
+    assert.doesNotMatch(where, /[/\\]npm[/\\]node_modules[/\\]/, name);
+  }
   const modules = await loadSigstore();
   assert.equal(typeof modules.verify.Verifier, 'function');
-  await assert.rejects(loadSigstore([]), /sigstore-js is not installed/);
+  assert.equal(typeof modules.tuf.getTrustedRoot, 'function');
+  // A verifier whose sigstore-js cannot be loaded verifies nothing: it refuses.
+  const unloaded = sigstoreBundleVerifier({
+    load: async () => {
+      throw new Error('sigstore-js could not be loaded');
+    },
+  });
+  await assert.rejects(unloaded({}, { issuer: PROVENANCE_PINS.issuer, identity: /^$/ }), /could not be loaded/);
 });
 
 test('a release built by release.yml at its tag, on a GitHub-hosted runner, verifies — through sigstore-js', async () => {

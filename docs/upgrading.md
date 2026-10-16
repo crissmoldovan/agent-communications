@@ -185,7 +185,8 @@ nothing unless all of this holds:
   declares `agentcommsRelease.security: true`. The clock is the earlier of this machine's and the registry's, so a clock
   set ahead skips no hold and ends no pause early.
 - **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
-  sigstore-js — the copy npm carries beside your Node — must be issued by `https://token.actions.githubusercontent.com`
+  sigstore-js (its verifier's parts, `@sigstore/verify` and the rest at sigstore-js 3.1.0's versions, are dependencies of
+  `@agentcomms/core`) — must be issued by `https://token.actions.githubusercontent.com`
   for exactly `https://github.com/crissmoldovan/agent-communications/.github/workflows/release.yml@refs/tags/v<version>`,
   built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
   version with no attestation, or any other identity, is refused, and nothing at all is installed.
