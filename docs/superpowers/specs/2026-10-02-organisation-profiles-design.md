@@ -100,6 +100,17 @@ Nothing in it is executed or used as a command line. It names apps and nothing e
 - `slack.apps.read` / `.send`: either may be absent. Each may carry `appId`; when it does, a token naming another app
   is refused. When it does not, the first sign-in records the app id Slack returns, and later ones must match it.
 - Either `gmail` or `slack` may be absent. The whole document is at most 64 KiB.
+- **The agent app is named beside the profile, not in it** (amended 2026-10-16, CUE-493, for 0.20.0). An organisation
+  may have one bot-only Slack agent app, whose token members paste with `workspace bot`. Its id goes in a companion
+  file in the same folder, the profile's name with `.agent-app.json` for its `.json`: `{"agentcomms":
+  "organisation-agent-app", "version": 1, "organisation", "slack": {"workspace", "appId"}}`, strict, at most 64 KiB,
+  its organisation and workspace the profile's. Every object of a version-1 profile is strict in every release since
+  0.13.0, so a new key in the profile would make a member still on one of them refuse the whole document at `org
+  update`; they never open the companion file. Read with the profile by `org add` and `org update`, it is bound by its
+  own SHA-256 in the same approval — another file, or none where there was one, is a change approved first even with
+  the profile's bytes unchanged — and recorded as `slack.apps.agent: { appId, sha256 }`, which the configuration's
+  loose schema keeps through older releases' ordinary writes (an older `org update` rebuilds `apps` and drops it; the
+  next update by this release names it again, approved).
 - **Every field comes from whoever wrote the profile**, and is checked as untrusted, so each has a grammar and a bound,
   and the schema refuses anything else:
 

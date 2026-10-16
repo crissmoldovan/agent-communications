@@ -314,48 +314,201 @@ export interface ProfileFile {
   path: string;
   sha256: string;
   profile: OrganisationProfile;
+  /** The organisation's agent app, from the file beside the profile (`agentAppPathFor`); absent when there is none. */
+  agentApp?: AgentAppFile | undefined;
 }
 
 /**
- * Reads a profile from an absolute path, in one bounded read: open once, check it is a regular file, read at most one
- * byte more than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a
- * device, a directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path
- * is one the person chose.
+ * The bytes at an absolute path, in one bounded read: open once, check it is a regular file, read at most one byte more
+ * than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a device, a
+ * directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path is one the
+ * person chose. `unopened` says what a file that cannot be opened is: a refusal for the profile, whatever the reason;
+ * nothing for its agent-app file when it is not there, and a refusal when it is there and cannot be opened.
  */
-export async function readProfileFile(path: string): Promise<ProfileFile> {
+async function readBounded(
+  path: string,
+  what: { unopened: (error: unknown) => null; noun: string; size: string },
+): Promise<Buffer | null> {
   let handle: FileHandle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  } catch {
-    throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
-      hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
-    });
+  } catch (error) {
+    return what.unopened(error);
   }
-  let bytes: Buffer;
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new CommsError('USAGE', `${shownPath(path)} is not a file`);
     const buffer = Buffer.allocUnsafe(PROFILE_MAX_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, PROFILE_MAX_BYTES + 1, 0);
     if (bytesRead > PROFILE_MAX_BYTES) {
-      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than a profile can be (64 KiB)`, {
-        hint: 'A profile is a few hundred bytes of JSON. Check this is the file your organisation sent.',
+      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than ${what.size} can be (64 KiB)`, {
+        hint: `${what.size.charAt(0).toUpperCase()}${what.size.slice(1)} is a few hundred bytes of JSON. Check this is the file your organisation sent.`,
       });
     }
-    bytes = Buffer.from(buffer.subarray(0, bytesRead));
+    return Buffer.from(buffer.subarray(0, bytesRead));
   } catch (error) {
     if (error instanceof CommsError) throw error;
-    throw new CommsError('NOT_FOUND', `the profile at ${shownPath(path)} could not be read`, { cause: error });
+    throw new CommsError('NOT_FOUND', `${what.noun} at ${shownPath(path)} could not be read`, { cause: error });
   } finally {
     await handle.close();
   }
-  let text: string;
+}
+
+function utf8(bytes: Buffer, what: string): string {
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    throw new CommsError('BAD_DATA', 'the organisation profile is not UTF-8 text');
+    throw new CommsError('BAD_DATA', `${what} is not UTF-8 text`);
   }
-  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), profile: parseProfile(text) };
+}
+
+/**
+ * Reads a profile from an absolute path (`readBounded`), and the organisation's agent app from the file beside it when
+ * there is one (`agentAppPathFor`). Each is bound by the SHA-256 of its own exact bytes.
+ */
+export async function readProfileFile(path: string): Promise<ProfileFile> {
+  const bytes = (await readBounded(path, {
+    unopened: () => {
+      throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
+        hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
+      });
+    },
+    noun: 'the profile',
+    size: 'a profile',
+  })) as Buffer;
+  const profile = parseProfile(utf8(bytes, 'the organisation profile'));
+  const agentApp = await readAgentAppFile(agentAppPathFor(path), profile);
+  return {
+    path,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    profile,
+    ...(agentApp === undefined ? {} : { agentApp }),
+  };
+}
+
+// ── The organisation's agent app ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An organisation's agent app (CUE-493, decided 2026-10-16): one bot-only Slack app per organisation — no user scopes,
+ * token rotation off — that its administrator installs once. Its bot token is shared with members privately, never in
+ * the profile's repository, and each member who wants their agent's posts to appear as the app pastes it once with
+ * Slack's `workspace bot`. Their own read and send connection is untouched; a member who does nothing keeps the
+ * labelled fallback.
+ *
+ * **The app is named in a file beside the profile, not in it.** Every object of a version-1 profile is strict, in this
+ * release and in every one since profiles were added (0.13.0 to 0.19.0): a new key anywhere — `slack.apps.agent`, say —
+ * refuses the whole document. A member still on an older release would then lose `org update` for everything else the
+ * organisation changes, until they updated. So the profile stays exactly as those releases read it, and the agent app's
+ * id goes in `<profile>.agent-app.json`, which they never open. This release reads it whenever it reads the profile,
+ * binds it by its own SHA-256 in the same approval, and records it as `slack.apps.agent` — where the configuration's
+ * loose schema lets older releases keep it through their writes.
+ *
+ * It holds the app's id and nothing secret: what lets `workspace bot` refuse a token of any other app, and lets `doctor`
+ * tell a member whom to ask for this one.
+ */
+export const AGENT_APP_KIND = 'organisation-agent-app' as const;
+
+/** The agent app's file for a profile: in the same folder, the profile's name with `.agent-app.json` for its `.json`. */
+export function agentAppPathFor(profilePath: string): string {
+  return /\.json$/i.test(profilePath)
+    ? `${profilePath.slice(0, -'.json'.length)}.agent-app.json`
+    : `${profilePath}.agent-app.json`;
+}
+
+/** The agent app as it was read: from where, the SHA-256 of its exact bytes, and the app it names. */
+export interface AgentAppFile {
+  path: string;
+  sha256: string;
+  appId: string;
+}
+
+const agentAppSchema = z.strictObject({
+  agentcomms: z.literal(AGENT_APP_KIND),
+  version: z.literal(1),
+  organisation: z.string(),
+  slack: z.strictObject({
+    workspace: z
+      .string()
+      .regex(SLACK_WORKSPACE_ID_PATTERN, 'a Slack workspace id is T followed by capital letters or digits'),
+    appId: z.string().regex(SLACK_APP_ID_PATTERN, 'a Slack app id is A followed by 2–20 capital letters or digits'),
+  }),
+});
+
+/**
+ * Reads the agent app's file, if there is one, and holds it to the profile it sits beside: the same organisation, and
+ * the profile's own Slack workspace. Strict as the profile is, and refused in the same words — naming each problem by
+ * where it is, never by the value found there — but naming this file, so the person knows which of the two to fix.
+ */
+async function readAgentAppFile(path: string, profile: OrganisationProfile): Promise<AgentAppFile | undefined> {
+  const bytes = await readBounded(path, {
+    unopened: (error) => {
+      // Only a file that is not there is no agent app. One that is there and cannot be opened is refused: read as
+      // none, it would let `workspace bot` take any app's token for a profile that names one.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new CommsError('NOT_FOUND', `the agent app file at ${shownPath(path)} could not be opened`, {
+        cause: error,
+      });
+    },
+    noun: 'the agent app file',
+    size: 'an agent app file',
+  });
+  if (bytes === null) return undefined;
+  const where = shownPath(path);
+  const refuse = (problem: string): never => {
+    throw new CommsError('BAD_DATA', `the agent app file ${where} is not valid: ${problem}`, {
+      hint: 'It names the organisation’s agent app and nothing else: its kind, version 1, the organisation, and its Slack workspace and app id. Ask your organisation for its current one.',
+    });
+  };
+  let raw: unknown;
+  try {
+    const text = utf8(bytes, `the agent app file ${where}`);
+    raw = JSON.parse(text.startsWith('﻿') ? text.slice(1) : text);
+  } catch (error) {
+    if (error instanceof CommsError) throw error;
+    return refuse('it is not valid JSON');
+  }
+  const parsed = agentAppSchema.safeParse(raw);
+  if (!parsed.success) {
+    return refuse(
+      parsed.error.issues
+        .slice(0, 6)
+        .map((issue) => {
+          const at = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the file';
+          return issue.code === 'unrecognized_keys'
+            ? `${at}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} it has`
+            : `${at}: ${issue.message}`;
+        })
+        .join('; '),
+    );
+  }
+  const document = parsed.data;
+  if (document.organisation !== profile.organisation) {
+    return refuse(
+      `it names the organisation ${shownText(document.organisation, 40)}, not ${profile.organisation}, whose profile it sits beside`,
+    );
+  }
+  if (!profile.slack) return refuse('the profile beside it lists no Slack workspace for the app to post in');
+  if (document.slack.workspace !== profile.slack.workspace) {
+    return refuse(`it names the workspace ${document.slack.workspace}, not ${profile.slack.workspace}, the profile's`);
+  }
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), appId: document.slack.appId };
+}
+
+/**
+ * The agent app an organisation's profile names for this Slack workspace, as the configuration records it — or none.
+ *
+ * Whatever string the record holds is returned, an app id or not: a check against a hand-edited value then refuses
+ * every token, the stricter reading, rather than none.
+ */
+export function organisationAgentApp(
+  config: Config,
+  organisation: string,
+  workspace: string,
+): { appId: string } | undefined {
+  const slack = recordOf(config, organisation)?.slack;
+  if (slack === undefined || slack.workspace !== workspace) return undefined;
+  const agent = slack.apps.agent;
+  return typeof agent?.appId === 'string' && agent.appId !== '' ? { appId: agent.appId } : undefined;
 }
 
 // ── The record ───────────────────────────────────────────────────────────────────────────────────────────────────
