@@ -82,6 +82,12 @@ import {
 import { profileSourcePath, shownPath } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
 import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
+import {
+  type BackgroundDeps,
+  type BackgroundOutcome,
+  type BackgroundRunResult,
+  runBackgroundUpdate,
+} from './update-background.ts';
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
 import { CHANGE_CLAIM, exemptFromUpdateGate, updateGateAtTerminal } from './update-gate.ts';
 import type { UpdateJobDeps } from './update-job.ts';
@@ -170,6 +176,10 @@ Usage — run these with this CLI, each as the words after its program:
   update --background-job on|off [--approval <id>]
                                 set up the per-user job that installs verified releases in the
                                 background, approved first; off removes it at once
+  update --background [--dry-run]
+                                one background run, as the job starts it: a verified release past its
+                                hold, installed, checked and switched to; --dry-run says what it would
+                                do and why, and changes nothing
   secrets migrate --to keychain|file [--approval <id>]
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
@@ -264,6 +274,7 @@ function parse(argv: string[]) {
       auto: { type: 'string' },
       rollback: { type: 'boolean', default: false },
       'background-job': { type: 'string' },
+      background: { type: 'boolean', default: false },
       // A flag on `org add`, and on `org update` the flag and the word after it — `on` or `off` — read from the tokens.
       'for-other-addresses': { type: 'boolean', default: false },
       adopt: { type: 'string' },
@@ -428,6 +439,8 @@ export async function main(
      * so a test never loads, schedules or removes a real job.
      */
     updateJob?: UpdateJobDeps | undefined;
+    /** What one background run reads and runs — registry, attestations, installer, self-check, clock — for a test. */
+    updateBackground?: BackgroundDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -898,22 +911,46 @@ export async function main(
       case 'update': {
         if (sub !== undefined) {
           throw usage(
-            'usage: update [--check | --later | --auto on|off | --rollback | --background-job on|off] [--no-verify] [--approval <id>]',
+            'usage: update [--check | --later | --auto on|off | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
           );
         }
         const job = values['background-job'];
-        const settings = values.later || values.auto !== undefined || values.rollback || job !== undefined;
+        const settings =
+          values.later || values.auto !== undefined || values.rollback || job !== undefined || values.background;
         const modes = [
           values.check,
           values.later,
           values.auto !== undefined,
           values.rollback,
           job !== undefined,
+          values.background,
         ].filter(Boolean).length;
         if (modes > 1 || (values['no-verify'] && settings)) {
           throw usage(
-            '--check, --later, --auto, --rollback and --background-job are one at a time, and --no-verify is for the update itself',
+            '--check, --later, --auto, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
           );
+        }
+        if (values['dry-run'] && !values.background) {
+          throw usage(
+            '--dry-run is for --background; the update itself shows every step and asks before it changes anything',
+          );
+        }
+        if (values.background) {
+          // The job's own run: it prepares no change, so there is nothing for an approval to be for.
+          if (values.approval !== undefined) throw usage('--background approves nothing, so it takes no --approval');
+          const result = await runBackgroundUpdate(
+            core,
+            env,
+            { dryRun: values['dry-run'] },
+            {
+              platform,
+              ...(deps.updateJob === undefined ? {} : { job: deps.updateJob }),
+              ...deps.updateBackground,
+            },
+          );
+          softExit = backgroundExit(result.outcome);
+          writeResult(result, output, renderBackground);
+          return;
         }
         if (values.rollback) {
           const result = await gatedChangeAtTerminal(core, updateRollbackChange(core), {
@@ -1309,6 +1346,54 @@ function renderRollback(result: UpdateRollbackResult): string {
   if (result.status === 'nothing') lines.push('Nothing was changed: no stable launcher here has a release before.');
   for (const left of result.left) lines.push(`Left as it is: ${left.launcher}: ${left.reason}.`);
   if (result.next) lines.push('', result.next);
+  if (result.holdFailed) {
+    lines.push(
+      `The background update run was not told to hold this release back (${result.holdFailed}): its next run may install it again.`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** A run that could not do its work is not a success to the job's log; one with nothing to do yet is. */
+function backgroundExit(outcome: BackgroundOutcome): number {
+  if (outcome === 'refused') return EXIT_CODES.CONFIG;
+  if (outcome === 'failed' || outcome === 'unavailable') return EXIT_CODES.UNAVAILABLE;
+  if (outcome === 'busy') return EXIT_CODES.TRANSIENT;
+  return EXIT_CODES.OK;
+}
+
+function renderBackground(result: BackgroundRunResult): string {
+  const lines = [
+    `${result.dryRun ? 'Dry run: ' : ''}${result.outcome}: ${result.reason}.`,
+    `Runs ${result.current ?? 'nothing known'}; the registry's latest is ${result.latest ?? 'not known'}.`,
+  ];
+  if (result.release) {
+    const { release } = result;
+    lines.push(
+      `${release.version} came out ${release.publishedAt ?? 'at a time the registry does not give'}${release.security ? ', a security fix' : ''}; it may install ${release.holdHours} hours after, at ${release.installableAt ?? 'a time not known'}.`,
+    );
+  }
+  for (const item of result.packages) {
+    const done = [
+      item.provenance
+        ? `provenance verified: ${item.provenance.identity}, issued by ${item.provenance.issuer}, built on a ${item.provenance.runner} runner from ${item.provenance.repository} at ${item.provenance.ref}, SHA-512 ${item.provenance.sha512.slice(0, 16)}…${item.provenance.logIndex === null ? '' : `, transparency-log entry ${item.provenance.logIndex}`}`
+        : '',
+      item.installed ? 'installed' : '',
+      item.checked ? 'checked' : '',
+      item.switched ? 'switched to' : '',
+    ].filter(Boolean);
+    lines.push(
+      `- ${item.package} ${item.from ?? 'no release'} → ${item.to}: ${done.join('; ') || 'nothing done'}${item.detail ? ` (${item.detail})` : ''}`,
+    );
+  }
+  for (const gone of result.pruned) lines.push(`- removed the unused runtime ${gone.version} at ${gone.path}`);
+  if (result.jobRemoved) lines.push('The background update job was removed.');
+  if (result.notice)
+    lines.push(
+      '',
+      `${result.dryRun ? 'The next session would be told' : 'The next session is told'}: ${result.notice}`,
+    );
+  if (result.dryRun) lines.push('', 'Nothing was changed: this was a dry run.');
   return lines.join('\n');
 }
 

@@ -385,6 +385,15 @@
       "reason": "Removing the background update job: it only makes this machine do less, so it applies at once and takes no approval (design 2026-10-16 U4)."
     },
     {
+      "id": "core.update.background",
+      "package": "core",
+      "cli": "update",
+      "mcp": null,
+      "status": "exception",
+      "argv": ["--background"],
+      "reason": "One background run, as the per-user job starts it once a day with no terminal and no agent: a verified release past its hold, installed, checked and switched to; --dry-run only says what it would do. It is the job's entry, not a tool: an agent in a conversation updates with comms_update, whose preview a person approves, and this run exists so that no conversation waits for an update (design 2026-10-16 U4, U5)."
+    },
+    {
       "id": "core.approve",
       "package": "core",
       "cli": "approve",

@@ -133,6 +133,33 @@ when an organisation profile here turns background updates off, and a job set up
 removed by its next run. `doctor` reports the job as installed, missing, foreign or stale, with what fixes each; on a
 machine that never set one up it says nothing.
 
+### What one background run does
+
+`agentcomms update --background` is what the job runs. It never sends, posts or approves anything, and it installs
+nothing unless all of this holds:
+
+- **The level is `auto`**, and no organisation profile turns background updates off; otherwise it stops, and removes a
+  job such a profile forbids. `CI` and `AGENT_COMMS_UPDATE_CHECK=off` turn it off for that process.
+- **The release waits for nobody.** A major version, a release whose core manifest declares
+  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. A
+  release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
+  state directory).
+- **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest
+  declares `agentcommsRelease.security: true`. The clock is the earlier of this machine's and the registry's, so a clock
+  set ahead skips no hold. A pause holds everything but a security fix.
+- **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
+  sigstore-js — the copy npm carries beside your Node — must be issued by `https://token.actions.githubusercontent.com`
+  for exactly `https://github.com/crissmoldovan/agent-communications/.github/workflows/release.yml@refs/tags/v<version>`,
+  built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
+  version with no attestation, or any other identity, is refused, and nothing at all is installed.
+
+Then it installs each package into a runtime of its own, checks that npm installed the tarball whose provenance was
+verified, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
+reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
+switches nothing. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
+launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
+or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing.
+
 ## 0.14.0: the configuration moves to version 3
 
 0.14.0 adds a send epoch to the shared configuration — the counter that makes turning sending off (`never`) final for

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { AuditLog } from './audit.ts';
 import { CommsError } from './errors.ts';
 import { replaceFileInPlace, writeFileAtomic } from './fs.ts';
+import { launcherPaths } from './launcher.ts';
 import { homeDirectory } from './paths.ts';
 import { childEnvironment, windowsSystemProgram } from './system-programs.ts';
 
@@ -98,13 +99,9 @@ export interface UpdateJobCore {
   audit?: Pick<AuditLog, 'append'> | undefined;
 }
 
-/**
- * Track B's stable launcher for core, `launcherPaths(dataDir, 'core').launcher`: `<data>/launch/core`. Named here by
- * its documented shape until that module lands, so the job and the launcher agree on one path; the lead swaps this
- * for the call at the merge.
- */
+/** Track B's stable launcher for core, `<data>/launch/core`: what the job runs. */
 export function coreLauncherPath(dataDir: string): string {
-  return join(dataDir, 'launch', 'core');
+  return launcherPaths(dataDir, 'core').launcher;
 }
 
 export function updateJobContext(

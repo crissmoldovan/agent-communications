@@ -943,6 +943,51 @@ test('a side an exception says has no counterpart may not be paired by another r
   );
 });
 
+test('a flag of a shared command may be an exception of its own, told apart by its words, and only those', () => {
+  // `agentcomms update --background` is the job's entry, with no tool, beside `update` rows that are "both".
+  const withFlag = ({ registries, table }) => {
+    registries.gmail.tools.push('gmail_approve');
+    table.capabilities.push({
+      id: 'gmail.approve.chat',
+      package: 'gmail',
+      cli: 'approve',
+      mcp: 'gmail_approve',
+      status: 'both',
+      operation: 'approveInChat',
+      argv: ['--chat'],
+    });
+  };
+  assert.deepEqual(
+    breaking((f) => {
+      withFlag(f);
+      f.row('gmail.approve').argv = ['--terminal'];
+    }),
+    [],
+  );
+  // The same words as the row beside it: then the exception does say that row's capability has no counterpart.
+  assertNamed(
+    breaking((f) => {
+      withFlag(f);
+      f.row('gmail.approve').argv = ['--chat'];
+    }),
+    'row "gmail.approve" says `agent-gmail approve --chat` has no counterpart, but row "gmail.approve.chat" names it too',
+  );
+  // With no row beside it there is nothing to tell it apart from, and words on an exception say nothing.
+  assertNamed(
+    breaking(({ row }) => {
+      row('gmail.approve').argv = ['--terminal'];
+    }),
+    'row "gmail.approve" is "exception" but carries "argv"',
+  );
+  assertNamed(
+    breaking((f) => {
+      withFlag(f);
+      f.row('gmail.approve').argv = [];
+    }),
+    'row "gmail.approve": an exception\'s "argv" names the words that tell it apart from the other rows of its command',
+  );
+});
+
 test('a table without its array, a row that is not an object, and a side that is not a name or null each fail', () => {
   assert.deepEqual(checkParity({}, fixture().registries), ['capabilities.json has no "capabilities" array']);
   assertNamed(

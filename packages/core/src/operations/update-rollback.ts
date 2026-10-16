@@ -11,6 +11,7 @@ import {
   readPointer,
   rollbackPointer,
 } from '../launcher.ts';
+import { holdRolledBack } from '../update-background.ts';
 
 /**
  * Back to the release before (design 2026-10-16, U6): every stable launcher on this machine switched back to the
@@ -21,6 +22,9 @@ import {
  * It switches pointers and nothing else: no client configuration is edited, no runtime is installed or removed, and a
  * server already running keeps the code it started with until its client starts it again. The runtime it leaves
  * becomes the launcher's previous one, so a second rollback goes forward again.
+ *
+ * It also tells the background run (U5) not to install again what it went back from: every release a launcher left is
+ * held in `<state>/update-held.json` until a newer one is out, and the release it went to is held no longer.
  */
 
 /** One launcher that has a release before to go back to. */
@@ -57,6 +61,10 @@ export interface UpdateRollbackResult {
   ok: boolean;
   /** What the person does next: restart the clients. Null when nothing went back. */
   next: string | null;
+  /** The releases the background run now holds back, this rollback's among them: none installs again on its own. */
+  held?: string[] | undefined;
+  /** Why the hold could not be recorded, when it could not: then the background run may install that release again. */
+  holdFailed?: string | undefined;
 }
 
 /** The release a runtime folder is, or its folder's name when it is not one. */
@@ -140,7 +148,22 @@ export function updateRollbackChange(core: Core): GatedChange<UpdateRollbackResu
       }
       const ok = steps.every((step) => step.outcome === 'switched');
       const switched = steps.some((step) => step.outcome === 'switched');
+      const went = steps.filter((step) => step.outcome === 'switched');
+      let hold: Pick<UpdateRollbackResult, 'held' | 'holdFailed'> = {};
+      if (went.length > 0) {
+        try {
+          hold = {
+            held: await holdRolledBack(core.paths.stateDir, {
+              from: went.flatMap((step) => (step.from === null ? [] : [step.from])),
+              to: went.flatMap((step) => (step.to === null ? [] : [step.to])),
+            }),
+          };
+        } catch (error) {
+          hold = { holdFailed: toCommsError(error).message };
+        }
+      }
       return {
+        ...hold,
         status: steps.length === 0 ? 'nothing' : ok ? 'rolled-back' : 'failed',
         steps,
         left: planned.left,
