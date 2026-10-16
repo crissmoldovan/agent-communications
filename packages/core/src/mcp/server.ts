@@ -110,7 +110,7 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach, comms_change_policy and comms_label',
-    'with no change, and comms_update with `check`. Neither does comms_update with `pause` or `resume`.',
+    'with no change, and comms_update with `check`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
