@@ -107,15 +107,15 @@ the channel servers and the local events service (`comms_server_install`), bring
 policy (`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent
 screen, and a server it registers appears only once the client is restarted.
 
-**It keeps itself up to date.** Once a day the machine asks npm whether a newer release is out; when one is, every
-server and command stops first — "Hang on a minute, there's an update. Let's update first." — and your agent asks
-whether to update now (`comms_update`) or not until tomorrow (`comms_update` with `later`, which you approve). A
-command at a terminal asks you there; anywhere else the stop names this installation's own `update` and
-`update --later` commands, to run exactly as given (with core installed globally, `agentcomms update` and
-`agentcomms update --later` are the same). A server this machine does not register itself — the Claude Code plugin's,
-the Gemini extension's — is updated where it was installed. `agentcomms update --auto off` turns the check off for one
-machine; `CI`, and `AGENT_COMMS_UPDATE_CHECK=off`, skip it. [Upgrading](docs/upgrading.md#the-daily-check) has the
-details.
+**It keeps itself up to date, and never stops you for it.** Once a day the machine asks npm whether a newer release is
+out; when one is, a server's first result says so in one line, and a command once a day on stderr, and every tool and
+command carries on. On `auto`, the default, one yes sets up a background job that installs a release whose provenance
+verifies, three days after it is out — `comms_update` with `backgroundJob: "on"`, or
+`agentcomms update --background-job on`; it takes effect when each client restarts. Choose `every-14-days` or `never`
+with `agentcomms update --level`, pause the notices for 1, 7 or 14 days with `--pause`, or update by hand with
+`comms_update`. A server this machine does not register itself — the Claude Code plugin's, the Gemini extension's —
+is updated where it was installed. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
+[Upgrading](docs/upgrading.md#the-daily-check) has the details.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
 `chat` change policy your yes in the conversation approves it; under `confirm` you run, in your own terminal, the
