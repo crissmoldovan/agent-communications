@@ -2,12 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { displayUrl } from './mcp-clients.ts';
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
-import {
-  type ProvenanceField,
-  type ProvenanceRelease,
-  type ProvenanceVerdict,
-  sha512Hex,
-} from './update-provenance.ts';
+import { type ProvenanceRelease, type ProvenanceVerdict, sha512Hex } from './update-provenance.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -137,21 +132,7 @@ export function oldestVersion(versions: readonly (string | null | undefined)[]):
   );
 }
 
-/**
- * Which pin a refusal is about, in this package's own words: what an update says when a release does not verify. Never
- * the value the attestation or its certificate held — an unverified certificate's text is not ours to repeat.
- */
-export const PIN_WORDS: Readonly<Record<ProvenanceField, string>> = Object.freeze({
-  attestation: 'npm has no SLSA provenance attestation for it that could be read',
-  bundle: 'its provenance bundle could not be read',
-  issuer: "it was not signed through GitHub Actions' token issuer",
-  identity: "it was not signed for this repository's release workflow at the tag of its version",
-  runner: 'it was not built on a GitHub-hosted runner',
-  repository: 'it was not built from this repository',
-  ref: 'it was not built from the tag of its version',
-  subject: 'what its provenance signs is not the tarball the registry serves for it',
-  signature: 'Sigstore did not verify its signature, certificate or transparency-log entry',
-});
+export { PIN_WORDS } from './update-words.ts';
 
 /** What a release that verified was built by, in one phrase: the preview's and the dry run's words. */
 export const BUILT_BY =

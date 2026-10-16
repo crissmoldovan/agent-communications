@@ -144,7 +144,8 @@ async function ask(
     latest = await (deps.latestVersion ?? ((name: string) => npmLatestVersion(name, { env })))(CORE_PACKAGE);
     if (!isVersion(latest))
       throw new Error(
-        `the npm registry names ${JSON.stringify(String(latest)).slice(0, 60)} as the latest release, which is not a version`,
+        // What it named is not repeated: the registry's answer can be anything at all.
+        'the npm registry names something that is not a version as the latest release',
       );
   } catch (error) {
     await settle({ lastError: reason(error) });

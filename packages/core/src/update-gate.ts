@@ -25,6 +25,7 @@ import {
   updateVerdict,
   within,
 } from './update-state.ts';
+import { backgroundNoticeLine } from './update-words.ts';
 import { isBehind, isVersion } from './versions.ts';
 
 /**
@@ -301,7 +302,8 @@ const registrations = (count: number): string => (count === 1 ? 'one registratio
 export function serverDecisionLine(decision: NoticeDecision, env: NodeJS.ProcessEnv = {}): string {
   const { notice, background, moves } = decision;
   const parts: string[] = [];
-  if (background !== null) parts.push(background.text);
+  // The run's word in fixed sentences only: never the state file's text as it is (`update-words.ts`).
+  if (background !== null) parts.push(backgroundNoticeLine(background));
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(serverNoticeLine(notice, env));
   }
@@ -521,7 +523,8 @@ export function commandDecisionLine(
   const { notice, background, moves } = decision;
   const handoffs = requireHandoffs(core, platform);
   const parts: string[] = [];
-  if (background !== null) parts.push(background.text);
+  // The run's word in fixed sentences only: never the state file's text as it is (`update-words.ts`).
+  if (background !== null) parts.push(backgroundNoticeLine(background));
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(commandNoticeLine(core, notice, channel, platform));
   }

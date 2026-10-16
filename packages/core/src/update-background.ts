@@ -40,7 +40,13 @@ import {
   type VerifiedProvenance,
   verifyProvenance,
 } from './update-provenance.ts';
-import { npmRegistry, type RegistryAnswer, type ReleaseRegistry, releaseIntegrity } from './update-release.ts';
+import {
+  npmRegistry,
+  type RegistryAnswer,
+  type ReleaseRegistry,
+  releaseDeclaration,
+  releaseIntegrity,
+} from './update-release.ts';
 import {
   type BackgroundNotice,
   changeUpdateCheck,
@@ -50,6 +56,7 @@ import {
   type UpdateCheckRecord,
   updateCheckSwitchedOff,
 } from './update-state.ts';
+import { BACKGROUND_WORDS, type FailedWhat } from './update-words.ts';
 import { VERSION } from './version.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -214,8 +221,6 @@ const HOUR_MS = 60 * 60 * 1000;
 export const UPDATE_HELD_FILE = 'update-held.json';
 
 const CORE: ServerId = 'core';
-const RESTART =
-  'restart each MCP client that starts these servers (in Claude Code, /mcp and then Reconnect) to use it: a server already running keeps the code it started with';
 
 // ── The releases a person rolled back from ───────────────────────────────────────────────────────────────────────
 
@@ -274,27 +279,6 @@ export async function holdRolledBack(
 }
 
 // ── The registry ────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** What a release's core manifest declares (U5): a security fix, and a decision it needs from the person. */
-function releaseFlags(manifest: { agentcommsRelease?: unknown } | undefined): {
-  security: boolean;
-  needsDecision: string | null;
-} {
-  const declared = manifest?.agentcommsRelease;
-  if (declared === undefined || declared === null) return { security: false, needsDecision: null };
-  // A declaration this release cannot read waits for the person: it may be the decision it cannot see.
-  if (typeof declared !== 'object' || Array.isArray(declared)) {
-    return { security: false, needsDecision: 'its release declaration cannot be read' };
-  }
-  const { security, needsDecision } = declared as Record<string, unknown>;
-  const decision =
-    needsDecision === undefined || needsDecision === null || needsDecision === false
-      ? null
-      : typeof needsDecision === 'string' && needsDecision.trim()
-        ? needsDecision.trim().slice(0, 200)
-        : 'its release says it needs one';
-  return { security: security === true, needsDecision: decision };
-}
 
 function majorOf(version: string): string {
   return version.split('.')[0] ?? version;
@@ -476,8 +460,10 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   try {
     launched = await launchedPackages(core.paths.dataDir);
   } catch (error) {
-    const text = `No update was installed in the background: ${toCommsError(error).message}`;
-    return stop('failed', toCommsError(error).message, undefined, { text, outcome: 'failed' });
+    return stop('failed', toCommsError(error).message, undefined, {
+      text: BACKGROUND_WORDS.stopped(null),
+      outcome: 'failed',
+    });
   }
   if (launched.length === 0) {
     return stop('no-launchers', 'nothing here starts a stable launcher, so there is nothing a background run switches');
@@ -493,10 +479,15 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   } catch (error) {
     return stop('unavailable', `the registry could not be read: ${toCommsError(error).message}`, facts);
   }
+  // A release is named by its plain MAJOR.MINOR.PATCH — what npm publishes — or it is not one this runs: a
+  // prerelease is never installed, and build metadata is not part of a published version. Neither is repeated.
   const latest = coreAnswer.packument['dist-tags']?.latest;
-  if (!isVersion(latest)) return stop('unavailable', 'the registry names no latest release of the core', facts);
+  if (!isVersion(latest) || latest.includes('+')) {
+    return stop('unavailable', 'the registry names no latest release of the core', facts);
+  }
+  if (isPrerelease(latest))
+    return stop('up-to-date', "the registry's latest is a prerelease, which is never installed", facts);
   facts.latest = latest;
-  if (isPrerelease(latest)) return stop('up-to-date', `the registry's latest, ${latest}, is a prerelease`, facts);
 
   const behind = launched.filter((entry) => entry.version !== latest);
   const ahead = launched.filter((entry) => entry.version !== null && (compareVersions(entry.version, latest) ?? 0) > 0);
@@ -508,7 +499,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   const clock = () => new Date(Math.min(run.now.getTime(), ...servedAt.flatMap((at) => (at ? [at.getTime()] : []))));
   const paused = settings.pausedUntil(clock());
   const pausedNow = paused !== undefined && clock() < paused;
-  if (pausedNow && !releaseFlags(coreAnswer.packument.versions?.[latest]).security) {
+  if (pausedNow && !releaseDeclaration(coreAnswer.packument.versions?.[latest]).security) {
     return stop(
       'paused',
       `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
@@ -527,13 +518,12 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     { fetch: deps.provenance?.fetch, verifyBundle: verifier },
   );
   if (!coreVerdict.ok) {
-    const text = `${latest} was not installed: the provenance of ${corePackage}@${latest} did not verify (${coreVerdict.field}: ${coreVerdict.reason}). Nothing was changed.`;
     return stop('refused', `the provenance of ${corePackage}@${latest} did not verify: ${coreVerdict.field}`, facts, {
-      text,
+      text: BACKGROUND_WORDS.unverified(latest, coreVerdict.field),
       outcome: 'refused',
     });
   }
-  const flags = releaseFlags(coreAnswer.packument.versions?.[latest]);
+  const flags = releaseDeclaration(coreAnswer.packument.versions?.[latest]);
   if (pausedNow && !flags.security) {
     return stop(
       'paused',
@@ -543,27 +533,28 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   }
 
   if ((compareVersions(latest, current) ?? 0) < 0 || ahead.length > 0) {
-    const text = `The registry names ${latest} as the latest release, older than ${current} here: nothing was changed in the background.`;
     return stop('skipped', `${latest} is older than what runs here: a downgrade is never automatic`, facts, {
-      text,
+      text: BACKGROUND_WORDS.downgrade(latest),
       outcome: 'skipped',
     });
   }
   if (majorOf(latest) !== majorOf(current)) {
-    const text = `${latest} is a new major release: it is never installed in the background. Update when it suits you — comms_update shows each step first.`;
     return stop('skipped', `${latest} is a major release after ${current}: it waits for the person`, facts, {
-      text,
+      text: BACKGROUND_WORDS.major(latest),
       outcome: 'skipped',
     });
   }
-  if (flags.needsDecision !== null) {
-    const text = `${latest} needs a decision from you (${flags.needsDecision}), so it was not installed in the background. comms_update shows what it changes.`;
-    return stop('skipped', `${latest} needs a decision: ${flags.needsDecision}`, facts, { text, outcome: 'skipped' });
+  // What the decision is, the manifest's own words, is never said: the person reads it in the release notes.
+  if (flags.needsDecision) {
+    return stop('skipped', `${latest} needs a decision from the person`, facts, {
+      text: BACKGROUND_WORDS.decision(latest),
+      outcome: 'skipped',
+    });
   }
 
   const held = await readHeldReleases(core.paths.stateDir);
   if (held === null) {
-    const text = `No update is installed in the background while ${core.paths.stateDir}/${UPDATE_HELD_FILE} cannot be read: it says which releases were rolled back. Delete it to hold none.`;
+    const text = BACKGROUND_WORDS.heldUnreadable;
     return stop(
       'held',
       `${UPDATE_HELD_FILE} cannot be read, so it is not known whether ${latest} was rolled back`,
@@ -656,7 +647,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     );
     if (!verdict.ok) {
       item.detail = `provenance refused (${verdict.field}): ${verdict.reason}`;
-      const text = `${latest} was not installed: the provenance of ${item.package}@${latest} did not verify (${verdict.field}: ${verdict.reason}). Nothing was changed.`;
+      const text = BACKGROUND_WORDS.unverified(latest, verdict.field);
       return stop(
         'refused',
         `the provenance of ${item.package}@${latest} did not verify: ${verdict.field}`,
@@ -693,14 +684,14 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       return installManagedRuntime(context, product(channel, version), version);
     });
   const selfCheck = deps.selfCheck ?? offlineSelfCheck(env, dataDir, deps.platform);
-  const failed = (item: BackgroundPackage, detail: string): Settled => {
+  // The detail is the run's, for its result and the audit log; the notice says what went wrong in fixed words.
+  const failed = (item: BackgroundPackage, detail: string, what: FailedWhat): Settled => {
     item.detail = detail;
-    const text = `${latest} was not installed in the background: ${serverLabel(item.channel)}, ${detail}. Nothing was switched; the next run tries again.`;
     return {
       ...partial,
       outcome: 'failed',
-      reason: `${item.package}@${latest}: ${detail}`,
-      notice: text,
+      reason: `${item.package}@${latest} (${serverLabel(item.channel)}): ${detail}`,
+      notice: BACKGROUND_WORDS.failed(latest, what),
       noticeOutcome: 'failed',
     };
   };
@@ -713,6 +704,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
         return failed(
           item,
           `${item.runtime} is there unfinished and ${used === null ? 'the running processes cannot be listed' : 'a running process uses it'}, so it was not installed over`,
+          'inUse',
         );
       }
     }
@@ -721,7 +713,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       item.installed = true;
     } catch (error) {
       item.installed = false;
-      return failed(item, `it could not be installed: ${toCommsError(error).message}`);
+      return failed(item, `it could not be installed: ${toCommsError(error).message}`, 'install');
     }
   }
   for (const item of packages) {
@@ -733,6 +725,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       return failed(
         item,
         `what was installed is not the tarball whose provenance was verified (${integrity === null ? 'no integrity recorded' : 'another integrity'})`,
+        'tarball',
       );
     }
     const checked = await selfCheck({
@@ -743,7 +736,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
     });
     item.checked = checked.ok;
     item.detail = checked.detail;
-    if (!checked.ok) return failed(item, `its self-check failed: ${checked.detail}`);
+    if (!checked.ok) return failed(item, `its self-check failed: ${checked.detail}`, 'selfCheck');
   }
 
   // Every package verified and checked: now the pointers, all of them or none.
@@ -762,11 +755,12 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       return failed(
         item,
         `its launcher could not be switched (${toCommsError(error).message}), so every launcher was put back`,
+        'switch',
       );
     }
   }
   const pruned = await prune(run, latest);
-  const text = `${latest} is installed; ${RESTART}.`;
+  const text = BACKGROUND_WORDS.installed(latest);
   return {
     ...partial,
     outcome: 'installed',
@@ -873,7 +867,7 @@ export async function runBackgroundUpdate(
       ...decided.partial,
       outcome: 'would-install',
       reason: `${latest} would be installed: every package's provenance verified, and it is past its hold`,
-      notice: `${latest} is installed; ${RESTART}.`,
+      notice: BACKGROUND_WORDS.installed(latest ?? ''),
     });
   }
   let partial: Settled;
@@ -892,10 +886,7 @@ export async function runBackgroundUpdate(
     partial =
       refused.code === 'LOCK_TIMEOUT'
         ? stop('busy', 'another background run, or a person’s update, is under way')
-        : stop('failed', refused.message, undefined, {
-            text: `No update was installed in the background: ${refused.message}`,
-            outcome: 'failed',
-          });
+        : stop('failed', refused.message, undefined, { text: BACKGROUND_WORDS.stopped(null), outcome: 'failed' });
   }
   const result = finish(partial);
   await core.audit

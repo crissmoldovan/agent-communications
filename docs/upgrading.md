@@ -91,7 +91,10 @@ The same one line also carries, by the same rules of level and pause:
 - **what the last background run left** — the release it installed and that a restart picks up, a release it refused
   because its provenance did not verify, a major release or one needing a decision that it left for you, the job an
   organisation turned off. It is said by the first server or command it applies to, and then cleared; "installed" is
-  said only by a process running a release before it.
+  said only by a process running a release before it. It is said in this package's own fixed sentences, naming a
+  release only by its plain `MAJOR.MINOR.PATCH` and a refusal only by the pin that failed: nothing the registry or an
+  attestation's certificate wrote — a needed decision's own words, the runner a certificate names — is ever repeated,
+  and a record in `update-check.json` holding any other text is said by its outcome's sentence instead.
 - **the offer of the background job**, on `auto` while it is not set up, where it could be: `comms_update` with
   `backgroundJob: "on"` (or the located `update --background-job on`) shows the job, when it runs and how to remove
   it, and sets nothing up without your yes.

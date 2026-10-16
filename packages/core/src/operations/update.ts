@@ -340,7 +340,8 @@ async function latestReleases(
         if (!isVersion(version)) {
           return {
             name,
-            problem: `the npm registry names ${JSON.stringify(String(version)).slice(0, 60)} as the latest release of ${name}, which is not a version`,
+            // What it named is not repeated: the registry's answer can be anything at all.
+            problem: `the npm registry names something that is not a version as the latest release of ${name}`,
           };
         }
         return { name, version };

@@ -47,6 +47,9 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   does not hold the tarball that was verified; to skip the release hold, a major version's or a needs-decision
   release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a running server
   is using.
+- **Registry text reaching an agent** — any way to make an update's notice, refusal, preview or background run result
+  repeat a string the npm registry or an unverified attestation wrote (a manifest's `needsDecision` words, a version's
+  prerelease or build words, a certificate's identity, ref or runner), instead of this project's fixed words.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
