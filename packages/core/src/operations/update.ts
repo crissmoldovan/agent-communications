@@ -63,6 +63,7 @@ import {
   type ReleaseDeclaration,
 } from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
+import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
 import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
@@ -1079,6 +1080,8 @@ export function updateChange(
   let planned: Planned | null = null;
   return {
     plan: async (config) => {
+      // Never beside a background run: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir);
       const inspection = await inspect(core, env, deps);
       const { steps, manual } = await planRegistrations(
         context,
@@ -1121,11 +1124,14 @@ export function updateChange(
     },
     apply: async () => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the update was applied before it was planned');
-      const result = await applyUpdate(context, planned, deps);
-      // What it moved to the latest release — and only what worked — is what lets a server or a command started
-      // before this say "restart" rather than "update" from now on.
-      await recordFound(core, env, planned.report, deps, result);
-      return result;
+      const done = planned;
+      return withPersonUpdateLock(core.paths.stateDir, async () => {
+        const result = await applyUpdate(context, done, deps);
+        // What it moved to the latest release — and only what worked — is what lets a server or a command started
+        // before this say "restart" rather than "update" from now on.
+        await recordFound(core, env, done.report, deps, result);
+        return result;
+      });
     },
     refuseApproval: (approvalId) => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the update was refused before it was planned');

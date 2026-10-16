@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { gatedChange } from '../src/change-flow.ts';
+import { type GatedChange, gatedChange } from '../src/change-flow.ts';
 import { main } from '../src/cli.ts';
 import { type Core, openCore } from '../src/core.ts';
+import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherName, readPointer, switchPointer } from '../src/launcher.ts';
 import { managedRuntimeDir, managedRuntimeEntry } from '../src/mcp-install.ts';
+import { updateChange } from '../src/operations/update.ts';
 import { updateRollbackChange } from '../src/operations/update-rollback.ts';
 import { updatePause } from '../src/operations/update-settings.ts';
 import {
@@ -21,6 +23,7 @@ import {
   updateHeldPath,
 } from '../src/update-background.ts';
 import { installUpdateJob, type UpdateJobRunner, updateJobContext, updateJobInstalled } from '../src/update-job.ts';
+import { updateLockPath } from '../src/update-lock.ts';
 import { ATTESTATIONS_BASE, type AttestationFetch, sigstoreBundleVerifier } from '../src/update-provenance.ts';
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
 import {
@@ -773,7 +776,7 @@ test('two runs at once: the second finds the first under way and does nothing', 
     },
   );
   // Let the first take the lock and reach its installer.
-  for (let tries = 0; tries < 200 && !existsSync(join(m.core.paths.stateDir, '.update-background.lock')); tries += 1) {
+  for (let tries = 0; tries < 200 && !existsSync(updateLockPath(m.core.paths.stateDir)); tries += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const second = world(m);
@@ -893,4 +896,74 @@ test('the offline self-check: the CLI says the release, and its server answers �
   const dead = await check(subject(OLD, silent.root));
   assert.equal(dead.ok, false);
   assert.match(dead.detail, /its server did not answer/);
+});
+
+// ── One machine lock: a person's update and a background run never overlap ─────────────────────────────────────
+
+test('while a background run is under way, a person’s update and rollback are refused before anything is prepared, and go ahead after', async () => {
+  const m = await launched();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached: () => void = () => undefined;
+  const installing = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const slow = installer(m);
+  const run = runBackgroundUpdate(
+    m.core,
+    m.env,
+    {},
+    {
+      ...world(m).deps,
+      install: async (packageName, version) => {
+        reached();
+        await gate;
+        return slow.install(packageName, version);
+      },
+    },
+  );
+  await installing;
+  try {
+    const person = { latestVersion: async () => LATEST, globalPackages: async () => ({}) };
+    const changes: GatedChange<unknown>[] = [
+      updateChange(m.core, m.env, { noVerify: true }, person),
+      updateRollbackChange(m.core),
+    ];
+    for (const change of changes) {
+      await assert.rejects(gatedChange(m.core, change, { channel: 'core', surface: 'mcp' }), (error: unknown) => {
+        assert.ok(error instanceof CommsError, String(error));
+        assert.equal(error.code, 'LOCK_TIMEOUT');
+        assert.match(error.message, /a background update run is under way on this machine/);
+        assert.match(String(error.hint), /again in a few minutes/);
+        return true;
+      });
+    }
+    assert.equal((await m.core.approvals.list()).length, 0, 'no approval was prepared, so none is spent');
+    // The command says so too, and changes nothing.
+    const written: string[] = [];
+    const write = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      if (typeof chunk === 'string') {
+        written.push(chunk);
+        return true;
+      }
+      return (write as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+    }) as typeof process.stdout.write;
+    let code: number;
+    try {
+      code = await main(['update', '--rollback', '--json'], { ...m.env, CLAUDECODE: '1' }, 'linux', {});
+    } finally {
+      process.stdout.write = write;
+    }
+    assert.equal(code, 75, written.join(''));
+    assert.equal(JSON.parse(written.join('')).error.code, 'LOCK_TIMEOUT');
+  } finally {
+    release();
+  }
+  assert.equal((await run).outcome, 'installed');
+  // The run is over: the rollback is prepared as ever.
+  const after = await gatedChange(m.core, updateRollbackChange(m.core), { channel: 'core', surface: 'mcp' });
+  assert.equal(after.status, 'approval-required');
 });

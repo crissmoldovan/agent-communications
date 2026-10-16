@@ -12,6 +12,7 @@ import {
   rollbackPointer,
 } from '../launcher.ts';
 import { holdRolledBack } from '../update-background.ts';
+import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 
 /**
  * Back to the release before (design 2026-10-16, U6): every stable launcher on this machine switched back to the
@@ -111,6 +112,8 @@ export function updateRollbackChange(core: Core): GatedChange<UpdateRollbackResu
   let planned: { plans: RollbackPlan[]; left: UpdateRollbackResult['left'] } | null = null;
   return {
     plan: async (config) => {
+      // Never beside a background run: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir);
       planned = await planRollback(core);
       const { plans } = planned;
       return {
@@ -128,55 +131,65 @@ export function updateRollbackChange(core: Core): GatedChange<UpdateRollbackResu
     },
     apply: async () => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the rollback was applied before it was planned');
-      const steps: RollbackStep[] = [];
-      for (const plan of planned.plans) {
-        const base = {
-          kind: 'pointer' as const,
-          channel: plan.channel,
-          package: plan.package,
-          launcher: plan.launcher,
-          from: launcherRuntimeVersion(plan.current, plan.name),
-          to: launcherRuntimeVersion(plan.previous, plan.name),
-        };
-        try {
-          // Only from the runtime the preview named: a launcher switched since is not what was approved.
-          const { to } = await rollbackPointer(core.paths.dataDir, plan.name, { expect: plan.current });
-          steps.push({ ...base, runtime: to, outcome: 'switched' });
-        } catch (error) {
-          steps.push({ ...base, runtime: plan.current, outcome: 'failed', detail: toCommsError(error).message });
-        }
-      }
-      const ok = steps.every((step) => step.outcome === 'switched');
-      const switched = steps.some((step) => step.outcome === 'switched');
-      const went = steps.filter((step) => step.outcome === 'switched');
-      let hold: Pick<UpdateRollbackResult, 'held' | 'holdFailed'> = {};
-      if (went.length > 0) {
-        try {
-          hold = {
-            held: await holdRolledBack(core.paths.stateDir, {
-              from: went.flatMap((step) => (step.from === null ? [] : [step.from])),
-              to: went.flatMap((step) => (step.to === null ? [] : [step.to])),
-            }),
-          };
-        } catch (error) {
-          hold = { holdFailed: toCommsError(error).message };
-        }
-      }
-      return {
-        ...hold,
-        status: steps.length === 0 ? 'nothing' : ok ? 'rolled-back' : 'failed',
-        steps,
-        left: planned.left,
-        ok,
-        next: switched
-          ? 'Restart each MCP client that starts these servers — in Claude Code, /mcp and then Reconnect — to run the release before: a server already running keeps its code until then. Rolling back again goes forward again.'
-          : null,
-      };
+      const { plans, left } = planned;
+      return withPersonUpdateLock(core.paths.stateDir, () => rollBack(core, plans, left));
     },
     refuseApproval: (approvalId) =>
       new CommsError('USAGE', 'nothing was changed: no stable launcher here has a release before to go back to', {
         hint: 'So the rollback needs no approval, and takes none. The same call without it says which launchers there are and why none can go back.',
         details: { approvalId },
       }),
+  };
+}
+
+/** The rollback itself, under the update lock: each launcher switched back from what the preview named, or not. */
+async function rollBack(
+  core: Core,
+  plans: readonly RollbackPlan[],
+  left: UpdateRollbackResult['left'],
+): Promise<UpdateRollbackResult> {
+  const steps: RollbackStep[] = [];
+  for (const plan of plans) {
+    const base = {
+      kind: 'pointer' as const,
+      channel: plan.channel,
+      package: plan.package,
+      launcher: plan.launcher,
+      from: launcherRuntimeVersion(plan.current, plan.name),
+      to: launcherRuntimeVersion(plan.previous, plan.name),
+    };
+    try {
+      // Only from the runtime the preview named: a launcher switched since is not what was approved.
+      const { to } = await rollbackPointer(core.paths.dataDir, plan.name, { expect: plan.current });
+      steps.push({ ...base, runtime: to, outcome: 'switched' });
+    } catch (error) {
+      steps.push({ ...base, runtime: plan.current, outcome: 'failed', detail: toCommsError(error).message });
+    }
+  }
+  const ok = steps.every((step) => step.outcome === 'switched');
+  const switched = steps.some((step) => step.outcome === 'switched');
+  const went = steps.filter((step) => step.outcome === 'switched');
+  let hold: Pick<UpdateRollbackResult, 'held' | 'holdFailed'> = {};
+  if (went.length > 0) {
+    try {
+      hold = {
+        held: await holdRolledBack(core.paths.stateDir, {
+          from: went.flatMap((step) => (step.from === null ? [] : [step.from])),
+          to: went.flatMap((step) => (step.to === null ? [] : [step.to])),
+        }),
+      };
+    } catch (error) {
+      hold = { holdFailed: toCommsError(error).message };
+    }
+  }
+  return {
+    ...hold,
+    status: steps.length === 0 ? 'nothing' : ok ? 'rolled-back' : 'failed',
+    steps,
+    left,
+    ok,
+    next: switched
+      ? 'Restart each MCP client that starts these servers — in Claude Code, /mcp and then Reconnect — to run the release before: a server already running keeps its code until then. Rolling back again goes forward again.'
+      : null,
   };
 }

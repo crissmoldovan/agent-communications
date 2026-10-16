@@ -34,6 +34,7 @@ import {
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 import { childEnvironment } from './system-programs.ts';
 import { backgroundJobAtRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
+import { withUpdateLock } from './update-lock.ts';
 import {
   type ProvenanceDeps,
   type ProvenanceVerdict,
@@ -898,23 +899,20 @@ export async function runBackgroundUpdate(
   }
   let partial: Settled;
   try {
-    partial = await withFileLock(
-      join(core.paths.stateDir, '.update-background.lock'),
-      async () => {
-        const decided = await decide(run);
-        const result = 'go' in decided ? await apply(run, decided.partial, decided.packages) : decided;
-        if (result.outcome === 'up-to-date') result.pruned = await prune(run, result.latest ?? '');
-        await leaveNotice(run, result);
-        return result;
-      },
-      // An install can take minutes: the lock is renewed while it runs, and only one run holds it at a time.
-      { timeoutMs: 1_000, staleMs: 10 * 60_000, renewMs: 60_000 },
-    );
+    // The machine's one update lock, which a person's update and rollback take too: the two never overlap. An install
+    // can take minutes, so it is renewed while it runs.
+    partial = await withUpdateLock(core.paths.stateDir, async () => {
+      const decided = await decide(run);
+      const result = 'go' in decided ? await apply(run, decided.partial, decided.packages) : decided;
+      if (result.outcome === 'up-to-date') result.pruned = await prune(run, result.latest ?? '');
+      await leaveNotice(run, result);
+      return result;
+    });
   } catch (error) {
     const refused = toCommsError(error);
     partial =
       refused.code === 'LOCK_TIMEOUT'
-        ? stop('busy', 'another background run is under way')
+        ? stop('busy', 'another background run, or a person’s update, is under way')
         : stop('failed', refused.message, undefined, {
             text: `No update was installed in the background: ${refused.message}`,
             outcome: 'failed',

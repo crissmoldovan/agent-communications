@@ -23,6 +23,7 @@ import {
   updateCheck,
   updateCheckFindings,
 } from '../src/operations/update.ts';
+import { runBackgroundUpdate } from '../src/update-background.ts';
 import { readUpdateCheck } from '../src/update-state.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -536,4 +537,72 @@ test('the check records how many registrations still name a versioned runtime, f
   });
   assert.equal(done.status, 'applied');
   assert.equal((await readUpdateCheck(m.core.paths.stateDir)).moves, 0, 'moved, so nothing is left to move');
+});
+
+test('while a person’s update is applying, a background run finds the machine busy and asks and installs nothing', async () => {
+  const m = machine();
+  makeRuntime(m, OLD);
+  await registerOnLauncher(m, OLD);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached: () => void = () => undefined;
+  const installing = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const deps = fakes(m, LATEST);
+  const install = deps.installRuntime;
+  deps.installRuntime = async (packageName, version) => {
+    reached();
+    await gate;
+    await install?.(packageName, version);
+  };
+  const first = await gatedChange(m.core, updateChange(m.core, m.env, { noVerify: true }, deps), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  assert.equal(first.status, 'approval-required');
+  const approvalId = (first as { prepared: { approvalId: string } }).prepared.approvalId;
+  const person = gatedChange(m.core, updateChange(m.core, m.env, { noVerify: true }, deps), {
+    channel: 'core',
+    surface: 'mcp',
+    approvalId,
+  });
+  await installing;
+  const asked: string[] = [];
+  const installed: string[] = [];
+  try {
+    const busy = await runBackgroundUpdate(
+      m.core,
+      { ...m.env, AGENT_COMMS_UPDATE_CHECK: 'on' },
+      {},
+      {
+        settings: { level: () => 'auto', pausedUntil: () => undefined, background: () => true },
+        registry: async (packageName) => {
+          asked.push(packageName);
+          throw new Error('a background run that got this far overlapped the person’s update');
+        },
+        provenance: {
+          fetch: async () => {
+            throw new Error('no attestation is fetched in this test');
+          },
+          verifyBundle: async () => undefined,
+        },
+        install: async (packageName, version) => {
+          installed.push(`${packageName}@${version}`);
+          return '';
+        },
+        processes: async () => [],
+      },
+    );
+    assert.equal(busy.outcome, 'busy');
+    assert.match(busy.reason, /under way/);
+    assert.deepEqual(asked, []);
+    assert.deepEqual(installed, []);
+  } finally {
+    release();
+  }
+  assert.equal((await person).status, 'applied');
+  assert.equal((await readPointer(m.dataDir, 'gmail'))?.current, managedRuntimeDir(m.dataDir, GMAIL, LATEST));
 });

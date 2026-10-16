@@ -198,6 +198,11 @@ switches nothing. It records one line in the audit log (`comms_audit_tail`), rem
 launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
 or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing.
 
+A background run and a person's update or rollback never overlap: each holds one lock for the machine,
+`.update.lock` in the state directory, while it installs, switches or prunes. A run that finds it held does nothing
+that day; `agentcomms update` and `comms_update` that find it held are refused at once — before any approval is
+prepared — saying a background run is under way, to try again in a few minutes.
+
 ## 0.14.0: the configuration moves to version 3
 
 0.14.0 adds a send epoch to the shared configuration — the counter that makes turning sending off (`never`) final for
