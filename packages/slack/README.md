@@ -320,9 +320,9 @@ redirects are not allowed to request bot scopes"). So a `send` workspace is in o
    name. On Slack's free plan a workspace holds at most 10 apps, and this new one counts toward them: if Slack says the
    limit is reached, remove an app you no longer use, in **Tools & settings → Manage apps**.
 
-   **A workspace connected through an organisation's profile** cannot post as the app in this release. The
-   organisation's shared app has PKCE on and rotating tokens, so neither way above works for it. Its agent's messages
-   go out as you, labelled, and `doctor` says so.
+   **A workspace connected through an organisation's profile** cannot use either way above: the organisation's
+   shared app has PKCE on and rotating tokens. Its agent's messages go out as you, labelled — unless the organisation
+   sets up an agent app, below.
 
    It asks for the client secret (the app's **Basic Information** page, under **App Credentials**) at a hidden prompt —
    a person's, at a terminal, as for `workspace bot` — keeps it in the secret store by the app's id, sends it only to
@@ -332,6 +332,71 @@ redirects are not allowed to request bot scopes"). So a `send` workspace is in o
    paste the bot token instead.
 
 Narrowing to `read` or removing the workspace deletes this machine's copy of the bot token, and never revokes it.
+
+#### An organisation's agent app
+
+Members connected through an organisation's profile can post as an app too, through one extra **bot-only agent app**
+that the organisation's administrator sets up once. Nobody's connection changes: each member keeps reading and posting
+through the organisation's own apps, and only adds the agent app's bot token. A member who does nothing keeps the
+labelled fallback.
+
+For members, it is one command, at your own terminal, with the token your administrator gave you:
+
+```sh
+agent-slack workspace bot rgc/slack     # asks for the token without showing it, checks it with Slack, keeps it
+```
+
+It checks the token as for any app: a bot token of the workspace's team, with exactly the four posting scopes, and not
+one that rotates. When the organisation's profile names its agent app, it also asks Slack (`bots.info`, with your own
+token) which app the token's bot belongs to, and refuses another app's token, naming it. Until you paste it,
+`agent-slack doctor` says "ask your organisation's admin for the agent app's token, then `workspace bot <name>`" when
+the profile names the app, and otherwise notes that posts go out as you, labelled.
+
+##### For administrators
+
+1. **Create the app.** `agent-slack manifest --mode agent` (or `slack_manifest` with `mode: "agent"`) prints a bot-only
+   manifest — a bot user and `chat:write`, `chat:write.customize`, `chat:write.public` and `reactions:write`, no user
+   scope, no redirect, and token rotation off — with these steps. At <https://api.slack.com/apps> choose **Create New
+   App → From a manifest**, pick the organisation's workspace, paste it, and give it the organisation's name, such as
+   "RGC agent". Rotation has to stay off: Slack never turns it off once it is on, and a pasted token that rotates stops
+   working within twelve hours.
+2. **Install it once.** On **OAuth & Permissions**, press **Install to Workspace**. Members do not install it.
+3. **Share its token privately.** Copy the **Bot User OAuth Token** (`xoxb-…`) and give it to members the way you
+   would a password — a password manager, or a direct message you delete afterwards. Never put it in the profile's
+   repository, and never paste it into a chat with an agent: the transcript keeps it.
+4. **Name it in the profile**, so `workspace bot` refuses any other app's token and `doctor` tells members whom to
+   ask. Beside the profile, add a file with the profile's name and `.agent-app.json` for its `.json` — for
+   `rgc.agentcomms.json`, `rgc.agentcomms.agent-app.json` — holding the app's **App ID** from **Basic Information**:
+
+   ```json
+   {
+     "agentcomms": "organisation-agent-app",
+     "version": 1,
+     "organisation": "rgc",
+     "slack": { "workspace": "T0123456789", "appId": "A0123456789" }
+   }
+   ```
+
+   Its organisation and workspace must be the profile's. It holds no secret. Members pick it up with `git pull` and
+   `agentcomms org update rgc`, which shows the app id and the file's SHA-256 and asks before applying, as any change
+   to the profile does. It is a file of its own, not a key in the profile, because every release before 0.20.0 refuses
+   a profile with a key it does not know: a member who has not updated yet keeps reading the profile as it is, and
+   never opens this file.
+
+**When someone leaves**, revoke the token on the app's **OAuth & Permissions** page and press **Install to Workspace**
+again for a new one, then share it; each member runs `workspace bot` again with it. In between, the first post,
+reaction, edit or deletion a member's agent makes with the old token comes back from Slack as `token_revoked`,
+`invalid_auth` or `account_inactive`. That act is refused — nothing goes out, and never under another identity, which
+would need its own preview — and the old token is removed from that member's machine, as narrowing or removal removes
+it. From the next prepare on, their agent's posts go out as them, labelled, and `doctor` says when the token was revoked
+and to ask you for the new one. Editing or deleting a message the app posted waits for the new token: only the app can
+change its own messages. Any other refusal keeps the token.
+
+**What one shared token means.** Everyone who pastes it holds the same token, and Slack lets it post under any name,
+with the APP badge beside it. These tools always name a post after the member who approved it, and an app message can
+be edited or deleted only from the machine whose own send record holds it — but the token itself is not bound to
+anyone, so share it only with members. On Slack's free plan a workspace holds at most 10 apps, and the agent app is one
+of them.
 
 ### Files
 

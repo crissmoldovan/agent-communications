@@ -196,6 +196,55 @@ export function buildManifest(
   };
 }
 
+// ── The organisation's agent app (CUE-493) ─────────────────────────────────────────────────────────────────────────
+
+/** What `manifest` can print: an app a person signs in through, for `read` or `send`, or an organisation's agent app. */
+export type ManifestMode = InstallMode | 'agent';
+
+export const MANIFEST_MODES: readonly ManifestMode[] = ['read', 'send', 'agent'];
+
+/** The agent app's page in Slack: a name its administrator changes to the organisation's, such as "RGC agent". */
+const AGENT_DISPLAY = {
+  name: 'Organisation agent',
+  description:
+    "Posts members' agent messages as the app, named after the member and labelled. Each post is approved by that member.",
+  background_color: '#1a1a1a',
+};
+
+/**
+ * The organisation's agent app: a bot user and the send app's four bot scopes (`BOT_SCOPES`), and nothing else.
+ *
+ * One per organisation, installed once by its administrator, whose bot token each member pastes with `workspace bot`
+ * (decided 2026-10-16). Nobody signs in through it, so it has no user scope, no redirect and nothing for PKCE to do.
+ * Its token rotation is off, and has to be: a pasted token that rotates stops working within twelve hours, nothing on a
+ * member's machine could renew it, and `workspace bot` refuses one.
+ */
+export interface AgentManifest {
+  display_information: typeof AGENT_DISPLAY;
+  features: { bot_user: { display_name: string; always_online: boolean } };
+  oauth_config: { scopes: { bot: string[] } };
+  settings: {
+    org_deploy_enabled: boolean;
+    socket_mode_enabled: boolean;
+    token_rotation_enabled: boolean;
+  };
+}
+
+export function buildAgentManifest(): AgentManifest {
+  return {
+    display_information: AGENT_DISPLAY,
+    // Only the default: every post it makes is named after the member whose agent sent it (S4).
+    features: { bot_user: { display_name: 'agent', always_online: false } },
+    oauth_config: { scopes: { bot: [...BOT_SCOPES].sort() } },
+    settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
+  };
+}
+
+/** The agent app's manifest as a person pastes it: JSON, two-space indented, newline-terminated. */
+export function renderAgentManifest(): string {
+  return `${JSON.stringify(buildAgentManifest(), null, 2)}\n`;
+}
+
 /** The manifest as a person pastes it: JSON, two-space indented, newline-terminated. */
 export function renderManifest(
   mode: InstallMode,

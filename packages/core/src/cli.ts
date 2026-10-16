@@ -1290,6 +1290,8 @@ function renderOrg(view: OrganisationView): string {
         `    ${role.padEnd(12)} ${app ? `client id ${app.clientId}${app.appId ? `, app id ${app.appId}` : ''}` : 'none'}`,
       );
     }
+    // Named only when the organisation names one: members paste its bot token with Slack's `workspace bot`.
+    if (view.slack.apps.agent) lines.push(`    ${'agent'.padEnd(12)} app id ${view.slack.apps.agent.appId}`);
   }
   if (view.accounts.length > 0) lines.push(`  accounts     ${view.accounts.join(', ')}`);
   for (const drift of view.drift) lines.push(`  ! ${drift.detail}. ${drift.fix}`);

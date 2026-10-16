@@ -8,7 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run } from '../src/cli/program.ts';
 import { createSlackMcpServer } from '../src/mcp/server.ts';
 import { manifestFor } from '../src/operations/manifest.ts';
-import { slackCommand, slackInline } from './support/handoffs.ts';
+import { slackCommand, slackInline, slackInlineToFill } from './support/handoffs.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 import { newOrganisationHarness } from './support/organisation.ts';
 
@@ -323,4 +323,86 @@ test('a workspace named without a recorded port is still refused rather than giv
   await harness.addWorkspace({ alias: 'acme' });
   const result = await cli(harness, ['--json', 'manifest', '--workspace', 'acme']);
   assert.equal(result.code, EXIT_CODES.USAGE, result.stdout);
+});
+
+// ── The organisation's agent app (CUE-493) ─────────────────────────────────────────────────────────────────────────
+
+interface AgentManifestData {
+  mode: string;
+  steps: string[];
+  notes: string[];
+  manifest: {
+    oauth_config: { scopes: Record<string, string[]>; redirect_urls?: unknown };
+    settings: { token_rotation_enabled: boolean };
+  };
+}
+
+test('manifest --mode agent prints the bot-only app and four steps: create, install, share the token, members paste it', async () => {
+  const harness = await newHarness();
+  const result = await cli(harness, ['manifest', '--mode', 'agent']);
+  assert.equal(result.code, EXIT_CODES.OK, result.stdout);
+  const text = result.stdout;
+  const step = (n: number) =>
+    new RegExp(`^ *${n}\\. (.*)$`, 'm').exec(text)?.[1] ?? assert.fail(`no step ${n}:\n${text}`);
+  assert.match(step(1), /Create New App.*From a manifest/);
+  assert.match(step(2), /Install to Workspace/);
+  assert.match(step(3), /Bot User OAuth Token/);
+  assert.match(step(3), /privately/);
+  assert.match(step(3), /never in the profile/i);
+  assert.ok(
+    step(4).includes(slackInlineToFill(harness.core.paths, ['workspace', 'bot'], ['<organisation>/slack'], 'darwin')),
+    `the members' step names workspace bot:\n${step(4)}`,
+  );
+  assert.equal(/^ *5\. /m.test(text), false, 'four steps, no more');
+  // No port anywhere: the agent app has no redirect, and nobody signs in through it.
+  assert.doesNotMatch(text, /--port|localhost/);
+  const json = JSON.parse(text.slice(text.indexOf('{'))) as AgentManifestData['manifest'];
+  assert.equal(json.settings.token_rotation_enabled, false);
+  assert.deepEqual(Object.keys(json.oauth_config.scopes), ['bot']);
+  assert.equal(json.oauth_config.redirect_urls, undefined);
+});
+
+test('slack_manifest with mode agent returns what the command does, word for word', async () => {
+  const harness = await newHarness();
+  const { call, close } = await connect(harness);
+  try {
+    const tool = await call('slack_manifest', { mode: 'agent' });
+    assert.notEqual(tool.isError, true, JSON.stringify(tool.structuredContent));
+    const command = await cli(harness, ['--json', 'manifest', '--mode', 'agent']);
+    const data = command.json<Envelope<AgentManifestData>>().data ?? assert.fail(command.stdout);
+    assert.deepEqual(tool.structuredContent, data);
+    assert.equal(data.mode, 'agent');
+    assert.equal(data.steps.length, 4);
+    // The trade-offs an administrator weighs before sharing one token: said beside the steps.
+    const notes = data.notes.join(' ');
+    assert.match(notes, /any name/);
+    assert.match(notes, /APP badge/);
+    assert.match(notes, /10 apps/);
+    assert.match(notes, /agent-app\.json/, 'and how to name the app in the profile');
+  } finally {
+    await close();
+  }
+});
+
+test('the agent app takes no port, no workspace and no client secret: each is refused, on both surfaces', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', redirectPort: 47911 });
+  for (const extra of [['--port', '47911'], ['--workspace', 'acme'], ['--with-client-secret']]) {
+    const result = await cli(harness, ['--json', 'manifest', '--mode', 'agent', ...extra]);
+    assert.equal(result.code, EXIT_CODES.USAGE, `${extra.join(' ')}: ${result.stdout}`);
+    assert.match(result.json<Envelope<unknown>>().error?.message ?? '', /agent app/);
+  }
+  const { call, close } = await connect(harness);
+  try {
+    for (const extra of [{ port: 47911 }, { workspace: 'acme' }, { pkce: false }]) {
+      const tool = await call('slack_manifest', { mode: 'agent', ...extra });
+      assert.equal(tool.isError, true, JSON.stringify(extra));
+    }
+  } finally {
+    await close();
+  }
+  await assert.rejects(
+    manifestFor(harness.context(), { mode: 'agent', port: 47911 }),
+    (error: unknown) => (error as CommsError).code === 'USAGE',
+  );
 });

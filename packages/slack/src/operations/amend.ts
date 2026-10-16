@@ -27,6 +27,7 @@ import type { SlackDraft } from '../compose/drafts.ts';
 import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/files.ts';
 import { FILE_POST_UNFURLS, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
+import { appTokenRefusal } from './app-token.ts';
 import {
   decideEditLabel,
   editLine,
@@ -882,7 +883,9 @@ async function editClassified(
     if (!attempted.ok) {
       const { error } = attempted;
       if (certainlyRefused(error, 'chat.update')) {
-        throw await recordNotChanged(deps, approvalId, claim, 'edit', auditIds, withLeftovers(error, added, false));
+        // The app's token refused by Slack is forgotten here, and the refusal says so (CUE-493).
+        const refused = view.via === 'app' ? await appTokenRefusal(deps, 'edit', error) : error;
+        throw await recordNotChanged(deps, approvalId, claim, 'edit', auditIds, withLeftovers(refused, added, false));
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'edit', auditIds, error, leftovers(added, true));
     }
@@ -1553,7 +1556,8 @@ async function deleteClassified(
         return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
       }
       if (certainlyRefused(error, 'chat.delete')) {
-        throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, error);
+        const refused = view.via === 'app' ? await appTokenRefusal(deps, 'delete', error) : error;
+        throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, refused);
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'delete', ids, error);
     }

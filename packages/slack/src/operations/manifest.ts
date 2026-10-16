@@ -5,16 +5,21 @@ import {
   CommsError,
   type Config,
   handoffSentence,
+  handoffSentenceToFill,
   organisationsOf,
   wholeNumber,
 } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
 import {
+  type AgentManifest,
   appManifestUrl,
+  buildAgentManifest,
   buildManifest,
   chosenPortSentence,
   INSTALL_MODES,
   type InstallMode,
+  MANIFEST_MODES,
+  type ManifestMode,
   type SlackManifest,
 } from '../manifest.ts';
 import { requireWorkspace } from './workspaces.ts';
@@ -54,6 +59,17 @@ export interface ManifestResult {
 }
 
 /**
+ * An organisation's agent app (CUE-493): the bot-only manifest, the administrator's steps, and what they weigh before
+ * sharing one token. No port, redirect or workspace: nobody signs in through it.
+ */
+export interface AgentManifestResult {
+  readonly mode: 'agent';
+  readonly manifest: AgentManifest;
+  readonly steps: readonly string[];
+  readonly notes: readonly string[];
+}
+
+/**
  * A loopback port, checked rather than coerced: the one given, else the one recorded, else a refusal.
  *
  * Slack matches redirect URLs exactly, so a port nobody chose is worse than none — the sign-in would complete at
@@ -82,6 +98,13 @@ export function modeWanted(value: unknown): InstallMode | undefined {
   if (value === undefined) return undefined;
   if (typeof value === 'string' && (INSTALL_MODES as readonly string[]).includes(value)) return value as InstallMode;
   throw new CommsError('USAGE', `"${String(value)}" is not a mode`, { hint: `One of: ${INSTALL_MODES.join(', ')}.` });
+}
+
+/** A mode `manifest` was asked for, checked as `modeWanted` checks one, with the agent app beside the two. */
+export function manifestModeWanted(value: unknown): ManifestMode | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && (MANIFEST_MODES as readonly string[]).includes(value)) return value as ManifestMode;
+  throw new CommsError('USAGE', `"${String(value)}" is not a mode`, { hint: `One of: ${MANIFEST_MODES.join(', ')}.` });
 }
 
 /** How many ports the system is asked for before giving up: each offer is a fresh one, so a few are plenty. */
@@ -140,7 +163,105 @@ async function chooseLoopbackPort(taken: ReadonlySet<number>, probe: () => Promi
   throw new CommsError('TRANSIENT', `no free loopback port could be found in ${PORT_TRIES} tries`, { hint });
 }
 
+/** What `manifestFor` takes: the same from the command and from the tool. */
+export interface ManifestOptions {
+  mode?: unknown;
+  port?: unknown;
+  workspace?: string | undefined;
+  pkce?: unknown;
+  probePort?: (() => Promise<number>) | undefined;
+}
+
+/**
+ * The Slack app to create or update, for `agent-slack manifest` and `slack_manifest` alike: an app a person signs in
+ * through (`appManifestFor`), or — `mode: "agent"` — an organisation's agent app (`agentManifestFor`).
+ */
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions & { mode: 'agent' },
+): Promise<AgentManifestResult>;
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions & { mode?: InstallMode | undefined },
+): Promise<ManifestResult>;
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions,
+): Promise<ManifestResult | AgentManifestResult>;
 export async function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions,
+): Promise<ManifestResult | AgentManifestResult> {
+  const mode = manifestModeWanted(options.mode);
+  if (mode === 'agent') return agentManifestFor(context, options);
+  return appManifestFor(context, { ...options, mode });
+}
+
+/**
+ * The agent app's manifest and steps. Refuses what only an app a person signs in through has — a port, a workspace whose
+ * app it would edit, a client secret — rather than ignore it: each says the person is making the other kind of app.
+ */
+function agentManifestFor(context: SlackContext, options: ManifestOptions): AgentManifestResult {
+  const given = (value: unknown) => value !== undefined && value !== null;
+  if (given(options.port)) {
+    throw new CommsError('USAGE', 'the agent app takes no port: it has no redirect, and nobody signs in through it', {
+      hint: 'Leave out the port. The agent app is installed once, with "Install to Workspace".',
+    });
+  }
+  if (options.workspace !== undefined) {
+    throw new CommsError('USAGE', "the agent app is a new app of the organisation's, not a workspace's own app", {
+      hint: 'Leave out the workspace: this manifest is for creating the agent app, not for editing the app a workspace signs in through.',
+    });
+  }
+  if (options.pkce !== undefined) {
+    throw new CommsError('USAGE', 'the agent app has no sign-in, so neither PKCE nor a client secret applies to it', {
+      hint: 'Leave out the client-secret option.',
+    });
+  }
+  return { mode: 'agent', manifest: buildAgentManifest(), ...agentAppSteps(context.handoffs) };
+}
+
+/**
+ * The administrator's four steps, and the notes beside them: the trade-offs of one shared token, the free plan's limit,
+ * and how to name the app in the profile so that `workspace bot` refuses any other app's token.
+ */
+function agentAppSteps(handoffs: CliHandoffs): { steps: string[]; notes: string[] } {
+  return {
+    steps: [
+      'Create the app from this manifest: open https://api.slack.com/apps, choose "Create New App" → "From a manifest", pick your organisation\'s workspace, and paste it. Change its "name" first to your organisation\'s, such as "RGC agent", then create the app.',
+      'On "OAuth & Permissions", press "Install to Workspace" and allow it. Once, for the whole organisation: members do not install it.',
+      'Copy the "Bot User OAuth Token" (it starts xoxb-) and share it with your members privately, as you would a password: never in the profile\'s repository, and never in a chat with an agent.',
+      handoffSentenceToFill(
+        handoffs.own(['workspace', 'bot']),
+        ['<organisation>/slack'],
+        (command) =>
+          `Each member who wants their agent's posts to appear as the app runs \`workspace bot <organisation>/slack\` once, in their own terminal on their own computer (on this one: ${command}), and pastes it: it is checked with Slack before it is kept. Their own connection is untouched, and a member who does nothing keeps posting as themselves, labelled.`,
+        {
+          instead:
+            "Each member who wants their agent's posts to appear as the app runs `workspace bot` once, in their own terminal, and pastes it. Their own connection is untouched.",
+        },
+      ),
+    ],
+    notes: [
+      'Token rotation is off, and has to stay off: a pasted token that rotates would stop working within twelve hours. The token lasts until it is revoked. When someone leaves, revoke it on "OAuth & Permissions", install the app again and share the new token; members paste it again. In between, the first act a member\'s agent makes with the old token is refused — nothing is posted under another identity — and the token is forgotten, so their agents\' posts go out as them, labelled, until they paste the new one.',
+      'Everyone who pastes it holds the same token, and Slack lets it post under any name, with the APP badge beside it. Posts made through these tools are always named after the member who approved them; the token itself is not bound to anyone, so share it only with members.',
+      "On Slack's free plan a workspace holds at most 10 apps, and this one counts toward them.",
+      handoffSentenceToFill(
+        handoffs.core(['org', 'update']),
+        ['<organisation>'],
+        (command) =>
+          `To have workspace bot refuse any other app's token, name this app in your organisation's profile: beside <name>.json, add <name>.agent-app.json with its kind "organisation-agent-app", version 1, the organisation, and the Slack workspace and the App ID from "Basic Information". Members pick it up with ${command}.`,
+        {
+          instead:
+            'To have workspace bot refuse any other app\'s token, name this app in your organisation\'s profile: beside <name>.json, add <name>.agent-app.json with its kind "organisation-agent-app", version 1, the organisation, and the Slack workspace and the App ID from "Basic Information". Members pick it up with org update.',
+        },
+      ),
+    ],
+  };
+}
+
+/** The manifest of an app a person signs in through, `read` or `send` — the one `workspace mode` needs too. */
+export async function appManifestFor(
   context: SlackContext,
   options: {
     mode?: unknown;

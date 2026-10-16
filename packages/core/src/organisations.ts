@@ -316,55 +316,250 @@ export interface ProfileFile {
   profile: OrganisationProfile;
   /** The organisation's update caps, from the file beside the profile (`updatesPathFor`); absent when there is none. */
   updates?: UpdatesFile | undefined;
+  /** The organisation's agent app, from the file beside the profile (`agentAppPathFor`); absent when there is none. */
+  agentApp?: AgentAppFile | undefined;
 }
 
 /**
- * Reads a profile from an absolute path, in one bounded read: open once, check it is a regular file, read at most one
- * byte more than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a
- * device, a directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path
- * is one the person chose.
+ * The bytes at an absolute path, in one bounded read: open once, check it is a regular file, read at most one byte more
+ * than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a device, a
+ * directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path is one the
+ * person chose. `unopened` says what a file that cannot be opened is: a refusal for the profile, whatever the reason;
+ * nothing for a file beside it (`readSideFile`) when it is not there, and a refusal when it is there and cannot be
+ * opened.
  */
-export async function readProfileFile(path: string): Promise<ProfileFile> {
+async function readBounded(
+  path: string,
+  what: { unopened: (error: unknown) => null; noun: string; size: string },
+): Promise<Buffer | null> {
   let handle: FileHandle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  } catch {
-    throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
-      hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
-    });
+  } catch (error) {
+    return what.unopened(error);
   }
-  let bytes: Buffer;
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new CommsError('USAGE', `${shownPath(path)} is not a file`);
     const buffer = Buffer.allocUnsafe(PROFILE_MAX_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, PROFILE_MAX_BYTES + 1, 0);
     if (bytesRead > PROFILE_MAX_BYTES) {
-      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than a profile can be (64 KiB)`, {
-        hint: 'A profile is a few hundred bytes of JSON. Check this is the file your organisation sent.',
+      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than ${what.size} can be (64 KiB)`, {
+        hint: `${what.size.charAt(0).toUpperCase()}${what.size.slice(1)} is a few hundred bytes of JSON. Check this is the file your organisation sent.`,
       });
     }
-    bytes = Buffer.from(buffer.subarray(0, bytesRead));
+    return Buffer.from(buffer.subarray(0, bytesRead));
   } catch (error) {
     if (error instanceof CommsError) throw error;
-    throw new CommsError('NOT_FOUND', `the profile at ${shownPath(path)} could not be read`, { cause: error });
+    throw new CommsError('NOT_FOUND', `${what.noun} at ${shownPath(path)} could not be read`, { cause: error });
   } finally {
     await handle.close();
   }
-  let text: string;
+}
+
+function utf8(bytes: Buffer, what: string): string {
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    throw new CommsError('BAD_DATA', 'the organisation profile is not UTF-8 text');
+    throw new CommsError('BAD_DATA', `${what} is not UTF-8 text`);
   }
-  const profile = parseProfile(text);
+}
+
+/**
+ * Reads a profile from an absolute path (`readBounded`), and each file the organisation keeps beside it when there is
+ * one: its update caps (`updatesPathFor`) and its agent app (`agentAppPathFor`). Each is bound by the SHA-256 of its
+ * own exact bytes.
+ */
+export async function readProfileFile(path: string): Promise<ProfileFile> {
+  const bytes = (await readBounded(path, {
+    unopened: () => {
+      throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
+        hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
+      });
+    },
+    noun: 'the profile',
+    size: 'a profile',
+  })) as Buffer;
+  const profile = parseProfile(utf8(bytes, 'the organisation profile'));
   const updates = await readUpdatesFile(updatesPathFor(path), profile);
+  const agentApp = await readAgentAppFile(agentAppPathFor(path), profile);
   return {
     path,
     sha256: createHash('sha256').update(bytes).digest('hex'),
     profile,
     ...(updates === undefined ? {} : { updates }),
+    ...(agentApp === undefined ? {} : { agentApp }),
   };
+}
+
+// ── Files beside the profile ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * **What an organisation adds after 0.19.0 goes in a file beside its profile, not in it.** Every object of a version-1
+ * profile is strict, in this release and in every one since profiles were added (0.13.0 to 0.19.0): a new key anywhere
+ * refuses the whole document, and a member still on an older release would then lose `org update` for everything else
+ * the organisation changes, until they updated. So the profile stays exactly as those releases read it, and each
+ * addition goes in `<profile>.<suffix>.json`, which they never open. This release reads each whenever it reads the
+ * profile, binds it by its own SHA-256 in the same approval, and records it where the configuration's loose schema lets
+ * older releases keep it through their writes.
+ */
+interface SideFile<T> {
+  /** What a refusal calls it: `the updates file`. */
+  noun: string;
+  /** The same with an indefinite article, for the size refusal: `an updates file`. */
+  size: string;
+  /** What it holds, strictly. Every document names the organisation whose profile it sits beside. */
+  schema: z.ZodType<T & { organisation: string }>;
+  /** What a refusal tells the person it should hold. */
+  hint: string;
+  /** Anything else it must agree on with the profile beside it: the problem to refuse it with, or nothing. */
+  agrees?: ((document: T & { organisation: string }, profile: OrganisationProfile) => string | undefined) | undefined;
+}
+
+/** A side file's path for a profile: in the same folder, the profile's name with `.<suffix>.json` for its `.json`. */
+function sidePathFor(profilePath: string, suffix: string): string {
+  return /\.json$/i.test(profilePath)
+    ? `${profilePath.slice(0, -'.json'.length)}.${suffix}.json`
+    : `${profilePath}.${suffix}.json`;
+}
+
+/**
+ * Reads one file beside a profile, if there is one, and holds it to the profile: the same organisation, and whatever
+ * else `agrees` asks. Read in one bounded read as the profile is (`readBounded`), strict as the profile is, and refused
+ * in the same words — naming each problem by where it is, never by the value found there — but naming this file, so
+ * the person knows which of the two to fix. Only a file that is not there is none: one that is there and cannot be
+ * opened is refused, since read as none it would lift what it says — the caps, or the one app `workspace bot` takes.
+ */
+async function readSideFile<T>(
+  path: string,
+  profile: OrganisationProfile,
+  side: SideFile<T>,
+): Promise<{ path: string; sha256: string; document: T & { organisation: string } } | undefined> {
+  const where = shownPath(path);
+  const bytes = await readBounded(path, {
+    unopened: (error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new CommsError('NOT_FOUND', `${side.noun} at ${where} could not be opened`, { cause: error });
+    },
+    noun: side.noun,
+    size: side.size,
+  });
+  if (bytes === null) return undefined;
+  const refuse = (problem: string): never => {
+    throw new CommsError('BAD_DATA', `${side.noun} ${where} is not valid: ${problem}`, { hint: side.hint });
+  };
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return refuse('it is not UTF-8 text');
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.startsWith('﻿') ? text.slice(1) : text);
+  } catch {
+    return refuse('it is not valid JSON');
+  }
+  const parsed = side.schema.safeParse(raw);
+  if (!parsed.success) {
+    return refuse(
+      parsed.error.issues
+        .slice(0, 6)
+        .map((issue) => {
+          const at = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the file';
+          return issue.code === 'unrecognized_keys'
+            ? `${at}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} it has`
+            : `${at}: ${issue.message}`;
+        })
+        .join('; '),
+    );
+  }
+  const document = parsed.data;
+  if (document.organisation !== profile.organisation) {
+    return refuse(
+      `it names the organisation ${shownText(document.organisation, 40)}, not ${profile.organisation}, whose profile it sits beside`,
+    );
+  }
+  const problem = side.agrees?.(document, profile);
+  if (problem !== undefined) return refuse(problem);
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), document };
+}
+
+// ── The organisation's agent app ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An organisation's agent app (CUE-493, decided 2026-10-16): one bot-only Slack app per organisation — no user scopes,
+ * token rotation off — that its administrator installs once. Its bot token is shared with members privately, never in
+ * the profile's repository, and each member who wants their agent's posts to appear as the app pastes it once with
+ * Slack's `workspace bot`. Their own read and send connection is untouched; a member who does nothing keeps the
+ * labelled fallback.
+ *
+ * **The app is named in a file beside the profile, not in it** (`readSideFile`): a key such as `slack.apps.agent` in
+ * the profile would make every release from 0.13.0 to 0.19.0 refuse it. Its id goes in `<profile>.agent-app.json`,
+ * recorded as `slack.apps.agent`.
+ *
+ * It holds the app's id and nothing secret: what lets `workspace bot` refuse a token of any other app, and lets `doctor`
+ * tell a member whom to ask for this one.
+ */
+export const AGENT_APP_KIND = 'organisation-agent-app' as const;
+
+/** The agent app's file for a profile: in the same folder, the profile's name with `.agent-app.json` for its `.json`. */
+export function agentAppPathFor(profilePath: string): string {
+  return sidePathFor(profilePath, 'agent-app');
+}
+
+/** The agent app as it was read: from where, the SHA-256 of its exact bytes, and the app it names. */
+export interface AgentAppFile {
+  path: string;
+  sha256: string;
+  appId: string;
+}
+
+const agentAppSchema = z.strictObject({
+  agentcomms: z.literal(AGENT_APP_KIND),
+  version: z.literal(1),
+  organisation: z.string(),
+  slack: z.strictObject({
+    workspace: z
+      .string()
+      .regex(SLACK_WORKSPACE_ID_PATTERN, 'a Slack workspace id is T followed by capital letters or digits'),
+    appId: z.string().regex(SLACK_APP_ID_PATTERN, 'a Slack app id is A followed by 2–20 capital letters or digits'),
+  }),
+});
+
+/** The agent app's file, held to the profile's organisation and to its own Slack workspace. */
+async function readAgentAppFile(path: string, profile: OrganisationProfile): Promise<AgentAppFile | undefined> {
+  const read = await readSideFile(path, profile, {
+    noun: 'the agent app file',
+    size: 'an agent app file',
+    schema: agentAppSchema,
+    hint: 'It names the organisation’s agent app and nothing else: its kind, version 1, the organisation, and its Slack workspace and app id. Ask your organisation for its current one.',
+    agrees: (document, beside) => {
+      if (!beside.slack) return 'the profile beside it lists no Slack workspace for the app to post in';
+      if (document.slack.workspace !== beside.slack.workspace) {
+        return `it names the workspace ${document.slack.workspace}, not ${beside.slack.workspace}, the profile's`;
+      }
+      return undefined;
+    },
+  });
+  return read === undefined ? undefined : { path: read.path, sha256: read.sha256, appId: read.document.slack.appId };
+}
+
+/**
+ * The agent app an organisation's profile names for this Slack workspace, as the configuration records it — or none.
+ *
+ * Whatever string the record holds is returned, an app id or not: a check against a hand-edited value then refuses
+ * every token, the stricter reading, rather than none.
+ */
+export function organisationAgentApp(
+  config: Config,
+  organisation: string,
+  workspace: string,
+): { appId: string } | undefined {
+  const slack = recordOf(config, organisation)?.slack;
+  if (slack === undefined || slack.workspace !== workspace) return undefined;
+  const agent = slack.apps.agent;
+  return typeof agent?.appId === 'string' && agent.appId !== '' ? { appId: agent.appId } : undefined;
 }
 
 // ── The record ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1075,22 +1270,16 @@ export function unmanagedSlackAccounts(config: Config, organisation: string, wor
  * `every-14-days` or `never` — and `background: false`, no background job. They only ever tighten: a member's level is
  * capped at `max`, and nothing a member sets goes past it.
  *
- * **They are named in a file beside the profile, not in it.** Every object of a version-1 profile is strict in every
- * release since profiles were added (0.13.0 to 0.19.0): a key such as `updates` anywhere refuses the whole document,
- * and a member still on an older release would lose `org update` for everything else the organisation changes. So the
- * profile stays exactly as those releases read it, and the caps go in `<profile>.updates.json`, which they never open.
- * This release reads it whenever it reads the profile, binds it by its own SHA-256 in the same approval, and records it
- * as the organisation's `updates`, where the configuration's loose schema lets older releases keep it through their
- * writes.
+ * **They are named in a file beside the profile, not in it** (`readSideFile`): a key such as `updates` in the profile
+ * would make every release from 0.13.0 to 0.19.0 refuse it. They go in `<profile>.updates.json`, recorded as the
+ * organisation's `updates`.
  */
 export const UPDATE_CAPS = ['every-14-days', 'never'] as const;
 export type UpdateCap = (typeof UPDATE_CAPS)[number];
 
 /** The updates file for a profile: in the same folder, the profile's name with `.updates.json` for its `.json`. */
 export function updatesPathFor(profilePath: string): string {
-  return /\.json$/i.test(profilePath)
-    ? `${profilePath.slice(0, -'.json'.length)}.updates.json`
-    : `${profilePath}.updates.json`;
+  return sidePathFor(profilePath, 'updates');
 }
 
 /** The caps as they were read: from where, the SHA-256 of the exact bytes, and what they say. */
@@ -1111,73 +1300,21 @@ const updatesSchema = z.strictObject({
     .optional(),
 });
 
-/**
- * Reads the updates file, if there is one, and holds it to the profile it sits beside: the same organisation. Strict as
- * the profile is, read in one bounded read as the profile is, and refused naming each problem by where it is, never by
- * the value found there — but naming this file, so the person knows which of the two to fix. Only a file that is not
- * there is no caps: one that is there and cannot be opened is refused, since read as none it would lift the caps.
- */
+/** The updates file, held to the profile's organisation (`readSideFile`). */
 async function readUpdatesFile(path: string, profile: OrganisationProfile): Promise<UpdatesFile | undefined> {
-  const where = shownPath(path);
-  let handle: FileHandle;
-  try {
-    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new CommsError('NOT_FOUND', `the updates file at ${where} could not be opened`, { cause: error });
-  }
-  let bytes: Buffer;
-  try {
-    if (!(await handle.stat()).isFile()) throw new CommsError('USAGE', `${where} is not a file`);
-    const buffer = Buffer.allocUnsafe(PROFILE_MAX_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, PROFILE_MAX_BYTES + 1, 0);
-    if (bytesRead > PROFILE_MAX_BYTES) {
-      throw new CommsError('BAD_DATA', `${where} is larger than an updates file can be (64 KiB)`);
-    }
-    bytes = Buffer.from(buffer.subarray(0, bytesRead));
-  } catch (error) {
-    if (error instanceof CommsError) throw error;
-    throw new CommsError('NOT_FOUND', `the updates file at ${where} could not be read`, { cause: error });
-  } finally {
-    await handle.close();
-  }
-  const refuse = (problem: string): never => {
-    throw new CommsError('BAD_DATA', `the updates file ${where} is not valid: ${problem}`, {
-      hint: 'It names the organisation, and the caps on how its members update and nothing else: `max` (every-14-days or never) and `background` (false). Ask your organisation for its current one.',
-    });
-  };
-  let raw: unknown;
-  try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    raw = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text);
-  } catch {
-    return refuse('it is not valid UTF-8 JSON');
-  }
-  const parsed = updatesSchema.safeParse(raw);
-  if (!parsed.success) {
-    return refuse(
-      parsed.error.issues
-        .slice(0, 6)
-        .map((issue) => {
-          const at = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the file';
-          return issue.code === 'unrecognized_keys'
-            ? `${at}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} it has`
-            : `${at}: ${issue.message}`;
-        })
-        .join('; '),
-    );
-  }
-  const document = parsed.data;
-  if (document.organisation !== profile.organisation) {
-    return refuse(
-      `it names the organisation ${shownText(document.organisation, 40)}, not ${profile.organisation}, whose profile it sits beside`,
-    );
-  }
+  const read = await readSideFile(path, profile, {
+    noun: 'the updates file',
+    size: 'an updates file',
+    schema: updatesSchema,
+    hint: 'It names the organisation, and the caps on how its members update and nothing else: `max` (every-14-days or never) and `background` (false). Ask your organisation for its current one.',
+  });
+  if (read === undefined) return undefined;
+  const { max, background } = read.document;
   return {
-    path,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    ...(document.max === undefined ? {} : { max: document.max }),
-    ...(document.background === undefined ? {} : { background: false as const }),
+    path: read.path,
+    sha256: read.sha256,
+    ...(max === undefined ? {} : { max }),
+    ...(background === undefined ? {} : { background: false as const }),
   };
 }
 

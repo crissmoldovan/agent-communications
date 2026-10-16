@@ -11,6 +11,7 @@ import { prepareDraftPost, sendPost } from '../src/operations/post.ts';
 import { botSecretRefFor } from '../src/operations/workspaces.ts';
 import { type SlackWorld, startFakeSlack, type WorldRoom } from './support/fake-slack.ts';
 import { newHarness } from './support/harness.ts';
+import { newOrganisationHarness } from './support/organisation.ts';
 
 /**
  * Who a post appears to come from, decided at prepare and bound (design 2026-10-15 L3, S2, S4, S7).
@@ -266,6 +267,70 @@ test("a workspace connected through an organisation's app gets a note that names
     assert.doesNotMatch(said, /workspace bot/);
     assert.doesNotMatch(said, /with-client-secret|client secret/);
   }
+});
+
+/**
+ * Doctor's finding for a member connected through RGC's profile (CUE-493): the profile may name the organisation's agent
+ * app, and the member may have pasted its bot token.
+ */
+async function organisationAppIdentity(options: { agentApp?: string; pasted?: boolean } = {}) {
+  const harness = await newOrganisationHarness({ port: 51234 });
+  await harness.addWorkspace({
+    alias: 'rgc/slack',
+    workspaceId: 'TRGC0001',
+    mode: 'send',
+    identity: 'agent',
+    // A pasted agent app token does not rotate: no refresh token, and an expiry nothing reaches.
+    ...(options.pasted
+      ? {
+          bot: {
+            userId: 'U0BOT0001',
+            bundle: {
+              refreshToken: undefined,
+              refreshExpiresAt: undefined,
+              accessExpiresAt: '9999-12-31T23:59:59.999Z',
+            },
+          },
+        }
+      : {}),
+  });
+  await harness.updateConfig((config) => {
+    const held = config.accounts['rgc/slack'];
+    assert.ok(held);
+    Object.assign(held, { organisation: 'rgc', profileApp: 'send' });
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    if (options.agentApp !== undefined) apps.agent = { appId: options.agentApp, sha256: 'c'.repeat(64) };
+  });
+  const report = await runDoctor(harness.context({ platform: 'darwin' }), { offline: true });
+  return report.checks.find((one) => one.id === 'app-identity');
+}
+
+test('with the profile naming its agent app and no token here, doctor says to ask the admin for it, then workspace bot', async () => {
+  const check = await organisationAppIdentity({ agentApp: 'A0AGENT0001' });
+  assert.equal(check?.status, 'warn', 'something the member can do, so not a note');
+  const fix = String(check?.fix);
+  assert.match(fix, /ask your organisation's admin for the agent app's token/i);
+  assert.match(fix, / workspace bot rgc\/slack(`|\s|$)/);
+  assert.match(check?.detail ?? '', /A0AGENT0001/);
+  assert.match(check?.detail ?? '', /as you, labelled/);
+  // Neither way an organisation's shared app refuses: its client secret, or a new app of the member's own.
+  const said = `${check?.detail} ${fix}`;
+  assert.doesNotMatch(said, /with-client-secret|client secret/);
+  for (const step of NEW_APP_STEPS) assert.doesNotMatch(said, step);
+});
+
+test('without the field, a profile workspace keeps today’s note; with the token pasted, the usual ok', async () => {
+  const none = await organisationAppIdentity();
+  assert.equal(none?.status, 'ok');
+  assert.equal(none?.fix, null);
+  assert.match(none?.detail ?? '', /organisation’s shared app/);
+  assert.doesNotMatch(`${none?.detail}`, /workspace bot/);
+
+  const pasted = await organisationAppIdentity({ agentApp: 'A0AGENT0001', pasted: true });
+  assert.equal(pasted?.status, 'ok');
+  assert.equal(pasted?.fix, null);
+  assert.match(pasted?.detail ?? '', /go out as the app \(bot user U0BOT0001\)/);
 });
 
 test('doctor checks the bot token is stored, not only that a bot user is recorded', async (t) => {

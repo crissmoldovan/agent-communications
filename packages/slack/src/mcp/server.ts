@@ -22,7 +22,7 @@ import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/
 import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
-import { INSTALL_MODES } from '../manifest.ts';
+import { INSTALL_MODES, MANIFEST_MODES } from '../manifest.ts';
 import {
   CHANGE_POLICIES,
   connectWorkspace,
@@ -466,10 +466,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'The Slack app manifest',
       description:
-        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
+        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. With `mode: "agent"`, an organisation\'s bot-only agent app instead: no user scope, no redirect, token rotation off, and an administrator\'s steps — create it, install it once, share its bot token privately, and each member pastes it with `workspace bot` at their own terminal (never in the chat) — with no port, workspace or `pkce`. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
       inputSchema: {
         workspace: z.string().optional().describe('a workspace already connected, as `organisation/slack`'),
-        mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
+        mode: oneOfWords(MANIFEST_MODES)
+          .optional()
+          .describe("`read` when left out; `agent` for an organisation's bot-only agent app"),
         port: z
           .number()
           .int()

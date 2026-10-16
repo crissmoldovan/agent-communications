@@ -152,13 +152,17 @@ export {
  * organisation's, and the generations of its client. The core writes the record; nothing else does.
  */
 export {
+  AGENT_APP_KIND,
+  type AgentAppFile,
   activeGeneration,
+  agentAppPathFor,
   GENERATION_LIMIT,
   type GenerationState,
   generationState,
   learnProfileSlackAppId,
   managingOrganisation,
   type OrganisationProfile,
+  organisationAgentApp,
   organisationProfileSchema,
   organisationsOf,
   PROFILE_ORGANISATION_MAX,

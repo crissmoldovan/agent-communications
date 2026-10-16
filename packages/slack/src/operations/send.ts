@@ -42,6 +42,7 @@ import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/f
 import { mentionedUserIds, previewOf, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
 import type { AppPostRecord } from './app-posts.ts';
+import { appTokenRefusal } from './app-token.ts';
 import { requireConversation } from './destination.ts';
 import {
   appNameOf,
@@ -1074,8 +1075,11 @@ async function postClassified(
     );
     if (!attempted.ok) {
       const { error } = attempted;
-      if (certainlyRefused(error, 'chat.postMessage'))
-        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, error);
+      if (certainlyRefused(error, 'chat.postMessage')) {
+        // The app's token refused by Slack is forgotten here, and the refusal says so (CUE-493): never a second post.
+        const refused = sent.via === 'app' ? await appTokenRefusal(deps, 'post', error) : error;
+        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, refused);
+      }
       throw await recordMaybePosted(deps, approvalId, claimed, where, error, 'it was posted');
     }
     const response: SlackResponse = attempted.value;
@@ -2215,7 +2219,8 @@ export async function reactPrepared(
         );
       }
       if (error instanceof CommsError && certainlyRefused(error, method)) {
-        throw await recordReactionRefused(deps, approvalId, claim, options, error);
+        const refused = label?.route === 'app' ? await appTokenRefusal(deps, 'reaction', error) : error;
+        throw await recordReactionRefused(deps, approvalId, claim, options, refused as CommsError);
       }
       throw await recordReactionUnknown(deps, approvalId, claim.claimed, options, error);
     }

@@ -58,6 +58,13 @@ export interface SlackLabel {
 export interface AppIdentity {
   readonly userId: string;
   readonly call: () => Promise<SlackCall>;
+  /**
+   * Forgets the bot token after Slack refused the token itself (CUE-493, `app-token.ts`): deleted, the bot user taken
+   * off the account, and why recorded, so the next prepare takes the fallback.
+   */
+  readonly forget?: ((slackError: string) => Promise<void>) | undefined;
+  /** The organisation whose profile connected the account, when one did: whose admin holds the agent app's token. */
+  readonly organisation?: string | undefined;
 }
 
 /** What a gate needs to decide a label: whose rules, which settings, and the app when this account has one. */
@@ -95,6 +102,15 @@ export function noAppReason(mode: string | undefined): string {
   return mode === 'send'
     ? "this workspace's app has no bot token on this machine yet"
     : 'this workspace is connected to read';
+}
+
+/**
+ * The reason a workspace whose app's bot token Slack refused takes the fallback (CUE-493): the token was forgotten when
+ * an act made with it came back `token_revoked`, `invalid_auth` or `account_inactive`, and none has been pasted since.
+ * A fixed string, as every reason is: it is bound.
+ */
+export function revokedAppReason(): string {
+  return "this workspace's app token was revoked, and no new one is on this machine yet";
 }
 
 /** A request for one act's identity, as the message carries it (L3 step 1). */

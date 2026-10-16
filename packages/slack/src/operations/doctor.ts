@@ -10,12 +10,14 @@ import {
   listRegisteredServers,
   lookupName,
   missingEntryFile,
+  organisationAgentApp,
   otherSlackServerRemoval,
   type RegisteredServer,
   type Remedy,
   registrationVersion,
   remedy,
   type SecretStore,
+  shownText,
   toCommsError,
 } from '@agentcomms/core';
 import { scopeMismatch } from '../auth/authorize.ts';
@@ -25,6 +27,7 @@ import { handoffsSentence } from '../handoffs.ts';
 import type { InstallMode } from '../manifest.ts';
 import { SLACK_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
+import { appTokenRevokedOf } from './app-token.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
 import { type PendingRevocationResult, pendingRevocationResult, retryPendingRevocations } from './revocations.ts';
 import { openWorkspace } from './session.ts';
@@ -520,6 +523,80 @@ export function doctor(input: DoctorInput): DoctorResult {
           fix: null,
           workspace: workspace.alias,
         });
+      } else if (
+        workspace.appUserId === undefined &&
+        appTokenRevokedOf(lookupName(input.config, 'account', workspace.alias)) !== undefined
+      ) {
+        /*
+         * Slack refused the stored bot token on an act made with it, and it was forgotten (CUE-493): say when, and what
+         * brings one back. A profile's agent app has one token its admin reissues; a person's own app connected with
+         * its client secret gets a new one from that sign-in; one whose token was pasted gets it pasted again.
+         */
+        const account = lookupName(input.config, 'account', workspace.alias);
+        const revoked = appTokenRevokedOf(account);
+        const on = revoked?.at.slice(0, 10) ?? 'an unknown date';
+        const paste = handoffs.own(['workspace', 'bot', workspace.alias]);
+        const fix =
+          workspace.organisation !== undefined
+            ? handoffSentence(
+                paste,
+                (command) =>
+                  `Ask your organisation's admin for the agent app's new token, then run ${command} in your own terminal and paste it there, never into a chat.`,
+                {
+                  instead:
+                    "Ask your organisation's admin for the agent app's new token, then paste it with `workspace bot` in your own terminal.",
+                },
+              )
+            : account !== undefined && clientSecretRefOf(account) !== undefined
+              ? handoffSentence(
+                  handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
+                  (command) =>
+                    `Sign in again with the app's client secret, which brings a new bot token: ${command}, in your own terminal.`,
+                  { instead: "Sign in again with the app's client secret, at your own terminal." },
+                )
+              : handoffSentence(
+                  paste,
+                  (command) =>
+                    `Copy the app's new "Bot User OAuth Token" from its OAuth & Permissions page, then run ${command} in your own terminal and paste it there.`,
+                  { instead: "Paste the app's new bot token with `workspace bot` in your own terminal." },
+                );
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'warn',
+          detail: `the app's bot token was revoked on ${on} (Slack said ${displayed(revoked?.slackError)} when an act was made with it), so it was removed from this machine, and an agent's posts go out as you, labelled in their text`,
+          fix: remedy(fix),
+          workspace: workspace.alias,
+        });
+      } else if (
+        workspace.organisation !== undefined &&
+        organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId) !== undefined
+      ) {
+        /*
+         * Connected through an organisation profile that names its agent app (CUE-493): the organisation's bot-only
+         * app, whose one non-rotating token its admin shares. Pasting it is the one way, and changes nothing else of the
+         * member's connection. A warning, as an own app missing its token is: there is something to do, and it is
+         * theirs to choose — a member who does nothing keeps the labelled fallback.
+         */
+        const agent = organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId);
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'warn',
+          detail: `no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. Your organisation's profile names its agent app (${displayed(agent?.appId)}), whose bot token its admin shares with members: pasted here once, an agent's posts go out as that app`,
+          fix: remedy(
+            handoffSentence(
+              handoffs.own(['workspace', 'bot', workspace.alias]),
+              (command) =>
+                `Ask your organisation's admin for the agent app's token, then run ${command} in your own terminal and paste it there, never into a chat.`,
+              {
+                instead:
+                  "Ask your organisation's admin for the agent app's token, then paste it with `workspace bot` in your own terminal, never into a chat.",
+              },
+            ),
+          ),
+          workspace: workspace.alias,
+        });
       } else if (workspace.organisation !== undefined) {
         /*
          * Connected through an organisation profile's shared app. Neither way works for it: the client-secret sign-in
@@ -644,6 +721,11 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks, ...(input.cleanup ? { cleanup: input.cleanup } : {}) };
+}
+
+/** A value read back from the configuration, as a finding shows it: neutralised and on one line. */
+function displayed(value: unknown): string {
+  return shownText(value, 64);
 }
 
 /** Whether the person's own credential shows its app rotates tokens: a refresh token, a refresh expiry, or a refresh under way or spent. */

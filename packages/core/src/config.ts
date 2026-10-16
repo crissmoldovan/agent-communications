@@ -332,6 +332,16 @@ export interface OrganisationUpdates {
 }
 
 /**
+ * The organisation's bot-only agent app, as its profile's agent-app file names it (CUE-493): the app's id, and the
+ * SHA-256 of that file, so `org update` can tell the organisation changing it from the record drifting. No client id:
+ * nobody signs in through it — its administrator installs it once and its members paste its bot token.
+ */
+export interface OrganisationAgentApp {
+  appId: string;
+  sha256: string;
+}
+
+/**
  * What this machine records of one organisation profile: never its bytes and never its secret — where it was read
  * from, the SHA-256 of what was read and when, the generations of its Google client, and its Slack apps.
  */
@@ -351,7 +361,11 @@ export interface OrganisationRecord {
         workspace: string;
         workspaceName: string;
         redirectPort: number;
-        apps: { read?: OrganisationSlackApp | undefined; send?: OrganisationSlackApp | undefined };
+        apps: {
+          read?: OrganisationSlackApp | undefined;
+          send?: OrganisationSlackApp | undefined;
+          agent?: OrganisationAgentApp | undefined;
+        };
       }
     | undefined;
   /** The organisation's update caps, from the file beside its profile; absent when it names none. */
@@ -631,6 +645,7 @@ const generationSchema = z.looseObject({
   addedAt: z.string(),
 });
 const slackAppRecordSchema = z.looseObject({ clientId: z.string().min(1), appId: z.string().min(1).optional() });
+const agentAppRecordSchema = z.looseObject({ appId: z.string().min(1), sha256: z.string().min(1) });
 const organisationRecordSchema = z.looseObject({
   label: z.string(),
   source: z.looseObject({ kind: z.string().min(1), path: z.string().min(1) }),
@@ -646,7 +661,13 @@ const organisationRecordSchema = z.looseObject({
       workspace: z.string().min(1),
       workspaceName: z.string(),
       redirectPort: z.number().int().min(1).max(65535),
-      apps: z.looseObject({ read: slackAppRecordSchema.optional(), send: slackAppRecordSchema.optional() }).default({}),
+      apps: z
+        .looseObject({
+          read: slackAppRecordSchema.optional(),
+          send: slackAppRecordSchema.optional(),
+          agent: agentAppRecordSchema.optional(),
+        })
+        .default({}),
     })
     .optional(),
   updates: z

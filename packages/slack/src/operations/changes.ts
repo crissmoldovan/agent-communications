@@ -24,7 +24,7 @@ import {
 } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
 import { type InstallMode, parseMode } from '../manifest.ts';
-import { checkedPort, type ManifestResult, manifestFor, modeWanted } from './manifest.ts';
+import { appManifestFor, checkedPort, type ManifestResult, modeWanted } from './manifest.ts';
 import { type ModeReport, modeReport, narrowingSteps, profileMoveSteps, wideningSteps } from './mode.ts';
 import { retryPendingRevocations } from './revocations.ts';
 import { type ListenerEntry, type StartedSignIn, startSignIn } from './signin.ts';
@@ -495,7 +495,7 @@ async function modeSetPlan(
         changed: false,
         appUpdateNeeded: true,
         steps: wideningSteps(found.alias, handoffs, port, found.account.appId),
-        manifest: await manifestFor(context, { mode: 'send', port, workspace: found.alias }),
+        manifest: await appManifestFor(context, { mode: 'send', port, workspace: found.alias }),
         terminalAlternative: found.account.appId
           ? handoffs.own(['app', 'update', found.alias, '--mode', 'send', '--port', String(port)])
           : null,
