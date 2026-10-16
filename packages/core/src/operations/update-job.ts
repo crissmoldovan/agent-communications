@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
 import type { GatedChange } from '../change-flow.ts';
 import type { ChangeSurface } from '../changes.ts';
-import { type Config, updateCheckSetting } from '../config.ts';
+import type { UpdateLevel } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { handoffSentence, handoffText, requireHandoffs } from '../handoffs.ts';
+import { shownText } from '../organisations.ts';
 import {
   inspectUpdateJob,
   installUpdateJob,
@@ -18,6 +19,7 @@ import {
   updateJobContext,
   updateJobSupported,
 } from '../update-job.ts';
+import { configuredUpdates } from '../update-state.ts';
 
 /**
  * The background update job on or off for this machine, from a terminal (`update --background-job on|off`) or a chat
@@ -34,16 +36,16 @@ import {
 
 export type UpdateJobSetting = 'on' | 'off';
 
-/** The update level as the job reads it: Track A's levels (U2). Until they land, `updateCheck: off` reads as never. */
-export type UpdateLevel = 'auto' | 'every-14-days' | 'never';
-
 export interface UpdateJobOptions {
   /**
    * False when an organisation profile on this machine says `updates.background: false` (U8): setting the job up is
-   * refused. Track A's organisation cap supplies it; until then nothing here turns it off.
+   * refused. Left out, read from the configuration's organisations (`configuredUpdates`); a test hands it in.
    */
   background?: boolean | undefined;
-  /** The level in force. Left out, read from the configuration: `updateCheck: off` is `never` (U2's migration). */
+  /**
+   * The level in force. Left out, read from the configuration: the level set, capped by its organisations' caps
+   * (`configuredUpdates`, Track A's U2 and U8); a test hands it in.
+   */
   level?: UpdateLevel | undefined;
   /** The stable core launcher the job runs: Track B's `launcherPaths(dataDir, 'core').launcher`. */
   launcher?: string | undefined;
@@ -87,10 +89,6 @@ function scheduleOf(platform: UpdateJobPlatform, minute?: number | undefined): s
     return 'daily, at a random moment in the hour after midnight — and at the next start when the computer was off then';
   }
   return `daily at ${UPDATE_JOB_HOUR}:00 local time, after a random delay of up to an hour — as soon as it can after a start it missed, on battery too`;
-}
-
-function levelOf(config: Config, given: UpdateLevel | undefined): UpdateLevel {
-  return given ?? (updateCheckSetting(config) === 'off' ? 'never' : 'auto');
 }
 
 export function updateJobChange(
@@ -159,7 +157,8 @@ export function updateJobChange(
           'nothing was set up: a background update job is offered on macOS, Linux and Windows only',
         );
       }
-      if (options.background === false) {
+      const updates = configuredUpdates(config);
+      if ((options.background ?? updates.backgroundOff === undefined) === false) {
         throw new CommsError(
           'CONFIG',
           'nothing was set up: an organisation profile on this machine turns background updates off',
@@ -172,7 +171,21 @@ export function updateJobChange(
           },
         );
       }
-      const level = levelOf(config, options.level);
+      const level = options.level ?? updates.level;
+      if (options.level === undefined && updates.cap !== undefined) {
+        // The member set auto, or more; the organisation's profile caps them below it, and only it can lift that.
+        throw new CommsError(
+          'CONFIG',
+          `nothing was set up: ${shownText(updates.cap.organisation, 40)}’s profile caps updates at ${updates.cap.level}, at which nothing installs in the background`,
+          {
+            hint: handoffSentence(
+              handoffs.core(['update']),
+              (update) =>
+                `A notice still says when a release is out: run ${update} (comms_update from a chat) when it suits you.`,
+            ),
+          },
+        );
+      }
       if (level !== 'auto') {
         throw new CommsError('CONFIG', `nothing was set up: at the level ${level} nothing installs in the background`, {
           hint: handoffSentence(

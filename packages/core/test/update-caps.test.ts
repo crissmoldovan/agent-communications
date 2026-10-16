@@ -13,10 +13,10 @@ import { updateLevelChange } from '../src/operations/update-settings.ts';
 import { readProfileFile, shownPath, updatesPathFor } from '../src/organisations.ts';
 import { checkForUpdates } from '../src/update-check.ts';
 import { updateNoticeAtTerminal, updateToolNotice } from '../src/update-gate.ts';
-import { effectiveUpdates, UPDATE_JOB_MARKER } from '../src/update-state.ts';
+import { effectiveUpdates } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
 import { readAsReleased0190 } from './fixtures/profile-schema-0.19.0.ts';
-import { deps, LATEST, type Machine, machine, seed } from './helpers/update-machine.ts';
+import { deps, LATEST, type Machine, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
 
 /*
  * Organisations can only tighten (design 2026-10-16, U8): an organisation's caps — `max`, the most this machine may
@@ -222,8 +222,7 @@ test('a member’s level is capped at max: every-14-days spaces the check and th
 test('background: false turns auto into a daily check with a notice, even with the job set up', async () => {
   const o = org({ background: false });
   await add(o);
-  mkdirSync(o.m.stateDir, { recursive: true });
-  writeFileSync(join(o.m.stateDir, UPDATE_JOB_MARKER), '{}\n');
+  markJobSetUp(o.m);
   const updates = await effectiveUpdates(o.m.core, o.m.env);
   assert.deepEqual([updates.level, updates.background, updates.backgroundOff?.organisation], ['auto', false, 'acme']);
   // A minor release the job would have installed: with the job held off, it is the notice.

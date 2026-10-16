@@ -12,9 +12,10 @@ import { CommsError } from '../src/errors.ts';
 import { updateLevelChange, updatePause, updateResume } from '../src/operations/update-settings.ts';
 import { checkForUpdates } from '../src/update-check.ts';
 import { updateNoticeAtTerminal, updateToolNotice } from '../src/update-gate.ts';
-import { readUpdateCheck, UPDATE_JOB_MARKER, updateJobInstalled } from '../src/update-state.ts';
+import { readUpdateJobMarker } from '../src/update-job.ts';
+import { effectiveUpdates, readUpdateCheck, updateJobInstalled } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { codeOf, connect, deps, LATEST, type Machine, machine, seed } from './helpers/update-machine.ts';
+import { codeOf, connect, deps, LATEST, type Machine, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
 
 /*
  * The levels and the pause (design 2026-10-16, U2 and U3): `defaults.updates` is `auto` (the default), `every-14-days`
@@ -238,8 +239,7 @@ test('AGENT_COMMS_UPDATES=never and CI switch it all off for the process, whatev
 test('auto with its background job set up says only what needs the person: a restart, a major release, a decision', async () => {
   const m = machine();
   assert.equal(await updateJobInstalled(m.core), false, 'no job yet: auto is a daily check with a notice');
-  mkdirSync(m.stateDir, { recursive: true });
-  writeFileSync(join(m.stateDir, UPDATE_JOB_MARKER), '{}\n');
+  markJobSetUp(m);
   assert.equal(await updateJobInstalled(m.core), true);
   const running = VERSION.split('.').map(Number) as [number, number, number];
   const minor = `${running[0]}.${running[1] + 1}.0`;
@@ -263,6 +263,20 @@ test('auto with its background job set up says only what needs the person: a res
 });
 
 // ── The pause ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('the job is set up for the notice exactly when it is for the doctor and the setup: a marker this release cannot read is none', async () => {
+  const m = machine();
+  mkdirSync(m.stateDir, { recursive: true });
+  // A marker this release cannot read — written by hand, or cut short: Track C reads it as no job, and so does this.
+  writeFileSync(join(m.stateDir, 'update-job.json'), '{}\n');
+  assert.equal(await updateJobInstalled(m.core), false);
+  assert.equal(await readUpdateJobMarker(m.stateDir), null);
+  assert.equal((await effectiveUpdates(m.core, m.env)).background, false, 'auto without its job: a daily check');
+  markJobSetUp(m);
+  assert.equal(await updateJobInstalled(m.core), true);
+  assert.notEqual(await readUpdateJobMarker(m.stateDir), null);
+  assert.equal((await effectiveUpdates(m.core, m.env)).background, true);
+});
 
 test('a pause is 1, 7 or 14 days — 7 when no length is given — asks nobody, and a new one replaces the old', async () => {
   const m = machine();

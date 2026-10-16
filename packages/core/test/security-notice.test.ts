@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import { renderChannelPreview } from '../src/render.ts';
 import { securityNotice } from '../src/update-gate.ts';
-import { readUpdateCheck, UPDATE_JOB_MARKER } from '../src/update-state.ts';
+import { readUpdateCheck } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { LATEST, machine, seed } from './helpers/update-machine.ts';
+import { LATEST, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
 
 /*
  * The security line (design 2026-10-16, U7): on `every-14-days`, `never`, and `auto` while its background job is not
@@ -61,8 +59,7 @@ test('nothing is said when no security release is waiting, when the job installs
       async () => {
         const m = machine();
         await seed(m, { latest: LATEST, behind: true, release: SECURITY });
-        mkdirSync(m.stateDir, { recursive: true });
-        writeFileSync(join(m.stateDir, UPDATE_JOB_MARKER), '{}\n');
+        markJobSetUp(m);
         return m;
       },
     ],

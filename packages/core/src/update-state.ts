@@ -1,10 +1,11 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
 import { organisationsOf, updatesPathFor } from './organisations.ts';
+import { updateJobInstalled } from './update-job.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -372,27 +373,40 @@ export function organisationCaps(config: Config): Pick<EffectiveUpdates, 'cap' |
 }
 
 /**
+ * The level in force by the configuration alone (design 2026-10-16, U2, U8): the level set, capped by its
+ * organisations' caps, and the organisation that turns background updates off. What `effectiveUpdates` starts from,
+ * and what a background run and the background job's setup read — neither of which runs where the environment
+ * switched updates off, and neither of which counts a configuration it cannot read as anything.
+ */
+export function configuredUpdates(config: Config): Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff'> {
+  const set = updateLevelOf(config);
+  const caps = organisationCaps(config);
+  // A cap only ever lowers the level: one at or above the level set is not the one in force.
+  const cap = caps.cap !== undefined && rankOf(caps.cap.level) < rankOf(set) ? caps.cap : undefined;
+  return {
+    level: cap?.level ?? set,
+    set,
+    ...(cap ? { cap } : {}),
+    ...(caps.backgroundOff ? { backgroundOff: caps.backgroundOff } : {}),
+  };
+}
+
+/**
  * The level in force here, read from the environment first, then the configuration and its organisations' caps. A
  * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
  * tools to say, and it must not quietly turn updates off.
  */
 export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Promise<EffectiveUpdates> {
-  let set: UpdateLevel = 'auto';
-  let caps: Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> = {};
+  let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff'> = { level: 'auto', set: 'auto' };
   try {
-    const config = await core.config.load();
-    set = updateLevelOf(config);
-    caps = organisationCaps(config);
+    configured = configuredUpdates(await core.config.load());
   } catch {
     // The default, as above.
   }
-  // A cap only ever lowers the level: one at or above the level set is not the one in force.
-  const cap = caps.cap !== undefined && rankOf(caps.cap.level) < rankOf(set) ? caps.cap : undefined;
-  const extra = { ...(cap ? { cap } : {}), ...(caps.backgroundOff ? { backgroundOff: caps.backgroundOff } : {}) };
+  const { level, set, ...extra } = configured;
   const switched = updateCheckSwitchedOff(env);
   if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
-  const level = cap?.level ?? set;
-  const background = level === 'auto' && caps.backgroundOff === undefined && (await updateJobInstalled(core));
+  const background = level === 'auto' && extra.backgroundOff === undefined && (await updateJobInstalled(core));
   return { level, set, by: 'setting', background, ...extra };
 }
 
@@ -415,14 +429,11 @@ export async function updateCheckEnabled(
  */
 export const UPDATE_JOB_MARKER = 'update-job.json';
 
-/** Whether the background update job is set up on this machine: its marker is a file in the state directory. */
-export async function updateJobInstalled(core: Pick<Core, 'paths'>): Promise<boolean> {
-  try {
-    return (await stat(join(core.paths.stateDir, UPDATE_JOB_MARKER))).isFile();
-  } catch {
-    return false;
-  }
-}
+/**
+ * Whether the background update job is set up on this machine: Track C's own reading of its marker, so the notice, the
+ * security line, the doctor and the job's setup agree on it. A marker this release cannot read is no job.
+ */
+export { updateJobInstalled };
 
 /**
  * When a pause ends, while one holds at `now` — or null. A pause holds from when it was asked until its end, and only

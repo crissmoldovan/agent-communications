@@ -9,6 +9,7 @@ import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherName, readPointer, switchPointer } from '../src/launcher.ts';
 import { managedRuntimeDir, managedRuntimeEntry } from '../src/mcp-install.ts';
 import { updateRollbackChange } from '../src/operations/update-rollback.ts';
+import { updatePause } from '../src/operations/update-settings.ts';
 import {
   type BackgroundDeps,
   type BackgroundRunResult,
@@ -630,22 +631,88 @@ test('a level that is not auto stops before the registry; an organisation that t
   assert.match(String(notice?.text), /organisation profile/);
 });
 
-test('until Track A wires its reader: updateCheck off reads as never; CI turns it off; an unreadable config installs nothing', async () => {
-  const m = machine({ defaults: { updateCheck: 'off' } });
-  await launch(m, CORE_PACKAGE, [OLD]);
-  const w = world(m, { settings: undefined });
-  const never = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+/** An organisation record whose profile caps updates, as `org add` leaves one (design 2026-10-16, U8). */
+function capped(updates: { max?: string; background?: boolean }): Record<string, unknown> {
+  return {
+    organisations: {
+      acme: {
+        label: 'Acme Test Org',
+        source: { kind: 'file', path: '/profiles/acme.agentcomms.json' },
+        sha256: 'a'.repeat(64),
+        readAt: NOW.toISOString(),
+        addedAt: NOW.toISOString(),
+        forOtherAddresses: false,
+        updates: { ...updates, sha256: 'b'.repeat(64) },
+      },
+    },
+  };
+}
+
+test('a run reads Track A’s settings: the level set, 0.18’s switch, the organisation’s caps and the pause; CI and an unreadable config install nothing', async () => {
+  // 0.18's switch, off, still reads as never (U2's migration).
+  const old = machine({ defaults: { updateCheck: 'off' } });
+  await launch(old, CORE_PACKAGE, [OLD]);
+  const never = await runBackgroundUpdate(old.core, old.env, {}, world(old, { settings: undefined }).deps);
   assert.equal(never.outcome, 'not-auto');
   assert.match(never.reason, /level is never/);
 
+  // The level the person set, with 0.18's switch still on beside it: every-14-days installs nothing in the background.
+  const spaced = await launched({ defaults: { updates: 'every-14-days', updateCheck: 'on' } });
+  const quiet = world(spaced, { settings: undefined });
+  const result = await runBackgroundUpdate(spaced.core, spaced.env, {}, quiet.deps);
+  assert.equal(result.outcome, 'not-auto');
+  assert.match(result.reason, /level is every-14-days/);
+  assert.deepEqual(quiet.registry.asked, []);
+
+  // An organisation's cap below auto is the level in force, whatever the member set.
+  const cap = await launched({ defaults: { updates: 'auto' }, ...capped({ max: 'every-14-days' }) });
+  const held = await runBackgroundUpdate(cap.core, cap.env, {}, world(cap, { settings: undefined }).deps);
+  assert.equal(held.outcome, 'not-auto');
+  assert.match(held.reason, /level is every-14-days/);
+
+  // An organisation's `background: false` removes the job at the run, and leaves the notice.
+  const off = await launched({ ...capped({ background: false }) });
+  const jobDeps = { run: recorder().run, uid: 501, random: () => 0.5, now: () => NOW };
+  await installUpdateJob(updateJobContext(off.core, off.env, { platform: 'linux', deps: jobDeps }));
+  const stopped = await runBackgroundUpdate(
+    off.core,
+    off.env,
+    {},
+    world(off, { settings: undefined, job: jobDeps }).deps,
+  );
+  assert.equal(stopped.outcome, 'not-auto');
+  assert.equal(stopped.jobRemoved, true);
+  assert.equal(await updateJobInstalled(off.core), false);
+
+  // A pause the person asked for holds the run, and a security fix is not held by it.
+  const paused = await launched();
+  await updatePause(paused.core, { days: 7, now: () => hoursAgo(1) });
+  const waiting = world(paused, { settings: undefined });
+  const pausedRun = await runBackgroundUpdate(paused.core, paused.env, {}, waiting.deps);
+  assert.equal(pausedRun.outcome, 'paused');
+  assert.match(pausedRun.reason, /paused until/);
+  const security = world(paused, {
+    settings: undefined,
+    releases: [{ version: LATEST, publishedAt: hoursAgo(30), declares: { security: true } }],
+  });
+  assert.equal((await runBackgroundUpdate(paused.core, paused.env, {}, security.deps)).outcome, 'installed');
+
+  // auto, with no cap and no pause: it installs.
   const n = await launched();
-  const on = world(n, { settings: undefined });
-  assert.equal((await runBackgroundUpdate(n.core, n.env, {}, on.deps)).outcome, 'installed');
+  assert.equal(
+    (await runBackgroundUpdate(n.core, n.env, {}, world(n, { settings: undefined }).deps)).outcome,
+    'installed',
+  );
 
   const ci = world(n, { settings: undefined });
   const skipped = await runBackgroundUpdate(n.core, { ...n.env, CI: 'true' }, {}, ci.deps);
   assert.equal(skipped.outcome, 'off');
   assert.deepEqual(ci.registry.asked, []);
+  const never2 = world(n, { settings: undefined });
+  assert.equal(
+    (await runBackgroundUpdate(n.core, { ...n.env, AGENT_COMMS_UPDATES: 'never' }, {}, never2.deps)).outcome,
+    'off',
+  );
 
   writeFileSync(join(n.core.paths.configDir, 'config.json'), '{ not json');
   const unread = world(n, { settings: undefined });

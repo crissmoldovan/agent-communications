@@ -765,3 +765,164 @@ test('the doctor names a profile that turns background updates off, while the jo
   assert.match(String(row?.detail), /organisation profile/);
   assert.ok(String(row?.fix).includes(inline(m, ['update', '--background-job', 'off'])));
 });
+
+// ── Track A's settings, read for real (design 2026-10-16 U2, U8) ──────────────────────────────────────────────────
+
+/** The machine's configuration, rewritten: `defaults`, and an organisation record whose profile caps updates. */
+function configure(m: Machine, defaults: Record<string, unknown>, caps?: { max?: string; background?: boolean }) {
+  const organisations =
+    caps === undefined
+      ? {}
+      : {
+          organisations: {
+            acme: {
+              label: 'Acme Test Org',
+              source: { kind: 'file', path: join(m.home, 'profiles', 'acme.agentcomms.json') },
+              sha256: 'a'.repeat(64),
+              readAt: FIXED.toISOString(),
+              addedAt: FIXED.toISOString(),
+              forOtherAddresses: false,
+              updates: { ...caps, sha256: 'b'.repeat(64) },
+            },
+          },
+        };
+  writeFileSync(
+    join(m.core.paths.configDir, 'config.json'),
+    `${JSON.stringify({ version: 2, secrets: { store: 'file' }, defaults, ...organisations })}\n`,
+  );
+}
+
+test('setting the job up reads the level in force: the level set, an organisation’s cap and its background: false', async () => {
+  const cases: [string, (m: Machine) => void, RegExp][] = [
+    // 0.18's switch is still on beside the level: the level is what counts.
+    [
+      'every-14-days set',
+      (m) => configure(m, { updates: 'every-14-days', updateCheck: 'on' }),
+      /at the level every-14-days nothing installs in the background/,
+    ],
+    [
+      'a cap at every-14-days',
+      (m) => configure(m, { updates: 'auto' }, { max: 'every-14-days' }),
+      /acme’s profile caps updates at every-14-days/,
+    ],
+    ['background: false', (m) => configure(m, {}, { background: false }), /organisation profile/],
+  ];
+  for (const [label, arrange, pattern] of cases) {
+    const m = machine();
+    arrange(m);
+    const { calls, run } = recorder();
+    const change = updateJobChange(m.core, m.env, 'on', { platform: 'darwin', launcher: m.launcher, deps: deps(run) });
+    await assert.rejects(gatedChange(m.core, change, { surface: 'mcp', channel: 'core' }), (error: unknown) => {
+      assert.ok(error instanceof CommsError, label);
+      assert.equal(error.code, 'CONFIG', label);
+      assert.match(error.message, pattern, `${label}: ${error.message}`);
+      return true;
+    });
+    assert.deepEqual(calls, [], label);
+    assert.equal(existsSync(plistOf(m)), false, label);
+  }
+  // auto, uncapped: it is offered, and approved first.
+  const m = machine();
+  configure(m, { updates: 'auto' });
+  const { run } = recorder();
+  const outcome = await gatedChange(
+    m.core,
+    updateJobChange(m.core, m.env, 'on', { platform: 'darwin', launcher: m.launcher, deps: deps(run) }),
+    { surface: 'mcp', channel: 'core' },
+  );
+  assert.equal(outcome.status, 'approval-required');
+});
+
+test('the doctor reads an organisation’s background: false from the configuration, with no option handed in', async () => {
+  const m = machine();
+  const { run } = recorder();
+  await installUpdateJob(
+    updateJobContext(m.core, m.env, { platform: 'darwin', launcher: m.launcher, deps: deps(run) }),
+  );
+  configure(m, {}, { background: false });
+  const [row] = await jobRow(m, 'darwin', run);
+  assert.equal(row?.warn, true);
+  assert.match(String(row?.detail), /organisation profile turns background updates off/);
+});
+
+/** The command as an agent's shell runs it, `--json`, capturing what it writes: as the test above does. */
+async function commandAt(m: Machine, run: UpdateJobRunner, args: string[]) {
+  const written: string[] = [];
+  const write = process.stdout.write;
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    if (typeof chunk === 'string') {
+      written.push(chunk);
+      return true;
+    }
+    return (write as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
+  try {
+    const code = await main([...args, '--json'], { ...m.env, CLAUDECODE: '1' }, 'darwin', { updateJob: deps(run) });
+    return { code, out: JSON.parse(written.join('')) as Envelope };
+  } finally {
+    process.stdout.write = write;
+  }
+}
+
+test('every-14-days and never each remove the job, from the CLI and from comms_update; auto leaves it', async () => {
+  for (const [level, surface] of [
+    ['every-14-days', 'cli'],
+    ['never', 'cli'],
+    ['every-14-days', 'mcp'],
+  ] as const) {
+    const label = `${level} (${surface})`;
+    const m = machine();
+    const { calls, run } = recorder();
+    await installUpdateJob(
+      updateJobContext(m.core, m.env, { platform: 'darwin', launcher: m.launcher, deps: deps(run) }),
+    );
+    calls.length = 0;
+    if (surface === 'cli') {
+      const pending = await commandAt(m, run, ['update', '--level', level]);
+      assert.equal(pending.code, 10, `${label}: a level that updates less is approved first`);
+      assert.ok(
+        pending.out.error.details.preview.includes(`removes the background update job, ${plistOf(m)}`),
+        `${label}: ${pending.out.error.details.preview}`,
+      );
+      assert.equal(existsSync(plistOf(m)), true, `${label}: nothing before the yes`);
+      const applied = await commandAt(m, run, [
+        'update',
+        '--level',
+        level,
+        '--approval',
+        pending.out.error.details.approvalId,
+      ]);
+      assert.equal(applied.code, 0, `${label}: ${JSON.stringify(applied.out)}`);
+    } else {
+      const { call, close } = await connect(m, { platform: 'darwin', updateJob: deps(run) });
+      try {
+        const first = (await call('comms_update', { level })).structuredContent as Record<string, unknown>;
+        assert.equal(first.approvalRequired, true, label);
+        assert.ok(String(first.preview).includes(`removes the background update job, ${plistOf(m)}`), label);
+        const done = (await call('comms_update', { level, approvalId: first.approvalId })).structuredContent;
+        assert.equal((done as { applied?: boolean }).applied, true, label);
+      } finally {
+        await close();
+      }
+    }
+    assert.deepEqual(calls, [{ program: '/bin/launchctl', args: ['bootout', 'gui/501/com.agentcomms.update'] }], label);
+    assert.equal(existsSync(plistOf(m)), false, label);
+    assert.equal(await updateJobInstalled(m.core), false, label);
+  }
+  // Moving back to auto applies at once and leaves a job alone.
+  const m = machine();
+  const { calls, run } = recorder();
+  await installUpdateJob(
+    updateJobContext(m.core, m.env, { platform: 'darwin', launcher: m.launcher, deps: deps(run) }),
+  );
+  calls.length = 0;
+  const { call, close } = await connect(m, { platform: 'darwin', updateJob: deps(run) });
+  try {
+    const back = (await call('comms_update', { level: 'auto' })).structuredContent as Record<string, unknown>;
+    assert.equal(back.applied, true, JSON.stringify(back));
+    assert.deepEqual(calls, []);
+    assert.equal(existsSync(plistOf(m)), true);
+  } finally {
+    await close();
+  }
+});

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { AuditRecord } from './audit.ts';
 import { SERVERS, type ServerId, serverFacts, serverLabel } from './channel-servers.ts';
-import { type Config, updateCheckSetting } from './config.ts';
+import type { Config, UpdateLevel } from './config.ts';
 import type { Core } from './core.ts';
 import { toCommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
@@ -41,7 +41,15 @@ import {
   type VerifiedProvenance,
   verifyProvenance,
 } from './update-provenance.ts';
-import { type BackgroundNotice, changeUpdateCheck, updateCheckSwitchedOff } from './update-state.ts';
+import {
+  type BackgroundNotice,
+  changeUpdateCheck,
+  configuredUpdates,
+  pauseEnd,
+  readUpdateCheck,
+  type UpdateCheckRecord,
+  updateCheckSwitchedOff,
+} from './update-state.ts';
 import { VERSION } from './version.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -51,9 +59,9 @@ import { compareVersions, isPrerelease, isVersion } from './versions.ts';
  * what U5 lists — a new runtime per package, each stable launcher's pointer, the runtimes older than the previous
  * release, one audit line, and the notice the next session shows.
  *
- * 1. **Settings.** Through `UpdateSettingsReader` (Track A builds the real one): unless the level is `auto` and the
- *    organisation allows background updates, Track C's `backgroundJobAtRun` is called — it removes the job an
- *    organisation turned off — and the run stops.
+ * 1. **Settings.** Track A's, through `updateSettingsReader`: unless the level in force is `auto` and no organisation
+ *    turns background updates off, Track C's `backgroundJobAtRun` is called — it removes the job an organisation
+ *    turned off — and the run stops.
  * 2. **The registry.** `latest` of the core. Never automatic: a major version, a release whose core manifest declares
  *    `agentcommsRelease.needsDecision`, a downgrade — each a notice. Held: a release that was rolled back, until a
  *    newer one exists (`update-held.json`); one published under 72 hours ago, or 24 for `agentcommsRelease.security`.
@@ -72,26 +80,31 @@ import { compareVersions, isPrerelease, isVersion } from './versions.ts';
  * hold and ends no pause early; one that goes back only holds longer (plan, Review focus 2).
  */
 
-/** The background levels' names, as Track A defines them (U2). */
-export type UpdateLevel = 'auto' | 'every-14-days' | 'never';
-
-/** What a run reads of the person's and the organisation's settings. Track A builds the real one; integration wires it. */
+/** What a run reads of the person's and the organisation's settings: Track A's, through `updateSettingsReader`. */
 export interface UpdateSettingsReader {
   level(): UpdateLevel;
-  /** The end of a pause (U3), when one holds. */
-  pausedUntil(): Date | undefined;
+  /**
+   * The end of a pause (U3), when one holds at `at` — the run's clock, the earlier of this machine's and the
+   * registry's, so a clock that jumps ahead ends no pause early.
+   */
+  pausedUntil(at?: Date): Date | undefined;
   /** Whether an organisation profile allows background updates (U8): false for `updates.background: false`. */
   background(): boolean;
 }
 
 /**
- * Until Track A's readers land: the daily check's setting, `defaults.updateCheck` — `on` reads as `auto` and `off` as
- * `never` (U2's migration) — with no pause, and background updates allowed. A configuration that cannot be read
- * installs nothing: what it says is not known.
+ * Track A's settings, as a run reads them (design 2026-10-16, U2, U3, U8): the level in force — the one set, capped by
+ * the organisations' caps (`configuredUpdates`) — the pause the person asked for, read as the notice reads it
+ * (`pauseEnd`, never longer than 14 days from when it was asked), and whether any organisation turns background updates
+ * off. The environment's switches are the run's own first step, before any of this.
  */
-export function updateCheckSettingsReader(config: Config | null): UpdateSettingsReader {
-  const level: UpdateLevel = config === null ? 'never' : updateCheckSetting(config) === 'off' ? 'never' : 'auto';
-  return { level: () => level, pausedUntil: () => undefined, background: () => true };
+export function updateSettingsReader(config: Config, record: UpdateCheckRecord, now: Date): UpdateSettingsReader {
+  const updates = configuredUpdates(config);
+  return {
+    level: () => updates.level,
+    pausedUntil: (at = now) => pauseEnd(record, at) ?? undefined,
+    background: () => updates.backgroundOff === undefined,
+  };
 }
 
 /** What the run reads of a package's document on the registry: its tags, its versions' manifests, when each came out. */
@@ -487,7 +500,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
         'config.json could not be read, so what it says of updates is not known; nothing was installed',
       );
     }
-    settings = updateCheckSettingsReader(config);
+    settings = updateSettingsReader(config, await readUpdateCheck(core.paths.stateDir), run.now);
   }
   const level = settings.level();
   const background = settings.background();
@@ -542,7 +555,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   const flags = releaseFlags(coreAnswer.packument.versions?.[latest]);
   const servedAt = [coreAnswer.servedAt];
   const clock = () => new Date(Math.min(run.now.getTime(), ...servedAt.flatMap((at) => (at ? [at.getTime()] : []))));
-  const paused = settings.pausedUntil();
+  const paused = settings.pausedUntil(clock());
   if (paused !== undefined && clock() < paused && !flags.security) {
     return stop(
       'paused',

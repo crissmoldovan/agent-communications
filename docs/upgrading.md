@@ -160,15 +160,17 @@ machine that never set one up it says nothing.
 `agentcomms update --background` is what the job runs. It never sends, posts or approves anything, and it installs
 nothing unless all of this holds:
 
-- **The level is `auto`**, and no organisation profile turns background updates off; otherwise it stops, and removes a
-  job such a profile forbids. `CI` and `AGENT_COMMS_UPDATE_CHECK=off` turn it off for that process.
+- **The level in force is `auto`** — the level set, under any organisation profile's `max` — and no organisation
+  profile turns background updates off; otherwise it stops, and removes a job such a profile forbids. A pause asked
+  for with `update --pause` holds it, but never for a security fix. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and
+  `AGENT_COMMS_UPDATES=never` turn it off for that process.
 - **The release waits for nobody.** A major version, a release whose core manifest declares
   `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. A
   release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
   state directory).
 - **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest
   declares `agentcommsRelease.security: true`. The clock is the earlier of this machine's and the registry's, so a clock
-  set ahead skips no hold. A pause holds everything but a security fix.
+  set ahead skips no hold and ends no pause early.
 - **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
   sigstore-js — the copy npm carries beside your Node — must be issued by `https://token.actions.githubusercontent.com`
   for exactly `https://github.com/crissmoldovan/agent-communications/.github/workflows/release.yml@refs/tags/v<version>`,

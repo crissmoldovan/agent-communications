@@ -81,8 +81,8 @@ export interface DoctorOptions {
   /** For a test: the runner the background update job's scheduler is asked through, so none is real. */
   updateJob?: UpdateJobDeps | undefined;
   /**
-   * False when an organisation profile here says `updates.background: false` (design 2026-10-16 U8). Track A's
-   * organisation cap supplies it; until then nothing turns background updates off.
+   * False when an organisation profile here says `updates.background: false` (design 2026-10-16 U8). Left out, read
+   * from the configuration's organisations, as the notice reads them (`effectiveUpdates`); a test hands it in.
    */
   background?: boolean | undefined;
 }
@@ -442,11 +442,9 @@ async function updateJobLines(
   const on = handoffs.core(['update', '--background-job', 'on']);
   const off = handoffs.core(['update', '--background-job', 'off']);
   const since = seen.marker === null ? '' : ` (set up ${seen.marker.installedAt})`;
+  const background = options.background ?? (await effectiveUpdates(core, env)).backgroundOff === undefined;
   // A profile that came after the job (Review focus 5): the job's next run removes it, and this says so before then.
-  if (
-    options.background === false &&
-    (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')
-  ) {
+  if (!background && (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')) {
     return [
       {
         name,
