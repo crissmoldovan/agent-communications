@@ -87,6 +87,51 @@ export async function npmLatestVersion(
   return latest;
 }
 
+/** What a release's manifest declares under `agentcommsRelease` (design 2026-10-16, U5, U7). */
+export interface ReleaseDeclaration {
+  /** `agentcommsRelease.security: true`: the release fixes a security problem. */
+  security: boolean;
+  /** `agentcommsRelease.needsDecision`: a migration, or a changed safety default, that waits for the person. */
+  needsDecision: boolean;
+}
+
+/**
+ * What one release's manifest declares, read from the registry as `npmLatestVersion` reads it — the same registry, its
+ * authentication and its timeout. The abbreviated document the latest version comes from carries none of a manifest's
+ * own fields, so this is the release's own document: `<registry>/<package>/<version>`.
+ */
+export async function npmReleaseDeclaration(
+  packageName: string,
+  version: string,
+  options: { env: NodeJS.ProcessEnv; fetch?: typeof fetch | undefined; timeoutMs?: number | undefined },
+): Promise<ReleaseDeclaration> {
+  const base = registryUrl(options.env);
+  const where = displayUrl(base) ?? 'the npm registry';
+  const timeoutMs = options.timeoutMs ?? REGISTRY_TIMEOUT_MS;
+  const url = new URL(`${packageName.replace('/', '%2f')}/${encodeURIComponent(version)}`, base);
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (url.username || url.password) {
+    const user = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
+    headers.authorization = `Basic ${Buffer.from(user).toString('base64')}`;
+    url.username = '';
+    url.password = '';
+  }
+  const response = await (options.fetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`${where} answered ${response.status}`);
+  }
+  const body = (await response.json()) as {
+    agentcommsRelease?: { security?: unknown; needsDecision?: unknown };
+  } | null;
+  const declared = body?.agentcommsRelease;
+  const needsDecision = declared?.needsDecision;
+  return {
+    security: declared?.security === true,
+    needsDecision: needsDecision === true || (typeof needsDecision === 'string' && needsDecision.trim() !== ''),
+  };
+}
+
 /**
  * A command's exit status and output, given up on after `timeoutMs`. npm starts programs of its own by name — scripts,
  * `node-gyp`, a shell — so on Windows it is told never to take one from its current folder.

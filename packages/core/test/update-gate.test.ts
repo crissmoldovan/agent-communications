@@ -14,7 +14,6 @@ import { type GatedChange, gatedChange } from '../src/change-flow.ts';
 import { CHANNEL_SERVERS } from '../src/channel-servers.ts';
 import type { Streams } from '../src/cli-runtime.ts';
 import { type Core, openCore } from '../src/core.ts';
-import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { changePolicyChange } from '../src/operations/change-policy.ts';
@@ -27,7 +26,7 @@ import {
   updateCheck,
   updateCheckFindings,
 } from '../src/operations/update.ts';
-import { updateAutoChange, updateLaterChange } from '../src/operations/update-settings.ts';
+import { updateLevelChange, updatePause } from '../src/operations/update-settings.ts';
 import {
   askUnderClaim,
   checkForUpdates,
@@ -40,7 +39,6 @@ import {
 import { exemptFromUpdateNotice, updateNoticeAtTerminal, updateToolNotice } from '../src/update-gate.ts';
 import {
   changeUpdateCheck,
-  nextLocalMidnight,
   pendingUpdate,
   readUpdateCheck,
   UPDATE_CHECK_FILE,
@@ -50,7 +48,7 @@ import {
   updateVerdict,
 } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { coreInline, locatedCoreLine } from './helpers/handoffs.ts';
+import { coreInline } from './helpers/handoffs.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -81,6 +79,10 @@ const EMPTY: UpdateCheckRecord = {
   snoozedUntil: null,
   checking: null,
   commandNoticeAt: null,
+  noticeAt: null,
+  pausedAt: null,
+  pausedUntil: null,
+  release: null,
 };
 
 interface Machine {
@@ -386,7 +388,12 @@ test('two processes that find the file a day old at the same moment ask the regi
     writeFileSync(go, '');
     const outcomes = await Promise.all([one.done, two.done]);
     assert.deepEqual(outcomes.map((outcome) => outcome.asked).sort(), [false, true], 'one of them asked');
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore'], 'the registry was asked once');
+    // Once between them — and the release's own document, for what its manifest declares (design 2026-10-16, U7).
+    assert.deepEqual(
+      served.requests,
+      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
+      'the registry was asked once',
+    );
     assert.equal((await readUpdateCheck(m.stateDir)).latest, LATEST);
   } finally {
     await served.close();
@@ -814,149 +821,6 @@ test('what an update records: an old entry by the same name in another scope is 
   );
 });
 
-// ── Not now ───────────────────────────────────────────────────────────────────────────────────────────────────
-
-test('not now lasts until local midnight, and holds for every server on the machine', async () => {
-  const m = machine();
-  await seed(m, { latest: LATEST, behind: true });
-  const evening = new Date(2026, 8, 28, 21, 30, 0);
-  const midnight = nextLocalMidnight(evening);
-  assert.deepEqual(
-    [midnight.getFullYear(), midnight.getMonth(), midnight.getDate(), midnight.getHours(), midnight.getMinutes()],
-    [2026, 8, 29, 0, 0],
-  );
-  const change = updateLaterChange(m.core, { now: () => evening });
-  const plan = await change.plan(await m.core.config.load());
-  assert.equal(plan.summary, `Skip the update to ${LATEST} until tomorrow`);
-  assert.match(String(plan.effects?.[0]), /until midnight, local time \(2026-09-29 00:00\)/);
-  const result = await change.apply(undefined, plan);
-  assert.equal(result.snoozedUntil, midnight.toISOString());
-
-  const at = (when: Date) => pendingUpdate({ core: m.core, env: m.env, running: VERSION, now: () => when, ...SERVER });
-  assert.equal(await at(evening), null);
-  assert.equal(await at(new Date(midnight.getTime() - 1)), null, 'a millisecond before midnight: still put off');
-  assert.notEqual(await at(midnight), null, 'at midnight it asks again');
-
-  // Machine-wide: a second server — another process, another core, the same state directory — reads it too.
-  const other = { ...m, core: openCore({ env: m.env, caller: CORE_CALLER }) };
-  const notice = updateToolNotice({
-    core: other.core,
-    env: m.env,
-    channel: 'gmail',
-    running: VERSION,
-    exempt: [],
-    now: () => evening,
-  });
-  assert.equal(await notice('gmail_search'), null);
-  const later = updateToolNotice({
-    core: other.core,
-    env: m.env,
-    channel: 'gmail',
-    running: VERSION,
-    exempt: [],
-    now: () => midnight,
-  });
-  assert.notEqual(await later('gmail_search'), null);
-});
-
-test('not now and turning the check off each need the person’s approval, and cannot be applied without it', async () => {
-  const m = machine();
-  await seed(m, { latest: LATEST, behind: true });
-  const { call, close } = await connect(m);
-  try {
-    // Not now: a preview and an id, and nothing written yet.
-    const later = (await call('comms_update', { later: true })).structuredContent as Record<string, unknown>;
-    assert.equal(later.approvalRequired, true);
-    assert.equal(later.summary, `Skip the update to ${LATEST} until tomorrow`);
-    assert.match(String(later.preview), /puts off the update to 99\.0\.0 until midnight/);
-    assert.equal((await readUpdateCheck(m.stateDir)).snoozedUntil, null);
-    // An id it did not prepare is refused, and nothing is written.
-    const forged = await call('comms_update', { later: true, approvalId: `ap_${'0'.repeat(26)}` });
-    assert.equal(forged.isError, true);
-    assert.equal((await readUpdateCheck(m.stateDir)).snoozedUntil, null);
-    // Nothing is stopped meanwhile: the call runs, and carries the notice.
-    const meanwhile = await call('comms_channels_available');
-    assert.equal(meanwhile.isError, undefined, JSON.stringify(meanwhile.structuredContent));
-    assert.ok(noticed(meanwhile), 'the notice was held with nobody asked');
-    // With its own id, after the person's yes: put off.
-    const applied = (await call('comms_update', { later: true, approvalId: later.approvalId })).structuredContent as {
-      applied: boolean;
-      result: { snoozedUntil: string };
-    };
-    assert.equal(applied.applied, true);
-    assert.equal(applied.result.snoozedUntil, nextLocalMidnight(new Date()).toISOString());
-    assert.equal(
-      await pendingUpdate({ core: m.core, env: m.env, running: VERSION, ...SERVER }),
-      null,
-      'held until midnight',
-    );
-
-    // Off: a loosening, prepared, and applied only with its id.
-    const off = (await call('comms_update', { auto: 'off' })).structuredContent as Record<string, unknown>;
-    assert.equal(off.approvalRequired, true);
-    assert.match(String(off.preview), /daily update check: on → off/);
-    assert.equal((await m.core.config.load()).defaults.updateCheck, undefined);
-    const turned = (await call('comms_update', { auto: 'off', approvalId: off.approvalId })).structuredContent as {
-      result: { updateCheck: string; changed: boolean };
-    };
-    assert.deepEqual(turned.result, { updateCheck: 'off', changed: true });
-    assert.equal((await m.core.config.load()).defaults.updateCheck, 'off');
-    // On: tightening, applied at once.
-    const on = (await call('comms_update', { auto: 'on' })).structuredContent as Record<string, unknown>;
-    assert.equal(on.applied, true);
-    assert.equal((await m.core.config.load()).defaults.updateCheck, 'on');
-
-    // One at a time.
-    const both = await call('comms_update', { later: true, auto: 'off' });
-    assert.equal(codeOf(both), 'USAGE');
-  } finally {
-    await close();
-  }
-  // The store itself refuses turning it off without the person's consent, whoever asks.
-  await assert.rejects(
-    m.core.config.update((config) => ({ ...config, defaults: { ...config.defaults, updateCheck: 'off' } })),
-    (error: unknown) => error instanceof CommsError && error.code === 'LOOSENING_REFUSED',
-  );
-  // And without an approval the change flow applies neither: both need one.
-  const fresh = machine();
-  await seed(fresh, { latest: LATEST, behind: true });
-  const changes: GatedChange<unknown>[] = [updateLaterChange(fresh.core), updateAutoChange(fresh.core, 'off')];
-  for (const change of changes) {
-    const request = await change.plan(await fresh.core.config.load());
-    const outcome = await gatedChange(fresh.core, change, { channel: 'core', surface: 'mcp' });
-    assert.equal(outcome.status, 'approval-required', request.summary);
-  }
-});
-
-test('the command: --later and --auto off wait for an approval; --auto on applies at once', async () => {
-  const m = machine();
-  await seed(m, { latest: LATEST, behind: true });
-  const run = (args: string[]) =>
-    spawnSync(process.execPath, [...NODE_FLAGS, CLI, ...args], {
-      encoding: 'utf8',
-      env: { ...m.env, CLAUDECODE: '1' },
-    });
-  const later = run(['update', '--later', '--json']);
-  assert.equal(later.status, 10, later.stdout + later.stderr);
-  const pending = JSON.parse(later.stdout) as { error: { code: string; hint: string; details: { preview: string } } };
-  assert.equal(pending.error.code, 'APPROVAL_PENDING');
-  assert.match(pending.error.details.preview, /puts off the update to 99\.0\.0/);
-  locatedCoreLine(pending.error.hint, [
-    'update',
-    '--later',
-    '--approval',
-    String(pending.error.hint.match(/ap_\w+/)?.[0]),
-  ]);
-  const off = run(['update', '--auto', 'off', '--json']);
-  assert.equal(off.status, 10, off.stdout + off.stderr);
-  const on = run(['update', '--auto', 'on', '--json']);
-  assert.equal(on.status, 0, on.stdout + on.stderr);
-  const bad = run(['update', '--auto', 'maybe', '--json']);
-  assert.equal(bad.status, 64);
-  const mixed = run(['update', '--later', '--check', '--json']);
-  assert.equal(mixed.status, 64);
-});
-
 // ── Switched off ──────────────────────────────────────────────────────────────────────────────────────────────
 
 test('CI, AGENT_COMMS_UPDATE_CHECK=off and the machine’s own setting each skip everything: no check, no notice', async () => {
@@ -1111,7 +975,8 @@ test('a registry slower than the terminal waits is still heard from: the check f
     const record = await readUpdateCheck(m.stateDir);
     assert.equal(record.lastError, null);
     assert.equal(record.checking, null, 'the claim was given up');
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore']);
+    // The latest, then the release's own document, for what its manifest declares (design 2026-10-16, U7).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0']);
   } finally {
     await served.close();
   }
@@ -1169,13 +1034,22 @@ test("the day's first command ends when its own work does: a detached child fini
       'the child to record what the registry said, and give up the claim',
       30_000,
     );
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore'], 'the registry was asked once');
+    // Once — the latest, and the release's own document, for what its manifest declares (design 2026-10-16, U7).
+    assert.deepEqual(
+      served.requests,
+      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
+      'the registry was asked once',
+    );
     assert.equal((await readUpdateCheck(m.stateDir)).lastError, null);
     // What the child found is the next command's notice, as a check in the command's own process would have been.
     const third = await command(env, ['channels', '--json']);
     assert.equal(third.code, 0, third.output);
     assert.match(third.output, /agent-communications 99\.0\.0 is out/);
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore'], 'the day was asked about again');
+    assert.deepEqual(
+      served.requests,
+      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
+      'the day was asked about again',
+    );
   } finally {
     await served.close();
   }
@@ -1213,7 +1087,8 @@ test('a child that cannot be started loses nothing: the command asks in its own 
       assert.match(tty.err(), /agent-communications 99\.0\.0 is out/, label);
       const record = await readUpdateCheck(m.stateDir);
       assert.deepEqual([record.latest, record.checking], [LATEST, null], label);
-      assert.equal(served.requests.length, asked + 1, `${label}: asked ${served.requests.length - asked} times`);
+      // The latest, and the release's own document (design 2026-10-16, U7): one ask.
+      assert.equal(served.requests.length, asked + 2, `${label}: asked ${served.requests.length - asked} times`);
     }
   } finally {
     await served.close();
@@ -1470,7 +1345,7 @@ test('agentcomms: a command that takes no approval is refused one as usage, befo
 test('a dry run, or a migration with nothing to rename, takes no approval: the id is refused as usage, and nothing is shown or claimed', async () => {
   // The daily check off: the refusal is the path's own, whatever the notice would have said.
   const m = machine({ AGENT_COMMS_UPDATE_CHECK: 'off' });
-  const later = await preparedFor(m, updateLaterChange(m.core));
+  const later = await preparedFor(m, updateLevelChange(m.core, 'never'));
   const configFile = join(m.core.paths.configDir, 'config.json');
   const before = readFileSync(configFile, 'utf8');
   const { call, close } = await connect(m);
@@ -1512,7 +1387,7 @@ test('a dry run, or a migration with nothing to rename, takes no approval: the i
 
 // ── The doctor ────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the doctor gives the check one line: on or off, when last checked, the latest, and what is running', async () => {
+test('the doctor gives the check one line: the level, when last checked, the latest, what is running, and a pause', async () => {
   const m = machine();
   const checked = new Date('2026-09-28T09:00:00.000Z');
   await seed(m, { latest: LATEST, behind: true }, checked);
@@ -1524,9 +1399,14 @@ test('the doctor gives the check one line: on or off, when last checked, the lat
     };
     const line = report.checks.filter((check) => check.name === 'update check');
     assert.equal(line.length, 1);
-    assert.equal(line[0]?.detail, `on · last checked ${checked.toISOString()} · latest ${LATEST} · running ${VERSION}`);
+    // The level now, where it said on or off (design 2026-10-16, U2): auto, until its background job is set up.
+    assert.equal(
+      line[0]?.detail,
+      `auto (a daily check with a notice: background updates are not set up) · last checked ${checked.toISOString()} · latest ${LATEST} · running ${VERSION}`,
+    );
     assert.equal(line[0]?.warn, true);
-    assert.ok(String(line[0]?.fix).includes(coreInline(m.core.paths, ['update', '--later'])), String(line[0]?.fix));
+    // The way on is the update, or a pause: "not now" is retired with the stop.
+    assert.ok(String(line[0]?.fix).includes(coreInline(m.core.paths, ['update', '--pause'])), String(line[0]?.fix));
     // "Installed: restart" only when both the core's server and its command would start the latest: the doctor
     // speaks for both.
     const fixFor = async (current: UpdateCheckRecord['current']) => {
@@ -1538,6 +1418,13 @@ test('the doctor gives the check one line: on or off, when last checked, the lat
     assert.ok((await fixFor({ registered: ['core'], global: [] })).startsWith(runUpdate));
     assert.ok((await fixFor({ registered: [], global: ['core'] })).startsWith(runUpdate));
     assert.match(await fixFor({ registered: ['core'], global: ['core'] }), /is installed on this machine: restart/);
+    // A pause, with when it ends (design 2026-10-16, U3).
+    await updatePause(m.core, { days: 7 });
+    const paused = (await call('comms_doctor')).structuredContent as { checks: { name: string; detail: string }[] };
+    assert.match(
+      String(paused.checks.find((check) => check.name === 'update check')?.detail),
+      / · paused until \d{4}-/,
+    );
   } finally {
     await close();
   }
@@ -1547,7 +1434,7 @@ test('the doctor gives the check one line: on or off, when last checked, the lat
     const report = (await offCall('comms_doctor')).structuredContent as { checks: { name: string; detail: string }[] };
     assert.equal(
       report.checks.find((check) => check.name === 'update check')?.detail,
-      `off (AGENT_COMMS_UPDATE_CHECK is set) · last checked never · latest unknown · running ${VERSION}`,
+      `never (AGENT_COMMS_UPDATE_CHECK is set) · last checked never · latest unknown · running ${VERSION}`,
     );
   } finally {
     await offClose();

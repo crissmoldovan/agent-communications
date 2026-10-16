@@ -11,7 +11,7 @@ import {
   readUpdateCheck,
   UPDATE_CHECK_CHILD_COMMAND,
   updateCheckPath,
-  updateLaterChange,
+  updateLevelChange,
 } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
@@ -49,7 +49,7 @@ function updateOut(harness: Harness, current: { registered: string[]; global: st
 
 /** An approval this machine holds, prepared before the update was found — as a post approved moments before is. */
 async function heldApproval(harness: Harness): Promise<string> {
-  const prepared = await gatedChange(harness.core, updateLaterChange(harness.core), {
+  const prepared = await gatedChange(harness.core, updateLevelChange(harness.core, 'never'), {
     channel: 'slack',
     surface: 'mcp',
   });
@@ -338,7 +338,7 @@ function offline(harness: Harness): void {
 const WAYS_PAST: readonly { label: string; apply: (harness: Harness) => Promise<void> | void }[] = [
   { label: 'an update out', apply: (harness) => updateOut(harness) },
   {
-    label: 'not now',
+    label: 'an earlier release’s not now',
     apply: (harness) => {
       updateOut(harness);
       writeFileSync(
@@ -365,8 +365,8 @@ const WAYS_PAST: readonly { label: string; apply: (harness: Harness) => Promise<
     apply: async (harness) => {
       updateOut(harness);
       await harness.core.config.update(
-        (config) => ({ ...config, defaults: { ...config.defaults, updateCheck: 'off' } }),
-        { consent: { kind: 'loosening-consent', paths: ['defaults.updateCheck'] } },
+        (config) => ({ ...config, defaults: { ...config.defaults, updates: 'never', updateCheck: 'off' } }),
+        { consent: { kind: 'loosening-consent', paths: ['defaults.updates'] } },
       );
     },
   },

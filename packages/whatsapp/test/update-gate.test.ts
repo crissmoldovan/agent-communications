@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
-import { openCore, updateCheckPath, updateLaterChange } from '@agentcomms/core';
+import { openCore, updateCheckPath, updatePause } from '@agentcomms/core';
 import { coreInline } from './support/handoffs.ts';
 import { newHarness, tempDir } from './support/harness.ts';
 import { ACCOUNT, connect } from './support/surfaces.ts';
@@ -112,9 +112,10 @@ test('with the network cut off, an update in the file is the notice of the first
     assert.match(older.stderr, /is installed; this WhatsApp CLI is .*: run it from the installed one\./);
     writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(record));
 
-    // "Not now", said anywhere on the machine — here through core's own change — holds for WhatsApp too.
-    const later = updateLaterChange(core);
-    await later.apply(undefined, await later.plan(await core.config.load()));
+    // A pause, asked anywhere on the machine — here through core’s own operation — holds for WhatsApp too. The file
+    // is written again without the day’s notice, so its once-a-day spacing is not what keeps it quiet.
+    writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(record));
+    await updatePause(core, { days: 7 });
     const quiet = await harness.cli(['chats', '--account', ACCOUNT, '--json']);
     assert.equal(quiet.code, 0);
     assert.doesNotMatch(quiet.stderr, /is out/);
@@ -210,7 +211,8 @@ test('the bundle as it ships carries the update notice’s reader, and none of t
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
   assert.match(shipped, /update-check\.json/, 'the reader is there');
-  assert.match(shipped, /is out; say "update" when it suits you/);
+  // The notice's words: assembled from parts, so one phrase of them that is written whole.
+  assert.match(shipped, /restart the client \(in Claude Code, \/mcp → Reconnect\) to use it/);
   for (const checker of [
     'checkForUpdates',
     'npmLatestVersion',

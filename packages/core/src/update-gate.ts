@@ -4,17 +4,24 @@ import type { Core } from './core.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
 import {
   changeUpdateCheck,
+  type EffectiveUpdates,
+  effectiveUpdates,
+  localStamp,
   type PendingUpdate,
-  pendingUpdate,
+  pauseEnd,
   readUpdateCheck,
+  SPACED_INTERVAL_MS,
+  securityRelease,
   UPDATE_STARTED_BY_ENV,
   type UpdateCheckRecord,
+  type UpdateSurface,
   updateCheckDue,
   updateCheckEnabled,
   updateCheckSwitchedOff,
-  updateSnoozed,
   updateVerdict,
+  within,
 } from './update-state.ts';
+import { isVersion } from './versions.ts';
 
 /**
  * The update notice, where every server and every command meets it (design 2026-10-16, U1). It replaces the stop of
@@ -58,9 +65,9 @@ export interface UpdateToolNoticeOptions {
 }
 
 /**
- * A server's notice. After a tool answers: if a newer release is out, the check is on — the setting, `CI` and
- * `AGENT_COMMS_UPDATE_CHECK` — and the tool is not exempt, the result carries one line, and no later result of this
- * process carries it again. Nothing is ever refused, and nothing waits for the check: the file is read as it is.
+ * A server's notice. After a tool answers: if a newer release is out, the machine's level says so (`decideNotice`),
+ * and the tool is not exempt, the result carries one line, and no later result of this process carries it again.
+ * Nothing is ever refused, and nothing waits for the check: the file is read as it is.
  *
  * At most once per process, on the first result there is something to say on: a server started on a day the check is
  * due learns of the release a moment after its first call, and says so on the next.
@@ -85,14 +92,109 @@ export function updateToolNotice(options: UpdateToolNoticeOptions): ToolNotice {
     if (given || exempt.has(tool)) return Promise.resolve(null);
     const decided = turn.then(async () => {
       if (given) return null;
-      const pending = await pendingUpdate({ ...options, surface: 'server' });
-      if (pending === null) return null;
+      const notice = await decideNotice(options, { channel: options.channel, surface: 'server' });
+      if (notice === null) return null;
       given = true;
-      return serverNoticeLine(pending, options.env);
+      return serverNoticeLine(notice, options.env);
     });
     turn = decided.catch(() => null);
     return decided.catch(() => null);
   };
+}
+
+/** What a notice says: the update this process is behind, and what is particular about it. */
+export interface Notice extends PendingUpdate {
+  /** The release fixes a security problem (U7): said at once, whatever the pause or the 14-day spacing. */
+  security: boolean;
+  /** A major release, which never installs on its own. */
+  major: boolean;
+  /** The release's manifest declares it needs a decision from the person. */
+  needsDecision: boolean;
+  /** When the pause in force ends: only a security fix is said during one. */
+  pausedUntil: Date | null;
+}
+
+/** How long a command's notice is good for, by level: a day, or 14 days on `every-14-days`. */
+function spacingOf(updates: EffectiveUpdates, surface: UpdateSurface['surface']): number | null {
+  if (updates.level === 'every-14-days') return SPACED_INTERVAL_MS;
+  return surface === 'command' ? COMMAND_NOTICE_INTERVAL_MS : null;
+}
+
+const majorOf = (version: string): number => Number(version.split('.')[0]);
+
+/**
+ * What the record means for this process's notice now — or null, with nothing written — decided and recorded under the
+ * file's lock, so two processes deciding together say it once where the level says once (design 2026-10-16, U2, U3,
+ * U7):
+ *
+ * - switched off for the process — `CI`, `AGENT_COMMS_UPDATE_CHECK=off`, `AGENT_COMMS_UPDATES=never` — nothing;
+ * - a security fix (the latest release's manifest says so) is said on `every-14-days`, on `never`, and on `auto` while
+ *   its background job is not set up, whatever the pause or the 14-day spacing: the job installs one within a day;
+ * - otherwise nothing on `never`, nothing during a pause, and on `auto` with its job set up only what needs the person:
+ *   a restart, a major release, a release needing a decision;
+ * - `every-14-days` says it at most once in 14 days for the machine, and a command at most once a day.
+ */
+async function decideNotice(
+  options: { core: Core; env: NodeJS.ProcessEnv; running: string; now?: (() => Date) | undefined },
+  where: UpdateSurface,
+): Promise<Notice | null> {
+  if (updateCheckSwitchedOff(options.env) !== null) return null;
+  const updates = await effectiveUpdates(options.core, options.env);
+  const now = options.now ?? (() => new Date());
+  const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
+  const decided = await changeUpdateCheck<Notice>(options.core.paths.stateDir, (record) => {
+    const at = now();
+    const notice = noticeOf(record, options.running, where, updates, at);
+    if (notice === null) return null;
+    const spacing = spacingOf(updates, where.surface);
+    if (!notice.security) {
+      const last =
+        where.surface === 'command' && updates.level !== 'every-14-days' ? record.commandNoticeAt : record.noticeAt;
+      if (spacing !== null && within(last, at, spacing)) return null;
+    } else if (where.surface === 'command' && within(record.commandNoticeAt, at, COMMAND_NOTICE_INTERVAL_MS)) {
+      // A security fix is said whatever the spacing, and still at most once a day by a command: the line on every
+      // command would be the stop's noise again.
+      return null;
+    }
+    const stamp = at.toISOString();
+    const written: UpdateCheckRecord = {
+      ...record,
+      noticeAt: stamp,
+      ...(where.surface === 'command' ? { commandNoticeAt: stamp } : {}),
+    };
+    // A server plugin or extension started is updated there, and restarting starts the release it pins: never "restart".
+    const kind = notice.kind === 'restart' && where.surface === 'server' && startedBy ? 'update' : notice.kind;
+    return { record: written, result: { ...notice, kind } };
+  });
+  return decided.result ?? null;
+}
+
+/** The notice the record makes for this process, before any spacing: see `decideNotice`. */
+function noticeOf(
+  record: UpdateCheckRecord,
+  running: string,
+  where: UpdateSurface,
+  updates: EffectiveUpdates,
+  at: Date,
+): Notice | null {
+  const pending = updateVerdict(record, running, where);
+  if (pending === null) return null;
+  const security = updates.background ? false : securityRelease(record, running) !== null;
+  const pausedUntil = pauseEnd(record, at);
+  const facts = record.release?.version === pending.latest ? record.release : null;
+  // What waits for the person is said only where anything installs without them: on `auto` with its job, every
+  // other release installs on its own; on every other level, every release waits for them anyway.
+  const notice: Notice = {
+    ...pending,
+    security,
+    major: updates.background && isVersion(running) && majorOf(pending.latest) > majorOf(running),
+    needsDecision: updates.background && facts?.needsDecision === true,
+    pausedUntil,
+  };
+  if (security) return notice;
+  if (updates.level === 'never' || pausedUntil !== null) return null;
+  if (updates.background && pending.kind !== 'restart' && !notice.major && !notice.needsDecision) return null;
+  return notice;
 }
 
 /** Who started a server from a release it pins itself, in words: the plugin's, the extension's. */
@@ -106,15 +208,30 @@ function startedByWords(startedBy: string): string {
  * The server's line. "Installed" only on the check's positive finding that restarting starts `latest`; a server a
  * plugin or an extension started is updated where it was installed, which `comms_update` never moves.
  */
-export function serverNoticeLine(pending: PendingUpdate, env: NodeJS.ProcessEnv = {}): string {
-  if (pending.kind === 'restart') {
-    return `${PRODUCT} ${pending.latest} is installed; restart the client (in Claude Code, /mcp → Reconnect) to use it.`;
+export function serverNoticeLine(notice: PendingUpdate & Partial<Notice>, env: NodeJS.ProcessEnv = {}): string {
+  const paused = pausedWords(notice);
+  if (notice.kind === 'restart') {
+    return `${PRODUCT} ${notice.latest} is installed; restart the client (in Claude Code, /mcp → Reconnect) to use it.${paused}`;
   }
   const startedBy = env[UPDATE_STARTED_BY_ENV]?.trim();
   if (startedBy) {
-    return `${PRODUCT} ${pending.latest} is out; this server came with ${startedByWords(startedBy)}, and is updated there when it suits you.`;
+    return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)}; this server came with ${startedByWords(startedBy)}, and is updated there ${notice.security ? 'soon' : 'when it suits you'}.${paused}`;
   }
-  return `${PRODUCT} ${pending.latest} is out; say "update" when it suits you.`;
+  return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)}; say "update" ${notice.security ? 'soon' : 'when it suits you'}.${paused}`;
+}
+
+/** What is particular about the release, after "is out": a security fix, a major release, a decision it needs. */
+function whatItIs(notice: Partial<Notice>): string {
+  if (notice.security) return ', and fixes a security problem';
+  if (notice.major) return ', a major release, which waits for you';
+  if (notice.needsDecision) return ', and needs a decision from you before it installs';
+  return '';
+}
+
+/** Every notice during a pause says when it ends (U3): only a security fix is said then. */
+function pausedWords(notice: Partial<Notice>): string {
+  if (!notice.pausedUntil) return '';
+  return ` Updates are paused until ${localStamp(notice.pausedUntil)}; a security fix is not held.`;
 }
 
 // ── A command at a terminal ──────────────────────────────────────────────────────────────────────────────────────
@@ -176,23 +293,24 @@ export const TERMINAL_CHECK_WAIT_MS = 3_000;
 /** How often a command says it, for the whole machine: once a day. */
 export const COMMAND_NOTICE_INTERVAL_MS: number = 24 * 60 * 60 * 1000;
 
-/** A few minutes for two processes' clocks, read at slightly different moments, as the check allows. */
-const CLOCK_SKEW_MS = 5 * 60 * 1000;
-
 /**
  * The update notice at a terminal, before a command runs. It never stops the command, and never throws.
  *
- * It reads the file first. If the check is due it asks the registry — through `check` — waiting at most about three
- * seconds and going on without it after that. Then, when a newer release is out and no command on this machine has
- * said so in the last day, it prints one line on stderr — never on stdout, where a result or `--json` is — and the
- * command runs.
+ * It reads the file first. If the check is due for the machine's level it asks the registry — through `check` — waiting
+ * at most about three seconds and going on without it after that. Then, when the level says so (`decideNotice`), it
+ * prints one line on stderr — never on stdout, where a result or `--json` is — and the command runs.
  */
 export async function updateNoticeAtTerminal(options: TerminalNoticeOptions): Promise<void> {
   const { core, env, streams } = options;
   const now = options.now ?? (() => new Date());
   try {
-    if (!(await updateCheckEnabled(core, env)).on) return;
-    if (options.check && updateCheckDue(await readUpdateCheck(core.paths.stateDir), now())) {
+    if (updateCheckSwitchedOff(env) !== null) return;
+    const enabled = await updateCheckEnabled(core, env);
+    if (
+      enabled.on &&
+      options.check &&
+      updateCheckDue(await readUpdateCheck(core.paths.stateDir), now(), enabled.intervalMs)
+    ) {
       // Stops waiting, and goes on: the check itself is not cut short, and finishes beside the command. A timer that
       // keeps the process alive, so the wait is the wait, whatever the check is waiting on.
       let timer: NodeJS.Timeout | undefined;
@@ -212,29 +330,11 @@ export async function updateNoticeAtTerminal(options: TerminalNoticeOptions): Pr
   }
 }
 
-/** Whether a command said it less than a day ago: a time from the future — a clock gone back — is not trusted. */
-function saidToday(record: UpdateCheckRecord, at: Date): boolean {
-  if (record.commandNoticeAt === null) return false;
-  const since = at.getTime() - Date.parse(record.commandNoticeAt);
-  return since >= -CLOCK_SKEW_MS && since < COMMAND_NOTICE_INTERVAL_MS;
-}
-
-/**
- * The command's line, decided and recorded under the file's lock — so of two commands started together, one says it —
- * or null: nothing newer, put off, or already said today.
- */
+/** The command's line, decided and recorded under the file's lock: see `decideNotice`. */
 async function commandNotice(options: TerminalNoticeOptions, now: () => Date): Promise<string | null> {
-  const where = { channel: options.channel, surface: 'command' as const };
-  const decided = await changeUpdateCheck<PendingUpdate>(options.core.paths.stateDir, (record) => {
-    const at = now();
-    if (updateSnoozed(record, at) || saidToday(record, at)) return null;
-    const pending = updateVerdict(record, options.running, where);
-    if (pending === null) return null;
-    return { record: { ...record, commandNoticeAt: at.toISOString() }, result: pending };
-  });
-  const pending = decided.result;
-  if (pending === undefined) return null;
-  return commandNoticeLine(options.core, pending, options.channel, options.output.platform);
+  const notice = await decideNotice({ ...options, now }, { channel: options.channel, surface: 'command' });
+  if (notice === null) return null;
+  return commandNoticeLine(options.core, notice, options.channel, options.output.platform);
 }
 
 /**
@@ -252,13 +352,15 @@ function cliOf(channel: string): string {
  */
 export function commandNoticeLine(
   core: Pick<Core, 'handoffs'>,
-  pending: PendingUpdate,
+  notice: PendingUpdate & Partial<Notice>,
   channel: string,
   platform?: NodeJS.Platform | undefined,
 ): string {
-  if (pending.kind === 'restart') {
-    return `${PRODUCT} ${pending.latest} is installed; this ${cliOf(channel)} is ${pending.running}, started from somewhere else — npx's cache, a project's own install, a checkout: run it from the installed one.`;
+  const paused = pausedWords(notice);
+  if (notice.kind === 'restart') {
+    return `${PRODUCT} ${notice.latest} is installed; this ${cliOf(channel)} is ${notice.running}, started from somewhere else — npx's cache, a project's own install, a checkout: run it from the installed one.${paused}`;
   }
   const update = requireHandoffs(core, platform).core(['update']);
-  return `${PRODUCT} ${pending.latest} is out (this is ${pending.running}); ${handoffSentence(update, (command) => `run ${command} when it suits you.`)}`;
+  const when = notice.security ? 'soon' : 'when it suits you';
+  return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)} (this is ${notice.running}); ${handoffSentence(update, (command) => `run ${command} ${when}.`)}${paused}`;
 }

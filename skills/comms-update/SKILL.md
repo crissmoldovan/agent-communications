@@ -32,14 +32,22 @@ A command at a terminal says the same once on stderr, at most once a day for the
 still answers `UPDATE_REQUIRED`, or a command that exits `11`, is a server or command older than 0.20.0: it is behind,
 and the update moves it too.
 
-**Not now** — `comms_update` with `later: true` keeps every server and command on this computer from mentioning the
-update until midnight, local time. It is a change like any other: show the preview and wait for the person's yes
-(under `confirm`, the approve command the result gives, run at their own terminal, and `comms_approval_wait` to learn
-when they have), then call again with the `approvalId`. Never put it off on your own.
+**Not now** is a plain answer, with no approval: `comms_update` with `pause` — `1`, `7` or `14` days, `true` for 7 when
+they name no length — holds every notice on this computer until then. A new pause replaces the old one; `resume: true`
+ends it at once. A pause never holds a security fix: its notice is said at once, with when the pause ends.
 
-To turn the check off for this computer, `comms_update` with `auto: "off"` — a change the person approves;
-`auto: "on"` turns it back on at once. `comms_doctor` shows it on one line: on or off, when it last checked, the latest
-release, and the one running.
+**How often it checks** is the person's to choose, with `comms_update` and `level`:
+
+- `auto`, the default: a check every day. It will install in the background once that is set up; until then it is a
+  daily check with a notice.
+- `every-14-days`: a check, and a notice, at most once every 14 days; an update only with their yes.
+- `never`: nothing asks npm; they update by hand.
+
+A level that updates less is a change the person approves: show the preview, which says what stops happening, and
+wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and
+`comms_approval_wait` to learn when they have), then call again with the `approvalId`. Moving back to one that updates
+more applies at once. Never choose a level or a pause for them. `comms_doctor` shows it on one line: the level, when it
+last checked, the latest release, the one running, and a pause with when it ends.
 
 ## Before anything: a core that can update
 
@@ -126,8 +134,8 @@ messages, in this order, skipping any that does not apply:
 | What is behind | `agentcomms update --check` |
 | Update | `agentcomms update` — at a terminal it shows the plan and asks `yes`; anywhere else it exits `10` with the preview and an approval id, then `agentcomms update --approval <id>` |
 | Clear out old versions | `agentcomms mcp prune`, `agent-gmail mcp prune`, `agent-slack mcp prune` |
-| Not now | `agentcomms update --later` — approved like any change; no notice until midnight |
-| The daily check off, or on | `agentcomms update --auto off` (approved like any change), `--auto on` (at once) |
+| Not now | `agentcomms update --pause [1\|7\|14]` — no approval; `agentcomms update --resume` ends it |
+| How often it checks | `agentcomms update --level auto\|every-14-days\|never` — less often is approved like any change; more often is at once |
 
 Where `agentcomms` is not installed, use `npx -y @agentcomms/core@latest` in its place. A command a result or
 a notice hands over is another matter: give the person that one, exactly as given — it names the installation that
@@ -145,7 +153,7 @@ printed it, with its folders pinned — never one rebuilt from these names.
   it after.
 - **Renaming or changing policies here.** An update changes versions only. Renaming old account names
   is `comms_names_migrate`; approvals are `comms_change_policy`.
-- **Putting the update off, or turning the check off, without asking.** Both are the person's to
-  decide: show the preview and wait for their yes, as for any change.
+- **Pausing, or choosing a level, without asking.** Both are the person's to decide: a pause is their answer, and a
+  level that updates less waits for their yes to its preview.
 - **Stopping the conversation for the notice.** It is one line to pass on, not a question to wait for: finish what the
   person asked, and update when they say so.

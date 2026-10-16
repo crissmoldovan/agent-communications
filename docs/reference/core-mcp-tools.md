@@ -251,8 +251,9 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 |---|---|---|---|
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
-| `later` | boolean | no | not now: no server or command on this machine mentions the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
-| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once |
+| `level` | `auto` \\| `every-14-days` \\| `never` | no | how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once |
+| `pause` | any | no | hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held |
+| `resume` | boolean | no | end a pause at once |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_names_migrate`

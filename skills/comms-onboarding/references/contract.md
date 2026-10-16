@@ -61,8 +61,8 @@ approval, a repair — it gives that command: this installation's Node and the c
 suite's folders pinned (`--config-dir` and the rest), so it runs as pasted with nothing of this suite on their
 PATH. Hand it over exactly as given, in a code span or block of its own. Never write one yourself from a
 command's name: a bare `agentcomms …` runs only where that package is installed globally, and may find other
-folders than the ones the approval is in. The same holds for the commands an update's stop gives — `update`
-and `update --later` — and for a repair that names another product's command: core finds that one among the
+folders than the ones the approval is in. The same holds for the command an update's notice gives — `update`
+— and for a repair that names another product's command: core finds that one among the
 servers registered with the person's clients, at this exact release, or says it is not locatable here.
 
 - On a default Windows install, where Node under `C:\Program Files` needs quoting, a safe result gives a line

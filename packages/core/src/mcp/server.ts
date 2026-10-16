@@ -5,6 +5,7 @@ import { waitCallOptions } from '../approval-wait-surface.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
+import { UPDATE_LEVELS } from '../config.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
@@ -30,7 +31,7 @@ import {
   serverPruneChange,
 } from '../operations/servers.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
-import { updateAutoChange, updateLaterChange } from '../operations/update-settings.ts';
+import { updateLevelChange, updatePause, updateResume } from '../operations/update-settings.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
@@ -109,7 +110,7 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach, comms_change_policy and comms_label',
-    'with no change, and comms_update with `check`.',
+    'with no change, and comms_update with `check`. Neither does comms_update with `pause` or `resume`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
@@ -189,6 +190,14 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),
+    {
+      // 0.18's two settings, replaced (design 2026-10-16, U2, U3): nothing is stopped any more to put off.
+      comms_update: {
+        later:
+          'Nothing is stopped for an update any more: to hold its notice, call comms_update with `pause` (1, 7 or 14 days) — no approval needed.',
+        auto: 'The daily check is now one of three levels: call comms_update with `level` — `auto`, `every-14-days` or `never`.',
+      },
+    },
   );
   /** One changing call: the change this tool plans, run through the one flow, returned in its one shape. */
   const change = async <T>(build: () => GatedChange<T>, approvalId: string | undefined) => {
@@ -766,36 +775,47 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       inputSchema: {
         check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
         noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
-        later: z
-          .boolean()
+        level: z
+          .enum(UPDATE_LEVELS)
           .optional()
           .describe(
-            'not now: no server or command on this machine mentions the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId',
+            'how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once',
           ),
-        auto: z
-          .enum(['on', 'off'])
+        pause: z
+          .union([z.literal(true), z.literal(1), z.literal(7), z.literal(14)])
           .optional()
           .describe(
-            'turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once',
+            'hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held',
           ),
+        resume: z.literal(true).optional().describe('end a pause at once'),
         ...approvalArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
-      const modes = [args.check === true, args.later === true, args.auto !== undefined].filter(Boolean).length;
-      if (modes > 1 || (args.noVerify !== undefined && (args.later === true || args.auto !== undefined))) {
+      const settings = args.level !== undefined || args.pause !== undefined || args.resume === true;
+      const modes = [args.check === true, args.level !== undefined, args.pause !== undefined, args.resume === true];
+      if (modes.filter(Boolean).length > 1 || (args.noVerify !== undefined && settings)) {
         return fail(
-          new CommsError('USAGE', '`check`, `later` and `auto` are one at a time, and `noVerify` is for the update', {
-            hint: 'Call comms_update with one of them — or none, to update.',
-          }),
+          new CommsError(
+            'USAGE',
+            '`check`, `level`, `pause` and `resume` are one at a time, and `noVerify` is for the update',
+            { hint: 'Call comms_update with one of them — or none, to update.' },
+          ),
         );
       }
-      if (args.later === true) {
-        return change(() => updateLaterChange(core, { now: updateDeps.now }), args.approvalId);
-      }
-      if (args.auto !== undefined) {
-        return change(() => updateAutoChange(core, args.auto as 'on' | 'off'), args.approvalId);
+      if (args.level !== undefined) return change(() => updateLevelChange(core, args.level as string), args.approvalId);
+      if (args.pause !== undefined || args.resume === true) {
+        return read(() => {
+          // A plain answer asks nobody, so an approval here is refused rather than dropped (`refuseUnclaimedApproval`).
+          refuseUnclaimedApproval(args.approvalId, {
+            message: '`pause` and `resume` ask nobody, so they take no approvalId',
+            hint: 'Call comms_update with `pause` or `resume` alone: either applies at once.',
+          });
+          return args.resume === true
+            ? updateResume(core, { now: updateDeps.now })
+            : updatePause(core, { days: args.pause === true ? undefined : args.pause, now: updateDeps.now });
+        });
       }
       if (args.check === true) {
         return read(() => {

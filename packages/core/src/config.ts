@@ -50,8 +50,20 @@ export type SendPolicy = 'chat' | 'confirm' | 'never';
  * way to change it, and that passes no gate at all.
  */
 export type ChangePolicy = 'chat' | 'confirm';
-/** Whether this machine checks for a newer release once a day, and stops until it is updated or put off. */
+/** 0.18's switch for the daily update check: what `defaults.updates` reads from until a level is set. */
 export type UpdateCheckSetting = 'on' | 'off';
+
+/**
+ * How this machine updates (design 2026-10-16, U2), from the most updating to the least: `auto` — the default — checks
+ * daily and installs in the background once its job is set up; `every-14-days` checks at most once every 14 days and
+ * installs only with the person's yes; `never` asks the registry nothing.
+ */
+export const UPDATE_LEVELS = ['auto', 'every-14-days', 'never'] as const;
+export type UpdateLevel = (typeof UPDATE_LEVELS)[number];
+
+export function isUpdateLevel(value: unknown): value is UpdateLevel {
+  return typeof value === 'string' && (UPDATE_LEVELS as readonly string[]).includes(value);
+}
 export type StoreKind = 'keychain' | 'file';
 
 export interface ClientConfig {
@@ -123,6 +135,16 @@ export interface Defaults {
    * it is what keeps a machine from quietly falling behind a release — so it is approved like one; on applies at once.
    */
   updateCheck?: UpdateCheckSetting | undefined;
+  /**
+   * How this machine updates (design 2026-10-16, U2): `auto`, `every-14-days` or `never`. Absent reads from
+   * `updateCheck` — `on` as `auto`, `off` as `never` — and both absent as `auto`. A word this release does not know
+   * reads as `auto`, and the file stays readable: a later release may add a level.
+   *
+   * Moving to a level that updates less is a loosening, approved like one; moving back applies at once. Every write of
+   * a level writes `updateCheck` beside it, `off` for `never` and `on` otherwise, so a release before 0.20 sharing the
+   * file checks, or does not, as the person chose.
+   */
+  updates?: string | undefined;
 }
 
 /**
@@ -517,6 +539,7 @@ const defaultsSchema = z.looseObject({
   timezone: z.string().default('system'),
   confirm: z.looseObject({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
   updateCheck: z.enum(['on', 'off']).optional(),
+  updates: z.string().min(1).optional(),
 });
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
@@ -939,9 +962,31 @@ export function governingChangePolicy(
   return governing.includes('confirm') ? 'confirm' : 'chat';
 }
 
-/** Whether this machine's daily update check is on: `defaults.updateCheck`, absent reading as `on`. */
+/** 0.18's switch, as written: `defaults.updateCheck`, absent reading as `on`. */
 export function updateCheckSetting(config: Config): UpdateCheckSetting {
   return config.defaults.updateCheck ?? 'on';
+}
+
+/**
+ * The level this machine's configuration sets (design 2026-10-16, U2): `defaults.updates`, else 0.18's switch read as a
+ * level — `on` as `auto`, `off` as `never`. A word this release does not know reads as `auto`, the default.
+ */
+export function updateLevelOf(config: Config): UpdateLevel {
+  const set = config.defaults.updates;
+  if (set !== undefined) return isUpdateLevel(set) ? set : 'auto';
+  return updateCheckSetting(config) === 'off' ? 'never' : 'auto';
+}
+
+/**
+ * How much a level updates, for `classifyChange`: `auto` 2, `every-14-days` 1, `never` 0. A word this release does not
+ * know is judged as the most updating on the side it leaves and the least on the side it arrives on, as an account's
+ * mode is — an unknown word can cost a person a question, never skip one.
+ */
+function updateRank(config: Config, side: 'before' | 'after'): number {
+  const set = config.defaults.updates;
+  const level = set === undefined ? updateLevelOf(config) : isUpdateLevel(set) ? set : null;
+  if (level === null) return side === 'before' ? UPDATE_LEVELS.length - 1 : 0;
+  return UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
 }
 
 /**
@@ -1836,8 +1881,18 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     loosen('defaults.changePolicy', defaultChangePolicy(before), defaultChangePolicy(after));
   }
   if (b.riskEscalation && !a.riskEscalation) loosen('defaults.riskEscalation', b.riskEscalation, a.riskEscalation);
-  // Off stops the one thing that tells a person this machine has fallen behind a release: a person agrees to that.
-  if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+  // A level that updates less keeps this machine behind for longer, or for good: a person agrees to that (design
+  // 2026-10-16, U2). The words as written, so a preview names what was set — an unknown one too.
+  // A level left exactly as it was moved nothing, whatever its word.
+  const levelKept = b.updates !== undefined && b.updates === a.updates;
+  if (!levelKept && updateRank(after, 'after') < updateRank(before, 'before')) {
+    loosen(
+      'defaults.updates',
+      before.defaults.updates ?? updateLevelOf(before),
+      after.defaults.updates ?? updateLevelOf(after),
+    );
+  } else if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+    // 0.18's switch off beside a level that says otherwise: what a release before 0.20 reads on this machine.
     loosen('defaults.updateCheck', updateCheckSetting(before), updateCheckSetting(after));
   }
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)

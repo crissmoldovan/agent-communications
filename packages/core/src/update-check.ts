@@ -5,7 +5,7 @@ import { channelServer } from './channel-servers.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
-import { npmLatestVersion } from './npm.ts';
+import { npmLatestVersion, npmReleaseDeclaration } from './npm.ts';
 import { type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
 import { childEnvironment } from './system-programs.ts';
@@ -58,7 +58,7 @@ export interface UpdateCheckOutcome {
   record: UpdateCheckRecord;
 }
 
-/** The check, when it is on and due: once in 24 hours per machine, recorded in `update-check.json`. */
+/** The check, when it is on and due — once a day on `auto`, once in 14 days on `every-14-days` — per machine. */
 export async function checkForUpdates(
   core: Core,
   env: NodeJS.ProcessEnv,
@@ -66,8 +66,9 @@ export async function checkForUpdates(
 ): Promise<UpdateCheckOutcome> {
   const stateDir = core.paths.stateDir;
   try {
-    if (!(await updateCheckEnabled(core, env)).on) return { asked: false, record: await readUpdateCheck(stateDir) };
-    const claimedAt = await claimUpdateCheck(core, options);
+    const enabled = await updateCheckEnabled(core, env);
+    if (!enabled.on) return { asked: false, record: await readUpdateCheck(stateDir) };
+    const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return { asked: false, record: await readUpdateCheck(stateDir) };
     await askUnderClaim(core, env, claimedAt, options);
     return { asked: true, record: await readUpdateCheck(stateDir) };
@@ -89,12 +90,15 @@ export async function checkForUpdates(
  */
 export async function claimUpdateCheck(
   core: Core,
-  options: { now?: (() => Date) | undefined } = {},
+  options: { now?: (() => Date) | undefined; intervalMs?: number | undefined } = {},
 ): Promise<string | null> {
   const now = options.now ?? (() => new Date());
+  // Due by the machine's level: a day on `auto`, 14 days on `every-14-days` (design 2026-10-16, U2).
+  const enabled = options.intervalMs === undefined ? await updateCheckEnabled(core, {}).catch(() => null) : null;
+  const intervalMs = options.intervalMs ?? (enabled?.on ? enabled.intervalMs : undefined);
   const claim = await changeUpdateCheck<string>(core.paths.stateDir, (record) => {
     const claimedAt = now();
-    if (!updateCheckDue(record, claimedAt) || updateCheckUnderway(record, claimedAt)) return null;
+    if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
     const checking = claimedAt.toISOString();
     return { record: { ...record, checking }, result: checking };
   }).catch(() => null);
@@ -151,13 +155,39 @@ async function ask(
     await settle({ latest, behind: null, current: null, lastError: null });
     return;
   }
+  // What the release declares — a security fix, a decision it needs (design 2026-10-16, U7) — read from the same
+  // registry the number came from, before anything here is read, so a machine that cannot be read still learns it. A
+  // test's stand-in registry hands in its own, or none is read.
+  const read =
+    deps.releaseFacts !== undefined
+      ? deps.releaseFacts
+      : deps.latestVersion === undefined
+        ? (name: string, version: string) => npmReleaseDeclaration(name, version, { env })
+        : null;
+  const release =
+    read === null
+      ? null
+      : await read(CORE_PACKAGE, latest).then(
+          (facts) => ({ version: latest, security: facts.security, needsDecision: facts.needsDecision }),
+          () => null,
+        );
   try {
-    // `comms_update`'s own check, handed the one number: it records what it finds, by this clock, and so ends the ask
-    // — under this ask's claim, so only while the claim is still its own.
-    await updateCheck(core, env, { ...deps, latestVersion: async () => latest, now: options.now }, options.claimedAt);
+    // `comms_update`'s own check, handed the one number and the facts: it records what it finds, by this clock, and so
+    // ends the ask — under this ask's claim, so only while the claim is still its own.
+    await updateCheck(
+      core,
+      env,
+      {
+        ...deps,
+        latestVersion: async () => latest,
+        releaseFacts: release === null ? null : async () => release,
+        now: options.now,
+      },
+      options.claimedAt,
+    );
   } catch (error) {
     // The registry answered, and something here could not be read: what is known is recorded, and the rest is not.
-    await settle({ latest, behind: null, current: null, lastError: reason(error) });
+    await settle({ latest, behind: null, current: null, lastError: reason(error), release });
   }
 }
 
@@ -313,9 +343,10 @@ async function handUpdateCheckToChild(
 ): Promise<void> {
   const deadline = Date.now() + TERMINAL_CHECK_WAIT_MS;
   try {
-    // Switched off — `CI`, the switch, the machine's setting — nothing is claimed, and no child is started.
-    if (!(await updateCheckEnabled(core, env)).on) return;
-    const claimedAt = await claimUpdateCheck(core, { now: options.now });
+    // Switched off — `CI`, a switch, the level `never` — nothing is claimed, and no child is started.
+    const enabled = await updateCheckEnabled(core, env);
+    if (!enabled.on) return;
+    const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return;
     const entry = options.entry === undefined ? updateCheckChildEntry() : options.entry;
     const started = entry !== null && (await startUpdateCheckChild(entry, claimedAt, core.paths, env, deadline));

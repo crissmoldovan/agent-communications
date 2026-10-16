@@ -10,7 +10,7 @@ import {
   stateOf,
   UPDATE_CHECK_CHILD_COMMAND,
   updateCheckPath,
-  updateLaterChange,
+  updateLevelChange,
 } from '@agentcomms/core';
 import { locatedCoreLine } from './support/handoffs.ts';
 import { type Harness, newHarness, tempDir } from './support/harness.ts';
@@ -36,7 +36,7 @@ function updateOut(harness: Harness, current: { registered: string[]; global: st
 
 /** An approval this machine holds, prepared before the update was found — as a send approved moments before is. */
 async function heldApproval(harness: Harness): Promise<string> {
-  const prepared = await gatedChange(harness.core, updateLaterChange(harness.core), {
+  const prepared = await gatedChange(harness.core, updateLevelChange(harness.core, 'never'), {
     channel: 'gmail',
     surface: 'mcp',
   });

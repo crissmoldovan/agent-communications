@@ -72,10 +72,12 @@ import {
 } from './operations/servers.ts';
 import { updateChange, updateCheck } from './operations/update.ts';
 import {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
 import { profileSourcePath, shownPath } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
@@ -158,10 +160,12 @@ Usage — run these with this CLI, each as the words after its program:
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
-  update --later [--approval <id>]
-                                not now: no command or server mentions the update until midnight
-  update --auto on|off [--approval <id>]
-                                turn the daily update check on or off for this machine
+  update --level auto|every-14-days|never [--approval <id>]
+                                how this machine updates: a level that updates less is approved
+                                first; one that updates more applies at once
+  update --pause [1|7|14]       hold every update notice on this machine for that many days (7);
+                                asks nobody, and never holds a security fix
+  update --resume               end a pause at once
   secrets migrate --to keychain|file [--approval <id>]
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
@@ -173,9 +177,10 @@ person has agreed: in the chat under the \`chat\` change policy, with \`approve\
 policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies
 at once and asks nobody, and a --dry-run changes nothing.
 
-Once a day this machine asks npm whether a newer release is out. When one is, a command says so in one line on
-stderr, at most once a day for the machine, and runs; nothing is stopped for being behind. Putting it off (--later)
-and turning the check off (--auto off) are changes a person approves. CI, and AGENT_COMMS_UPDATE_CHECK=off, skip it.
+On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
+once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
+day for the machine, and runs; nothing is stopped for being behind. CI, AGENT_COMMS_UPDATE_CHECK=off and
+AGENT_COMMS_UPDATES=never switch it all off for one process.
 
 Options:
   --config-dir <dir>     use this configuration directory for this run
@@ -251,6 +256,10 @@ function parse(argv: string[]) {
       'no-verify': { type: 'boolean', default: false },
       'include-printed': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
+      level: { type: 'string' },
+      pause: { type: 'boolean', default: false },
+      resume: { type: 'boolean', default: false },
+      // Retired with the stop (design 2026-10-16): kept so that each is refused with what replaced it.
       later: { type: 'boolean', default: false },
       auto: { type: 'string' },
       // A flag on `org add`, and on `org update` the flag and the word after it — `on` or `off` — read from the tokens.
@@ -862,28 +871,50 @@ export async function main(
         throw usage('usage: mcp [install|prune]');
       }
       case 'update': {
-        if (sub !== undefined) {
-          throw usage('usage: update [--check | --later | --auto on|off] [--no-verify] [--approval <id>]');
-        }
-        const modes = [values.check, values.later, values.auto !== undefined].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && (values.later || values.auto !== undefined))) {
-          throw usage('--check, --later and --auto are one at a time, and --no-verify is for the update itself');
-        }
         if (values.later) {
-          const result = await gatedChangeAtTerminal(core, updateLaterChange(core), {
-            ...approval,
-            rerun: ['update', '--later'],
+          throw new CommsError('USAGE', '--later no longer exists: nothing is stopped for an update any more', {
+            hint: 'To hold the update notice, use --pause [1|7|14] — it asks nobody — and --resume to end it.',
           });
-          writeResult(result, output, renderLater);
-          return;
         }
         if (values.auto !== undefined) {
-          if (values.auto !== 'on' && values.auto !== 'off') throw usage('--auto takes on or off');
-          const result = await gatedChangeAtTerminal(core, updateAutoChange(core, values.auto), {
-            ...approval,
-            rerun: ['update', '--auto', values.auto],
+          throw new CommsError('USAGE', '--auto no longer exists: the daily check is now one of three levels', {
+            hint: 'Use --level auto, --level every-14-days or --level never.',
           });
-          writeResult(result, output, renderAuto);
+        }
+        // `--pause` takes the days after it as a word of its own: `update --pause 14`.
+        const days = values.pause ? sub : undefined;
+        if ((sub !== undefined && !values.pause) || positionals.length > 2) {
+          throw usage(
+            'usage: update [--check | --level <level> | --pause [1|7|14] | --resume] [--no-verify] [--approval <id>]',
+          );
+        }
+        const modes = [values.check, values.level !== undefined, values.pause, values.resume].filter(Boolean).length;
+        const settings = values.level !== undefined || values.pause || values.resume;
+        if (modes > 1 || (values['no-verify'] && settings)) {
+          throw usage(
+            '--check, --level, --pause and --resume are one at a time, and --no-verify is for the update itself',
+          );
+        }
+        if (values.level !== undefined) {
+          const result = await gatedChangeAtTerminal(core, updateLevelChange(core, values.level), {
+            ...approval,
+            rerun: ['update', '--level', values.level],
+          });
+          writeResult(result, output, renderLevel);
+          return;
+        }
+        if (values.pause || values.resume) {
+          refuseUnclaimedApproval(values.approval, {
+            message: '--pause and --resume ask nobody, so they take no --approval',
+            hint: 'Run it without --approval: it applies at once.',
+          });
+          if (values.resume) {
+            writeResult(await updateResume(core), output, renderResume);
+            return;
+          }
+          if (days !== undefined && !/^\d+$/.test(days)) throw usage('--pause takes 1, 7 or 14 days');
+          const result = await updatePause(core, { days: days === undefined ? undefined : Number(days) });
+          writeResult(result, output, renderPause);
           return;
         }
         if (values.check) {
@@ -1213,18 +1244,25 @@ function renderOrgRemove(result: OrgRemoveResult): string {
   return lines.join('\n');
 }
 
-function renderLater(result: UpdateLaterResult): string {
-  if (result.snoozedUntil === null) return 'Nothing was put off: no update has been found on this machine.';
-  const what = result.latest ? `The update to ${result.latest} is` : 'The daily update check is';
-  return `${what} put off until ${new Date(result.snoozedUntil).toString()}${result.changed ? '' : ' (it already was)'}: nothing stops for it until then, and the first command after asks again.`;
+function renderLevel(result: UpdateLevelResult): string {
+  const words = {
+    auto: 'auto: a check every day, and installs in the background once that is set up',
+    'every-14-days': 'every-14-days: a check at most once every 14 days, and installs only with your yes',
+    never: 'never: nothing on this machine asks npm for a newer release; update by hand',
+  } as const;
+  return `This machine updates ${words[result.level]}${result.changed ? '' : ' (it already did)'}.`;
 }
 
-function renderAuto(result: UpdateAutoResult): string {
-  const state =
-    result.updateCheck === 'on'
-      ? 'on: once a day this machine asks npm for a newer release, and stops until it is updated or put off'
-      : 'off: nothing on this machine asks npm for a newer release, and nothing stops for one';
-  return `The daily update check is ${state}${result.changed ? '' : ' (it already was)'}.`;
+function renderPause(result: UpdatePauseResult): string {
+  const lines = [
+    `Update notices are paused until ${new Date(result.pausedUntil).toString()} (${result.days} day${result.days === 1 ? '' : 's'}). A security fix is not held.`,
+  ];
+  if (result.security !== null) lines.push(`A security fix is out now (${result.security}): update soon.`);
+  return lines.join('\n');
+}
+
+function renderResume(result: UpdateResumeResult): string {
+  return result.resumed ? 'The pause is over: update notices are back.' : 'Nothing was paused.';
 }
 
 function renderChannels(report: ChannelsReport): string {

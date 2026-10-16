@@ -78,11 +78,31 @@ Once a day — at most, for the whole machine — the first server or command to
 The `UPDATE_REQUIRED` error and exit status `11` are retired. A client that still sees one is talking to a server
 older than 0.20.0, and a script that branched on `11` can drop that branch.
 
-"Not now" (`agentcomms update --later`, or `comms_update` with `later: true`) is a change the person approves, like
-any other, and keeps every server and command on the machine from mentioning the update until midnight, local time.
-`agentcomms update --auto off` (or `auto: "off"`) turns the check off for this machine, also approved; `--auto on`
-turns it back on at once. `doctor` shows the check on one line: on or off, when it last asked, the latest release, and
-the one running.
+**Levels.** `defaults.updates` in `config.json` is one of three, and `agentcomms update --level <level>` (or
+`comms_update` with `level`) sets it:
+
+| Level | Checks | Notices |
+|---|---|---|
+| `auto` (the default) | daily | until background updates are set up, a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
+| `every-14-days` | at most once every 14 days | at most once every 14 days |
+| `never` | never: no registry request | none |
+
+A level that updates less (`auto` → `every-14-days` → `never`) is a change the person approves, and its preview says
+what stops happening; moving back applies at once. 0.18's `updateCheck` reads as a level until one is set — `on` as
+`auto`, `off` as `never` — and every level written keeps `updateCheck` beside it in step, so an earlier release sharing
+the file checks, or does not, as the person chose. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never`
+switch it all off for one process.
+
+**A pause.** `agentcomms update --pause [1|7|14]` (or `comms_update` with `pause`) holds every notice on this machine
+for that many days, 7 when no length is given. It is a plain answer with no approval: nothing is stopped any more, so a
+pause clears nothing. A new pause replaces the old one, and none lasts longer than 14 days from when it was asked,
+however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` says when it ends.
+
+**A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
+`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up —
+whatever the pause or the 14-day spacing, and with when the pause ends.
+
+`--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
 
 It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result and is not tried
 again that day. A prerelease never counts as an update. A command at a terminal waits about three seconds for the
@@ -90,11 +110,11 @@ answer at most, then goes on while the ask finishes beside it, so a slow registr
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
 `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. Where that process cannot be started, the command asks in its own process, as before, and ends
+`npm ls` behind it. The check reads the latest release's own document too, for what its manifest declares. Where that process cannot be started, the command asks in its own process, as before, and ends
 once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
 of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
 the notice once any other server or command on the machine has found an update. The check is skipped entirely when
-`CI` is set, or when `AGENT_COMMS_UPDATE_CHECK=off`.
+`CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when `AGENT_COMMS_UPDATES=never`.
 
 ## 0.14.0: the configuration moves to version 3
 
