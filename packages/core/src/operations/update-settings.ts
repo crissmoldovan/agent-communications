@@ -2,6 +2,7 @@ import type { GatedChange } from '../change-flow.ts';
 import { type Config, type UpdateCheckSetting, updateCheckSetting } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
+import { removeUpdateJob, type UpdateJobDeps, updateJobContext, updateJobRemovalEffect } from '../update-job.ts';
 import { changeUpdateCheck, countedLatest, localStamp, nextLocalMidnight, readUpdateCheck } from '../update-state.ts';
 
 /**
@@ -81,23 +82,47 @@ export interface UpdateAutoResult {
   changed: boolean;
 }
 
-/** The daily update check on or off for this machine, in `config.json`: off is a loosening, on applies at once. */
-export function updateAutoChange(core: Core, setting: UpdateCheckSetting): GatedChange<UpdateAutoResult> {
+/**
+ * The daily update check on or off for this machine, in `config.json`: off is a loosening, on applies at once.
+ *
+ * Off reads as the level `never` (design 2026-10-16 U2's migration), at which nothing installs in the background: so it
+ * also takes the background update job away (U4), and its preview says so. The job is unloaded and deleted before the
+ * setting is written, so a refusal to write leaves the machine doing less, never more. `env` is where the job's home
+ * is read from; `job` is a test's runner and user.
+ */
+export function updateAutoChange(
+  core: Core,
+  setting: UpdateCheckSetting,
+  options: {
+    env?: NodeJS.ProcessEnv | undefined;
+    platform?: NodeJS.Platform | undefined;
+    job?: UpdateJobDeps | undefined;
+  } = {},
+): GatedChange<UpdateAutoResult> {
   if (setting !== 'on' && setting !== 'off') {
     throw new CommsError('USAGE', `"${String(setting)}" is not a setting of the daily update check; use on or off`);
   }
   const set = (config: Config): Config => ({ ...config, defaults: { ...config.defaults, updateCheck: setting } });
+  const job = () =>
+    updateJobContext(core, options.env ?? process.env, { platform: options.platform, deps: options.job });
+  let removesJob = false;
   return {
-    plan: (config: Config) => ({
-      before: config,
-      after: updateCheckSetting(config) === setting ? config : set(config),
-      summary:
-        setting === 'off'
-          ? 'Turn off the daily update check on this machine'
-          : 'Turn on the daily update check on this machine',
-    }),
+    plan: async (config: Config) => {
+      const effect = setting === 'off' ? await updateJobRemovalEffect(job()) : null;
+      removesJob = effect !== null;
+      return {
+        before: config,
+        after: updateCheckSetting(config) === setting ? config : set(config),
+        ...(effect === null ? {} : { effects: [effect] }),
+        summary:
+          setting === 'off'
+            ? 'Turn off the daily update check on this machine'
+            : 'Turn on the daily update check on this machine',
+      };
+    },
     apply: async (consent, request) => {
-      if (request.after === request.before) return { updateCheck: setting, changed: false };
+      if (removesJob) await removeUpdateJob(job());
+      if (request.after === request.before) return { updateCheck: setting, changed: removesJob };
       await core.config.update(set, consent ? { consent } : {});
       return { updateCheck: setting, changed: true };
     },

@@ -361,6 +361,30 @@
       "reason": "Back to the release before: every stable launcher's pointer switched back to the runtime it started before its last switch — a change the person approves, one effect a launcher, which edits no client configuration (design 2026-10-16, U6)."
     },
     {
+      "id": "core.update.background-job.on",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateJobChange",
+      "argv": ["--background-job", "on"],
+      "args": { "backgroundJob": "on" },
+      "expect": { "setting": "on" },
+      "reason": "Setting up the per-user job that installs verified releases in the background: an effect the person approves, its preview naming the job file and what it runs, when it runs, what macOS shows and how to remove it (design 2026-10-16 U4)."
+    },
+    {
+      "id": "core.update.background-job.off",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateJobChange",
+      "argv": ["--background-job", "off"],
+      "args": { "backgroundJob": "off" },
+      "expect": { "setting": "off" },
+      "reason": "Removing the background update job: it only makes this machine do less, so it applies at once and takes no approval (design 2026-10-16 U4)."
+    },
+    {
       "id": "core.approve",
       "package": "core",
       "cli": "approve",
