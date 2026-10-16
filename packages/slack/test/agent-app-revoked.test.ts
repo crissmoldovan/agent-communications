@@ -292,7 +292,7 @@ test('for a person’s own app, doctor names the client-secret sign-in instead',
     ),
     fix,
   );
-  // The organisation's wording, not a bare "admin": a runner's home can be C:\Users\runneradmin, inside the command.
+  // The organisation's wording, not a bare "admin": a Windows runner's account is runneradmin, and its home is in the command.
   assert.doesNotMatch(fix, /organisation['’]s admin/);
 });
 
