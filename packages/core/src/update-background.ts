@@ -40,7 +40,7 @@ import {
   type VerifiedProvenance,
   verifyProvenance,
 } from './update-provenance.ts';
-import { npmRegistry, type RegistryAnswer, type ReleaseRegistry } from './update-release.ts';
+import { npmRegistry, type RegistryAnswer, type ReleaseRegistry, releaseIntegrity } from './update-release.ts';
 import {
   type BackgroundNotice,
   changeUpdateCheck,
@@ -502,11 +502,39 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   const ahead = launched.filter((entry) => entry.version !== null && (compareVersions(entry.version, latest) ?? 0) > 0);
   if (behind.length === 0) return stop('up-to-date', `every stable launcher here starts ${latest}, the latest`, facts);
 
-  const flags = releaseFlags(coreAnswer.packument.versions?.[latest]);
+  // What the manifest says, unverified: only ever a reason to hold back — a pause holds a release that does not say it
+  // is a security fix — until core's release verifies below. Nothing else is acted on, or said, before then.
   const servedAt = [coreAnswer.servedAt];
   const clock = () => new Date(Math.min(run.now.getTime(), ...servedAt.flatMap((at) => (at ? [at.getTime()] : []))));
   const paused = settings.pausedUntil(clock());
-  if (paused !== undefined && clock() < paused && !flags.security) {
+  const pausedNow = paused !== undefined && clock() < paused;
+  if (pausedNow && !releaseFlags(coreAnswer.packument.versions?.[latest]).security) {
+    return stop(
+      'paused',
+      `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
+      facts,
+    );
+  }
+
+  // Core's release, verified before anything the registry says of it is acted on — a security fix, a needed decision,
+  // a major, a downgrade — or made a notice: one that does not verify is only refused.
+  const verifier =
+    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  const coreIntegrity = releaseIntegrity(coreAnswer.packument, latest);
+  if (coreIntegrity === null) return stop('held', `${corePackage}@${latest} is not on the registry yet`, facts);
+  const coreVerdict = await verifyProvenance(
+    { packageName: corePackage, version: latest, integrity: coreIntegrity },
+    { fetch: deps.provenance?.fetch, verifyBundle: verifier },
+  );
+  if (!coreVerdict.ok) {
+    const text = `${latest} was not installed: the provenance of ${corePackage}@${latest} did not verify (${coreVerdict.field}: ${coreVerdict.reason}). Nothing was changed.`;
+    return stop('refused', `the provenance of ${corePackage}@${latest} did not verify: ${coreVerdict.field}`, facts, {
+      text,
+      outcome: 'refused',
+    });
+  }
+  const flags = releaseFlags(coreAnswer.packument.versions?.[latest]);
+  if (pausedNow && !flags.security) {
     return stop(
       'paused',
       `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
@@ -615,10 +643,12 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     to: latest,
     runtime: managedRuntimeDir(core.paths.dataDir, entry.packageName, latest),
   }));
-  // Every package verified before any is installed: one refusal installs nothing at all.
-  const verifier =
-    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  // Every package verified before any is installed: one refusal installs nothing at all. Core's was, above.
   for (const item of packages) {
+    if (item.package === corePackage) {
+      item.provenance = coreVerdict.provenance;
+      continue;
+    }
     const integrity = String(answers.get(item.package)?.packument.versions?.[latest]?.dist?.integrity);
     const verdict: ProvenanceVerdict = await verifyProvenance(
       { packageName: item.package, version: latest, integrity },

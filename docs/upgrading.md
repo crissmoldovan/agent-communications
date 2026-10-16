@@ -202,6 +202,11 @@ nothing unless all of this holds:
   built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
   version with no attestation, or any other identity, is refused, and nothing at all is installed.
 
+Core's latest release is verified first, before anything the registry says of it is acted on or made a notice — a
+security fix's shorter hold and its way past a pause, a needed decision, a major release, a downgrade. Until then the
+registry's word can only hold a release back: a pause holds one that does not say it is a security fix. A release that
+does not verify is only refused, and its notice says only that.
+
 Then it installs each package into a runtime of its own, checks that npm installed the tarball whose provenance was
 verified, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
 reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
