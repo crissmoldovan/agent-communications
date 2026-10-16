@@ -3,6 +3,69 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.20.0
+
+**Updates never interrupt a conversation any more, and by default they install themselves in the background, checked
+first.** Until now, as soon as a newer version was out, every tool refused to run ("Hang on a minute, there's an
+update") until you updated, or approved "later". That approval also lapsed at midnight. Now tools always run, and a
+newer version is mentioned once. The default level installs verified releases in the background after one yes from
+you. Organisations' Slack workspaces can post as the app too, through one extra agent app, without anyone's
+connection changing.
+
+**Updates.**
+- **Nothing stops for an update.** A session's first result mentions a newer version once, and a command prints it on
+  stderr at most once a day. `UPDATE_REQUIRED` and exit code 11 are gone.
+- **Three levels,** chosen with `agentcomms update --level` or `comms_update` `level`:
+  - `auto`, the default, installs in the background;
+  - `every-14-days` mentions a new version at most every 14 days, and installs with your yes;
+  - `never` checks nothing.
+
+  Moving to a level that updates less shows a preview and needs your yes; moving back applies at once.
+- **Pause for 1, 7 or 14 days** with `--pause`, and resume with `--resume`. It needs no approval. A pause never holds
+  back a security fix.
+- **Background updates, set up with one yes** (`update --background-job on`, or `comms_update`
+  `backgroundJob: "on"`): a daily per-user job. It is a LaunchAgent on macOS, a systemd user timer on Linux, and a
+  scheduled task on Windows, with no admin rights needed. Each run:
+  - waits 3 days after a release, or 24 hours for one marked as a security fix;
+  - checks with Sigstore that every package was built by this repository's release workflow, from that version's
+    tag, on GitHub's runners, and refuses anything else;
+  - installs and self-checks, then switches all packages at once.
+
+  A major version, or a release that needs a decision from you, is mentioned, never installed by itself. Every run
+  is in the audit log. The new version takes effect the next time your client starts, or after `/mcp` → Reconnect
+  in Claude Code.
+- **Registrations start a stable launcher,** so after one approved update that moves them, an update never edits
+  your client's configuration again. `update --rollback` goes back to the version before, with your approval, and
+  that version is held until a newer one comes out.
+- **A security fix** is mentioned at once, whatever the level. If it isn't installed yet, the next send or post
+  preview begins with it, once.
+- **An organisation can only make updates stricter.** A file beside its profile can cap members at `every-14-days`
+  or `never`, or forbid background updates.
+
+**Slack, posting as the app for organisations** (CUE-493).
+- An admin creates one extra bot-only app with `agent-slack manifest --mode agent`, installs it once, and shares its
+  token privately.
+- Each member who wants the app identity pastes the token once with `agent-slack workspace bot <org>/slack`. Nobody's
+  existing connection changes, and anyone who does nothing keeps the labelled posts from 0.19.0.
+- If the organisation names its agent app in a file beside its profile, a pasted token is checked to be that app's.
+- When the admin regenerates the token, a member's next app post is refused (nothing is sent), the old token is
+  forgotten, and the post after that goes out labelled until they paste the new one.
+
+Why: a person complained that the agent "blocks the conversation while updating". Updating should cost a person
+nothing, and should never be a way to slip unchecked code onto their machine. And the app identity from 0.19.0
+couldn't reach organisation workspaces without disrupting everyone's connection.
+
+**Upgrading.**
+- After updating, nothing stops for updates. The default level is `auto`. Your first session mentions setting up
+  background updates: say yes to its preview, or choose `every-14-days` or `never`.
+- One approved update moves your registrations to the stable launcher. It is the last update that edits client
+  configs. Restart your client afterwards.
+- An approval prepared by 0.19 for an install or update has to be prepared again.
+- On a company machine, the background job may be flagged by security software. Your organisation can forbid it with
+  `background: false` in the side file beside its profile.
+- An organisation profile itself is unchanged. The new organisation settings live in files beside it, which members
+  on older releases never open.
+
 ## 0.19.0
 
 **What an agent sends is now labelled as your agent's: "Cristian Moldovan (agent)", not just your name.** People who

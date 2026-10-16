@@ -41,6 +41,11 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   one of their confirmed label rules said so. Also in scope: any way to get the label's word, name or Slack icon
   changed without an approval of that exact change, or to make the preview's first line state a different identity
   from the one that is sent.
+- **An update that installs what it should not** — any way to make the background update job (or `comms_update`)
+  install or switch to a package that was not built by this repository's `release.yml` from the tag of its own
+  version on a GitHub-hosted runner, as its Sigstore provenance proves; to skip the release hold, a major version's or
+  a needs-decision release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a
+  running server is using.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
