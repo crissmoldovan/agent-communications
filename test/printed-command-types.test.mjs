@@ -136,10 +136,12 @@ const MUTATIONS = [
     fixture: 'encapsulation.ts',
   },
   {
-    name: 'the update’s command takes a string',
-    file: 'packages/core/src/update-state.ts',
-    from: "  readonly update: { readonly tool: 'comms_update'; readonly command: Handoff };",
-    to: "  readonly update: { readonly tool: 'comms_update'; readonly command: Handoff | string };",
+    // Was the update stop's `UpdateWays`, retired with the stop (design 2026-10-16, U1): the next command field the
+    // same fixture guards, so the mutation still proves `command-fields.ts` is not blind.
+    name: 'the change policy’s tightening command takes a string',
+    file: 'packages/core/src/operations/change-policy.ts',
+    from: '    command: Handoff;\n    /** From a chat: this tool, with these arguments. */',
+    to: '    command: Handoff | string;\n    /** From a chat: this tool, with these arguments. */',
     fixture: 'command-fields.ts',
   },
   {
