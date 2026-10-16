@@ -909,8 +909,14 @@ export async function prepareSend(
     reason: flags.length > 0 ? `escalated: ${flags.join(', ')}` : `policy ${effectivePolicy}`,
   });
 
-  // Asked once, once the approval exists: a prepare refused before here asks nothing (design 2026-10-16, U7).
-  const security = await securityNotice({ core: context.core, env: context.env, running: VERSION, act: 'send' });
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = await securityNotice({
+    core: context.core,
+    env: context.env,
+    running: VERSION,
+    act: 'send',
+    approvalId: record.approvalId,
+  });
   return {
     approvalId: record.approvalId,
     inbox: alias,

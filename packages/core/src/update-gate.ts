@@ -24,6 +24,7 @@ import {
   updateCheckSwitchedOff,
   updateVerdict,
   within,
+  withSecurityShown,
 } from './update-state.ts';
 import { isBehind, isVersion } from './versions.ts';
 
@@ -357,12 +358,14 @@ function pausedWords(notice: Partial<Notice>): string {
  * The line a send or post preview opens with when a security fix is out and this machine does not install it on its
  * own (design 2026-10-16, U7): `A security fix is out (0.20.1): update first, or approve to send anyway` — or null.
  *
- * Every channel's send and post prepare calls this, once it has prepared the approval. On `every-14-days`, on `never`,
- * and on `auto` while its background job is not set up, a release whose manifest declares a security fix — one this
- * process is behind — is asked about once, in the next preview: what it returns is recorded as asked, under the
- * file's lock, so the preview after it is as it always was. The person's yes to that preview is the answer; the line
- * is display only, never in what an approval binds. A pause never holds it. Nothing at all where the environment
- * switched updates off, and it never throws: a preview is never refused on its account.
+ * Every channel's send and post prepare calls this, once it has prepared the approval, and names it (`approvalId`). On
+ * `every-14-days`, on `never`, and on `auto` while its background job is not set up or does not run, a release whose
+ * manifest declares a security fix — one this process is behind — is asked about in every preview until the person
+ * answers: the approval it was shown on is recorded, under the file's lock, and the person's yes to it — approved, or
+ * sent (`securityAnswered`, which the approval store calls) — is the answer. A preview prepared and never answered,
+ * set aside, run out or refused, answers nothing, so the next one asks again. The line is display only, never in what
+ * an approval binds. A pause never holds it. Nothing at all where the environment switched updates off, and it never
+ * throws: a preview is never refused on its account.
  */
 export async function securityNotice(options: {
   core: Core;
@@ -371,6 +374,8 @@ export async function securityNotice(options: {
   running: string;
   /** What the person approves: `send` for mail, `post` for a channel message. */
   act?: string | undefined;
+  /** The approval the preview is for: the person's yes to it answers the line. Left out, nothing answers it. */
+  approvalId?: string | undefined;
 }): Promise<string | null> {
   try {
     if (updateCheckSwitchedOff(options.env) !== null) return null;
@@ -382,13 +387,19 @@ export async function securityNotice(options: {
       return version === null || record.securityAsked === version ? null : version;
     };
     // Nothing to ask, as nearly always: read, and no lock taken.
-    if (asked(await readUpdateCheck(options.core.paths.stateDir)) === null) return null;
-    const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
-      const version = asked(record);
-      return version === null ? null : { record: { ...record, securityAsked: version }, result: version };
-    });
-    if (decided.result === undefined) return null;
-    return `A security fix is out (${decided.result}): update first, or approve to ${options.act ?? 'send'} anyway`;
+    const version = asked(await readUpdateCheck(options.core.paths.stateDir));
+    if (version === null) return null;
+    const { approvalId } = options;
+    let shown = version;
+    if (approvalId !== undefined) {
+      const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
+        const now = asked(record);
+        return now === null ? null : { record: withSecurityShown(record, now, approvalId), result: now };
+      });
+      if (decided.result === undefined) return null;
+      shown = decided.result;
+    }
+    return `A security fix is out (${shown}): update first, or approve to ${options.act ?? 'send'} anyway`;
   } catch {
     return null;
   }

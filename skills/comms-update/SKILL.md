@@ -30,8 +30,9 @@ block of its own, and no later result of that session repeats it:
 
 A release that fixes a security problem is said at once, whatever a pause, and on a computer that does not install it
 on its own the next send or post preview opens with `A security fix is out (0.20.1): update first, or approve to send
-anyway`. Show that preview in full as always; it is asked once. Their yes to it sends, and their "update first" is
-steps 1 to 3 below — the prepared send waits, or expires and is prepared again.
+anyway`. Show that preview in full as always. It is asked in every preview until they answer one: their yes to it
+sends, and counts as the answer, so it is not asked again. Their "update first" is steps 1 to 3 below — the prepared
+send waits, or expires and is prepared again, still carrying the line.
 
 A command at a terminal says the same once on stderr, at most once a day for the computer, and runs. A client that
 still answers `UPDATE_REQUIRED`, or a command that exits `11`, is a server or command older than 0.20.0: it is behind,

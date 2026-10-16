@@ -116,8 +116,10 @@ however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` s
 has not run in 48 hours —
 whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
 preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
-send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
-the line is shown, never part of what the approval binds.
+send anyway` (`… to post anyway` on Slack). It is asked in every preview until the person answers one: once a send or
+post whose preview carried it is approved, or sent, it counts as asked on the machine and is not shown again for that
+release. A preview prepared and never answered — set aside, run out, refused — answers nothing, so the next one asks
+again. The line is shown, never part of what the approval binds.
 
 **An organisation's caps.** An organisation can only make its members' updates stricter, in a file beside its
 profile — `acme.agentcomms.updates.json` beside `acme.agentcomms.json` — holding

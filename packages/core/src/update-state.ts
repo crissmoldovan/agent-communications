@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { withFileLock } from './lock.ts';
 import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
@@ -111,10 +112,16 @@ export interface UpdateCheckRecord {
    */
   release: ReleaseFacts | null;
   /**
-   * The security release a send or post preview has already carried the line for (design 2026-10-16, U7): it is asked
-   * once, and the person's yes to that preview is the answer.
+   * The security release the person has answered the line about (design 2026-10-16, U7): a send or post whose preview
+   * carried it was approved, or sent. It is asked until then, and never after.
    */
   securityAsked: string | null;
+  /**
+   * The security release the line is out for, and the approvals whose previews carried it (`securityShown`): the
+   * person's yes to any of them is the answer (`securityAnswered`). Additive: a release that does not know the field
+   * ignores it.
+   */
+  securityShown?: SecurityShown | null | undefined;
   /**
    * What the last background run left for the next session to say (design 2026-10-16 U5 step 7): a release it
    * installed, which a restart picks up, or one it would not install, and why. Null when it left nothing. Additive:
@@ -127,6 +134,23 @@ export interface UpdateCheckRecord {
    * update that edits a client's configuration, and the notice says so. Null when it is not known. Additive.
    */
   moves?: number | null | undefined;
+}
+
+/** The security release a preview's line was about, and the approvals whose previews carried it, the latest last. */
+export interface SecurityShown {
+  version: string;
+  approvals: string[];
+}
+
+/** How many approvals carrying the line are remembered: the latest, which are the ones a person can still answer. */
+const SHOWN_LIMIT = 32;
+
+function readSecurityShown(value: unknown): SecurityShown | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { version, approvals } = value as Record<string, unknown>;
+  if (!isVersion(version) || !Array.isArray(approvals)) return null;
+  const ids = approvals.filter((id): id is string => typeof id === 'string' && APPROVAL_ID_PATTERN.test(id));
+  return { version, approvals: ids.slice(-SHOWN_LIMIT) };
 }
 
 /** What a release's core manifest declares under `agentcommsRelease`, for its version. */
@@ -204,6 +228,7 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   pausedUntil: null,
   release: null,
   securityAsked: null,
+  securityShown: null,
   backgroundNotice: null,
   moves: null,
 });
@@ -256,6 +281,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     pausedUntil: isTime(held.pausedUntil) ? held.pausedUntil : null,
     release: readRelease(held.release),
     securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
+    securityShown: readSecurityShown(held.securityShown),
     backgroundNotice: readBackgroundNotice(held.backgroundNotice),
     moves: typeof held.moves === 'number' && Number.isInteger(held.moves) && held.moves >= 0 ? held.moves : null,
   };
@@ -562,6 +588,37 @@ export function securityRelease(record: UpdateCheckRecord, running: string): str
   const latest = countedLatest(record);
   if (latest === null || record.release?.version !== latest || !record.release.security) return null;
   return isVersion(running) && isBehind(running, latest) ? latest : null;
+}
+
+/**
+ * Records that a preview carried the security line for `version`, on the approval `approvalId` (design 2026-10-16, U7):
+ * the person's yes to it — approved, or sent — is the answer (`securityAnswered`). A line about another release starts
+ * the list afresh.
+ */
+export function withSecurityShown(record: UpdateCheckRecord, version: string, approvalId: string): UpdateCheckRecord {
+  const held = record.securityShown?.version === version ? record.securityShown.approvals : [];
+  const approvals = [...held.filter((id) => id !== approvalId), approvalId].slice(-SHOWN_LIMIT);
+  return { ...record, securityShown: { version, approvals } };
+}
+
+/**
+ * The person answered the security line (design 2026-10-16, U7): the send or post `approvalId` was approved, or claimed
+ * to be sent. When its preview carried the line, that release counts as asked from now on, and the next preview is as
+ * it always was. An approval no preview carried it on answers nothing. Called by the approval store
+ * (`ApprovalStoreOptions.answered`); it never throws, and a send never waits long on it.
+ */
+export async function securityAnswered(stateDir: string, approvalId: string): Promise<void> {
+  const carried = (record: UpdateCheckRecord) => record.securityShown?.approvals.includes(approvalId) === true;
+  try {
+    // Nearly always nothing to do: read, and no lock taken.
+    if (!carried(await readUpdateCheck(stateDir))) return;
+    await changeUpdateCheck(stateDir, (record) => {
+      if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
+      return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
+    });
+  } catch {
+    // The answer is the person's yes, given; failing to record it only means the line is shown once more.
+  }
 }
 
 /** A local time as a person reads it in a preview: `2026-09-29 00:00`. */

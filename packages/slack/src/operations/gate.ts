@@ -58,7 +58,8 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     // This account's own record of its app's posts (design 2026-10-15 S5).
     appPosts: appPostRecordFor(context.core.paths.stateDir, account.id),
     // A security fix this machine does not install on its own, asked about once in a preview (design 2026-10-16, U7).
-    securityNotice: (act) => securityNotice({ core: context.core, env: context.env, running: VERSION, act }),
+    securityNotice: (act, approvalId) =>
+      securityNotice({ core: context.core, env: context.env, running: VERSION, act, approvalId }),
     // Who each act appears to come from (design 2026-10-15): the person's settings, and this account's app if it has one.
     label: {
       account: name,
