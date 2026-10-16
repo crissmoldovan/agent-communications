@@ -71,6 +71,7 @@ import {
   serverPruneChange,
 } from './operations/servers.ts';
 import { updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
 import {
   type UpdateAutoResult,
   type UpdateLaterResult,
@@ -162,6 +163,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 not now: nothing stops for the update until midnight
   update --auto on|off [--approval <id>]
                                 turn the daily update check on or off for this machine
+  update --rollback [--approval <id>]
+                                switch every stable launcher back to the release before; edits no client config
   secrets migrate --to keychain|file [--approval <id>]
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
@@ -254,6 +257,7 @@ function parse(argv: string[]) {
       check: { type: 'boolean', default: false },
       later: { type: 'boolean', default: false },
       auto: { type: 'string' },
+      rollback: { type: 'boolean', default: false },
       // A flag on `org add`, and on `org update` the flag and the word after it — `on` or `off` — read from the tokens.
       'for-other-addresses': { type: 'boolean', default: false },
       adopt: { type: 'string' },
@@ -879,11 +883,23 @@ export async function main(
       }
       case 'update': {
         if (sub !== undefined) {
-          throw usage('usage: update [--check | --later | --auto on|off] [--no-verify] [--approval <id>]');
+          throw usage('usage: update [--check | --later | --auto on|off | --rollback] [--no-verify] [--approval <id>]');
         }
-        const modes = [values.check, values.later, values.auto !== undefined].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && (values.later || values.auto !== undefined))) {
-          throw usage('--check, --later and --auto are one at a time, and --no-verify is for the update itself');
+        const modes = [values.check, values.later, values.auto !== undefined, values.rollback].filter(Boolean).length;
+        if (modes > 1 || (values['no-verify'] && (values.later || values.auto !== undefined || values.rollback))) {
+          throw usage(
+            '--check, --later, --auto and --rollback are one at a time, and --no-verify is for the update itself',
+          );
+        }
+        if (values.rollback) {
+          const result = await gatedChangeAtTerminal(core, updateRollbackChange(core), {
+            ...approval,
+            rerun: ['update', '--rollback'],
+          });
+          // A launcher that did not go back is not a success to a script, as for the update it undoes.
+          softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
+          writeResult(result, output, renderRollback);
+          return;
         }
         if (values.later) {
           const result = await gatedChangeAtTerminal(core, updateLaterChange(core), {
@@ -1241,6 +1257,21 @@ function renderAuto(result: UpdateAutoResult): string {
       ? 'on: once a day this machine asks npm for a newer release, and stops until it is updated or put off'
       : 'off: nothing on this machine asks npm for a newer release, and nothing stops for one';
   return `The daily update check is ${state}${result.changed ? '' : ' (it already was)'}.`;
+}
+
+function renderRollback(result: UpdateRollbackResult): string {
+  const lines: string[] = [];
+  for (const step of result.steps) {
+    lines.push(
+      step.outcome === 'switched'
+        ? `Switched the stable launcher ${step.launcher} back from ${step.from ?? 'its runtime'} to ${step.to ?? step.runtime}: no client configuration was changed.`
+        : `Could not switch the stable launcher ${step.launcher} back: ${step.detail ?? 'no reason given'}`,
+    );
+  }
+  if (result.status === 'nothing') lines.push('Nothing was changed: no stable launcher here has a release before.');
+  for (const left of result.left) lines.push(`Left as it is: ${left.launcher}: ${left.reason}.`);
+  if (result.next) lines.push('', result.next);
+  return lines.join('\n');
 }
 
 function renderChannels(report: ChannelsReport): string {

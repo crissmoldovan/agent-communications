@@ -24,7 +24,7 @@ import { inlineCommand } from '../src/cli-runtime.ts';
 import type { AccountConfig, InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER, isCommand } from '../src/handoffs.ts';
-import { launcherName, launcherPaths, readPointer } from '../src/launcher.ts';
+import { launcherName, launcherPaths, readPointer, switchPointer, writeLauncher } from '../src/launcher.ts';
 import { managedShimPath, managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { managedRuntimeDir, managedRuntimeEntry, whichExecutable } from '../src/mcp-install.ts';
@@ -892,6 +892,9 @@ test('update prepares one approval listing every step, writes nothing before it,
     // A managed entry starts the product's stable launcher: by its path, home as ~, on POSIX; Node on Windows.
     const starts = (name: string) =>
       process.platform === 'win32' ? process.execPath : join('~', 'data', 'launch', name);
+    // The one update that moves an entry onto the launcher says that it is the last to edit it.
+    const later = (client: string) =>
+      `  - from then on, an update switches that launcher's pointer and leaves this entry in ${client}'s configuration as it is`;
     const points = (name: string, label: string, packageName: string) =>
       `  - points the stable launcher ${launcherPaths(m.dataDir, name).launcher} at ${managedRuntimeDir(m.dataDir, packageName, LATEST)}: every ${label} registration on this machine that starts it runs ${LATEST} from its next start`;
     assert.deepEqual(
@@ -905,10 +908,12 @@ test('update prepares one approval listing every step, writes nothing before it,
         `  - registers the Gmail MCP server with cursor as "gmail" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the mailbox acme/gmail, read-only, as now`,
         goes(starts('gmail')),
         points('gmail', 'Gmail', PACKAGES.gmail),
+        later('cursor'),
         ...shim('agent-gmail'),
         `  - registers the Slack MCP server with cursor as "slack-acme" again (user scope, managed launcher), at ${LATEST} in place of ${OLD} — pinned to the workspace acme/slack, as now`,
         goes(starts('slack')),
         points('slack', 'Slack', PACKAGES.slack),
+        later('cursor'),
         ...shim('agent-slack'),
         `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: \`npm install -g ${PACKAGES.core}@${LATEST}\``,
       ],
@@ -1166,12 +1171,19 @@ test('a runtime that cannot be installed leaves its registrations as they were, 
 test('up to date: it says so, and prepares nothing', async () => {
   const m = machine();
   makeRuntime(m, PACKAGES.gmail, LATEST);
-  cursor(m, { gmail: managed(m, PACKAGES.gmail, LATEST, ['--inbox', 'acme/gmail']), slack: npx('slack', LATEST) });
+  /*
+   * Up to date is at the latest release and on the stable launcher (design 2026-10-16, U6): a managed entry that still
+   * names a versioned runtime is moved by the next update, once, which is a change (see launcher-update.test.ts).
+   */
+  await writeLauncher(m.dataDir, 'gmail', process.execPath);
+  await switchPointer(m.dataDir, 'gmail', managedRuntimeDir(m.dataDir, PACKAGES.gmail, LATEST));
+  cursor(m, { gmail: launched(m, PACKAGES.gmail, ['--inbox', 'acme/gmail']), slack: npx('slack', LATEST) });
   const deps = fakes(m, { global: { [PACKAGES.core]: LATEST } });
   const { ok, close } = await connect(m, { update: deps });
   try {
     const check = await ok('comms_update', { check: true });
     assert.deepEqual(check.behind, []);
+    assert.deepEqual(check.moves, [], 'nothing to move to the launcher either');
     assert.deepEqual(
       of(check.upToDate, 'runtime').map((item) => [item.package, item.version]),
       [[PACKAGES.gmail, LATEST]],
