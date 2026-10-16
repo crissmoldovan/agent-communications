@@ -23,6 +23,7 @@ import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from 
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
+import { inspectUpdateJob, type UpdateJobDeps, updateJobContext } from '../update-job.ts';
 import {
   countedLatest,
   readUpdateCheck,
@@ -75,6 +76,13 @@ export interface DoctorOptions {
   keyring?: KeyringModule | null | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
   platform?: NodeJS.Platform | undefined;
+  /** For a test: the runner the background update job's scheduler is asked through, so none is real. */
+  updateJob?: UpdateJobDeps | undefined;
+  /**
+   * False when an organisation profile here says `updates.background: false` (design 2026-10-16 U8). Track A's
+   * organisation cap supplies it; until then nothing turns background updates off.
+   */
+  background?: boolean | undefined;
 }
 
 /**
@@ -270,6 +278,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
   checks.push(await updateCheckLine(core, env, handoffs));
+  checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
 }
@@ -378,6 +387,104 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
           ),
         }),
   };
+}
+
+/**
+ * The background update job (design 2026-10-16 U4): installed, missing, foreign or stale, each with what fixes it — and
+ * nothing at all on a machine that never set one up, so every other doctor reads as it always did.
+ *
+ * Read from its files on macOS and Linux, so the doctor starts no program there. On Windows the scheduler is asked
+ * only when this installation recorded a job; a task another installation registered with no record here is not
+ * looked for. A job that cannot be read is something to look at, never a failure: the machine works without it.
+ */
+async function updateJobLines(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  platform: NodeJS.Platform,
+  options: DoctorOptions,
+): Promise<DoctorCheck[]> {
+  const name = 'background update job';
+  const context = updateJobContext(core, env, { platform, deps: options.updateJob });
+  let seen: Awaited<ReturnType<typeof inspectUpdateJob>>;
+  try {
+    seen = await inspectUpdateJob(context, { query: 'when-recorded' });
+  } catch (error) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  const on = handoffs.core(['update', '--background-job', 'on']);
+  const off = handoffs.core(['update', '--background-job', 'off']);
+  const since = seen.marker === null ? '' : ` (set up ${seen.marker.installedAt})`;
+  // A profile that came after the job (Review focus 5): the job's next run removes it, and this says so before then.
+  if (
+    options.background === false &&
+    (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')
+  ) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `an organisation profile turns background updates off here: ${seen.where} is still set up${since}, and its next run removes it`,
+        fix: remedy(handoffSentence(off, (command) => `Remove it now with ${command}.`)),
+      },
+    ];
+  }
+  switch (seen.state) {
+    case 'not-set-up':
+      return [];
+    case 'installed':
+      return [
+        { name, ok: true, detail: `installed: ${seen.where} runs ${context.launcher} update --background${since}` },
+      ];
+    case 'missing':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `missing: set up${since}, and ${seen.where} is gone, so nothing installs in the background`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (forget) => `Set it up again with ${again}, or forget it with ${forget}.`),
+            ),
+          ),
+        },
+      ];
+    case 'foreign':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `foreign: ${seen.where} is not this installation's — ${seen.reason}`,
+          fix: remedy(
+            'This installation leaves it alone. If it is not wanted, remove it with the installation that set it up, or by hand.',
+          ),
+        },
+      ];
+    case 'stale':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `stale: ${seen.where} is this installation's, but ${seen.reason}${since}`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (remove) => `Write it again with ${again}, or remove it with ${remove}.`),
+            ),
+          ),
+        },
+      ];
+  }
 }
 
 /**

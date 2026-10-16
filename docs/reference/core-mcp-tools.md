@@ -252,7 +252,8 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
 | `later` | boolean | no | not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
-| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once |
+| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`, and also removes the background update job; `on` applies at once |
+| `backgroundJob` | `on` \\| `off` | no | set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_names_migrate`

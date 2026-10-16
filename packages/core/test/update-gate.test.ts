@@ -1371,7 +1371,11 @@ test('not now and turning the check off each need the person’s approval, and c
   // And without an approval the change flow applies neither: both need one.
   const fresh = machine();
   await seed(fresh, { latest: LATEST, behind: true });
-  const changes: GatedChange<unknown>[] = [updateLaterChange(fresh.core), updateAutoChange(fresh.core, 'off')];
+  // Its home is the test's own: turning the check off looks for the background update job there (design 2026-10-16 U4).
+  const changes: GatedChange<unknown>[] = [
+    updateLaterChange(fresh.core),
+    updateAutoChange(fresh.core, 'off', { env: fresh.env }),
+  ];
   for (const change of changes) {
     const request = await change.plan(await fresh.core.config.load());
     const outcome = await gatedChange(fresh.core, change, { channel: 'core', surface: 'mcp' });

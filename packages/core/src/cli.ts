@@ -71,6 +71,7 @@ import {
   serverPruneChange,
 } from './operations/servers.ts';
 import { updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import {
   type UpdateAutoResult,
   type UpdateLaterResult,
@@ -82,6 +83,7 @@ import { resolvePaths } from './paths.ts';
 import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
 import { CHANGE_CLAIM, exemptFromUpdateGate, updateGateAtTerminal } from './update-gate.ts';
+import type { UpdateJobDeps } from './update-job.ts';
 import { VERSION } from './version.ts';
 
 /**
@@ -162,6 +164,9 @@ Usage — run these with this CLI, each as the words after its program:
                                 not now: nothing stops for the update until midnight
   update --auto on|off [--approval <id>]
                                 turn the daily update check on or off for this machine
+  update --background-job on|off [--approval <id>]
+                                set up the per-user job that installs verified releases in the
+                                background, approved first; off removes it at once
   secrets migrate --to keychain|file [--approval <id>]
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
@@ -254,6 +259,7 @@ function parse(argv: string[]) {
       check: { type: 'boolean', default: false },
       later: { type: 'boolean', default: false },
       auto: { type: 'string' },
+      'background-job': { type: 'string' },
       // A flag on `org add`, and on `org update` the flag and the word after it — `on` or `off` — read from the tokens.
       'for-other-addresses': { type: 'boolean', default: false },
       adopt: { type: 'string' },
@@ -413,6 +419,11 @@ export async function main(
           platform: NodeJS.Platform;
         }) => Promise<void>)
       | undefined;
+    /**
+     * The runner the background update job's commands go through, its user, its random minute and its clock: injected
+     * so a test never loads, schedules or removes a real job.
+     */
+    updateJob?: UpdateJobDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -513,7 +524,10 @@ export async function main(
         );
         return;
       case 'doctor': {
-        const report = await doctor(core, env, { platform });
+        const report = await doctor(core, env, {
+          platform,
+          ...(deps.updateJob === undefined ? {} : { updateJob: deps.updateJob }),
+        });
         writeResult(report, output, renderDoctor);
         if (!report.ok)
           throw new CommsError('CONFIG', 'doctor found problems', { hint: 'Apply the fixes listed above.' });
@@ -879,11 +893,27 @@ export async function main(
       }
       case 'update': {
         if (sub !== undefined) {
-          throw usage('usage: update [--check | --later | --auto on|off] [--no-verify] [--approval <id>]');
+          throw usage(
+            'usage: update [--check | --later | --auto on|off | --background-job on|off] [--no-verify] [--approval <id>]',
+          );
         }
-        const modes = [values.check, values.later, values.auto !== undefined].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && (values.later || values.auto !== undefined))) {
-          throw usage('--check, --later and --auto are one at a time, and --no-verify is for the update itself');
+        const job = values['background-job'];
+        const settings = values.later || values.auto !== undefined || job !== undefined;
+        const modes = [values.check, values.later, values.auto !== undefined, job !== undefined].filter(Boolean).length;
+        if (modes > 1 || (values['no-verify'] && settings)) {
+          throw usage(
+            '--check, --later, --auto and --background-job are one at a time, and --no-verify is for the update itself',
+          );
+        }
+        if (job !== undefined) {
+          if (job !== 'on' && job !== 'off') throw usage('--background-job takes on or off');
+          const result = await gatedChangeAtTerminal(
+            core,
+            updateJobChange(core, env, job, { platform, deps: deps.updateJob, surface: 'cli' }),
+            { ...approval, rerun: ['update', '--background-job', job] },
+          );
+          writeResult(result, output, renderUpdateJob);
+          return;
         }
         if (values.later) {
           const result = await gatedChangeAtTerminal(core, updateLaterChange(core), {
@@ -895,10 +925,14 @@ export async function main(
         }
         if (values.auto !== undefined) {
           if (values.auto !== 'on' && values.auto !== 'off') throw usage('--auto takes on or off');
-          const result = await gatedChangeAtTerminal(core, updateAutoChange(core, values.auto), {
-            ...approval,
-            rerun: ['update', '--auto', values.auto],
-          });
+          const result = await gatedChangeAtTerminal(
+            core,
+            updateAutoChange(core, values.auto, { env, platform, job: deps.updateJob }),
+            {
+              ...approval,
+              rerun: ['update', '--auto', values.auto],
+            },
+          );
           writeResult(result, output, renderAuto);
           return;
         }
@@ -1241,6 +1275,20 @@ function renderAuto(result: UpdateAutoResult): string {
       ? 'on: once a day this machine asks npm for a newer release, and stops until it is updated or put off'
       : 'off: nothing on this machine asks npm for a newer release, and nothing stops for one';
   return `The daily update check is ${state}${result.changed ? '' : ' (it already was)'}.`;
+}
+
+function renderUpdateJob(result: UpdateJobResult): string {
+  if (result.backgroundJob === 'on') {
+    const remove = result.remove === undefined ? '' : `\nTo remove it: ${result.remove}`;
+    return result.changed
+      ? `The background update job is set up: ${result.where} runs ${result.command.join(' ')}, ${result.schedule}.${remove}`
+      : `The background update job is already set up: ${result.where}, ${result.schedule}.${remove}`;
+  }
+  const left =
+    result.foreign === undefined
+      ? ''
+      : ` ${result.foreign.where} was left as it is: this installation did not write it (${result.foreign.reason}).`;
+  return `${result.changed ? `The background update job is removed (${result.where}).` : 'There is no background update job of this installation to remove.'}${left}`;
 }
 
 function renderChannels(report: ChannelsReport): string {
