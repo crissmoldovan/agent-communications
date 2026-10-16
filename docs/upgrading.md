@@ -96,7 +96,7 @@ older than 0.20.0, and a script that branched on `11` can drop that branch.
 
 | Level | Checks | Notices |
 |---|---|---|
-| `auto` (the default) | daily | until background updates are set up, a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
+| `auto` (the default) | daily | until background updates are set up — and whenever the job has not run in 48 hours — a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
 | `every-14-days` | at most once every 14 days | at most once every 14 days |
 | `never` | never: no registry request | none |
 
@@ -112,7 +112,8 @@ pause clears nothing. A new pause replaces the old one, and none lasts longer th
 however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` says when it ends.
 
 **A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
-`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up —
+`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up or
+has not run in 48 hours —
 whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
 preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
 send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
@@ -156,10 +157,21 @@ runs, what macOS shows, and how to remove it.
 | Windows | the task `agentcomms-update` in Task Scheduler, registered without elevation | daily at 10:00 local time, after a random delay of up to an hour; as soon as it can after a missed start, on battery too |
 
 It runs the stable core launcher, `<data>/launch/core`, with `update --background` and this installation's four folders
-pinned, so it reads the same configuration whatever the environment it starts in. Setting it up writes
+pinned, so it reads the same configuration whatever the environment it starts in. On Windows the launcher is a Node
+script with no extension, which Task Scheduler cannot start, so the task's program is the Node a managed registration
+names, with the launcher as its first argument; a task 0.20.0 registered with the launcher as its program never ran, and
+`doctor` reports it as stale until `update --background-job on` writes it again. Setting it up writes
 `update-job.json` in the state directory; removing it deletes that file. On macOS 13 and later, macOS shows
 "Background Items Added" once and lists the job under System Settings → General → Login Items, where it can be switched
 off.
+
+**A job that does not run is no job.** Every background run, one that finds nothing to do included, records when it
+ran (`lastRun` in `update-job.json`). The job counts as working only when it ran in the last 48 hours, or was set up
+less than 48 hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires
+or a task that cannot start keeps its file, and counts as none: every notice and the security line are given as though
+no job were set up, with the offer to set it up again, and one more line —
+`background updates have not run since <date>; check Login Items (macOS) or run doctor`. `doctor` warns of it on the
+job's row, and says where to look on each platform.
 
 `agentcomms update --background-job off` (or `backgroundJob: "off"`) removes it at once, and so does choosing a level
 at which nothing installs in the background, `update --level every-14-days` or `--level never`. Run it before you uninstall: npm runs no script of a package as it removes it. A job at

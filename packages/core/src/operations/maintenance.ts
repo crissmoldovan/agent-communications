@@ -24,7 +24,7 @@ import { organisationDrift, organisationsOf, orphanMarkedRows, shownPath, shownT
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
-import { inspectUpdateJob, type UpdateJobDeps, updateJobContext } from '../update-job.ts';
+import { inspectUpdateJob, type UpdateJobDeps, updateJobContext, updateJobHealth } from '../update-job.ts';
 import {
   countedLatest,
   effectiveUpdates,
@@ -85,6 +85,8 @@ export interface DoctorOptions {
    * from the configuration's organisations, as the notice reads them (`effectiveUpdates`); a test hands it in.
    */
   background?: boolean | undefined;
+  /** For a test: the clock whether the background job has run lately is read on. */
+  now?: (() => Date) | undefined;
 }
 
 /**
@@ -279,7 +281,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     ok: true,
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
-  checks.push(await updateCheckLine(core, env, handoffs));
+  checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
@@ -347,10 +349,14 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
  * the registry was last asked, the latest release it named, the release running here, and a pause with when it ends.
  * Never a failure: an update that is out is something to look at, with the way on, and the rest is information.
  */
-async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: CliHandoffs): Promise<DoctorCheck> {
-  const updates = await effectiveUpdates(core, env);
+async function updateCheckLine(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  now: Date,
+): Promise<DoctorCheck> {
+  const updates = await effectiveUpdates(core, env, now);
   const record = await readUpdateCheck(core.paths.stateDir);
-  const now = new Date();
   // Where a cap or a profile's `background: false` comes from (design 2026-10-16, U8): the organisation and its file.
   const fromProfile = (where: { organisation: string; source: string }) =>
     `${shownText(where.organisation, 40)}’s profile, ${shownPath(where.source)}`;
@@ -362,7 +368,9 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
         : updates.level === 'auto' && !updates.background
           ? updates.backgroundOff
             ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
-            : 'auto (a daily check with a notice: background updates are not set up)'
+            : updates.jobSilent
+              ? `auto (a daily check with a notice: background updates have not run since ${localStamp(new Date(updates.jobSilent.since))})`
+              : 'auto (a daily check with a notice: background updates are not set up)'
           : updates.level;
   const latest =
     record.latest === null
@@ -441,7 +449,10 @@ async function updateJobLines(
   }
   const on = handoffs.core(['update', '--background-job', 'on']);
   const off = handoffs.core(['update', '--background-job', 'off']);
-  const since = seen.marker === null ? '' : ` (set up ${seen.marker.installedAt})`;
+  const since =
+    seen.marker === null
+      ? ''
+      : ` (set up ${seen.marker.installedAt}${seen.marker.lastRun ? `, last ran ${seen.marker.lastRun}` : ''})`;
   const background = options.background ?? (await effectiveUpdates(core, env)).backgroundOff === undefined;
   // A profile that came after the job (Review focus 5): the job's next run removes it, and this says so before then.
   if (!background && (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')) {
@@ -458,10 +469,30 @@ async function updateJobLines(
   switch (seen.state) {
     case 'not-set-up':
       return [];
-    case 'installed':
+    case 'installed': {
+      const health = await updateJobHealth(core.paths.stateDir, (options.now ?? (() => new Date()))());
+      // Installed as it should be, and silent: switched off in Login Items, a timer that never fires (U4, U7).
+      if (health !== null && !health.working) {
+        return [
+          {
+            name,
+            ok: true,
+            warn: true,
+            detail: `installed, and has not run since ${health.since}${health.marker.lastRun ? '' : ', when it was set up'}: ${seen.where} runs ${context.launcher} update --background, and nothing has run it in 48 hours, so every notice and the security line are given as though there were no job`,
+            fix: remedy(
+              handoffSentence(
+                on,
+                (again) =>
+                  `${silentWhere(platform)} If it is there and allowed, set it up again with ${again}, and run the doctor tomorrow.`,
+              ),
+            ),
+          },
+        ];
+      }
       return [
         { name, ok: true, detail: `installed: ${seen.where} runs ${context.launcher} update --background${since}` },
       ];
+    }
     case 'missing':
       return [
         {
@@ -503,6 +534,17 @@ async function updateJobLines(
         },
       ];
   }
+}
+
+/** Where a person looks for a background job that does not run, in words: each platform's own place. */
+function silentWhere(platform: NodeJS.Platform): string {
+  if (platform === 'darwin') {
+    return 'Check Login Items (System Settings → General → Login Items): macOS lists the job there, and it runs only while allowed.';
+  }
+  if (platform === 'linux') {
+    return 'Check that the agentcomms-update timer is enabled for your user, and that your user’s systemd instance runs.';
+  }
+  return 'Check the agentcomms-update task in Task Scheduler: that it is enabled, and what its last run result was.';
 }
 
 /**

@@ -5,7 +5,7 @@ import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
 import { organisationsOf, updatesPathFor } from './organisations.ts';
-import { updateJobInstalled } from './update-job.ts';
+import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -346,10 +346,16 @@ export interface EffectiveUpdates {
   /** What decided `level`: the configuration and its caps, or the environment. */
   by: 'setting' | 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV;
   /**
-   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up
-   * (`updateJobInstalled`). Until then `auto` behaves as a daily check with a notice (U2).
+   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up and
+   * working (`updateJobHealth`): it ran in the last 48 hours, or was set up less than 48 hours ago and has not had its
+   * first run yet. Until then `auto` behaves as a daily check with a notice (U2), as with no job at all.
    */
   background: boolean;
+  /**
+   * The job set up here, on `auto` with nothing turning it off, that has not run in 48 hours: since when — its last
+   * run, or its setup when it never ran. The notice and the doctor say so; absent when there is no job, or it works.
+   */
+  jobSilent?: { since: string } | undefined;
   /** The strictest `max` an organisation profile here names, when it is below the level set: the cap in force. */
   cap?: (UpdateCapSource & { level: 'every-14-days' | 'never' }) | undefined;
   /** The organisation whose profile turns background updates off, when one does. */
@@ -404,7 +410,11 @@ export function configuredUpdates(config: Config): Pick<EffectiveUpdates, 'level
  * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
  * tools to say, and it must not quietly turn updates off.
  */
-export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Promise<EffectiveUpdates> {
+export async function effectiveUpdates(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  now: Date = new Date(),
+): Promise<EffectiveUpdates> {
   let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff'> = { level: 'auto', set: 'auto' };
   try {
     configured = configuredUpdates(await core.config.load());
@@ -414,8 +424,19 @@ export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Prom
   const { level, set, ...extra } = configured;
   const switched = updateCheckSwitchedOff(env);
   if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
-  const background = level === 'auto' && extra.backgroundOff === undefined && (await updateJobInstalled(core));
-  return { level, set, by: 'setting', background, ...extra };
+  if (level !== 'auto' || extra.backgroundOff !== undefined)
+    return { level, set, by: 'setting', background: false, ...extra };
+  // A record alone is not a job that works: one switched off in Login Items keeps its record for ever (U4, U7).
+  const job = await updateJobHealth(core.paths.stateDir, now);
+  const background = job?.working === true;
+  return {
+    level,
+    set,
+    by: 'setting',
+    background,
+    ...extra,
+    ...(job !== null && !job.working ? { jobSilent: { since: job.since } } : {}),
+  };
 }
 
 /** Whether a check may run at all, how often, and if not, what turned it off: the environment, then the level. */
@@ -438,10 +459,11 @@ export async function updateCheckEnabled(
 export const UPDATE_JOB_MARKER = 'update-job.json';
 
 /**
- * Whether the background update job is set up on this machine: Track C's own reading of its marker, so the notice, the
- * security line, the doctor and the job's setup agree on it. A marker this release cannot read is no job.
+ * Whether the background update job is set up on this machine, and whether it works: Track C's own reading of its
+ * marker, so the notice, the security line, the doctor and the job's setup agree on it. A marker this release cannot
+ * read is no job; a marker whose job has not run in 48 hours is a job that does not work (`effectiveUpdates`).
  */
-export { updateJobInstalled };
+export { updateJobHealth, updateJobInstalled };
 
 /**
  * When a pause ends, while one holds at `now` — or null. A pause holds from when it was asked until its end, and only
