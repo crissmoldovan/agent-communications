@@ -123,19 +123,16 @@ interface BotsInfo {
 }
 
 /**
- * Refuses a bot token that is not the organisation's agent app's: `bots.info` about the bot `auth.test` named, asked
- * with the member's own user token (`users:read`), never with the pasted one, and its `app_id` compared exactly. An
- * answer that names no app — or none could be had — keeps nothing: the check is the reason to ask.
+ * Which app a bot belongs to: `bots.info` about it, asked with the member's own user token (`users:read`), never with
+ * the bot's. Refused, as `app-unknown`, when Slack cannot say or names no app: the answer is the reason to ask.
  */
-async function requireAgentApp(
+async function appOfBot(
   context: SlackContext,
   alias: string,
   organisation: string,
   botId: string,
-  expected: string,
   deps: SessionDeps,
-): Promise<void> {
-  const ask = 'Ask your organisation’s admin for the agent app’s "Bot User OAuth Token", and paste that one.';
+): Promise<{ appId: string; name: unknown }> {
   let answer: BotsInfo;
   try {
     const session = await openWorkspace(context, alias, deps);
@@ -162,9 +159,27 @@ async function requireAgentApp(
       },
     );
   }
+  return { appId, name: answer.bot?.name };
+}
+
+/**
+ * Refuses a bot token that is not the organisation's agent app's: `bots.info` about the bot `auth.test` named, asked
+ * with the member's own user token (`users:read`), never with the pasted one, and its `app_id` compared exactly. An
+ * answer that names no app — or none could be had — keeps nothing: the check is the reason to ask.
+ */
+async function requireAgentApp(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  botId: string,
+  expected: string,
+  deps: SessionDeps,
+): Promise<void> {
+  const ask = 'Ask your organisation’s admin for the agent app’s "Bot User OAuth Token", and paste that one.';
+  const { appId, name } = await appOfBot(context, alias, organisation, botId, deps);
   if (appId === expected) return;
   const shownId = displaySlackFailureText(appId);
-  const shownName = displaySlackFailureText(answer.bot?.name);
+  const shownName = displaySlackFailureText(name);
   throw new CommsError(
     'CONFIG',
     `that token is the app ${shownId}${shownName ? ` ("${shownName}")` : ''}'s, not ${organisation}'s agent app, ${displaySlackFailureText(expected)}`,
@@ -173,6 +188,52 @@ async function requireAgentApp(
       details: { reason: 'another-app', appId: shownId, expected: displaySlackFailureText(expected) },
     },
   );
+}
+
+/** What `doctor` learns of a stored bot token against the agent app the profile names now (`probeAgentApp`). */
+export type AgentAppProbe =
+  | { readonly kind: 'match'; readonly appId: string }
+  | { readonly kind: 'other'; readonly appId: string; readonly name: string }
+  | { readonly kind: 'unknown'; readonly why: string };
+
+/**
+ * Whether a stored bot token is the organisation's agent app's, asked as the paste asks (`storeBotToken`): `auth.test`
+ * with the stored token, for its bot, and `bots.info` about that bot with the member's own user token. For `doctor`,
+ * which re-checks a token pasted before the profile named its agent app — the paste checked it against nothing then.
+ * Never throws, and never puts the token in what it says: every failure is `unknown`, which is not a pass.
+ */
+export async function probeAgentApp(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  stored: string,
+  expected: string,
+  deps: SessionDeps = {},
+): Promise<AgentAppProbe> {
+  try {
+    const { body } = await askSlack(stored, deps);
+    if (body.ok !== true) {
+      return {
+        kind: 'unknown',
+        why: `Slack refused the stored token: ${displaySlackFailureText(body.error) || 'no reason given'}`,
+      };
+    }
+    if (typeof body.bot_id !== 'string' || body.bot_id === '') {
+      return { kind: 'unknown', why: 'Slack says the stored token is not a bot token' };
+    }
+    let app: { appId: string; name: unknown };
+    try {
+      app = await appOfBot(context, alias, organisation, body.bot_id, deps);
+    } catch {
+      return { kind: 'unknown', why: 'Slack could not say which app the stored token belongs to' };
+    }
+    const { appId, name } = app;
+    return appId === expected
+      ? { kind: 'match', appId: displaySlackFailureText(appId) }
+      : { kind: 'other', appId: displaySlackFailureText(appId), name: displaySlackFailureText(name) };
+  } catch (error) {
+    return { kind: 'unknown', why: displaySlackFailureText(toCommsError(error).message) };
+  }
 }
 
 /**

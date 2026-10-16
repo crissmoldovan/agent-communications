@@ -453,6 +453,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             offline: args.offline === true,
             workspace: await resolveOptional(args.workspace),
             probe,
+            session: slackDeps,
           }),
         );
       } catch (error) {

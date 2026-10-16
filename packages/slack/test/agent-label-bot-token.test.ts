@@ -7,6 +7,7 @@ import { CommsError, EXIT_CODES } from '@agentcomms/core';
 import { parseBundle } from '../src/auth/bundle.ts';
 import { run } from '../src/cli/program.ts';
 import { storeBotToken } from '../src/operations/bot-token.ts';
+import { runDoctor } from '../src/operations/doctor.ts';
 import { prepareDraftPost } from '../src/operations/post.ts';
 import { botSecretRefFor } from '../src/operations/workspaces.ts';
 import { type FakeSlack, type SlackRequest, startFakeSlack } from './support/fake-slack.ts';
@@ -337,6 +338,82 @@ test('without the field, a profile workspace takes any app’s token as before, 
   assert.equal(asked(w.fake, 'bots.info').length, 0);
   const account = (await w.harness.core.config.load()).accounts['rgc/slack'] as unknown as Record<string, unknown>;
   assert.equal(account.botUserId, 'U0BOT0001');
+});
+
+test('doctor checks a token pasted before the profile named its agent app, with bots.info and the member’s own token', async (t) => {
+  // Pasted while the profile named no agent app: any app's token was taken, as it should have been then.
+  const w = await organisationWorld(t);
+  const pasted = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], { tty: true, type: OTHER_APP_PASTED });
+  assert.equal(pasted.code, EXIT_CODES.OK, said(pasted));
+  // Then the organisation adds rgc.agentcomms.agent-app.json, and the member's org update records it.
+  await w.harness.updateConfig((config) => {
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    apps.agent = { appId: 'A0AGENT0001', sha256: 'c'.repeat(64) };
+  });
+  const session = { fetch: w.fake.fetch };
+  w.fake.requests.length = 0;
+  const report = await runDoctor(w.harness.context({ platform: 'darwin' }), {
+    probe: (input, init) => w.harness.probe(input, init),
+    session,
+  });
+  const row = report.checks.find((check) => check.id === 'agent-app' && check.workspace === 'rgc/slack');
+  assert.equal(row?.status, 'warn', JSON.stringify(row));
+  assert.match(String(row?.detail), /A0OTHERAPP1/, 'names the app the stored token is');
+  assert.match(String(row?.detail), /Somebody’s app/);
+  assert.doesNotMatch(String(row?.detail), /<\|im_start\|>/, 'neutralised: the name is whatever its maker typed');
+  assert.match(String(row?.detail), /A0AGENT0001/, 'and the agent app the profile names');
+  assert.match(String(row?.fix), /admin/);
+  assert.match(String(row?.fix), /workspace bot/);
+  // Asked as the paste asks: auth.test with the stored token, bots.info with the member's own.
+  const [info, ...more] = asked(w.fake, 'bots.info');
+  assert.equal(more.length, 0);
+  assert.equal(info?.authorization, `Bearer ${MEMBER_OWN}`, 'bots.info with the member’s token, never the stored one');
+  assert.equal(info?.params.get('bot'), 'B0OTHER01');
+  assert.equal(
+    asked(w.fake, 'auth.test').filter((request) => request.authorization === `Bearer ${OTHER_APP_PASTED}`).length,
+    1,
+  );
+  assert.equal(JSON.stringify(report).includes(OTHER_APP_PASTED), false, 'the stored token was printed');
+
+  // The agent app's own token: checked, and fine.
+  const fixed = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], { tty: true, type: AGENT_PASTED });
+  assert.equal(fixed.code, EXIT_CODES.OK, said(fixed));
+  const after = await runDoctor(w.harness.context({ platform: 'darwin' }), {
+    probe: (input, init) => w.harness.probe(input, init),
+    session,
+  });
+  assert.equal(after.checks.find((check) => check.id === 'agent-app')?.status, 'ok');
+
+  // Offline, nothing is asked, and nothing is called fine that was not checked.
+  w.fake.requests.length = 0;
+  const offline = await runDoctor(w.harness.context({ platform: 'darwin' }), { offline: true, session });
+  assert.equal(offline.checks.find((check) => check.id === 'agent-app')?.status, 'unknown');
+  assert.equal(asked(w.fake, 'bots.info').length, 0);
+
+  // Slack cannot say which app: not known, never fine.
+  w.fake.script['bots.info'] = () => ({ ok: false, error: 'bot_not_found' });
+  const unsure = await runDoctor(w.harness.context({ platform: 'darwin' }), {
+    probe: (input, init) => w.harness.probe(input, init),
+    session,
+  });
+  assert.equal(unsure.checks.find((check) => check.id === 'agent-app')?.status, 'unknown');
+});
+
+test('doctor asks nothing about an agent app for a workspace whose profile names none', async (t) => {
+  const w = await organisationWorld(t);
+  const pasted = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], { tty: true, type: OTHER_APP_PASTED });
+  assert.equal(pasted.code, EXIT_CODES.OK, said(pasted));
+  w.fake.requests.length = 0;
+  const report = await runDoctor(w.harness.context({ platform: 'darwin' }), {
+    probe: (input, init) => w.harness.probe(input, init),
+    session: { fetch: w.fake.fetch },
+  });
+  assert.equal(
+    report.checks.find((check) => check.id === 'agent-app'),
+    undefined,
+  );
+  assert.equal(asked(w.fake, 'bots.info').length, 0);
 });
 
 test('a person’s own app is never checked against an organisation’s agent app', async (t) => {

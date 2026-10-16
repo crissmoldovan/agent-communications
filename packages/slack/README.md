@@ -379,7 +379,9 @@ the profile names the app, and otherwise notes that posts go out as you, labelle
 
    Its organisation and workspace must be the profile's. It holds no secret. Members pick it up with `git pull` and
    `agentcomms org update rgc`, which shows the app id and the file's SHA-256 and asks before applying, as any change
-   to the profile does. It is a file of its own, not a key in the profile, because every release before 0.20.0 refuses
+   to the profile does. A token a member pasted before the file was added was checked against no app, so `doctor`
+   checks the stored token as the paste does — `auth.test` with it, `bots.info` with the member's own token — and warns
+   when it is another app's. It is a file of its own, not a key in the profile, because every release before 0.20.0 refuses
    a profile with a key it does not know: a member who has not updated yet keeps reading the profile as it is, and
    never opens this file.
 
