@@ -75,6 +75,19 @@ Once a day — at most, for the whole machine — the first server or command to
   command is. `update`, `doctor`, `paths`, `approve`, `approvals`, `mcp` on its own, the listener a sign-in starts, the
   hidden `update-check-child` and WhatsApp's `status` never print it.
 
+The same one line also carries, by the same rules of level and pause:
+
+- **what the last background run left** — the release it installed and that a restart picks up, a release it refused
+  because its provenance did not verify, a major release or one needing a decision that it left for you, the job an
+  organisation turned off. It is said by the first server or command it applies to, and then cleared; "installed" is
+  said only by a process running a release before it.
+- **the offer of the background job**, on `auto` while it is not set up, where it could be: `comms_update` with
+  `backgroundJob: "on"` (or the located `update --background-job on`) shows the job, when it runs and how to remove
+  it, and sets nothing up without your yes.
+- **the move to the stable launcher**, while any managed registration still names a versioned runtime: one approved
+  update moves each, the last update that edits a client's configuration. With nothing newer out, the move alone is
+  worth the line. The check records how many are left (`moves` in `update-check.json`).
+
 The `UPDATE_REQUIRED` error and exit status `11` are retired. A client that still sees one is talking to a server
 older than 0.20.0, and a script that branched on `11` can drop that branch.
 

@@ -1,8 +1,12 @@
+import { stat } from 'node:fs/promises';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import type { OutputOptions, Streams } from './cli-runtime.ts';
 import type { Core } from './core.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
+import { launcherPaths } from './launcher.ts';
+import { updateJobSupported } from './update-job.ts';
 import {
+  type BackgroundNotice,
   changeUpdateCheck,
   type EffectiveUpdates,
   effectiveUpdates,
@@ -21,7 +25,7 @@ import {
   updateVerdict,
   within,
 } from './update-state.ts';
-import { isVersion } from './versions.ts';
+import { isBehind, isVersion } from './versions.ts';
 
 /**
  * The update notice, where every server and every command meets it (design 2026-10-16, U1). It replaces the stop of
@@ -92,10 +96,10 @@ export function updateToolNotice(options: UpdateToolNoticeOptions): ToolNotice {
     if (given || exempt.has(tool)) return Promise.resolve(null);
     const decided = turn.then(async () => {
       if (given) return null;
-      const notice = await decideNotice(options, { channel: options.channel, surface: 'server' });
-      if (notice === null) return null;
+      const decision = await decideNotice(options, { channel: options.channel, surface: 'server' });
+      if (decision === null) return null;
       given = true;
-      return serverNoticeLine(notice, options.env);
+      return serverDecisionLine(decision, options.env);
     });
     turn = decided.catch(() => null);
     return decided.catch(() => null);
@@ -123,6 +127,21 @@ function spacingOf(updates: EffectiveUpdates, surface: UpdateSurface['surface'])
 const majorOf = (version: string): number => Number(version.split('.')[0]);
 
 /**
+ * Everything one notice line says, decided together (design 2026-10-16, U1, U2, U4, U5 step 7, U6): the release this
+ * process is behind (`notice`), what the last background run left for the next session (`background`), how many
+ * registrations still name a versioned runtime for the one approved update to move (`moves`), and whether to offer the
+ * background job (`offerJob`).
+ */
+export interface NoticeDecision {
+  notice: Notice | null;
+  background: BackgroundNotice | null;
+  /** Registrations the next approved update moves onto the stable launcher: said with the notice, or alone. */
+  moves: number;
+  /** `auto` with no background job, one that could be set up here: the notice offers it, naming its approval. */
+  offerJob: boolean;
+}
+
+/**
  * What the record means for this process's notice now — or null, with nothing written — decided and recorded under the
  * file's lock, so two processes deciding together say it once where the level says once (design 2026-10-16, U2, U3,
  * U7):
@@ -133,48 +152,91 @@ const majorOf = (version: string): number => Number(version.split('.')[0]);
  * - otherwise nothing on `never`, nothing during a pause, and on `auto` with its job set up only what needs the person:
  *   a restart, a major release, a release needing a decision;
  * - `every-14-days` says it at most once in 14 days for the machine, and a command at most once a day.
+ *
+ * Beside it, by the same rules of level and pause: what the last background run left (U5 step 7), said by the first
+ * process it applies to and then cleared from the file — "installed" applies only to a process behind what was
+ * installed — and the registrations still naming a versioned runtime (U6), spaced as the notice is.
  */
 async function decideNotice(
   options: { core: Core; env: NodeJS.ProcessEnv; running: string; now?: (() => Date) | undefined },
   where: UpdateSurface,
-): Promise<Notice | null> {
+): Promise<NoticeDecision | null> {
   if (updateCheckSwitchedOff(options.env) !== null) return null;
   const updates = await effectiveUpdates(options.core, options.env);
   const now = options.now ?? (() => new Date());
   const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
-  /** The notice due now, spacing included, or null: decided once on the file as read, then again under its lock. */
-  const due = (record: UpdateCheckRecord, at: Date): Notice | null => {
-    const notice = noticeOf(record, options.running, where, updates, at);
-    if (notice === null) return null;
-    const spacing = spacingOf(updates, where.surface);
-    if (!notice.security) {
-      const last =
-        where.surface === 'command' && updates.level !== 'every-14-days' ? record.commandNoticeAt : record.noticeAt;
-      if (spacing !== null && within(last, at, spacing)) return null;
-    } else if (where.surface === 'command' && within(record.commandNoticeAt, at, COMMAND_NOTICE_INTERVAL_MS)) {
-      // A security fix is said whatever the spacing, and still at most once a day by a command: the line on every
-      // command would be the stop's noise again.
-      return null;
+  const offerJob = updates.level === 'auto' && !updates.background && (await jobCanBeSetUp(options.core, updates));
+  const spacing = spacingOf(updates, where.surface);
+  /** What the level and the spacing let this process say now, or null: decided once as read, then under the lock. */
+  const due = (record: UpdateCheckRecord, at: Date): NoticeDecision | null => {
+    let notice = noticeOf(record, options.running, where, updates, at);
+    const last =
+      where.surface === 'command' && updates.level !== 'every-14-days' ? record.commandNoticeAt : record.noticeAt;
+    const spaced = spacing !== null && within(last, at, spacing);
+    if (notice !== null) {
+      if (!notice.security) {
+        if (spaced) notice = null;
+      } else if (where.surface === 'command' && within(record.commandNoticeAt, at, COMMAND_NOTICE_INTERVAL_MS)) {
+        // A security fix is said whatever the spacing, and still at most once a day by a command: the line on every
+        // command would be the stop's noise again.
+        notice = null;
+      }
     }
-    return notice;
+    const quiet = updates.level === 'never' || pauseEnd(record, at) !== null;
+    const background = quiet ? null : backgroundFor(record.backgroundNotice, options.running);
+    const moves = quiet || spaced ? 0 : (record.moves ?? 0);
+    if (notice === null && background === null && moves === 0) return null;
+    return { notice, background, moves, offerJob: offerJob && notice !== null };
   };
   // Most calls have nothing to say: they read the file and take no lock, so a server's calls never queue behind one.
   if (due(await readUpdateCheck(options.core.paths.stateDir), now()) === null) return null;
-  const decided = await changeUpdateCheck<Notice>(options.core.paths.stateDir, (record) => {
+  const decided = await changeUpdateCheck<NoticeDecision>(options.core.paths.stateDir, (record) => {
     const at = now();
-    const notice = due(record, at);
-    if (notice === null) return null;
+    const decision = due(record, at);
+    if (decision === null) return null;
     const stamp = at.toISOString();
+    // A line about this machine's updates spaces the next one; a background run's word alone is an event, said once.
+    const spaces = decision.notice !== null || decision.moves > 0;
     const written: UpdateCheckRecord = {
       ...record,
-      noticeAt: stamp,
-      ...(where.surface === 'command' ? { commandNoticeAt: stamp } : {}),
+      ...(spaces ? { noticeAt: stamp } : {}),
+      ...(spaces && where.surface === 'command' ? { commandNoticeAt: stamp } : {}),
+      // Said once, then cleared: the run's next word replaces it, and nobody is told the same thing twice.
+      ...(decision.background !== null ? { backgroundNotice: null } : {}),
     };
+    const { notice } = decision;
     // A server plugin or extension started is updated there, and restarting starts the release it pins: never "restart".
-    const kind = notice.kind === 'restart' && where.surface === 'server' && startedBy ? 'update' : notice.kind;
-    return { record: written, result: { ...notice, kind } };
+    const kind = notice?.kind === 'restart' && where.surface === 'server' && startedBy ? 'update' : notice?.kind;
+    return {
+      record: written,
+      result: { ...decision, notice: notice === null || kind === undefined ? null : { ...notice, kind } },
+    };
   });
   return decided.result ?? null;
+}
+
+/**
+ * What a background run left, when it is this process's to say: an install only to a process running a release before
+ * it — one already running it has nothing to restart into — and anything else, a refusal, a skip, a removed job, to
+ * any process.
+ */
+function backgroundFor(left: BackgroundNotice | null | undefined, running: string): BackgroundNotice | null {
+  if (left === null || left === undefined) return null;
+  if (left.outcome !== 'installed') return left;
+  return left.version !== null && isVersion(running) && isBehind(running, left.version) ? left : null;
+}
+
+/**
+ * Whether the background job could be set up here, so offering it is not offering a refusal (design 2026-10-16 U4):
+ * a platform it is written for, no organisation turning background updates off, and the stable core launcher it runs.
+ */
+async function jobCanBeSetUp(core: Core, updates: EffectiveUpdates): Promise<boolean> {
+  if (updates.backgroundOff !== undefined || !updateJobSupported(process.platform)) return false;
+  try {
+    return (await stat(launcherPaths(core.paths.dataDir, 'core').launcher)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** The notice the record makes for this process, before any spacing: see `decideNotice`. */
@@ -226,6 +288,36 @@ export function serverNoticeLine(notice: PendingUpdate & Partial<Notice>, env: N
     return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)}; this server came with ${startedByWords(startedBy)}, and is updated there ${notice.security ? 'soon' : 'when it suits you'}.${paused}`;
   }
   return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)}; say "update" ${notice.security ? 'soon' : 'when it suits you'}.${paused}`;
+}
+
+/** How many registrations, in words: "one registration", "2 registrations". */
+const registrations = (count: number): string => (count === 1 ? 'one registration' : `${count} registrations`);
+
+/**
+ * A server's one line, from everything `decideNotice` decided: the background run's word first, then the release this
+ * server is behind — unless the run's word is about that same release — then the move to the stable launcher, and the
+ * offer of the background job.
+ */
+export function serverDecisionLine(decision: NoticeDecision, env: NodeJS.ProcessEnv = {}): string {
+  const { notice, background, moves } = decision;
+  const parts: string[] = [];
+  if (background !== null) parts.push(background.text);
+  if (notice !== null && !(background !== null && background.version === notice.latest)) {
+    parts.push(serverNoticeLine(notice, env));
+  }
+  if (moves > 0) {
+    parts.push(
+      notice !== null
+        ? `The update also moves ${registrations(moves)} onto the stable launcher, the last update that edits a client's configuration.`
+        : `${PRODUCT}: ${moves === 1 ? 'one registration still starts' : `${moves} registrations still start`} a versioned runtime; one approved update (say "update") moves ${moves === 1 ? 'it' : 'them'} onto the stable launcher, after which updates never edit a client's configuration again.`,
+    );
+  }
+  if (decision.offerJob) {
+    parts.push(
+      'To have releases install in the background instead, comms_update with backgroundJob "on" sets up a daily job: its preview shows the job, when it runs and how to remove it, and sets nothing up without your yes.',
+    );
+  }
+  return parts.join(' ');
 }
 
 /** What is particular about the release, after "is out": a security fix, a major release, a decision it needs. */
@@ -383,9 +475,9 @@ export async function updateNoticeAtTerminal(options: TerminalNoticeOptions): Pr
 
 /** The command's line, decided and recorded under the file's lock: see `decideNotice`. */
 async function commandNotice(options: TerminalNoticeOptions, now: () => Date): Promise<string | null> {
-  const notice = await decideNotice({ ...options, now }, { channel: options.channel, surface: 'command' });
-  if (notice === null) return null;
-  return commandNoticeLine(options.core, notice, options.channel, options.output.platform);
+  const decision = await decideNotice({ ...options, now }, { channel: options.channel, surface: 'command' });
+  if (decision === null) return null;
+  return commandDecisionLine(options.core, decision, options.channel, options.output.platform);
 }
 
 /**
@@ -414,4 +506,44 @@ export function commandNoticeLine(
   const update = requireHandoffs(core, platform).core(['update']);
   const when = notice.security ? 'soon' : 'when it suits you';
   return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)} (this is ${notice.running}); ${handoffSentence(update, (command) => `run ${command} ${when}.`)}${paused}`;
+}
+
+/**
+ * A command's one line, from everything `decideNotice` decided, as `serverDecisionLine` puts it together — every
+ * command named located for this installation, or why there is none here.
+ */
+export function commandDecisionLine(
+  core: Pick<Core, 'handoffs'>,
+  decision: NoticeDecision,
+  channel: string,
+  platform?: NodeJS.Platform | undefined,
+): string {
+  const { notice, background, moves } = decision;
+  const handoffs = requireHandoffs(core, platform);
+  const parts: string[] = [];
+  if (background !== null) parts.push(background.text);
+  if (notice !== null && !(background !== null && background.version === notice.latest)) {
+    parts.push(commandNoticeLine(core, notice, channel, platform));
+  }
+  if (moves > 0) {
+    parts.push(
+      notice !== null
+        ? `The update also moves ${registrations(moves)} onto the stable launcher, the last update that edits a client's configuration.`
+        : `${PRODUCT}: ${moves === 1 ? 'one registration still starts' : `${moves} registrations still start`} a versioned runtime; ${handoffSentence(
+            handoffs.core(['update']),
+            (update) =>
+              `one approved update, ${update}, moves ${moves === 1 ? 'it' : 'them'} onto the stable launcher, after which updates never edit a client's configuration again.`,
+          )}`,
+    );
+  }
+  if (decision.offerJob) {
+    parts.push(
+      handoffSentence(
+        handoffs.core(['update', '--background-job', 'on']),
+        (command) =>
+          `To have releases install in the background instead, run ${command}: it shows the job, when it runs and how to remove it, and sets nothing up without your yes.`,
+      ),
+    );
+  }
+  return parts.join(' ');
 }

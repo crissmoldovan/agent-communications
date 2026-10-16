@@ -121,6 +121,12 @@ export interface UpdateCheckRecord {
    * a release that does not know the field ignores it.
    */
   backgroundNotice?: BackgroundNotice | null | undefined;
+  /**
+   * How many managed registrations here still name a versioned runtime, as the last check or update found them
+   * (design 2026-10-16 U6, Track B's `moves`): the one approved update moves each onto the stable launcher, the last
+   * update that edits a client's configuration, and the notice says so. Null when it is not known. Additive.
+   */
+  moves?: number | null | undefined;
 }
 
 /** What a release's core manifest declares under `agentcommsRelease`, for its version. */
@@ -199,6 +205,7 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   release: null,
   securityAsked: null,
   backgroundNotice: null,
+  moves: null,
 });
 
 export function updateCheckPath(stateDir: string): string {
@@ -250,6 +257,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     release: readRelease(held.release),
     securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
     backgroundNotice: readBackgroundNotice(held.backgroundNotice),
+    moves: typeof held.moves === 'number' && Number.isInteger(held.moves) && held.moves >= 0 ? held.moves : null,
   };
 }
 

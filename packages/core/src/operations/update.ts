@@ -702,6 +702,7 @@ async function recordFound(
   if (updateCheckSwitchedOff(env) !== null || latest === undefined || !isVersion(latest)) return;
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const { behind, current } = updateCheckFindings(report, latest, after);
+  const moves = movesLeft(report, after);
   // What the release declares, when this read it; what an earlier read found of another release counts for nothing.
   const facts = (record: { release: ReleaseFacts | null }) =>
     release !== undefined ? release : record.release?.version === latest ? record.release : null;
@@ -718,9 +719,37 @@ async function recordFound(
             lastError: null,
             checking: null,
             release: facts(record),
+            moves,
           },
         },
   ).catch(() => undefined);
+}
+
+/**
+ * How many managed registrations still name a versioned runtime once `after` is done, for the notice (design
+ * 2026-10-16 U6): those at the latest release the update would move (`moves`), and those behind it that it registers
+ * again on the stable launcher — less each one `after` registered. Null when a client's configuration could not be
+ * read, and so what it holds is not known.
+ */
+function movesLeft(report: UpdateReport, after: UpdateResult | null): number | null {
+  if (report.unreadable.some((file) => file.client !== 'npm')) return null;
+  const moved = new Set<string>();
+  for (const step of after?.steps ?? []) {
+    if (step.kind === 'registration' && step.outcome === 'registered' && step.verification !== 'failed') {
+      moved.add(registrationKey(step));
+    }
+  }
+  const versioned = [
+    ...(report.moves ?? []),
+    ...report.behind.filter(
+      (item): item is RegistrationItem =>
+        item.kind === 'registration' &&
+        item.launcher === 'managed' &&
+        item.launches === undefined &&
+        item.updatable !== false,
+    ),
+  ];
+  return versioned.filter((item) => !moved.has(registrationKey(item))).length;
 }
 
 /**

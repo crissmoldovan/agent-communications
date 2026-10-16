@@ -52,7 +52,6 @@ export function machine(extra: Record<string, string> = {}, config: Record<strin
   return { home, env, core, stateDir: core.paths.stateDir, configPath };
 }
 
-/** The file as a check would have left it, asked at `at`, written under the check's own lock. */
 /**
  * The background job set up, as far as everything but the scheduler reads it: the marker Track C's installer writes
  * (`<state>/update-job.json`, design 2026-10-16 U4), with its platform, when, and the job's name. No job is scheduled.
@@ -65,6 +64,7 @@ export function markJobSetUp(m: Machine): void {
   );
 }
 
+/** The file as a check would have left it, asked at `at`, written under the check's own lock. */
 export async function seed(m: Machine, record: Partial<UpdateCheckRecord>, at: Date = new Date()): Promise<void> {
   mkdirSync(m.stateDir, { recursive: true });
   await changeUpdateCheck(m.stateDir, (current) => ({

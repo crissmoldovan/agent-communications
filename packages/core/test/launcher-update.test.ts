@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { asV2 } from '../src/approval-stored.ts';
+import { gatedChange } from '../src/change-flow.ts';
 import type { InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -18,8 +19,11 @@ import {
   type UpdateDeps,
   type UpdateReport,
   type UpdateResult,
+  updateChange,
+  updateCheck,
   updateCheckFindings,
 } from '../src/operations/update.ts';
+import { readUpdateCheck } from '../src/update-state.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -508,4 +512,28 @@ test('`agentcomms update --rollback` gives the tool’s preview, claims the appr
   } finally {
     await close();
   }
+});
+
+test('the check records how many registrations still name a versioned runtime, for the notice; the update that moves them leaves none', async () => {
+  const m = machine();
+  // The check is on here: what it records is what the notice reads (design 2026-10-16, U6 and U1).
+  const env = { ...m.env, AGENT_COMMS_UPDATE_CHECK: 'on' };
+  makeRuntime(m, LATEST);
+  mkdirSync(dirname(cursorConfig(m)), { recursive: true });
+  writeFileSync(cursorConfig(m), `${JSON.stringify({ mcpServers: { gmail: versionedEntry(m, LATEST) } }, null, 2)}\n`);
+  const report = await updateCheck(m.core, env, fakes(m, LATEST));
+  assert.equal((report.moves ?? []).length, 1);
+  assert.equal((await readUpdateCheck(m.core.paths.stateDir)).moves, 1);
+
+  const change = updateChange(m.core, env, { noVerify: true }, fakes(m, LATEST));
+  const first = await gatedChange(m.core, change, { channel: 'core', surface: 'mcp' });
+  assert.equal(first.status, 'approval-required');
+  const approvalId = (first as { prepared: { approvalId: string } }).prepared.approvalId;
+  const done = await gatedChange(m.core, updateChange(m.core, env, { noVerify: true }, fakes(m, LATEST)), {
+    channel: 'core',
+    surface: 'mcp',
+    approvalId,
+  });
+  assert.equal(done.status, 'applied');
+  assert.equal((await readUpdateCheck(m.core.paths.stateDir)).moves, 0, 'moved, so nothing is left to move');
 });
