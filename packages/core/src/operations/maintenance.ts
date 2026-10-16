@@ -14,6 +14,7 @@ import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { isGroupOrWorldAccessible } from '../fs.ts';
 import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requireHandoffs } from '../handoffs.ts';
+import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
@@ -431,11 +432,21 @@ async function registrationChecks(
       null,
     );
     if (latestRuntime !== null && managedShimsSupported({ platform })) {
-      const expectedEntry = managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version);
-      // A shim names this Node as a command does, so one naming the file a link resolves to is stale (CUE-492).
+      /*
+       * A shim starts the stable launcher once there is one (design 2026-10-16, U6), so one naming a runtime is stale;
+       * before it, the newest runtime, with this Node as a command names it — a shim naming the file a link resolves to
+       * is stale too (CUE-492).
+       */
+      const name = launcherName(channel.package);
+      const expected = (await launcherExists(core.paths.dataDir, name))
+        ? { expectedEntry: launcherPaths(core.paths.dataDir, name).launcher }
+        : {
+            expectedEntry: managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version),
+            expectedNode: nodeProgram(env),
+          };
       const shim = await inspectManagedShim(
         { env, dataDir: core.paths.dataDir, platform },
-        { binary: channel.binary, expectedEntry, expectedNode: nodeProgram(env) },
+        { binary: channel.binary, ...expected },
       );
       if (shim.status !== 'current') {
         checks.push({

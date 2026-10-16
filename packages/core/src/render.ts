@@ -487,7 +487,8 @@ function describeItem(item: UpdateItem): string {
     item.version === null
       ? 'pins no release'
       : `${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
-  return `${serverLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${item.launcher}, ${version}${pins})`;
+  const launcher = item.launches === undefined ? item.launcher : `${item.launcher}, stable launcher`;
+  return `${serverLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${launcher}, ${version}${pins})`;
 }
 
 export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): string {
@@ -506,12 +507,21 @@ export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): 
   section('Behind', report.behind);
   section('Up to date', report.upToDate);
   section('Pinned to no release', report.unpinned);
+  // At the latest release, still naming a versioned runtime: the next update moves each to the stable launcher, once.
+  section('To move to the stable launcher', report.moves ?? []);
   for (const file of report.unreadable) lines.push('', `Could not read ${file.path}: ${file.reason}.`);
   const updatable = report.behind.some((item) => item.kind !== 'registration' || item.updatable === true);
+  const moves = (report.moves ?? []).length > 0;
   lines.push(
     '',
     report.behind.length === 0
-      ? 'Everything here is at the latest release.'
+      ? moves
+        ? handoffSentence(
+            handoffs.core(['update']),
+            (command) =>
+              `Everything here is at the latest release. Run ${command} once to move the registrations above to the stable launcher: after that, an update edits no client configuration.`,
+          )
+        : 'Everything here is at the latest release.'
       : updatable
         ? handoffSentence(
             handoffs.core(['update']),
@@ -552,6 +562,28 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
             color,
             'red',
             `${step.outcome === 'skipped' ? 'Skipped' : 'Could not register'} ${what}: ${step.detail}`,
+          ),
+        );
+      }
+    } else if (step.kind === 'pointer') {
+      const starters = step.registrations.map((registration) => `"${registration.name}" with ${registration.client}`);
+      if (step.outcome === 'switched') {
+        lines.push(
+          paint(
+            color,
+            'green',
+            `Switched the stable launcher ${step.launcher} from ${step.from ?? 'no release'} to ${step.to}: no client configuration was changed.`,
+          ),
+        );
+        if (step.verification === 'passed') lines.push(`  Checked: ${step.detail}`);
+        else lines.push(paint(color, 'yellow', `  Not checked: ${step.detail ?? 'skipped'}`));
+        lines.push(`  ${starters.join(', ')} ${starters.length === 1 ? 'runs' : 'run'} ${step.to} once restarted.`);
+      } else {
+        lines.push(
+          paint(
+            color,
+            'red',
+            `${step.outcome === 'skipped' ? 'Skipped' : 'Could not switch'} the stable launcher ${step.launcher} to ${step.to}: ${step.detail ?? 'no reason given'}`,
           ),
         );
       }

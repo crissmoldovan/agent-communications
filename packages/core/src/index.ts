@@ -101,6 +101,7 @@ export * from './internet-mark.ts';
 export * from './jail.ts';
 export * from './keys.ts';
 export * from './known-folders.ts';
+export * from './launcher.ts';
 export * from './ledger.ts';
 export * from './lock.ts';
 export * from './mcp-clients.ts';
@@ -175,6 +176,8 @@ export * from './output.ts';
 export * from './paths.ts';
 export * from './plans.ts';
 export * from './reconcile.ts';
+// What a registration pins, its stable launcher's pointer included: the channels' doctors read it as core does.
+export { registrationVersion } from './registrations.ts';
 export * from './render.ts';
 export * from './sanitize.ts';
 export * from './save-deny.ts';

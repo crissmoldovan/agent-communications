@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { EXIT_CODES, managedRuntimeDir, managedRuntimeEntry } from '@agentcomms/core';
+import { EXIT_CODES, launcherPaths, managedRuntimeDir, managedRuntimeEntry, readPointer } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { run } from '../src/cli/program.ts';
@@ -226,8 +226,17 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
     });
     assert.equal(done.isError, undefined, JSON.stringify(done.structuredContent));
     assert.equal(done.structuredContent?.applied, true);
-    const settings = JSON.parse(await readFile(gemini, 'utf8')) as { mcpServers: { slack: { args: string[] } } };
-    assert.deepEqual(settings.mcpServers.slack.args, [entry, ...pinWords(harness.core.paths), 'mcp']);
+    const settings = JSON.parse(await readFile(gemini, 'utf8')) as {
+      mcpServers: { slack: { command: string; args: string[] } };
+    };
+    // It starts Slack's stable launcher — the program on POSIX, Node's first word on Windows — which starts the runtime.
+    const started = settings.mcpServers.slack;
+    assert.deepEqual(process.platform === 'win32' ? started.args : [started.command, ...started.args], [
+      launcherPaths(dataDir, 'slack').launcher,
+      ...pinWords(harness.core.paths),
+      'mcp',
+    ]);
+    assert.equal((await readPointer(dataDir, 'slack'))?.current, root);
   } finally {
     await server.close();
   }

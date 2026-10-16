@@ -350,6 +350,17 @@
       "reason": "The daily update check on or off for this machine, in config.json: off is a loosening the person approves, on applies at once (design 2026-09-28)."
     },
     {
+      "id": "core.update.rollback",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateRollbackChange",
+      "argv": ["--rollback"],
+      "args": { "rollback": true },
+      "reason": "Back to the release before: every stable launcher's pointer switched back to the runtime it started before its last switch — a change the person approves, one effect a launcher, which edits no client configuration (design 2026-10-16, U6)."
+    },
+    {
       "id": "core.approve",
       "package": "core",
       "cli": "approve",
