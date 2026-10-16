@@ -54,58 +54,47 @@ one whose client's own command is not on `PATH` — is left as it was and listed
 each step as it went, then says which clients to restart. Restart them, then prune the old runtimes from the restarted
 server, as in step 7.
 
-### The daily check
+### The daily check, and its notice
 
-From the release that adds it, a machine does not wait to be asked. Once a day — at most, for the whole machine — the
-first server or command to run asks npm for the latest release of `@agentcomms/core`, runs the same "what is behind"
-check as `update --check`, and records what it found in `update-check.json` in the state directory. When a newer
-release is out:
+Once a day — at most, for the whole machine — the first server or command to run asks npm for the latest release of
+`@agentcomms/core`, runs the same "what is behind" check as `update --check`, and records what it found in
+`update-check.json` in the state directory.
 
-- **every MCP tool call stops** — except `comms_update`, `comms_doctor`, `comms_paths`, each channel's doctor, and a
-  call carrying the `approvalId` of an approval the person already gave that is still waiting to be used (an empty or
-  made-up id does not count, nor one already used, revoked or expired; Resend's send status, which looks a send up by
-  its approval, counts the send's whatever became of it; and a call that takes one but would not use it — a report, a
-  dry run — refuses it) — and answers "Hang on a minute, there's an update. Let's
-  update first.", with the running and latest versions and the two ways on. When every registration of that server on
-  this machine already names the latest release, and only the running server is old, it says to restart the client
-  instead. The Claude Code plugin's Gmail server and the Gemini extension's servers are always told to update — each
-  says, as it starts, that the plugin or the extension started it — because they run the release it pins, which
-  restarting starts again: update them where they were installed, or put it off. So is a server of a channel with a
-  registration that pins no release — a checkout's own, or an entry written by hand. A server started from a client
-  configuration the check does not read goes by its channel's registrations;
-- **every command stops** — except `update`, `doctor`, `paths`, `approve`, `approvals`, `mcp` on its own (the server,
-  which stops each call itself; `mcp install` and `mcp prune` are stopped like any other command), the listener a
-  sign-in starts (`agent-gmail oauth-listen`, `agent-slack sign-in-listen`), the hidden `update-check-child` a
-  command starts to finish the day's check, WhatsApp's `status`, and a command
-  that takes `--approval` carrying one still waiting to be used (a command that takes none refuses it, and so does
-  one that would not use it: a report, a dry run, a `--finish`) — and at a
-  terminal asks "Update now, later today, or
-  cancel?". Now runs `update`, with its own preview, and says "Updated. Run your command again." only when it
-  brought this command to the latest release; otherwise it says what is left and exits non-zero. Later puts it off;
-  cancel does nothing. Anything without a terminal — a script, an agent, `--json` — exits `11` (`UPDATE_REQUIRED`),
-  naming this installation's own `update` and `update --later` commands — its Node and core's CLI file, its folders
-  pinned — to run exactly as given; on Windows with Node under `C:\Program Files` they come as a line labelled for
-  PowerShell, beginning with its `&` call operator. A word that cannot be represented safely still comes as inert JSON
-  to type yourself. A command whose release is installed globally while an
-  older copy of it runs — from npx's cache, or a project's own install — stops the same way, and says to run the
-  installed one.
+**From 0.20.0, nothing is stopped for being behind.** When a newer release is out:
+
+- **a server's first tool result of its process** carries one line beside the result — an `update` field, and a text
+  block of its own — and that process never repeats it: `agent-communications 0.20.0 is out; say "update" when it
+  suits you.` When every registration of that server on this machine already names the latest release, and only the
+  running server is old, it says `agent-communications 0.20.0 is installed; restart the client (in Claude Code, /mcp →
+  Reconnect) to use it.` instead. The Claude Code plugin's Gmail server and the Gemini extension's servers are told to
+  update where they were installed, because restarting starts the release the plugin or the extension pins. A tool's
+  output schema is published with room for the `update` field, so a client that checks results against it takes the
+  one carrying it. `comms_update`, `comms_doctor`, `comms_paths` and each channel's doctor never carry it;
+- **a command** prints the same line once on stderr — never on stdout, where its result and `--json` are — at most
+  once a day for the machine, and runs. It names this installation's own `update` command, located as every printed
+  command is. `update`, `doctor`, `paths`, `approve`, `approvals`, `mcp` on its own, the listener a sign-in starts, the
+  hidden `update-check-child` and WhatsApp's `status` never print it.
+
+The `UPDATE_REQUIRED` error and exit status `11` are retired. A client that still sees one is talking to a server
+older than 0.20.0, and a script that branched on `11` can drop that branch.
 
 "Not now" (`agentcomms update --later`, or `comms_update` with `later: true`) is a change the person approves, like
-any other, and lasts until midnight, local time, for the whole machine. `agentcomms update --auto off` (or `auto:
-"off"`) turns the check off for this machine, also approved; `--auto on` turns it back on at once. `doctor` shows the
-check on one line: on or off, when it last asked, the latest release, and the one running.
+any other, and keeps every server and command on the machine from mentioning the update until midnight, local time.
+`agentcomms update --auto off` (or `auto: "off"`) turns the check off for this machine, also approved; `--auto on`
+turns it back on at once. `doctor` shows the check on one line: on or off, when it last asked, the latest release, and
+the one running.
 
-It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result, stops nothing,
-and is not tried again that day. A prerelease never counts as an update. A command at a terminal waits about three
-seconds for the answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from;
-a server never waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the
-command's output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a
-pipe into `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's
-registry or `npm ls` behind it. Where that process cannot be started, the command asks in its own process, as before, and ends
-once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a
-couple of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm
-themselves; they stop once any other server or command on the machine has found an update. The check is skipped
-entirely when `CI` is set, or when `AGENT_COMMS_UPDATE_CHECK=off`.
+It never gets in the way of a machine that cannot reach npm: an ask that fails keeps the last result and is not tried
+again that day. A prerelease never counts as an update. A command at a terminal waits about three seconds for the
+answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from; a server never
+waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
+output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
+`jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
+`npm ls` behind it. Where that process cannot be started, the command asks in its own process, as before, and ends
+once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
+of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
+the notice once any other server or command on the machine has found an update. The check is skipped entirely when
+`CI` is set, or when `AGENT_COMMS_UPDATE_CHECK=off`.
 
 ## 0.14.0: the configuration moves to version 3
 

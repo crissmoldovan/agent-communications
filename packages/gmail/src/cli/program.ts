@@ -2,7 +2,6 @@ import {
   agentMarker,
   answerDownloadAtTerminal,
   approvalHint,
-  approvalsOf,
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
@@ -10,11 +9,10 @@ import {
   cliHandoffs,
   colorEnabled,
   commandPathOf,
-  DOWNLOAD_CLAIM,
   describeFenceReport,
   downloadAtTerminal,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChange,
   gatedChangeAtTerminal,
@@ -47,7 +45,7 @@ import {
   terminalUpdateHooks,
   toCommsError,
   UPDATE_CHECK_CHILD_COMMAND,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   waitForApproval,
   wholeNumber,
   withoutOptionsBeforeSentinel,
@@ -197,8 +195,7 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
     .addHelpText(
       'after',
       `
-Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 11 an update is out:
-update first, or put it off (the stop names both commands) · 64 usage · 65 bad data ·
+Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 usage · 65 bad data ·
 66 not found · 69 provider or secret store unavailable · 75 temporary (retry later) ·
 77 sign-in or permission needed · 78 configuration problem.`,
     )
@@ -255,46 +252,26 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
   let softExit: number | null = null;
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
     // `oauth-listen` too: it is the listener a sign-in started, not a command anybody types, and stopping it would
     // break the sign-in the person is in the middle of. So is the update check a command handed on (#48).
-    if (exemptFromUpdateGate(path, ['oauth-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
+    if (exemptFromUpdateNotice(path, ['oauth-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-gmail',
-          channel: 'gmail',
-          running: VERSION,
-          output: output(),
-          noInput: globals().noInput,
-          streams,
-          approvals: approvalsOf(command),
-          // A download's `--choice` is the question the person just answered: held to that kind, as the tool's is.
-          // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-          approvalClaim:
-            path.join(' ') === 'attachments download'
-              ? DOWNLOAD_CLAIM
-              : path.join(' ') === 'send wait'
-                ? { lookup: true }
-                : undefined,
-          ...terminalUpdateHooks(core, env, { channel: 'gmail', output: output(), streams }),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'gmail',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+      ...terminalUpdateHooks(core, env),
+    });
   });
 
   const act =
@@ -302,10 +279,6 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       const core = coreForInvocation();
       const context = new GmailContext({ ...deps, core, env, pathOverrides: core.pathOverrides, surface: 'cli' });
       exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);

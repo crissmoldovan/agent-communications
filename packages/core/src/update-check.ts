@@ -1,16 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
-import { gatedChangeAtTerminal } from './change-flow.ts';
 import { channelServer } from './channel-servers.ts';
-import { type OutputOptions, type Streams, writeResult } from './cli-runtime.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
 import { npmLatestVersion } from './npm.ts';
-import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
-import { renderUpdate } from './render.ts';
 import { childEnvironment } from './system-programs.ts';
 import { TERMINAL_CHECK_WAIT_MS, type TerminalUpdateHooks } from './update-gate.ts';
 import {
@@ -37,7 +34,7 @@ import { isPrerelease, isVersion } from './versions.ts';
  * `lastChecked` is written when the ask is over, so an ask cut short — a command the person interrupted, a server
  * whose client closed it — does not use up the day: its claim runs out (`UPDATE_CHECK_LEASE_MS`) and the next process
  * asks. An ask that fails — offline, a registry that does not answer — is recorded as the day's ask, keeps the last
- * result, and stops nothing. It never throws.
+ * result, and changes nothing else. It never throws.
  *
  * Nothing here gives up on the registry sooner than the registry's own timeout: a command at a terminal stops
  * *waiting* after about three seconds and goes on, and the check carries on beside it — in a detached child of its
@@ -150,7 +147,7 @@ async function ask(
     return;
   }
   if (isPrerelease(latest)) {
-    // Recorded as the registry said it, and never counted: nobody is stopped for a release candidate.
+    // Recorded as the registry said it, and never counted: nobody is told of a release candidate.
     await settle({ latest, behind: null, current: null, lastError: null });
     return;
   }
@@ -169,7 +166,7 @@ async function ask(
 /**
  * The hidden command every CLI that asks the registry answers to — `agentcomms`, `agent-gmail`, `agent-slack`,
  * `agent-resend` — with the claim's time after it: the ask a command handed on (`terminalUpdateHooks`). Not in any
- * help, never stopped by the update gate, and nothing a person or an agent runs.
+ * help, never given the update notice, and nothing a person or an agent runs.
  */
 export const UPDATE_CHECK_CHILD_COMMAND = 'update-check-child';
 
@@ -297,10 +294,10 @@ export function updateCheckChildEnvironment(
 /**
  * The day's check at a terminal, handed on (#48). The command claims the check itself, as it always has, so only one
  * process asks — then starts this CLI again, detached, with the hidden command and the claim's time, and waits up to
- * the gate's three seconds for it to say the ask is over. After that it lets go of the child, which carries on alone,
+ * the notice's three seconds for it to say the ask is over. After that it lets go of the child, which carries on alone,
  * and the command's process ends when the command does: before, it lived until the ask was over — the registry's ten
  * seconds, then `npm ls`'s minute — and a `$(…)`, a pipe or an agent's shell waited with it. A fast answer is written
- * before the wait ends, and the gate reads the file after it, so it still stops the day's first command.
+ * before the wait ends, and the notice reads the file after it, so the day's first command still says so.
  *
  * The child holds none of the command's output — stdin, stdout and stderr ignored, only the IPC channel for its one
  * message — or whatever reads that output would wait for the child as it waited for the check. Detached, so a
@@ -413,19 +410,14 @@ function settled(): void {
 }
 
 /**
- * What a command at a terminal hands the update gate (`updateGateAtTerminal`): the check, and the update itself for
- * the person's "now" — its own preview and yes.
+ * What a command at a terminal hands the update notice (`updateNoticeAtTerminal`): the check.
  *
- * Every command but WhatsApp's is given these. WhatsApp's is given neither, and reads the file as it is.
+ * Every command but WhatsApp's is given it. WhatsApp's is given none, and reads the file as it is.
  */
 export function terminalUpdateHooks(
   core: Core,
   env: NodeJS.ProcessEnv,
   options: {
-    /** The command's channel, `gmail`, `core`: recorded on the update's approval when a person says "now". */
-    channel: string;
-    output: OutputOptions;
-    streams: Streams;
     /** Stand-ins for the registry and `npm ls`, for a test: the check is then asked in this process. */
     deps?: UpdateDeps | undefined;
     now?: (() => Date) | undefined;
@@ -434,7 +426,7 @@ export function terminalUpdateHooks(
      * test, one that cannot be started, or null for none, and the check is asked in this process instead.
      */
     childEntry?: UpdateCheckChildEntry | null | undefined;
-  },
+  } = {},
 ): TerminalUpdateHooks {
   return {
     check: async () => {
@@ -444,21 +436,6 @@ export function terminalUpdateHooks(
         return;
       }
       await handUpdateCheckToChild(core, env, { now: options.now, entry: options.childEntry });
-    },
-    update: async () => {
-      const result = await gatedChangeAtTerminal(core, updateChange(core, env, {}, options.deps), {
-        channel: options.channel,
-        env,
-        output: options.output,
-        rerun: ['update'],
-        rerunOn: 'core',
-        streams: options.streams,
-      });
-      writeResult(result, options.output, (r) => renderUpdate(r, options.output.color), options.streams);
-      if (!result.ok) return 'failed';
-      // Every step worked and nothing was left for a person. Anything short of that — nothing it could do, or
-      // something left behind — is not "Updated": the gate says so, and the command still does not run.
-      return result.status === 'updated' && result.manual.length === 0 ? 'updated' : 'short';
     },
   };
 }

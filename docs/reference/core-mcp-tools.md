@@ -251,7 +251,7 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 |---|---|---|---|
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
-| `later` | boolean | no | not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
+| `later` | boolean | no | not now: no server or command on this machine mentions the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
 | `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 

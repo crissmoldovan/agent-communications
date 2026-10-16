@@ -8,7 +8,6 @@ import {
   gatedChange,
   readUpdateCheck,
   UPDATE_CHECK_CHILD_COMMAND,
-  UPDATE_FIRST,
   updateCheckPath,
   updateLaterChange,
 } from '@agentcomms/core';
@@ -16,9 +15,10 @@ import { coreText } from './support/handoffs.ts';
 import { type Harness, newHarness, type ToolResult, tempDir } from './support/harness.ts';
 
 /*
- * The daily update check's stop, on Resend's server and command (design 2026-09-28): an update that is out stops
- * every tool but the doctor, and every command but the exempt ones. The check is turned back on here — the harness
- * turns it off — with a file a check wrote a moment ago, so nothing here asks a registry; Resend is the loopback fake.
+ * The update notice, on Resend's server and command (design 2026-10-16, U1): nothing is refused for being behind. The
+ * server's first result carries one line beside it, and a command prints it once on stderr, at most once a day for the
+ * machine. The check is turned back on here — the harness turns it off — with a file a check wrote a moment ago, so
+ * nothing here asks a registry; Resend is the loopback fake.
  */
 
 function updateOut(harness: Harness, current: { registered: string[]; global: string[] } | null = null): void {
@@ -78,99 +78,85 @@ const text = (result: ToolResult) =>
   ((result as { content?: { type: string; text?: string }[] }).content ?? []).find((part) => part.type === 'text')
     ?.text ?? '';
 
-test('an update that is out stops every Resend tool but the doctor, and a call claiming an approval goes ahead', async () => {
+const notice = (result: ToolResult) =>
+  (result as { structuredContent?: { update?: unknown } }).structuredContent?.update;
+const OUT = 'agent-communications 99.0.0 is out; say "update" when it suits you.';
+
+test('an update that is out stops no Resend tool: the first result carries the notice, once, and the doctor never does', async () => {
   const harness = await newHarness();
   try {
     const account = await harness.addAccount({ name: 'acme/resend' });
-    const pending = await sendApproval(harness, account.id);
     const sent = await sendApproval(harness, account.id, true);
-    const change = await heldApproval(harness);
     updateOut(harness);
     const { call, close } = await harness.mcp();
     try {
+      assert.equal(notice(await call('resend_doctor', {})), undefined, 'the doctor carried the notice');
       const listed = await call('resend_accounts_list', {});
-      assert.equal(code(listed), 'UPDATE_REQUIRED');
-      assert.ok(text(listed).startsWith(UPDATE_FIRST), text(listed));
-      assert.match(text(listed), /This is the Resend server, /);
-      assert.notEqual(code(await call('resend_doctor', {})), 'UPDATE_REQUIRED');
-      // The status of a send is looked up by the approval it went under — waiting, or used once it went — and goes
-      // past the stop as the send did.
-      for (const approvalId of [pending, sent]) {
-        const status = await call('resend_send_status', { account: 'acme/resend', approvalId });
-        assert.notEqual(code(status), 'UPDATE_REQUIRED', 'a look-up of a send is not stopped');
-        assert.equal(status.isError, undefined, JSON.stringify(status.structuredContent));
-      }
-      // A used approval claims nothing else: sending under it again is stopped, not merely refused past the stop.
+      assert.equal(listed.isError, undefined, JSON.stringify(listed.structuredContent));
+      assert.equal(notice(listed), OUT);
+      // A send's status is looked up as it always is, and the process does not say it again.
+      const status = await call('resend_send_status', { account: 'acme/resend', approvalId: sent });
+      assert.equal(status.isError, undefined, JSON.stringify(status.structuredContent));
+      assert.equal(notice(status), undefined);
+      // A used approval claims nothing: sending under it again is refused by the send gate itself.
       const again = await call('resend_send_execute', {
         account: 'acme/resend',
         approvalId: sent,
         expect: { to: ['someone@example.test'], cc: [], bcc: [], subject: 'Hello' },
       });
-      assert.equal(code(again), 'UPDATE_REQUIRED', JSON.stringify(again.structuredContent));
-      // The key alone claims nothing: an empty id, one nobody here prepared, or a change's — "not now", which an
-      // agent can have prepared while stopped — is stopped like any new call.
-      for (const claimed of ['', `ap_${'0'.repeat(26)}`, change]) {
-        const refused = await call('resend_send_status', { account: 'acme/resend', approvalId: claimed });
-        assert.equal(code(refused), 'UPDATE_REQUIRED', JSON.stringify(claimed));
-      }
-      // Every registration of Resend's server here names the latest: restart the client. Another channel's, or
-      // Resend's global command, says nothing of this server: update.
-      updateOut(harness, { registered: ['resend'], global: [] });
-      assert.match(text(await call('resend_accounts_list', {})), /Restart the client first/);
-      updateOut(harness, { registered: ['gmail'], global: ['resend'] });
-      assert.ok(text(await call('resend_accounts_list', {})).startsWith(UPDATE_FIRST));
+      assert.equal(again.isError, true, JSON.stringify(again.structuredContent));
+      assert.notEqual(code(again), 'UPDATE_REQUIRED');
     } finally {
       await close();
     }
+    // Every registration of Resend's server here names the latest: restart the client. Another channel's, or
+    // Resend's global command, says nothing of this server: it is out.
+    for (const [current, words] of [
+      [{ registered: ['resend'], global: [] }, /is installed; restart the client/],
+      [{ registered: ['gmail'], global: ['resend'] }, /is out; say "update"/],
+    ] as const) {
+      updateOut(harness, { registered: [...current.registered], global: [...current.global] });
+      const next = await harness.mcp();
+      try {
+        assert.match(String(notice(await next.call('resend_accounts_list', {}))), words);
+      } finally {
+        await next.close();
+      }
+    }
   } finally {
     await harness.close();
   }
 });
 
-test('agent-resend: with nobody to ask a command exits 11 naming both ways on, and the doctor still runs', async () => {
+test('agent-resend: a command that is behind runs, and says so once on stderr, naming core’s own update', async () => {
   const harness = await newHarness();
   try {
-    const account = await harness.addAccount({ name: 'acme/resend' });
-    const sent = await sendApproval(harness, account.id, true);
-    const change = await heldApproval(harness);
+    await harness.addAccount({ name: 'acme/resend' });
     updateOut(harness);
-    // `send status` looks a send up by its approval, used as it is, and goes past the stop as `resend_send_status`
-    // does over MCP — by its argument here — to the command's own answer. One nobody here prepared, or a change's,
-    // does not.
-    const held = await harness.cli(['--json', 'send', 'status', sent, '--account', 'acme/resend']);
-    assert.equal(held.code, 0, held.stdout + held.stderr);
-    assert.doesNotMatch(held.stdout, /UPDATE_REQUIRED/);
-    for (const claimed of [`ap_${'0'.repeat(26)}`, change]) {
-      const refused = await harness.cli(['--json', 'send', 'status', claimed, '--account', 'acme/resend']);
-      assert.equal(refused.code, 11, refused.stdout + refused.stderr);
-    }
     const listed = await harness.cli(['--json', 'account', 'list']);
-    assert.equal(listed.code, 11, listed.stdout + listed.stderr);
-    const error = (listed.json() as { error: { code: string; message: string } }).error;
-    assert.equal(error.code, 'UPDATE_REQUIRED');
+    assert.equal(listed.code, 0, listed.stdout + listed.stderr);
+    assert.match(listed.stderr, /^agent-communications 99\.0\.0 is out \(this is /m);
     // Core's own, through Resend's installed dependency on it: located, never `agentcomms` by name (CUE-403).
-    assert.ok(error.message.includes(`\`${coreText(harness.core, ['update'])}\``), error.message);
-    assert.ok(error.message.includes(`\`${coreText(harness.core, ['update', '--later'])}\``), error.message);
-    assert.doesNotMatch(error.message, /`agentcomms /);
-    // Resend's package installed globally at the latest, and this copy older: stopped, and told to run the installed
-    // one.
+    assert.ok(listed.stderr.includes(`\`${coreText(harness.core, ['update'])}\``), listed.stderr);
+    assert.doesNotMatch(listed.stderr, /`agentcomms /);
+    assert.doesNotMatch((await harness.cli(['--json', 'account', 'list'])).stderr, /is out/, 'said twice today');
+    // Resend's package installed globally at the latest, and this copy older: told to run the installed one.
     updateOut(harness, { registered: [], global: ['resend'] });
     const older = await harness.cli(['--json', 'account', 'list']);
-    assert.equal(older.code, 11, older.stdout);
-    assert.match(older.stdout, /isn't running it yet/);
+    assert.equal(older.code, 0, older.stdout);
+    assert.match(older.stderr, /is installed; this Resend CLI is .*: run it from the installed one\./);
     updateOut(harness);
     const doctor = await harness.cli(['--json', 'doctor']);
-    assert.notEqual(doctor.code, 11, doctor.stdout);
+    assert.doesNotMatch(doctor.stderr, /is out/);
   } finally {
     await harness.close();
   }
 });
 
-test('an approval the stop let through is refused by the policy report, over MCP and at the terminal: nothing is reported', async () => {
+test('an approval the report would not claim is refused by it, over MCP and at the terminal: nothing is reported', async () => {
   /*
-   * "Not now" — waiting, a change — lets a call past the stop, and an agent that was stopped can have it prepared
-   * without the person. The report took the id and claimed none, answering past the stop as though it were not there.
-   * It refuses it now, as `comms_change_policy` does without `set`.
+   * The report took an approval id and claimed none, answering as though it were not there — which once got a call
+   * past the update check's stop. It refuses it, as `comms_change_policy` does without `set`.
    */
   const harness = await newHarness();
   try {
@@ -203,12 +189,12 @@ test('an approval the stop let through is refused by the policy report, over MCP
   }
 });
 
-test('agent-resend finishes the update check a command handed on: under its claim, never stopped, and not in help', async () => {
+test('agent-resend finishes the update check a command handed on: under its claim, with no notice, and not in help', async () => {
   // The child a command starts for the day's check (#48) is this CLI again, with the hidden command and the claim.
   const harness = await newHarness();
   try {
     updateOut(harness);
-    // A day old, so every other command would ask first — and, with an update out, be stopped.
+    // A day old, so every other command would ask first — and, with an update out, say so.
     const stateDir = harness.core.paths.stateDir;
     writeFileSync(updateCheckPath(stateDir), JSON.stringify({ latest: '99.0.0', behind: true }));
     const claimedAt = await claimUpdateCheck(harness.core);

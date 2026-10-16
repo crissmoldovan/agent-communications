@@ -8,15 +8,15 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
-import { openCore, UPDATE_FIRST, updateCheckPath, updateLaterChange } from '@agentcomms/core';
+import { openCore, updateCheckPath, updateLaterChange } from '@agentcomms/core';
 import { coreInline } from './support/handoffs.ts';
 import { newHarness, tempDir } from './support/harness.ts';
 import { ACCOUNT, connect } from './support/surfaces.ts';
 
 /*
- * The daily update check on WhatsApp (design 2026-09-28): this package has no network code, so it never asks the
- * registry — it imports the reader alone, and stops for an update once any other server or command on the machine
- * has found one. Shown with the network cut off at the socket, DNS, TLS, `fetch` and process creation, as
+ * The update notice on WhatsApp (design 2026-10-16, U1): this package has no network code, so it never asks the
+ * registry — it imports the reader alone, and says an update is out once any other server or command on the machine
+ * has found one. Nothing is refused for being behind. Shown with the network cut off at the socket, DNS, TLS, `fetch` and process creation, as
  * `no-network.test.ts` cuts it; and in the bundle as it ships, which carries the reader and not the checker.
  */
 
@@ -28,7 +28,7 @@ function files(directory: string): string[] {
   );
 }
 
-test('with the network cut off, an update in the file stops every tool but whatsapp_status and every command but status', async () => {
+test('with the network cut off, an update in the file is the notice of the first tool result and of a command, and stops nothing', async () => {
   const harness = await newHarness({ env: { AGENT_COMMS_UPDATE_CHECK: 'on' } });
   await harness.ready();
   const core = openCore({ env: harness.env });
@@ -64,49 +64,60 @@ test('with the network cut off, an update in the file stops every tool but whats
   try {
     const { call, close } = await connect(harness);
     try {
-      const chats = await call('whatsapp_chats', { account: ACCOUNT });
-      assert.equal(chats.structuredContent.error?.code, 'UPDATE_REQUIRED');
-      const text = (chats as { content?: { type: string; text?: string }[] }).content?.[0]?.text ?? '';
-      assert.ok(text.startsWith(UPDATE_FIRST), text);
-      assert.match(text, /This is the WhatsApp server, /);
       const status = await call('whatsapp_status', {});
       assert.notEqual(status.isError, true, JSON.stringify(status.structuredContent));
-      // Every registration of WhatsApp's server here names the latest — the file says so, and no network is needed
-      // to read it: restart the client, not update.
-      const record = { lastChecked: checked, latest: '99.0.0', behind: true };
-      const installed = { ...record, current: { registered: ['whatsapp'], global: [] } };
-      writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(installed));
-      const restart = await call('whatsapp_chats', { account: ACCOUNT });
-      const restartText = (restart as { content?: { type: string; text?: string }[] }).content?.[0]?.text ?? '';
-      assert.match(restartText, /Restart the client first/);
-      writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(record));
+      assert.equal((status.structuredContent as { update?: unknown }).update, undefined, 'its doctor carried it');
+      const chats = await call('whatsapp_chats', { account: ACCOUNT });
+      assert.notEqual(chats.structuredContent.error?.code, 'UPDATE_REQUIRED');
+      assert.equal(
+        (chats.structuredContent as { update?: unknown }).update,
+        'agent-communications 99.0.0 is out; say "update" when it suits you.',
+      );
+      const again = await call('whatsapp_chats', { account: ACCOUNT });
+      assert.equal((again.structuredContent as { update?: unknown }).update, undefined, 'said twice');
     } finally {
       await close();
     }
-    const refused = await harness.cli(['chats', '--account', ACCOUNT, '--json']);
-    assert.equal(refused.code, 11, refused.stdout + refused.stderr);
-    const error = refused.json().error as { code: string; message: string };
-    assert.equal(error.code, 'UPDATE_REQUIRED');
-    // Core's commands, as this package finds core through its own dependency on it: never a bare `agentcomms`.
-    assert.ok(error.message.includes(coreInline(harness.env, ['update'])), error.message);
-    assert.ok(error.message.includes(coreInline(harness.env, ['update', '--later'])), error.message);
-    assert.equal((await harness.cli(['status', '--json'])).code, 0);
-    // WhatsApp's package installed globally at the latest, and this copy older: stopped, and told to run the
-    // installed one.
-    const stale = { lastChecked: checked, latest: '99.0.0', behind: true };
+    // Every registration of WhatsApp's server here names the latest — the file says so, and no network is needed to
+    // read it: restart the client, not update.
+    const record = { lastChecked: checked, latest: '99.0.0', behind: true };
     writeFileSync(
       updateCheckPath(core.paths.stateDir),
-      JSON.stringify({ ...stale, current: { registered: [], global: ['whatsapp'] } }),
+      JSON.stringify({ ...record, current: { registered: ['whatsapp'], global: [] } }),
+    );
+    const restart = await connect(harness);
+    try {
+      const chats = await restart.call('whatsapp_chats', { account: ACCOUNT });
+      assert.match(
+        String((chats.structuredContent as { update?: unknown }).update),
+        /is installed; restart the client/,
+      );
+    } finally {
+      await restart.close();
+    }
+    writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(record));
+    const ran = await harness.cli(['chats', '--account', ACCOUNT, '--json']);
+    assert.equal(ran.code, 0, ran.stdout + ran.stderr);
+    assert.match(ran.stderr, /^agent-communications 99\.0\.0 is out \(this is /m);
+    // Core's command, as this package finds core through its own dependency on it: never a bare `agentcomms`.
+    assert.ok(ran.stderr.includes(coreInline(harness.env, ['update'])), ran.stderr);
+    assert.equal((await harness.cli(['status', '--json'])).code, 0);
+    // WhatsApp's package installed globally at the latest, and this copy older: told to run the installed one.
+    writeFileSync(
+      updateCheckPath(core.paths.stateDir),
+      JSON.stringify({ ...record, current: { registered: [], global: ['whatsapp'] } }),
     );
     const older = await harness.cli(['chats', '--account', ACCOUNT, '--json']);
-    assert.equal(older.code, 11, older.stdout);
-    assert.match((older.json().error as { message: string }).message, /isn't running it yet/);
-    writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(stale));
+    assert.equal(older.code, 0, older.stdout);
+    assert.match(older.stderr, /is installed; this WhatsApp CLI is .*: run it from the installed one\./);
+    writeFileSync(updateCheckPath(core.paths.stateDir), JSON.stringify(record));
 
     // "Not now", said anywhere on the machine — here through core's own change — holds for WhatsApp too.
     const later = updateLaterChange(core);
     await later.apply(undefined, await later.plan(await core.config.load()));
-    assert.equal((await harness.cli(['chats', '--account', ACCOUNT, '--json'])).code, 0);
+    const quiet = await harness.cli(['chats', '--account', ACCOUNT, '--json']);
+    assert.equal(quiet.code, 0);
+    assert.doesNotMatch(quiet.stderr, /is out/);
   } finally {
     net.Socket.prototype.connect = saved.connect;
     tls.connect = saved.tlsConnect;
@@ -167,8 +178,10 @@ test('a flag-pinned WhatsApp run reads update state from the pinned directory an
         },
       },
     );
-    assert.equal(result.code, 11, result.stdout + result.stderr);
-    assert.equal((result.json().error as { code?: string }).code, 'UPDATE_REQUIRED');
+    // Not stopped: the command ran to its own answer — there is no account in these folders — and the notice is the
+    // pinned directory's file, not the ambient one's, which holds nothing.
+    assert.equal((result.json().error as { code?: string }).code, 'NOT_FOUND', result.stdout + result.stderr);
+    assert.match(result.stderr, /99\.0\.0 is out/);
   } finally {
     childProcess.spawn = spawn;
     syncBuiltinESMExports();
@@ -176,7 +189,7 @@ test('a flag-pinned WhatsApp run reads update state from the pinned directory an
   assert.deepEqual(attempts, []);
 });
 
-test('the bundle as it ships carries the update gate’s reader, and none of the checker', async () => {
+test('the bundle as it ships carries the update notice’s reader, and none of the checker', async () => {
   const { build } = await import('tsdown');
   const outDir = tempDir('agent-whatsapp-gate-bundle-');
   await build({
@@ -197,7 +210,7 @@ test('the bundle as it ships carries the update gate’s reader, and none of the
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
   assert.match(shipped, /update-check\.json/, 'the reader is there');
-  assert.match(shipped, /Hang on a minute, there's an update\. Let's update first\./);
+  assert.match(shipped, /is out; say "update" when it suits you/);
   for (const checker of [
     'checkForUpdates',
     'npmLatestVersion',

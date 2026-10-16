@@ -81,7 +81,7 @@ import { profileSourcePath, shownPath } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
 import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
-import { CHANGE_CLAIM, exemptFromUpdateGate, updateGateAtTerminal } from './update-gate.ts';
+import { exemptFromUpdateNotice, updateNoticeAtTerminal } from './update-gate.ts';
 import { VERSION } from './version.ts';
 
 /**
@@ -159,7 +159,7 @@ Usage — run these with this CLI, each as the words after its program:
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
   update --later [--approval <id>]
-                                not now: nothing stops for the update until midnight
+                                not now: no command or server mentions the update until midnight
   update --auto on|off [--approval <id>]
                                 turn the daily update check on or off for this machine
   secrets migrate --to keychain|file [--approval <id>]
@@ -173,10 +173,9 @@ person has agreed: in the chat under the \`chat\` change policy, with \`approve\
 policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies
 at once and asks nobody, and a --dry-run changes nothing.
 
-Once a day this machine asks npm whether a newer release is out. When one is, every command but update, doctor,
-paths, approve and approvals stops first: at a terminal it asks "Update now, later today, or cancel?"; anywhere else
-it exits 11 and names the commands for update and update --later. Putting it off (--later) and turning the check
-off (--auto off) are changes a person approves. CI, and AGENT_COMMS_UPDATE_CHECK=off, skip it.
+Once a day this machine asks npm whether a newer release is out. When one is, a command says so in one line on
+stderr, at most once a day for the machine, and runs; nothing is stopped for being behind. Putting it off (--later)
+and turning the check off (--auto off) are changes a person approves. CI, and AGENT_COMMS_UPDATE_CHECK=off, skip it.
 
 Options:
   --config-dir <dir>     use this configuration directory for this run
@@ -189,7 +188,7 @@ Options:
   -h, --help    show this help
   -v, --version show the version
 
-Exit codes: 0 ok · 1 unexpected · 10 approval required · 11 an update is out: update first, or put it off
+Exit codes: 0 ok · 1 unexpected · 10 approval required
             64 usage · 65 bad data · 66 not found · 69 provider unavailable · 75 transient
             77 auth or scope missing · 78 config error
 `;
@@ -300,11 +299,6 @@ const CLIENT_NAMES = ['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemin
  * `mcp install`, `mcp prune`, `names migrate`, `secrets migrate` and `update` — where it is how the second run claims
  * that change. Every one of them is a change, so what it claims is a change approval.
  */
-/** Whether a command is a wait for an approval: `approval wait <approvalId>`, a look-up past the update's stop. */
-function waitsFor(command: string | undefined, sub: string | undefined): boolean {
-  return command === 'approval' && sub === 'wait';
-}
-
 function takesApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
     case 'policy':
@@ -329,8 +323,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
 /**
  * Refuses `--approval` on a command that takes none, as USAGE.
  *
- * Parsed as one option for every command, it was carried to the update check's stop whatever the command, and the
- * stop lets a command claiming an approval through (§2): `agentcomms channels --approval <id>`, with an old "not now"
+ * Parsed as one option for every command, it was once carried to the update check's stop whatever the command, and
+ * the stop let a command claiming an approval through: `agentcomms channels --approval <id>`, with an old "not now"
  * the person had turned down, ran past it. Over MCP the same calls are refused an `approvalId` their tools do not
  * declare, and every channel's command is refused an option it does not take, before anything runs. So is this one.
  */
@@ -473,34 +467,24 @@ export async function main(
   }
 
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
-  // stopped by the gate it is part of — it is run before the gate, as the server is.
+  // given the notice it is part of — it is run before the notice, as the server is.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
     return runCommand(output, () => runUpdateCheckChild(core, env, sub));
   }
 
-  // The daily update check (design 2026-09-28 §3): before any command but the exempt ones, an update that is out
-  // stops it — a person is asked, anything else ends with UPDATE_REQUIRED. One carrying an approval the person
-  // already gave goes ahead, as the same call over MCP does: only a command that takes one carries it, and every one
-  // of those claims a change.
-  if (!exemptFromUpdateGate(positionals.slice(0, 2))) {
-    let ended: number | null = null;
-    const gated = await runCommand(output, async () => {
-      ended = await updateGateAtTerminal({
-        core,
-        env,
-        binary: 'agentcomms',
-        channel: 'core',
-        running: VERSION,
-        output,
-        streams: defaultStreams,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        approvals: takesApproval(command, sub) ? [values.approval] : waitsFor(command, sub) ? [arg] : [],
-        approvalClaim: waitsFor(command, sub) ? { lookup: true } : CHANGE_CLAIM,
-        ...terminalUpdateHooks(core, env, { channel: 'core', output, streams: defaultStreams }),
-      });
+  // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for
+  // about three seconds at most, and — when a newer release is out and no command here said so today — one line on
+  // stderr. It never stops the command.
+  if (!exemptFromUpdateNotice(positionals.slice(0, 2))) {
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'core',
+      running: VERSION,
+      output,
+      streams: defaultStreams,
+      ...terminalUpdateHooks(core, env),
     });
-    if (gated !== EXIT_CODES.OK) return gated;
-    if (ended !== null) return ended;
   }
 
   const code = await runCommand(output, async () => {

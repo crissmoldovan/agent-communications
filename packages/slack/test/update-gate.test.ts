@@ -10,7 +10,6 @@ import {
   gatedChange,
   readUpdateCheck,
   UPDATE_CHECK_CHILD_COMMAND,
-  UPDATE_FIRST,
   updateCheckPath,
   updateLaterChange,
 } from '@agentcomms/core';
@@ -23,9 +22,10 @@ import { assertNoBareCommand, coreInline } from './support/handoffs.ts';
 import { type Harness, newHarness, tempDir } from './support/harness.ts';
 
 /*
- * The daily update check's stop, on Slack's server and command (design 2026-09-28): an update that is out stops every
- * tool but the doctor, and every command but the exempt ones. The check is turned back on here — the harness turns it
- * off — with a file a check wrote a moment ago, so nothing here asks a registry, and Slack is a fetch that refuses.
+ * The update notice, on Slack's server and command (design 2026-10-16, U1): nothing is refused for being behind. The
+ * server's first result carries one line beside it, and a command prints it once on stderr, at most once a day for the
+ * machine. The check is turned back on here — the harness turns it off — with a file a check wrote a moment ago, so
+ * nothing here asks a registry, and Slack is a fetch that refuses.
  */
 
 interface ToolResult {
@@ -60,119 +60,113 @@ async function heldApproval(harness: Harness): Promise<string> {
 const code = (result: ToolResult) =>
   (result.structuredContent as { error?: { code?: string } } | undefined)?.error?.code;
 const text = (result: ToolResult) => (result.content ?? []).find((part) => part.type === 'text')?.text ?? '';
+const notice = (result: ToolResult) => result.structuredContent?.update as string | undefined;
+const OUT = 'agent-communications 99.0.0 is out; say "update" when it suits you.';
 
-test('an update that is out stops every Slack tool but the doctor, and a call claiming an approval goes ahead', async () => {
+test('an update that is out stops no Slack tool: the first result carries the notice, once, and the doctor never does', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme' });
-  const approvalId = await heldApproval(harness);
   updateOut(harness);
-  const { server } = await createSlackMcpServer({
-    core: harness.core,
-    env: harness.env,
-    fetch: refuseEverything,
-    probe: (input, init) => harness.probe(input, init),
-  });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'test', version: '0' });
-  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
-  const call = async (name: string, args: Record<string, unknown>) =>
-    (await client.callTool({ name, arguments: args })) as ToolResult;
+  const connectSlack = async () => {
+    const { server } = await createSlackMcpServer({
+      core: harness.core,
+      env: harness.env,
+      fetch: refuseEverything,
+      probe: (input, init) => harness.probe(input, init),
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await client.callTool({ name, arguments: args })) as ToolResult;
+    return { call, close: () => Promise.all([client.close(), server.close()]) };
+  };
+  const { call, close } = await connectSlack();
   try {
+    assert.equal(notice(await call('slack_doctor', { offline: true })), undefined, 'the doctor carried the notice');
     const listed = await call('slack_workspaces_list', {});
-    assert.equal(code(listed), 'UPDATE_REQUIRED');
-    assert.ok(text(listed).startsWith(UPDATE_FIRST), text(listed));
-    assert.match(text(listed), /This is the Slack server, /);
-    assert.notEqual(code(await call('slack_doctor', { offline: true })), 'UPDATE_REQUIRED');
-    const send = (claimed: string) =>
-      call('slack_post_send', {
-        workspace: 'acme',
-        draftId: 'dr_none',
-        approvalId: claimed,
-        expectChannel: 'C0000000000',
-      });
-    assert.notEqual(code(await send(approvalId)), 'UPDATE_REQUIRED', 'a call claiming an approval is not stopped');
-    // The key alone claims nothing: an empty id, or one nobody here prepared, is stopped like any new call.
-    for (const claimed of ['', `ap_${'0'.repeat(26)}`]) {
-      assert.equal(code(await send(claimed)), 'UPDATE_REQUIRED', JSON.stringify(claimed));
-    }
-    // Every registration of Slack's server here names the latest: restart the client. Another channel's, or Slack's
-    // global command, says nothing of this server: update.
-    updateOut(harness, { registered: ['slack'], global: [] });
-    assert.match(text(await call('slack_workspaces_list', {})), /Restart the client first/);
-    updateOut(harness, { registered: ['gmail'], global: ['slack'] });
-    assert.ok(text(await call('slack_workspaces_list', {})).startsWith(UPDATE_FIRST));
+    assert.notEqual(listed.isError, true, JSON.stringify(listed.structuredContent));
+    assert.equal(notice(listed), OUT);
+    assert.ok(
+      (listed.content ?? []).some((part) => part.text === OUT),
+      'a text block of its own',
+    );
+    // The rest of this process's results carry nothing, a refusal's included.
+    const send = await call('slack_post_send', {
+      workspace: 'acme',
+      draftId: 'dr_none',
+      approvalId: `ap_${'0'.repeat(26)}`,
+      expectChannel: 'C0000000000',
+    });
+    assert.equal(notice(send), undefined);
+    assert.notEqual(code(send), 'UPDATE_REQUIRED', 'the post was answered by its own gate');
   } finally {
-    await Promise.all([client.close(), server.close()]);
+    await close();
+  }
+  // Every registration of Slack's server here names the latest: restart the client. Another channel's, or Slack's
+  // global command, says nothing of this server: it is out.
+  for (const [current, words] of [
+    [{ registered: ['slack'], global: [] }, /is installed; restart the client/],
+    [{ registered: ['gmail'], global: ['slack'] }, /is out; say "update"/],
+  ] as const) {
+    updateOut(harness, { registered: [...current.registered], global: [...current.global] });
+    const next = await connectSlack();
+    try {
+      assert.match(String(notice(await next.call('slack_workspaces_list', {}))), words);
+    } finally {
+      await next.close();
+    }
   }
 });
 
-test('agent-slack: with nobody to ask a command exits 11 naming both ways on, and the doctor still runs', async () => {
+test('agent-slack: a command that is behind runs, and says so once on stderr, naming core’s own update', async () => {
   const harness = await newHarness();
-  const approvalId = await heldApproval(harness);
   updateOut(harness);
   const command = async (argv: string[]) => {
     let stdout = '';
+    let stderr = '';
     const out = new PassThrough();
     out.on('data', (chunk) => {
       stdout += String(chunk);
     });
+    const err = new PassThrough();
+    err.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
     const exit = await run(argv, {
       core: harness.core,
       env: harness.env,
-      streams: { stdout: out, stderr: new PassThrough(), stdin: new PassThrough() },
+      streams: { stdout: out, stderr: err, stdin: new PassThrough() },
       openBrowser: () => undefined,
       probe: (input, init) => harness.probe(input, init),
       read: refuseEverything,
     });
-    return { exit, stdout };
+    return { exit, stdout, stderr };
   };
   const listed = await command(['workspace', 'list', '--json']);
-  assert.equal(listed.exit, 11, listed.stdout);
-  const error = (JSON.parse(listed.stdout) as { error: { code: string; message: string } }).error;
-  assert.equal(error.code, 'UPDATE_REQUIRED');
+  assert.equal(listed.exit, 0, listed.stdout + listed.stderr);
   // Core's update, found through the core Slack has installed and located: never a bare `agentcomms` (CUE-403).
-  assert.ok(error.message.includes(coreInline(harness.core.paths, ['update'])), error.message);
-  assert.ok(error.message.includes(coreInline(harness.core.paths, ['update', '--later'])), error.message);
-  assertNoBareCommand(error.message);
-  const doctor = await command(['doctor', '--offline', '--json']);
-  assert.notEqual(doctor.exit, 11, doctor.stdout);
-  // A command carrying an approval this machine holds goes past the stop, as `slack_post_send` does over MCP — to
-  // the command's own answer (this approval is not a post's); one nobody here prepared does not.
-  const post = (claimed: string) =>
-    command([
-      'post',
-      'send',
-      '--workspace',
-      'acme',
-      '--draft',
-      'dr_none',
-      '--approval',
-      claimed,
-      '--expect-channel',
-      'C0000000000',
-      '--json',
-    ]);
-  const held = await post(approvalId);
-  assert.notEqual(held.exit, 11, held.stdout);
-  assert.doesNotMatch(held.stdout, /UPDATE_REQUIRED/);
-  assert.equal((await post(`ap_${'0'.repeat(26)}`)).exit, 11);
-  // Slack's package installed globally at the latest, and this copy older: stopped, and told to run the installed one.
+  assert.match(listed.stderr, /^agent-communications 99\.0\.0 is out \(this is /m);
+  assert.ok(listed.stderr.includes(coreInline(harness.core.paths, ['update'])), listed.stderr);
+  assertNoBareCommand(listed.stderr);
+  assert.doesNotMatch(listed.stdout, /is out/, 'the line is on stderr, never in the result');
+  // Not again today, on this machine; and never by the doctor or the listener a sign-in starts.
+  assert.doesNotMatch((await command(['workspace', 'list', '--json'])).stderr, /is out/);
+  updateOut(harness);
+  assert.doesNotMatch((await command(['doctor', '--offline', '--json'])).stderr, /is out/);
+  assert.doesNotMatch((await command(['sign-in-listen', 'flow_none', '--json'])).stderr, /is out/);
+  // Slack's package installed globally at the latest, and this copy older: told to run the installed one.
   updateOut(harness, { registered: [], global: ['slack'] });
   const older = await command(['workspace', 'list', '--json']);
-  assert.equal(older.exit, 11, older.stdout);
-  assert.match(older.stdout, /isn't running it yet/);
-  // The listener a sign-in starts is not stopped: stopping it would break the sign-in under way. (This flow does not
-  // exist, so it ends for that reason instead.)
-  const listener = await command(['sign-in-listen', 'flow_none', '--json']);
-  assert.notEqual(listener.exit, 11, listener.stdout);
-  assert.doesNotMatch(listener.stdout, /UPDATE_REQUIRED/);
+  assert.equal(older.exit, 0, older.stdout);
+  assert.match(older.stderr, /is installed; this Slack CLI is .*: run it from the installed one\./);
 });
 
-test('an approval the stop let through is refused by a report, the steps, the app step and a finish: nothing is shown or collected', async () => {
+test('an approval a call would not claim is refused by a report, the steps, the app step and a finish: nothing is shown or collected', async () => {
   /*
-   * "Not now" — waiting, a change — lets a call past the stop, and an agent that was stopped can have it prepared
-   * without the person. Each of these took the id and claimed none: they answered as though it were not there, past
-   * the stop. Now each refuses it as usage, on both surfaces, before it reads or collects anything.
+   * Each of these took an approval id and claimed none: they answered as though it were not there — which once got a
+   * call past the update check's stop. Nothing is stopped now, and each still refuses it as usage, on both surfaces,
+   * before it reads or collects anything.
    */
   const harness = await newHarness();
   // `read`, and its app never asked for posting; and one that posts. Each with the port it last signed in with.
@@ -247,10 +241,9 @@ test('an approval the stop let through is refused by a report, the steps, the ap
 // ── Saving files: `slack_file_download` and `agent-slack files download` ─────────────────────────────────────────
 
 /*
- * The download is the one Slack surface that writes to this machine, so it is held to the stop by name rather than
- * left to "every tool registered after the gate" and "every command that runs through `act`". Each case counts what
- * reached Slack, what reached the file transport and what reached the disk: a stop that answered correctly after the
- * download had begun would pass a test that read only the answer.
+ * The download is the one Slack surface that writes to this machine. With an update out it is never stopped: it asks,
+ * and the person's answer saves, as on any other day. Each case counts what reached Slack, what reached the file
+ * transport and what reached the disk.
  */
 
 const FILE_ID = 'F0AAA1';
@@ -338,10 +331,12 @@ function offline(harness: Harness): void {
 }
 
 /**
- * The ways past the stop that are not an update. "Not now" is written an hour ahead rather than at the midnight the
- * product writes, so a run that crosses midnight cannot see it run out; the gate reads only whether it is still ahead.
+ * Every state of the update check a download meets: an update out, put off, switched off, turned off, CI, offline.
+ * "Not now" is written an hour ahead rather than at the midnight the product writes, so a run that crosses midnight
+ * cannot see it run out.
  */
 const WAYS_PAST: readonly { label: string; apply: (harness: Harness) => Promise<void> | void }[] = [
+  { label: 'an update out', apply: (harness) => updateOut(harness) },
   {
     label: 'not now',
     apply: (harness) => {
@@ -443,51 +438,6 @@ async function downloadAtCommand(harness: Harness, extra: string[] = [], options
   return { exit, stdout, stderr, slack: slack.asked, transport: transport.asked };
 }
 
-test('slack_file_download: an update that is out answers "Hang on a minute" and saves nothing — no Slack, no transport, no disk', async () => {
-  const { harness, root } = await downloadHarness();
-  updateOut(harness);
-  const { result, slack, transport } = await downloadOverMcp(harness);
-  assert.equal(result.isError, true, JSON.stringify(result.structuredContent));
-  assert.equal(code(result), 'UPDATE_REQUIRED', JSON.stringify(result.structuredContent));
-  assert.ok(text(result).startsWith("Hang on a minute, there's an update. Let's update first."), text(result));
-  assert.match(text(result), /This is the Slack server, /);
-  assert.match(text(result), /slack_file_download did not run/);
-  const error = (result.structuredContent as { error: { message: string; details: Record<string, unknown> } }).error;
-  assert.ok(error.message.startsWith(UPDATE_FIRST), 'the structured content carries the same words');
-  assert.equal(error.details.tool, 'slack_file_download');
-  assert.equal(error.details.server, 'agent-slack');
-  assert.deepEqual(slack, [], 'Slack was asked about the file');
-  assert.deepEqual(transport, [], 'the file was fetched');
-  assert.deepEqual(saved(root), [], 'something was written under the downloads root');
-  assert.equal(await downloadAudits(harness), 0, 'a download was audited');
-});
-
-test('agent-slack files download: with no terminal an update that is out exits 11 and writes nothing', async () => {
-  for (const json of [true, false]) {
-    const label = json ? '--json' : 'plain';
-    const { harness, root } = await downloadHarness();
-    updateOut(harness);
-    const stopped = await downloadAtCommand(harness, [], { json });
-    assert.equal(stopped.exit, EXIT_CODES.UPDATE, `${label}: ${stopped.stdout}${stopped.stderr}`);
-    assert.equal(stopped.exit, 11);
-    if (json) {
-      const error = (JSON.parse(stopped.stdout) as { error: { code: string; message: string } }).error;
-      assert.equal(error.code, 'UPDATE_REQUIRED');
-      assert.ok(error.message.startsWith(UPDATE_FIRST), error.message);
-      assert.ok(error.message.includes(coreInline(harness.core.paths, ['update'])), error.message);
-      assert.ok(error.message.includes(coreInline(harness.core.paths, ['update', '--later'])), error.message);
-      assertNoBareCommand(error.message);
-    } else {
-      assert.ok(stopped.stderr.includes(UPDATE_FIRST), `${label}: ${stopped.stderr}`);
-      assert.doesNotMatch(stopped.stdout, /numbers|F0AAA1/, `${label}: the command reported a download`);
-    }
-    assert.deepEqual(stopped.slack, [], `${label}: Slack was asked about the file`);
-    assert.deepEqual(stopped.transport, [], `${label}: the file was fetched`);
-    assert.deepEqual(saved(root), [], `${label}: something was written under the downloads root`);
-    assert.equal(await downloadAudits(harness), 0, `${label}: a download was audited`);
-  }
-});
-
 /** Whether a saved file is on disk, inside this harness's downloads root. */
 function savedInside(root: string, path: string | undefined): boolean {
   if (path === undefined || !existsSync(path)) return false;
@@ -495,16 +445,10 @@ function savedInside(root: string, path: string | undefined): boolean {
   return below !== '' && !below.startsWith('..') && !below.includes(':');
 }
 
-test('the download goes ahead when the update is put off, switched off, turned off, in CI or offline — over MCP and at the command', async () => {
+test('the download goes ahead with an update out, put off, switched off, turned off, in CI or offline — over MCP and at the command', async () => {
   for (const { label, apply } of WAYS_PAST) {
-    // Over MCP. The same call is stopped first, so what lets it through is the way past and nothing else; offline
-    // has no update out to be stopped for.
+    // Over MCP.
     const tool = await downloadHarness();
-    if (label !== 'offline') {
-      updateOut(tool.harness);
-      const control = await downloadOverMcp(tool.harness);
-      assert.equal(code(control.result), 'UPDATE_REQUIRED', `${label}: the control call was not stopped`);
-    }
     await apply(tool.harness);
     // Asked first — nothing fetched — then answered, as the person would.
     const asked = await downloadOverMcp(tool.harness);
@@ -521,13 +465,8 @@ test('the download goes ahead when the update is put off, switched off, turned o
 
     // At the command, with no terminal, as an agent runs it — asked first, then answered with `--to` and the
     // question's `--choice` (a bare `--to` is a person's at a terminal, and there is none here): exit 0 and the file
-    // on disk, where the same command was stopped first.
+    // on disk.
     const command = await downloadHarness();
-    if (label !== 'offline') {
-      updateOut(command.harness);
-      const control = await downloadAtCommand(command.harness);
-      assert.equal(control.exit, 11, `${label}: the control command was not stopped`);
-    }
     await apply(command.harness);
     const askedAt = await downloadAtCommand(command.harness);
     assert.equal(askedAt.exit, 10, `${label}: ${askedAt.stdout}${askedAt.stderr}`);
@@ -543,19 +482,16 @@ test('the download goes ahead when the update is put off, switched off, turned o
   }
 });
 
-test('the download claims only its own question, so another approval cannot walk it past the stop', async () => {
-  // The stop lets through a call carrying an approval this machine holds (§2). A download takes no approval but its
-  // own question's `choiceId`: `approvalId` on the tool, or `--approval` on the command, is refused before the gate is
-  // asked, and a change's approval passed as the question's id claims nothing — so even a real one opens nothing
-  // here, and the download stays stopped until the update or "not now".
+test('the download takes no approval but its own question’s, on either surface', async () => {
+  // A download takes no approval but its own question's `choiceId`: `approvalId` on the tool, or `--approval` on the
+  // command, is refused before anything runs, and a change's approval passed as the question's id saves nothing.
   const { harness, root } = await downloadHarness();
   const approvalId = await heldApproval(harness);
   updateOut(harness);
 
   const borrowed = await downloadOverMcp(harness, { saveTo: 'downloads', choiceId: approvalId });
-  assert.equal(code(borrowed.result), 'UPDATE_REQUIRED', JSON.stringify(borrowed.result.structuredContent));
-  const borrowedAtCommand = await downloadAtCommand(harness, ['--to', 'downloads', '--choice', approvalId]);
-  assert.equal(borrowedAtCommand.exit, EXIT_CODES.UPDATE, `${borrowedAtCommand.stdout}${borrowedAtCommand.stderr}`);
+  assert.equal(borrowed.result.isError, true, JSON.stringify(borrowed.result.structuredContent));
+  assert.deepEqual(borrowed.transport, [], 'a change’s approval fetched the file');
   assert.equal(asV2(await harness.core.approvals.get(approvalId))?.state, 'pending', 'the change’s approval was spent');
 
   const tool = await downloadOverMcp(harness, { approvalId });
@@ -571,41 +507,11 @@ test('the download claims only its own question, so another approval cannot walk
   assert.equal(await downloadAudits(harness), 0, 'a download was audited');
 });
 
-test('the person’s answer goes past the stop by its question’s choice id; the answer alone does not', async () => {
-  const { harness, root } = await downloadHarness();
-  // Asked before the update was found, as a question answered moments before the check landed.
-  const asked = await downloadOverMcp(harness);
-  const question = asked.result.structuredContent as unknown as FileDownloadQuestion;
-  assert.equal(question.destinationRequired, true, JSON.stringify(question));
-  const again = await downloadOverMcp(harness);
-  const second = again.result.structuredContent as unknown as FileDownloadQuestion;
-  updateOut(harness);
-
-  // A new request, and an answer to no question, are stopped like any new call; nothing reaches Slack.
-  for (const args of [{}, { saveTo: 'downloads' }]) {
-    const stopped = await downloadOverMcp(harness, args);
-    assert.equal(code(stopped.result), 'UPDATE_REQUIRED', JSON.stringify(args));
-    assert.deepEqual([...stopped.slack, ...stopped.transport], [], JSON.stringify(args));
-  }
-  const bare = await downloadAtCommand(harness, ['--to', 'downloads']);
-  assert.equal(bare.exit, EXIT_CODES.UPDATE, `${bare.stdout}${bare.stderr}`);
-  assert.deepEqual(saved(root), [], 'something was saved past the stop');
-
-  // The answer to the question the person was asked goes through, over MCP and at the command.
-  const answered = await downloadOverMcp(harness, { saveTo: 'downloads', choiceId: question.choiceId });
-  assert.notEqual(answered.result.isError, true, JSON.stringify(answered.result.structuredContent));
-  assert.deepEqual(answered.transport, [FILE_ID]);
-  const atCommand = await downloadAtCommand(harness, ['--to', 'downloads', '--choice', second.choiceId]);
-  assert.equal(atCommand.exit, EXIT_CODES.OK, `${atCommand.stdout}${atCommand.stderr}`);
-  assert.deepEqual(saved(root), ['numbers-2.pdf', 'numbers.pdf']);
-  assert.equal(await downloadAudits(harness), 2);
-});
-
-test('agent-slack finishes the update check a command handed on: under its claim, never stopped, and not in help', async () => {
+test('agent-slack finishes the update check a command handed on: under its claim, with no notice, and not in help', async () => {
   // The child a command starts for the day's check (#48) is this CLI again, with the hidden command and the claim.
   const harness = await newHarness();
   updateOut(harness);
-  // A day old, so every other command would ask first — and, with an update out, be stopped.
+  // A day old, so every other command would ask first — and, with an update out, say so.
   const stateDir = harness.core.paths.stateDir;
   writeFileSync(updateCheckPath(stateDir), JSON.stringify({ latest: '99.0.0', behind: true }));
   const ambient = tempDir('agent-slack-update-ambient-');

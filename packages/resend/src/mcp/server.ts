@@ -6,10 +6,9 @@ import {
   gatedChange,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
-  SEND_LOOKUP,
   strictToolArguments,
   toCommsError,
-  updateToolGate,
+  updateToolNotice,
   waitCallOptions,
   waitForApproval,
 } from '@agentcomms/core';
@@ -158,22 +157,17 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
 
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
   // in the envelope above — before its handler runs.
-  // Then the daily update check's stop (design 2026-09-28): an update that is out stops every tool but this server's
-  // doctor, and the check itself runs in the background, never delaying a call.
+  // Then the update notice (design 2026-10-16, U1): nothing is refused for being behind; the first result of this
+  // process that finds a newer release carries one line beside it, and the check runs in the background.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-resend',
       channel: 'resend',
       running: VERSION,
       exempt: ['resend_doctor'],
-      // The status of a send is asked by the approval it went under, used or failed as it may be: a look-up of that
-      // send, which goes past the stop as the send itself did — and only with a send's approval.
-      // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-      approvals: { resend_send_status: SEND_LOOKUP, resend_send_wait: { lookup: true } },
       refresh: () => checkForUpdates(context.core, context.env),
     }),
   );

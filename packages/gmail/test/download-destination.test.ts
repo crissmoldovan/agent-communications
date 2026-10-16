@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { asV2, gatedChange, updateCheckPath, updateLaterChange } from '@agentcomms/core';
+import { asV2, updateCheckPath } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { v1DownloadRecord, writeV1Record } from '../../core/test/fixtures/approval-v1-0.13.0.ts';
@@ -73,9 +73,6 @@ async function listing(folder: string): Promise<string[]> {
     return [];
   }
 }
-
-const code = (result: ToolResult) =>
-  (result.structuredContent as { error?: { code?: string } } | undefined)?.error?.code;
 
 // ── Over MCP ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -330,7 +327,7 @@ test('the command and the tool answer with the same question and the same saved 
   }
 });
 
-// ── The update check's stop ───────────────────────────────────────────────────────────────────────────────────
+// ── The update notice ─────────────────────────────────────────────────────────────────────────────────────────
 
 function updateOut(harness: Harness): void {
   harness.env.AGENT_COMMS_UPDATE_CHECK = 'on';
@@ -343,52 +340,27 @@ function updateOut(harness: Harness): void {
   );
 }
 
-test('the update stop lets the person’s answer through by its choice id, and stops a bare saveTo or --to', async () => {
+test('with an update out, a download is never stopped: the question, then the person’s answer, save as they always do', async () => {
+  // Nothing is refused for being behind (design 2026-10-16, U1): the stop that let only the answer's choice id past
+  // it is gone, and the first result carries the notice beside it.
   const { harness, downloads, cwd } = await mailbox();
+  updateOut(harness);
   const { call, close } = await connect({ core: harness.core, env: harness.env, cwd });
-  let choiceId: string;
   try {
-    // Asked before the update was found, as a question answered moments before the check landed.
-    choiceId = String(wire(await call('gmail_attachment_download', { inbox: 'work', messageIds: ['m1'] })).choiceId);
+    const args = { inbox: 'work', messageIds: ['m1'] };
+    const asked = await call('gmail_attachment_download', args);
+    assert.equal(asked.isError, undefined, JSON.stringify(asked.structuredContent));
+    assert.match(String((asked.structuredContent as { update?: unknown }).update), /99\.0\.0 is out/);
+    const choiceId = String(wire(asked).choiceId);
+    const answered = await call('gmail_attachment_download', { ...args, saveTo: 'downloads', choiceId });
+    assert.equal(answered.isError, undefined, JSON.stringify(answered.structuredContent));
+    assert.equal((answered.structuredContent as { update?: unknown }).update, undefined, 'said twice');
+    assert.deepEqual(await listing(downloads), ['invoice.pdf']);
   } finally {
     await close();
   }
-  updateOut(harness);
-  const stopped = await connect({ core: harness.core, env: harness.env, cwd });
-  try {
-    const args = { inbox: 'work', messageIds: ['m1'] };
-    assert.equal(code(await stopped.call('gmail_attachment_download', args)), 'UPDATE_REQUIRED', 'a new request');
-    assert.equal(
-      code(await stopped.call('gmail_attachment_download', { ...args, saveTo: 'downloads' })),
-      'UPDATE_REQUIRED',
-      'a bare saveTo',
-    );
-    const answered = await stopped.call('gmail_attachment_download', { ...args, saveTo: 'downloads', choiceId });
-    assert.equal(answered.isError, undefined, JSON.stringify(answered.structuredContent));
-    assert.deepEqual(await listing(downloads), ['invoice.pdf']);
-  } finally {
-    await stopped.close();
-  }
 
-  // The command the same way: `--to` alone is stopped, and so is another kind's approval passed as `--choice`;
-  // `--choice` of a question still waiting goes through.
-  const bare = await cli(harness, ['attachments', 'download', 'm1', '--inbox', 'work', '--to', 'current', '--json'], {
-    cwd,
-  });
-  assert.equal(bare.code, 11, bare.stdout);
-  const prepared = await gatedChange(harness.core, updateLaterChange(harness.core), {
-    channel: 'gmail',
-    surface: 'mcp',
-  });
-  const change = (prepared as { prepared: { approvalId: string } }).prepared.approvalId;
-  const borrowed = await cli(
-    harness,
-    ['attachments', 'download', 'm1', '--inbox', 'work', '--to', 'current', '--choice', change, '--json'],
-    { cwd },
-  );
-  assert.equal(borrowed.code, 11, borrowed.stdout);
-  assert.equal(asV2(await harness.core.approvals.get(change))?.state, 'pending', 'the change’s approval was spent');
-  updateOut(harness);
+  // The command the same way: the answer saves, and the notice is on stderr.
   const { call: ask, close: closeAsk } = await connect({
     core: harness.core,
     env: { ...harness.env, AGENT_COMMS_UPDATE_CHECK: 'off' },
@@ -406,6 +378,7 @@ test('the update stop lets the person’s answer through by its choice id, and s
     { cwd },
   );
   assert.equal(claimed.code, 0, claimed.stdout);
+  assert.match(claimed.stderr, /99\.0\.0 is out/);
   assert.deepEqual(await listing(cwd), ['invoice.pdf']);
 });
 

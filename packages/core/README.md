@@ -28,17 +28,14 @@ npx @agentcomms/core channels      # which servers exist, which are installed, a
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
-npx @agentcomms/core update --later  # not now: nothing stops for the update until midnight (a change you approve)
+npx @agentcomms/core update --later  # not now: no notice of the update until midnight (a change you approve)
 npx @agentcomms/core update --auto off  # no daily update check on this machine (a change you approve); --auto on
 ```
 
-**Once a day this machine asks npm whether a newer release is out.** When one is, every server and every command
-stops before doing anything — "Hang on a minute, there's an update. Let's update first." — until it is updated or put
-off until midnight. At a terminal you are asked "Update now, later today, or cancel?"; anything without a terminal
-exits `11` (`UPDATE_REQUIRED`), naming `agentcomms update` and `agentcomms update --later`. `update`, `doctor`,
-`paths`, `approve`, `approvals` and `mcp` on its own (the server, which stops each call itself — `mcp install` and
-`mcp prune` are stopped) are never stopped, and neither is a call or a command carrying the id of an approval already
-given on this machine. A registry that cannot be reached stops nothing. The check is skipped when `CI` is set, or
+**Once a day this machine asks npm whether a newer release is out.** Nothing is ever stopped for it. When one is, a
+server's first tool result carries one line beside it (an `update` field), and a command prints the same line once on
+stderr, at most once a day for the machine, and runs. `update`, `doctor`, `paths`, `approve`, `approvals` and `mcp` on
+its own never print it. A registry that cannot be reached changes nothing. The check is skipped when `CI` is set, or
 `AGENT_COMMS_UPDATE_CHECK=off`; `doctor` shows it on one line.
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or

@@ -34,7 +34,7 @@ import { updateAutoChange, updateLaterChange } from '../operations/update-settin
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
-import { CHANGE_CLAIM, updateToolGate } from '../update-gate.ts';
+import { updateToolNotice } from '../update-gate.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -173,35 +173,19 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     };
   };
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
-  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the daily update check's stop
-  // (design 2026-09-28): an update that is out stops every tool but the update's own, the doctor and the paths, and
-  // the check itself runs in the background, never delaying a call.
+  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the update notice (design
+  // 2026-10-16, U1): nothing is refused for being behind; the first result of this process that finds a newer release
+  // carries one line beside it, and the check itself runs in the background, never delaying a call.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core,
       env,
-      server: 'agentcomms',
       channel: 'core',
       running: VERSION,
+      // Each says what is behind in its own words already.
       exempt: ['comms_update', 'comms_doctor', 'comms_paths'],
-      // Every tool here that takes an approval claims a change with it, as the same command does at a terminal.
-      // `comms_approval_revoke` takes either kind: it is how a person's no reaches a send or a change.
-      approvals: {
-        comms_attach: CHANGE_CLAIM,
-        comms_change_policy: CHANGE_CLAIM,
-        comms_label: CHANGE_CLAIM,
-        comms_server_install: CHANGE_CLAIM,
-        comms_server_prune: CHANGE_CLAIM,
-        comms_names_migrate: CHANGE_CLAIM,
-        comms_secrets_migrate: CHANGE_CLAIM,
-        comms_org_add: CHANGE_CLAIM,
-        comms_org_update: CHANGE_CLAIM,
-        comms_org_remove: CHANGE_CLAIM,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        comms_approval_wait: { lookup: true },
-      },
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),
@@ -786,7 +770,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           .boolean()
           .optional()
           .describe(
-            'not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId',
+            'not now: no server or command on this machine mentions the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId',
           ),
         auto: z
           .enum(['on', 'off'])
