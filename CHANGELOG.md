@@ -57,6 +57,8 @@ never inherits them.
   for example one another app installed, a printed command and a managed CLI shim now name the link, as client
   registrations already did, not the file it pointed to at the time. `doctor` reports an older shim as stale, and
   `update` repoints it.
+- **A Gmail send preview no longer calls a new message a reply.** It said "reply in conversation …" for every draft,
+  because Gmail gives each one a conversation; now it says so only for a real reply.
 - **An events rule tick no longer judges Gmail mail by the wall clock** instead of the scheduler's own. This only showed
   in tests, but a test would have failed on any machine from 2026-10-15 on.
 
