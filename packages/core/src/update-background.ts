@@ -18,7 +18,6 @@ import {
   restorePointer,
 } from './launcher.ts';
 import { withFileLock } from './lock.ts';
-import { displayUrl } from './mcp-clients.ts';
 import {
   type InstallContext,
   installManagedRuntime,
@@ -31,7 +30,6 @@ import {
   runningCommandLines,
   verifyEntry,
 } from './mcp-install.ts';
-import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 import { childEnvironment } from './system-programs.ts';
 import { backgroundJobAtRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
 import { withUpdateLock } from './update-lock.ts';
@@ -42,6 +40,7 @@ import {
   type VerifiedProvenance,
   verifyProvenance,
 } from './update-provenance.ts';
+import { npmRegistry, type RegistryAnswer, type ReleaseRegistry } from './update-release.ts';
 import {
   type BackgroundNotice,
   changeUpdateCheck,
@@ -108,20 +107,8 @@ export function updateSettingsReader(config: Config, record: UpdateCheckRecord, 
   };
 }
 
-/** What the run reads of a package's document on the registry: its tags, its versions' manifests, when each came out. */
-export interface Packument {
-  'dist-tags'?: Record<string, unknown> | undefined;
-  versions?: Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown } } | undefined> | undefined;
-  time?: Record<string, unknown> | undefined;
-}
-
-/** A package's document, and when the registry served it (its `Date`), when it said. */
-export interface RegistryAnswer {
-  packument: Packument;
-  servedAt?: Date | undefined;
-}
-
-export type ReleaseRegistry = (packageName: string) => Promise<RegistryAnswer>;
+export type { Packument, RegistryAnswer, ReleaseRegistry } from './update-release.ts';
+export { npmRegistry } from './update-release.ts';
 
 /** One package's check after installing: what was run, and how it went. */
 export type SelfCheck = (subject: {
@@ -287,44 +274,6 @@ export async function holdRolledBack(
 }
 
 // ── The registry ────────────────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * The registry npm itself reads, asked for a package's full document — the one that says when each version came out.
- * A mirror's address with a user and password in it means basic authentication, as `npmLatestVersion` sends it. It
- * fails rather than guesses, naming the registry by its host only.
- */
-export function npmRegistry(env: NodeJS.ProcessEnv): ReleaseRegistry {
-  return async (packageName) => {
-    const base = registryUrl(env);
-    const where = displayUrl(base) ?? 'the npm registry';
-    const url = new URL(packageName.replace('/', '%2f'), base);
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (url.username || url.password) {
-      const user = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
-      headers.authorization = `Basic ${Buffer.from(user).toString('base64')}`;
-      url.username = '';
-      url.password = '';
-    }
-    let response: Response;
-    try {
-      response = await fetch(url, { headers, signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
-    } catch {
-      throw new Error(`${where} could not be reached`);
-    }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`${where} answered ${response.status} for ${packageName}`);
-    }
-    let packument: Packument;
-    try {
-      packument = (await response.json()) as Packument;
-    } catch {
-      throw new Error(`${where} answered something that is not JSON for ${packageName}`);
-    }
-    const date = Date.parse(response.headers.get('date') ?? '');
-    return { packument, ...(Number.isFinite(date) ? { servedAt: new Date(date) } : {}) };
-  };
-}
 
 /** What a release's core manifest declares (U5): a security fix, and a decision it needs from the person. */
 function releaseFlags(manifest: { agentcommsRelease?: unknown } | undefined): {

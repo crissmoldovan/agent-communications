@@ -430,6 +430,17 @@ export async function verifyProvenance(
   };
 }
 
+/**
+ * The verifier an update is handed (`update-release.ts`, `ReleaseVerifier`): `verifyProvenance` with npm's endpoint and
+ * sigstore-js reading Sigstore's trust root through TUF into `cachePath` — or, for a test, its own fetch and verifier.
+ */
+export function releaseVerifier(
+  options: { cachePath?: string | undefined } & ProvenanceDeps = {},
+): (release: ProvenanceRelease) => Promise<ProvenanceVerdict> {
+  const verifyBundle = options.verifyBundle ?? sigstoreBundleVerifier({ cachePath: options.cachePath });
+  return (release) => verifyProvenance(release, { fetch: options.fetch, verifyBundle });
+}
+
 function shown(value: string | null): string {
   return value === null ? 'nothing' : JSON.stringify(value.slice(0, 200));
 }

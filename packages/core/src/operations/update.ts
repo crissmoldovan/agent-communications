@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { corruptStubOf, type StoredApproval, stateOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -64,6 +64,16 @@ import {
 } from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
+import { releaseVerifier, type VerifiedProvenance } from '../update-provenance.ts';
+import {
+  BUILT_BY,
+  npmRegistry,
+  PIN_WORDS,
+  type ReleaseRegistry,
+  type ReleaseVerifier,
+  releaseIntegrity,
+  runtimeIntegrityProblem,
+} from '../update-release.ts';
 import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { VERSION } from '../version.ts';
 import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
@@ -119,6 +129,19 @@ export interface UpdateDeps {
    * `latestVersion` hands in this too, or the facts are not read. Null: never read them.
    */
   releaseFacts?: ((packageName: string, version: string) => Promise<ReleaseDeclaration>) | null | undefined;
+  /**
+   * Every package's full document on the registry, read for the tarball integrity of the release an update installs
+   * (and what the releases on the way declare). Defaults to the registry npm reads — but only beside the registry's own
+   * `latest`: a test that hands in a `latestVersion` hands in this too.
+   */
+  registry?: ReleaseRegistry | undefined;
+  /**
+   * Verifies a release's provenance before an update installs or switches to it (design 2026-10-16 U5 step 3, held to
+   * the same pins as the background run). Defaults to npm's attestations endpoint and sigstore-js, with Sigstore's
+   * trust root read through TUF — but only when neither `latestVersion` nor `registry` is a stand-in: a test hands in
+   * its own, or every release is refused. Nothing skips it.
+   */
+  verifyRelease?: ReleaseVerifier | undefined;
   /** The clock a check or an update is recorded by in the daily check's file. */
   now?: (() => Date) | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
@@ -859,6 +882,8 @@ interface Planned {
   nothingBehind: boolean;
   /** Whether each switched launcher is started, through a registration of it, to check that it answers. */
   verify: boolean;
+  /** Every release this update installs or switches to, by package: verified before the preview was made. */
+  verified: Map<string, VerifiedProvenance>;
 }
 
 /**
@@ -910,6 +935,104 @@ function registrationEffects(step: RegistrationStep): string[] {
   return effects;
 }
 
+/**
+ * The release of each package this update installs or switches to: each runtime it installs, each launcher it
+ * switches, each registration it writes — a managed one's runtime, an npx one's package, which its client fetches from
+ * npm — and each global package it updates.
+ */
+function releasesOf(
+  runtimes: readonly RuntimeItem[],
+  pointers: readonly PointerStep[],
+  registrations: readonly RegistrationStep[],
+  globals: readonly GlobalItem[],
+): Map<string, string> {
+  const wanted = new Map<string, string>();
+  for (const runtime of runtimes) wanted.set(runtime.package, runtime.latest);
+  for (const pointer of pointers) wanted.set(pointer.package, pointer.latest);
+  for (const { item, product } of registrations) {
+    wanted.set(item.launcher === 'managed' ? product.packageName : item.package, item.latest);
+  }
+  for (const global of globals) wanted.set(global.package, global.latest);
+  return wanted;
+}
+
+/**
+ * Where an update reads releases' documents and verifies them: the registry npm reads and npm's attestations, verified
+ * with sigstore-js — unless a test handed in stand-ins, which then hands in its verifier too. Null where none was
+ * handed in beside a stand-in: then every release is refused, and nothing reaches the network.
+ */
+function releaseSources(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  deps: UpdateDeps,
+): { registry: ReleaseRegistry | null; verify: ReleaseVerifier | null } {
+  const standIn = deps.latestVersion !== undefined || deps.registry !== undefined;
+  return {
+    registry: deps.registry ?? (deps.latestVersion === undefined ? npmRegistry(env) : null),
+    verify:
+      deps.verifyRelease ?? (standIn ? null : releaseVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') })),
+  };
+}
+
+/** The refusal of a whole update for one release that did not verify: which, and which pin — never what it held. */
+function unverified(packageName: string, version: string, why: string, pin: string): CommsError {
+  return new CommsError(
+    'BAD_DATA',
+    `nothing was installed or changed: ${packageName}@${version} could not be verified as built by this repository's release workflow — ${why}`,
+    {
+      hint: "An update installs only a release whose Sigstore provenance shows it was built by this repository's release workflow at the tag of its version, on a GitHub-hosted runner, and nothing skips that check. Nothing was prepared to approve. A release published minutes ago can be without its attestation for a while: try again later. If it still does not verify, do not install it some other way; report it as SECURITY.md says.",
+      details: { package: packageName, version, pin },
+    },
+  );
+}
+
+/**
+ * Verifies every release in `wanted` — its tarball's integrity as the registry gives it, and npm's attestation for it,
+ * held to the pins the background run holds a release to (design 2026-10-16 U5 step 3). The first that does not verify
+ * refuses the whole update; what verified is returned by package, for the preview and for the integrity check after
+ * install. Reads; changes nothing.
+ */
+async function verifyReleases(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  deps: UpdateDeps,
+  wanted: ReadonlyMap<string, string>,
+): Promise<Map<string, VerifiedProvenance>> {
+  const verified = new Map<string, VerifiedProvenance>();
+  if (wanted.size === 0) return verified;
+  const { registry, verify } = releaseSources(core, env, deps);
+  for (const [packageName, version] of [...wanted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (registry === null || verify === null) {
+      throw unverified(packageName, version, 'this update was handed a stand-in registry and no verifier', 'verifier');
+    }
+    let integrity: string | null;
+    try {
+      integrity = releaseIntegrity((await registry(packageName)).packument, version);
+    } catch (error) {
+      throw new CommsError(
+        'PROVIDER_UNAVAILABLE',
+        `nothing was installed or changed: the registry's document of ${packageName} could not be read to verify ${version}: ${message(error)}`,
+        { hint: 'Try again once the registry can be reached.' },
+      );
+    }
+    if (integrity === null) {
+      throw unverified(packageName, version, 'the registry gives no tarball integrity for it', 'subject');
+    }
+    const verdict = await verify({ packageName, version, integrity });
+    if (!verdict.ok) throw unverified(packageName, version, PIN_WORDS[verdict.field], verdict.field);
+    verified.set(packageName, verdict.provenance);
+  }
+  return verified;
+}
+
+/** What the preview says of each release it verified: one sentence a package, in the order the packages sort. */
+function verifiedEffects(planned: Planned): string[] {
+  return [...planned.verified.values()].map(
+    (provenance) =>
+      `${provenance.package}@${provenance.version} was verified before this preview: built by ${BUILT_BY}`,
+  );
+}
+
 /** Every step as the sentences a person reads, in the order the steps are taken. */
 function effectsOf(planned: Planned): string[] {
   // One launcher a product: said with the first of its registrations, which switches it, and not again.
@@ -930,6 +1053,7 @@ function effectsOf(planned: Planned): string[] {
       (global) =>
         `updates the global ${global.package} from ${global.version} to ${global.latest}: \`npm install -g ${global.package}@${global.latest}\``,
     ),
+    ...verifiedEffects(planned),
   ];
 }
 
@@ -1094,6 +1218,9 @@ export function updateChange(
         ...steps.map((step) => step.item),
         ...pointers.flatMap((step) => step.items),
       ]);
+      // Every release it would install or switch to, verified before anything is shown or done: one that does not
+      // verify refuses the whole update, and nothing is prepared to approve.
+      const verified = await verifyReleases(core, env, deps, releasesOf(runtimes, pointers, steps, inspection.globals));
       planned = {
         report: inspection.report,
         latest: inspection.report.latest,
@@ -1105,6 +1232,7 @@ export function updateChange(
         manual: [...inspection.manual, ...manual],
         nothingBehind: inspection.report.behind.length === 0 && (inspection.report.moves ?? []).length === 0,
         verify: request.noVerify !== true,
+        verified,
       };
       const parts = [
         steps.length > 0 ? counted(steps.length, 'registration', 'registrations') : '',
@@ -1263,7 +1391,7 @@ async function switchLauncher(
   context: InstallContext,
   pointer: PointerStep,
   verify: boolean,
-  runtimeMissing: boolean,
+  runtimeMissing: string | undefined,
 ): Promise<UpdateStep> {
   const { dataDir } = context.core.paths;
   const base = {
@@ -1276,11 +1404,11 @@ async function switchLauncher(
     runtime: pointer.runtime,
     registrations: pointer.items.map(({ client, name, scope, path }) => ({ client, name, scope, path })),
   };
-  if (runtimeMissing) {
+  if (runtimeMissing !== undefined) {
     return {
       ...base,
       outcome: 'skipped',
-      detail: `its runtime ${pointer.package}@${pointer.latest} could not be installed, so the launcher was left as it was`,
+      detail: `its runtime ${pointer.package}@${pointer.latest} ${runtimeMissing}, so the launcher was left as it was`,
     };
   }
   try {
@@ -1305,6 +1433,24 @@ async function switchLauncher(
   }
 }
 
+/**
+ * Why the runtime of `packageName` at `version` is not the release verified before the preview, or null when it is
+ * (see `runtimeIntegrityProblem`). One that was never verified — nothing in the plan named it — is not used either.
+ */
+async function integrityProblem(
+  dataDir: string,
+  planned: Planned,
+  packageName: string,
+  version: string,
+): Promise<string | null> {
+  const verified = planned.verified.get(packageName);
+  const runtime = managedRuntimeDir(dataDir, packageName, version);
+  if (verified === undefined || verified.version !== version) {
+    return `${packageName}@${version} was not verified before the preview, so ${runtime} is not used`;
+  }
+  return runtimeIntegrityProblem(runtime, packageName, verified.sha512);
+}
+
 async function applyUpdate(context: InstallContext, planned: Planned, deps: UpdateDeps): Promise<UpdateResult> {
   const installRuntime =
     deps.installRuntime ??
@@ -1315,7 +1461,8 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   const steps: UpdateStep[] = [];
 
   // The runtimes first: a registration whose runtime could not be installed is not attempted, and stays as it was.
-  const missing = new Set<string>();
+  const missing = new Map<string, string>();
+  const { dataDir } = context.core.paths;
   for (const runtime of planned.runtimes) {
     const base = {
       kind: 'runtime' as const,
@@ -1326,16 +1473,51 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
     };
     try {
       await installRuntime(runtime.package, runtime.latest);
-      steps.push({ ...base, outcome: 'installed' });
     } catch (error) {
-      missing.add(runtime.package);
+      missing.set(runtime.package, 'could not be installed');
       steps.push({ ...base, outcome: 'failed', detail: message(error) });
+      continue;
     }
+    // What npm left is the tarball whose provenance was verified, or nothing is switched to it or registered on it.
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.latest);
+    if (problem === null) steps.push({ ...base, outcome: 'installed' });
+    else {
+      missing.set(runtime.package, 'is not the tarball whose provenance was verified');
+      steps.push({ ...base, outcome: 'failed', detail: problem });
+    }
+  }
+  // A runtime found on disk, not installed now, is held to the same: the release a launcher switches to, or a
+  // registration starts, is the verified one.
+  const used = [
+    ...planned.pointers.map((pointer) => ({
+      channel: pointer.channel,
+      package: pointer.package,
+      version: pointer.latest,
+    })),
+    ...planned.registrations
+      .filter(({ item }) => item.launcher === 'managed')
+      .map(({ item, product }) => ({ channel: item.channel, package: product.packageName, version: item.latest })),
+  ];
+  const installedNow = new Set(planned.runtimes.map((runtime) => runtime.package));
+  for (const runtime of used) {
+    if (installedNow.has(runtime.package) || missing.has(runtime.package)) continue;
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.version);
+    if (problem === null) continue;
+    missing.set(runtime.package, 'is not the tarball whose provenance was verified');
+    steps.push({
+      kind: 'runtime',
+      channel: runtime.channel,
+      package: runtime.package,
+      version: runtime.version,
+      path: managedRuntimeDir(dataDir, runtime.package, runtime.version),
+      outcome: 'failed',
+      detail: problem,
+    });
   }
 
   // Then each stable launcher: its pointer switched to the runtime just installed, and no client configuration touched.
   for (const pointer of planned.pointers) {
-    steps.push(await switchLauncher(context, pointer, planned.verify, missing.has(pointer.package)));
+    steps.push(await switchLauncher(context, pointer, planned.verify, missing.get(pointer.package)));
   }
 
   for (const { item, product, options, install } of planned.registrations) {
@@ -1351,11 +1533,12 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
       to: item.latest,
       narrowing: item.narrowing,
     };
-    if (item.launcher === 'managed' && missing.has(product.packageName)) {
+    const lacking = item.launcher === 'managed' ? missing.get(product.packageName) : undefined;
+    if (lacking !== undefined) {
       steps.push({
         ...base,
         outcome: 'skipped',
-        detail: `its runtime ${product.packageName}@${item.latest} could not be installed, so the entry was left as it was`,
+        detail: `its runtime ${product.packageName}@${item.latest} ${lacking}, so the entry was left as it was`,
       });
       continue;
     }

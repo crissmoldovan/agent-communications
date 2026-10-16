@@ -70,7 +70,7 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
-import { updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
 import {
@@ -444,6 +444,8 @@ export async function main(
     updateJob?: UpdateJobDeps | undefined;
     /** What one background run reads and runs — registry, attestations, installer, self-check, clock — for a test. */
     updateBackground?: BackgroundDeps | undefined;
+    /** What `update` and `update --check` read and run — the registry, the verifier, the installers — for a test. */
+    update?: UpdateDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -1004,15 +1006,21 @@ export async function main(
           if (values.approval !== undefined) {
             throw usage('--check only reads, so it takes no --approval; leave out --check to update');
           }
-          writeResult(await updateCheck(core, env), output, (report) => renderUpdateCheck(report, handoffs));
+          writeResult(await updateCheck(core, env, deps.update), output, (report) =>
+            renderUpdateCheck(report, handoffs),
+          );
           return;
         }
         const words = ['update'];
         if (values['no-verify']) words.push('--no-verify');
-        const result = await gatedChangeAtTerminal(core, updateChange(core, env, { noVerify: values['no-verify'] }), {
-          ...approval,
-          rerun: words,
-        });
+        const result = await gatedChangeAtTerminal(
+          core,
+          updateChange(core, env, { noVerify: values['no-verify'] }, deps.update),
+          {
+            ...approval,
+            rerun: words,
+          },
+        );
         // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
         softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
         writeResult(result, output, (r) => renderUpdate(r, output.color));

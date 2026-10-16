@@ -40,6 +40,17 @@ and calls again with it — `--approval <id>`, or `approvalId` — once you have
 those versions: a release published in between is a different change, and is refused. With nothing behind, it says
 so and prepares nothing.
 
+**Every release it would install is verified first**, before the preview is made and again when the approval is
+claimed, against the same pins as the background run (below): each runtime it installs, each launcher it switches, each
+registration it writes — a managed one's runtime, and an npx one's package, which its client fetches from npm — and
+each global package. The preview ends with one line a package: `@agentcomms/gmail@<version> was verified before this
+preview: built by this repository's release workflow …`. One release with no attestation, or one that names anything
+else, refuses the whole update with `BAD_DATA` — `nothing was installed or changed: <package>@<version> could not be
+verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
+No flag or setting skips it. After installing, each runtime must hold the very tarball that was verified, as npm's
+lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
+registered on, and its step says so.
+
 Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
 same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign
 file unchanged. A symlinked bin directory works; if it is redirected while an operation is in progress, the mutation

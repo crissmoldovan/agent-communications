@@ -1,4 +1,11 @@
 import { createHash, generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
+import {
+  ATTESTATIONS_BASE,
+  type AttestationFetch,
+  releaseVerifier,
+  sigstoreBundleVerifier,
+} from '../../src/update-provenance.ts';
+import type { Packument, ReleaseRegistry, ReleaseVerifier } from '../../src/update-release.ts';
 
 /*
  * Provenance bundles made here, for tests that must never reach npm or Sigstore (design 2026-10-16 §4).
@@ -330,5 +337,95 @@ export function attestationsAnswer(bundle: Record<string, unknown>): { attestati
       { predicateType: 'https://github.com/npm/attestation/tree/main/specs/publish/v0.1', bundle: { mediaType: 'x' } },
       { predicateType: 'https://slsa.dev/provenance/v1', bundle },
     ],
+  };
+}
+
+// ── Stand-ins for an update: npm's endpoint, a registry of full documents, and the verifier ─────────────────────────
+
+/** The tarball every stand-in serves for one release: its integrity, as the registry writes it. */
+export const tarballOf = (packageName: string, version: string): string => integrityOf(`${packageName}@${version}`);
+
+/**
+ * npm's attestations endpoint: a genuine bundle for every package and version, signing `tarballOf` it — but where
+ * `change` says otherwise, by `package` or by `package@version`: another shape, or `'missing'` for none at all.
+ */
+export function attestationsEndpoint(change: Record<string, Partial<ProvenanceShape> | 'missing'> = {}): {
+  fetch: AttestationFetch;
+  asked: string[];
+} {
+  const asked: string[] = [];
+  const fetch: AttestationFetch = async (url) => {
+    asked.push(url);
+    const spec = decodeURIComponent(url.slice(ATTESTATIONS_BASE.length));
+    const at = spec.lastIndexOf('@');
+    const packageName = spec.slice(0, at);
+    const version = spec.slice(at + 1);
+    const shape = change[`${packageName}@${version}`] ?? change[packageName];
+    if (shape === 'missing') return { status: 404, body: { error: 'not found' } };
+    const bundle = provenanceBundle({ packageName, version, integrity: tarballOf(packageName, version), ...shape });
+    return { status: 200, body: attestationsAnswer(bundle) };
+  };
+  return { fetch, asked };
+}
+
+/** The verifier an update is handed in a test: the real one, reading `endpoint`, with sigstore-js and the test's root. */
+export function testReleaseVerifier(endpoint: { fetch: AttestationFetch } = attestationsEndpoint()): ReleaseVerifier {
+  return releaseVerifier({
+    fetch: endpoint.fetch,
+    verifyBundle: sigstoreBundleVerifier({ trustedRoot: async () => trustedRoot() }),
+  });
+}
+
+/** One release in a stand-in registry: when it came out, and what its core manifest declares. */
+export interface ListedRelease {
+  version: string;
+  publishedAt?: Date | undefined;
+  declares?: unknown;
+}
+
+/**
+ * A registry's full package documents: for each package, `latest` as its tag and every release in `releases` (and
+ * `latest` itself), each with the tarball `tarballOf` it; `agentcommsRelease` only on core's, as the release declares.
+ */
+export function packumentRegistry(
+  latest: Record<string, string>,
+  releases: readonly ListedRelease[] = [],
+): { read: ReleaseRegistry; asked: string[] } {
+  const asked: string[] = [];
+  const read: ReleaseRegistry = async (packageName) => {
+    asked.push(packageName);
+    const tag = latest[packageName];
+    if (tag === undefined) throw new Error(`the registry answered 404 for ${packageName}`);
+    const packument: Packument = { 'dist-tags': { latest: tag }, versions: {}, time: {} };
+    const listed = releases.some((release) => release.version === tag) ? releases : [...releases, { version: tag }];
+    for (const release of listed) {
+      (packument.versions as Record<string, unknown>)[release.version] = {
+        dist: { integrity: tarballOf(packageName, release.version) },
+        ...(packageName === '@agentcomms/core' && release.declares !== undefined
+          ? { agentcommsRelease: release.declares }
+          : {}),
+      };
+      (packument.time as Record<string, unknown>)[release.version] = (
+        release.publishedAt ?? new Date('2026-10-01T00:00:00Z')
+      ).toISOString();
+    }
+    return { packument };
+  };
+  return { read, asked };
+}
+
+/**
+ * A registry whose every package's latest release is what `latestOf` says — a stand-in `latestVersion`, read again —
+ * with its tarball `tarballOf` it: for a test about something else than which releases there are.
+ */
+export function registryOf(latestOf: (packageName: string) => string | Promise<string>): ReleaseRegistry {
+  return async (packageName) => {
+    const version = await latestOf(packageName);
+    return {
+      packument: {
+        'dist-tags': { latest: version },
+        versions: { [version]: { dist: { integrity: tarballOf(packageName, version) } } },
+      },
+    };
   };
 }

@@ -49,6 +49,7 @@ import {
 } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
 import { coreInline } from './helpers/handoffs.ts';
+import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -152,6 +153,9 @@ function deps(latestVersion: UpdateDeps['latestVersion'], global: Record<string,
   const installed = { ...global };
   return {
     latestVersion,
+    // Each release's document, and its provenance verified against the test's own trust root: nothing reaches npm.
+    registry: registryOf(async (packageName) => String(await latestVersion?.(packageName))),
+    verifyRelease: testReleaseVerifier(),
     globalPackages: async () => ({ ...installed }),
     installGlobal: async (spec: string) => {
       const at = spec.lastIndexOf('@');
