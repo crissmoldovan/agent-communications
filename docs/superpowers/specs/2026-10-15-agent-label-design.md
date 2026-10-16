@@ -442,6 +442,14 @@ Resend gets no live check: no real key is used while developing.
   Organisation apps have PKCE on, so the secret sign-in is refused for them, and their tokens rotate, so paste-once
   refuses them. They get the labelled fallback. Posting as the app through an organisation's shared app needs its
   own design, perhaps an organisation app made with PKCE off whose administrator connects the bot once.
+  (Decided 2026-10-16, CUE-493, for 0.20.0: one extra bot-only **agent app** per organisation — no user scopes, token
+  rotation off, made from `manifest --mode agent` — installed once by its administrator, whose `xoxb-` token is shared
+  privately and pasted by each member with `workspace bot`. Nobody's connection changes. The profile may name the app
+  in a companion file, `<profile>.agent-app.json` (organisation profiles design, §D2), so that `workspace bot` checks a
+  pasted token's app with `bots.info` and refuses another's, and `doctor` tells a member to ask the admin for it. Every
+  member holds the same token, which can post under any name with the APP badge; S5's own-record rule still decides
+  edits and deletes. A revoked token is not detected at prepare: until a member pastes the new one, their app posts are
+  refused at send and nothing is posted under another identity.)
 
 ## 11. Release
 
