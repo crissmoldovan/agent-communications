@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
-import { organisationsOf, profileTarget, updatesPathFor } from './organisations.ts';
+import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
@@ -360,6 +360,12 @@ export interface EffectiveUpdates {
   cap?: (UpdateCapSource & { level: 'every-14-days' | 'never' }) | undefined;
   /** The organisation whose profile turns background updates off, when one does. */
   backgroundOff?: UpdateCapSource | undefined;
+  /**
+   * `config.json` could not be read (design 2026-10-16 U8, failing closed): why, and how many organisations' caps were
+   * read in its place — from the files beside their profiles, and what the file still says of them. The strictest of
+   * those is the cap; with none, the default. Nothing installs in the background meanwhile.
+   */
+  unreadableConfig?: { reason: string; read: number } | undefined;
 }
 
 /** How much a level updates: `auto` 2, `every-14-days` 1, `never` 0. */
@@ -416,26 +422,85 @@ export function configuredUpdates(config: Config): Pick<EffectiveUpdates, 'level
 }
 
 /**
- * The level in force here, read from the environment first, then the configuration and its organisations' caps. A
- * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
- * tools to say, and it must not quietly turn updates off.
+ * The caps that stand in for the configuration's when `config.json` cannot be read (U8, failing closed): for every
+ * organisation the file still names — read loosely, as JSON, whatever its schema says — the caps it records, and the
+ * caps file beside its profile, read again (`readUpdatesBeside`). The strictest `max` of them all, and the first
+ * `background: false`. A caps file that cannot be read is passed over; what the configuration recorded of it stands.
+ * A file that is not JSON at all names no organisation, and so no cap.
+ */
+async function capsWithoutConfig(
+  core: Core,
+): Promise<Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> & { read: number }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(core.config.path, 'utf8'));
+  } catch {
+    return { read: 0 };
+  }
+  const organisations = (raw as { organisations?: unknown } | null)?.organisations;
+  if (typeof organisations !== 'object' || organisations === null) return { read: 0 };
+  let cap: EffectiveUpdates['cap'];
+  let backgroundOff: EffectiveUpdates['backgroundOff'];
+  let read = 0;
+  const take = (organisation: string, source: string, caps: { max?: unknown; background?: unknown }) => {
+    read += 1;
+    if (caps.max !== undefined) {
+      const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
+      if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { organisation, source, level };
+    }
+    if (caps.background === false && backgroundOff === undefined) backgroundOff = { organisation, source };
+  };
+  for (const [organisation, record] of Object.entries(organisations).sort(([a], [b]) => a.localeCompare(b))) {
+    const held = (typeof record === 'object' && record !== null ? record : {}) as {
+      source?: { path?: unknown };
+      updates?: { max?: unknown; background?: unknown };
+    };
+    const path = typeof held.source?.path === 'string' && isAbsolute(held.source.path) ? held.source.path : undefined;
+    const source = path === undefined ? core.config.path : updatesPathFor(safeTarget(path));
+    if (typeof held.updates === 'object' && held.updates !== null) take(organisation, source, held.updates);
+    if (path === undefined) continue;
+    try {
+      const file = await readUpdatesBeside(path, organisation);
+      if (file !== undefined) take(organisation, file.path, file);
+    } catch {
+      // Not readable now: what the configuration recorded of it, above, stands.
+    }
+  }
+  return { ...(cap ? { cap } : {}), ...(backgroundOff ? { backgroundOff } : {}), read };
+}
+
+/**
+ * The level in force here, read from the environment first, then the configuration and its organisations' caps.
+ *
+ * A configuration that cannot be read sets the default, `auto` — what is wrong with it is for the doctor and the tools
+ * to say, and it must not quietly turn updates off — but it never lifts an organisation's cap: the strictest cap that
+ * can still be read in its place holds (`capsWithoutConfig`), and nothing installs in the background, which reads the
+ * configuration too.
  */
 export async function effectiveUpdates(
   core: Core,
   env: NodeJS.ProcessEnv,
   now: Date = new Date(),
 ): Promise<EffectiveUpdates> {
-  let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff'> = { level: 'auto', set: 'auto' };
+  let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff' | 'unreadableConfig'>;
   try {
     configured = configuredUpdates(await core.config.load());
-  } catch {
-    // The default, as above.
+  } catch (error) {
+    const { read, cap, backgroundOff } = await capsWithoutConfig(core);
+    configured = {
+      level: cap?.level ?? 'auto',
+      set: 'auto',
+      ...(cap ? { cap } : {}),
+      ...(backgroundOff ? { backgroundOff } : {}),
+      unreadableConfig: { reason: shownText(error instanceof Error ? error.message : String(error), 200), read },
+    };
   }
   const { level, set, ...extra } = configured;
   const switched = updateCheckSwitchedOff(env);
   if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
-  if (level !== 'auto' || extra.backgroundOff !== undefined)
+  if (level !== 'auto' || extra.backgroundOff !== undefined || extra.unreadableConfig !== undefined) {
     return { level, set, by: 'setting', background: false, ...extra };
+  }
   // A record alone is not a job that works: one switched off in Login Items keeps its record for ever (U4, U7).
   const job = await updateJobHealth(core.paths.stateDir, now);
   const background = job?.working === true;

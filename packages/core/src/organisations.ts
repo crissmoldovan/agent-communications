@@ -1353,6 +1353,16 @@ async function readUpdatesFile(path: string, profile: OrganisationProfile): Prom
   };
 }
 
+/**
+ * The caps file beside a profile, read with no profile to hold it to but the organisation's word: what stands in for
+ * the caps the configuration records when `config.json` cannot be read (`effectiveUpdates`, failing closed). Beside the
+ * file the path names (`profileTarget`), in the same bounded, strict read, held to the same organisation. Refused as
+ * `readProfileFile` refuses it; undefined when there is none.
+ */
+export async function readUpdatesBeside(profilePath: string, organisation: string): Promise<UpdatesFile | undefined> {
+  return readUpdatesFile(updatesPathFor(profileTarget(profilePath)), { organisation } as OrganisationProfile);
+}
+
 /** The caps, as a preview and the doctor say them: "at most never, no background updates", or "no caps". */
 export function capsText(caps: { max?: string | undefined; background?: boolean | undefined } | undefined): string {
   const parts = [

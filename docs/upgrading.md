@@ -129,7 +129,10 @@ member not yet on 0.20.0 would lose `org update` for the whole profile. Those re
 `org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
 file is approved first even when the profile's bytes are unchanged, and a record edited by hand is put back at once. A
 member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
-`max` other than those two words is refused. `doctor` names the cap and the profile it comes from.
+`max` other than those two words is refused. `doctor` names the cap and the profile it comes from. A `config.json`
+that cannot be read lifts no cap: the strictest cap that can still be read in its place holds — what the file still
+records of each organisation, read as plain JSON, and each caps file beside its profile, read again — nothing installs
+in the background meanwhile, and `doctor` says so on its update check row.
 
 `--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
 

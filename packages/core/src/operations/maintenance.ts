@@ -370,7 +370,9 @@ async function updateCheckLine(
             ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
             : updates.jobSilent
               ? `auto (a daily check with a notice: background updates have not run since ${localStamp(new Date(updates.jobSilent.since))})`
-              : 'auto (a daily check with a notice: background updates are not set up)'
+              : updates.unreadableConfig
+                ? 'auto (a daily check with a notice)'
+                : 'auto (a daily check with a notice: background updates are not set up)'
           : updates.level;
   const latest =
     record.latest === null
@@ -381,6 +383,15 @@ async function updateCheckLine(
   const pause = pauseEnd(record, now);
   const security = securityRelease(record, VERSION);
   const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
+  // An unreadable configuration lifts no cap (U8, failing closed): say what stands in for it.
+  const unreadable = updates.unreadableConfig;
+  if (unreadable !== undefined) {
+    parts.push(
+      unreadable.read > 0
+        ? `config.json could not be read, so the caps of the organisation files still readable hold, and nothing installs in the background (${unreadable.reason})`
+        : `config.json could not be read, and no organisation’s caps could be read in its place, so the default holds and nothing installs in the background (${unreadable.reason})`,
+    );
+  }
   if (updates.backgroundOff && !(updates.level === 'auto' && !updates.cap)) {
     parts.push(`background updates off by ${shownText(updates.backgroundOff.organisation, 40)}’s profile`);
   }
@@ -397,7 +408,7 @@ async function updateCheckLine(
   return {
     name: 'update check',
     ok: true,
-    ...(pending ? { warn: true as const } : {}),
+    ...(pending || unreadable ? { warn: true as const } : {}),
     detail: parts.join(' · '),
     ...(pending === null
       ? {}

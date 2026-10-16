@@ -279,6 +279,87 @@ test('the doctor names the cap and where it comes from', async () => {
   assert.match(String(line?.detail), /background updates off by acme’s profile/);
 });
 
+/** config.json made unreadable as this release reads it: still JSON, and refused by its schema. */
+function breakConfig(o: Org): void {
+  const raw = JSON.parse(readFileSync(o.m.configPath, 'utf8')) as Record<string, unknown>;
+  writeFileSync(o.m.configPath, `${JSON.stringify({ ...raw, accounts: 'not a map' }, null, 2)}\n`);
+}
+
+test('an unreadable config.json fails closed for the cap: the strictest cap of the organisation files still readable holds', async () => {
+  const o = org({ max: 'never', background: false });
+  await add(o);
+  breakConfig(o);
+  await assert.rejects(o.m.core.config.load(), 'the configuration is unreadable, as the test means it to be');
+  const updates = await effectiveUpdates(o.m.core, o.m.env);
+  assert.deepEqual(
+    [
+      updates.level,
+      updates.cap?.organisation,
+      updates.cap?.source,
+      updates.backgroundOff?.organisation,
+      updates.background,
+    ],
+    ['never', 'acme', o.updates, 'acme', false],
+  );
+  assert.match(String(updates.unreadableConfig?.reason), /config\.json/);
+  // never asks nobody, as with the configuration read.
+  const asked: string[] = [];
+  const outcome = await checkForUpdates(o.m.core, o.m.env, {
+    deps: deps(async (name) => {
+      asked.push(name);
+      return LATEST;
+    }),
+  });
+  assert.equal(outcome.asked, false);
+  assert.deepEqual(asked, [], 'a member capped at never asked the registry with config.json unreadable');
+  await seed(o.m, { latest: LATEST, behind: true });
+  assert.equal(await serverNotice(o.m), null);
+  // The doctor says the configuration could not be read, and where the cap in force comes from instead.
+  const report = await doctor(o.m.core, o.m.env, { keyring: null, platform: 'darwin' });
+  const line = report.checks.find((check) => check.name === 'update check');
+  assert.equal(line?.warn, true);
+  assert.match(String(line?.detail), /^never \(capped by acme’s profile, .*acme\.agentcomms\.updates\.json\)/);
+  assert.match(
+    String(line?.detail),
+    /config\.json could not be read, so the caps of the organisation files still readable hold/,
+  );
+});
+
+test('with config.json unreadable, a caps file gone or broken still caps by what was recorded of it, and the strictest wins', async () => {
+  // Gone since it was recorded: the record of it, read loosely from the file, still caps.
+  const gone = org({ max: 'never' });
+  await add(gone);
+  rmSync(gone.updates);
+  breakConfig(gone);
+  assert.equal((await effectiveUpdates(gone.m.core, gone.m.env)).level, 'never');
+  // Broken since: it cannot be read, and what was recorded of it stands.
+  const broken = org({ max: 'every-14-days' });
+  await add(broken);
+  writeFileSync(broken.updates, '{ not json');
+  breakConfig(broken);
+  assert.equal((await effectiveUpdates(broken.m.core, broken.m.env)).level, 'every-14-days');
+  // Changed since to stricter: the file, read again, is stricter than the record, and the stricter holds.
+  const tighter = org({ max: 'every-14-days' });
+  await add(tighter);
+  writeFileSync(tighter.updates, `${JSON.stringify({ organisation: 'acme', max: 'never' })}\n`);
+  breakConfig(tighter);
+  assert.equal((await effectiveUpdates(tighter.m.core, tighter.m.env)).level, 'never');
+  // Nothing to read in its place — not JSON at all, so no organisation can be found: the default, and the doctor says so.
+  const lost = org({ max: 'never' });
+  await add(lost);
+  writeFileSync(lost.m.configPath, '{ not json');
+  const updates = await effectiveUpdates(lost.m.core, lost.m.env);
+  assert.deepEqual([updates.level, updates.cap, updates.background], ['auto', undefined, false]);
+  const report = await doctor(lost.m.core, lost.m.env, { keyring: null, platform: 'darwin' });
+  const line = report.checks.find((check) => check.name === 'update check');
+  assert.equal(line?.warn, true);
+  assert.match(String(line?.detail), /^auto \(a daily check with a notice\) · /);
+  assert.match(
+    String(line?.detail),
+    /config\.json could not be read, and no organisation’s caps could be read in its place/,
+  );
+});
+
 test('an organisation with no caps file changes nothing', async () => {
   const o = org();
   await add(o);
