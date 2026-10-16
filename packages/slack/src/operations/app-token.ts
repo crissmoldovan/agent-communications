@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { type CliHandoffs, CommsError, findById, handoffSentence, toCommsError } from '@agentcomms/core';
+import { parseBundle } from '../auth/bundle.ts';
 import type { SlackContext } from '../context.ts';
 import type { LabelDeps } from './label.ts';
 import { botSecretRefFor, type SlackAccount } from './workspaces.ts';
@@ -38,22 +40,61 @@ export function appTokenRevokedOf(account: unknown): AppTokenRevoked | undefined
   return { at: value.at, slackError: typeof value.slackError === 'string' ? value.slackError : 'unknown' };
 }
 
+/** A token as forgetting compares it: its SHA-256, never the token, which is neither kept nor shown. */
+function tokenDigest(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
 /**
- * Forgets an account's bot token after Slack refused it: the secret first, as removal deletes it, then the account —
- * the bot user it named taken off, and why recorded. A token kept with no bot user named is one nothing posts with.
+ * What forgetting did: `forgotten`, the token Slack refused is gone; `kept`, the token stored now is another — pasted
+ * again between the refused call and this — and it, and the account's bot user, were left as they are.
  */
-export async function forgetAppToken(context: SlackContext, accountId: string, slackError: string): Promise<void> {
-  const secrets = await context.secrets();
-  await secrets.delete(botSecretRefFor(accountId));
-  secrets.invalidate(botSecretRefFor(accountId));
+export type ForgetOutcome = 'forgotten' | 'kept';
+
+/**
+ * Forgets an account's bot token after Slack refused it — only while the token stored is still the one the refused
+ * call carried (`refused`), compared by SHA-256: an admin who regenerated the token and a person who pasted the new one
+ * while the old one's call was out must not lose the new one to the old one's refusal. The secret first, as removal
+ * deletes it, then the account — the bot user it named taken off, and why recorded. A token kept with no bot user named
+ * is one nothing posts with.
+ *
+ * Under the configuration's lock, which a paste takes to name the bot user it stored: a paste that stored its token
+ * before this looks is found here and kept, and one that stores it after names its bot user again once this is done.
+ * A stored token that cannot be read is not known to be the refused one, and is kept.
+ */
+export async function forgetAppToken(
+  context: SlackContext,
+  accountId: string,
+  slackError: string,
+  refused: string,
+): Promise<ForgetOutcome> {
+  const ref = botSecretRefFor(accountId);
+  const refusedDigest = tokenDigest(refused);
   const at = context.now().toISOString();
-  await context.core.config.update((current) => {
+  let outcome: ForgetOutcome = 'kept';
+  await context.core.config.update(async (current) => {
+    const secrets = await context.secrets();
+    secrets.invalidate(ref);
+    const stored = await secrets.get(ref);
+    if (stored !== null) {
+      let token: string | undefined;
+      try {
+        token = parseBundle(stored, context.handoffs)?.accessToken;
+      } catch {
+        token = undefined;
+      }
+      if (token === undefined || tokenDigest(token) !== refusedDigest) return current;
+      await secrets.delete(ref);
+      secrets.invalidate(ref);
+    }
+    outcome = 'forgotten';
     const held = findById(current, 'account', accountId);
     if (!held) return current;
     const { botUserId: _gone, ...rest } = held.account as SlackAccount;
     const next = { ...rest, appTokenRevoked: { at, slackError } };
     return { ...current, accounts: { ...current.accounts, [held.alias]: next } };
   });
+  return outcome;
 }
 
 /** Which act a refusal ended: what it says was not done, and what to do next. */
@@ -75,7 +116,10 @@ export async function appTokenRefusal(
   const app = deps.label?.app;
   let kept = '';
   try {
-    await app?.forget?.(slackError);
+    if ((await app?.forget?.(slackError)) === 'kept') {
+      kept =
+        ' A newer token pasted for the app since that call was kept: prepare it again, and it goes as the app with that one.';
+    }
   } catch (failure) {
     kept = ` It could not be removed from this machine (${toCommsError(failure).message}), so the next prepare may route to the app again.`;
   }

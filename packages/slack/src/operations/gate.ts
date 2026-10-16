@@ -76,7 +76,12 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
                 app ??= openApp(context, name, account, deps);
                 return app;
               },
-              forget: (slackError: string) => forgetAppToken(context, account.id, slackError),
+              // Only the token the refused call carried: the call this gate opened, and nothing stored since.
+              forget: async (slackError: string) => {
+                const refused = await app?.catch(() => undefined);
+                if (refused === undefined) return 'kept' as const;
+                return forgetAppToken(context, account.id, slackError, refused.token);
+              },
               ...(account.organisation === undefined ? {} : { organisation: account.organisation }),
             },
           }),

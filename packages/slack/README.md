@@ -390,7 +390,9 @@ reaction, edit or deletion a member's agent makes with the old token comes back 
 would need its own preview — and the old token is removed from that member's machine, as narrowing or removal removes
 it. From the next prepare on, their agent's posts go out as them, labelled, and `doctor` says when the token was revoked
 and to ask you for the new one. Editing or deleting a message the app posted waits for the new token: only the app can
-change its own messages. Any other refusal keeps the token.
+change its own messages. Any other refusal keeps the token. Only the token the refused act carried is removed,
+compared by its SHA-256: a new one pasted while that act was out is kept, and the next prepare posts as the app with
+it.
 
 **What one shared token means.** Everyone who pastes it holds the same token, and Slack lets it post under any name,
 with the APP badge beside it. These tools always name a post after the member who approved it, and an app message can

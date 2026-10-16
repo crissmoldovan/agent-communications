@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { asV2, CommsError } from '@agentcomms/core';
+import { parseBundle } from '../src/auth/bundle.ts';
 import { storeBotToken } from '../src/operations/bot-token.ts';
 import { runDoctor } from '../src/operations/doctor.ts';
 import { revokedAppReason } from '../src/operations/label.ts';
@@ -15,7 +16,7 @@ import {
 } from '../src/operations/post.ts';
 import { botSecretRefFor } from '../src/operations/workspaces.ts';
 import { type Reply, type SlackRequest, type SlackWorld, startFakeSlack } from './support/fake-slack.ts';
-import { slackInline } from './support/handoffs.ts';
+import { slackHandoffs, slackInline } from './support/handoffs.ts';
 import { newHarness } from './support/harness.ts';
 import { newOrganisationHarness } from './support/organisation.ts';
 
@@ -156,6 +157,46 @@ test('the next prepare finds no bot token, so it takes the labelled fallback, an
   const [, labelledPost] = calls(w, 'chat.postMessage');
   assert.equal(labelledPost?.authorization, USER, 'the fallback goes with the person’s token');
   assert.match(labelledPost?.params.get('text') ?? '', /^Jo Example \(agent\): /);
+});
+
+test('a token pasted again between the refused call and the forget survives it: only the token Slack refused is forgotten', async (t) => {
+  const w = await labelled(t);
+  const prepared = await preparePost(w);
+  assert.equal(prepared.label?.route, 'app');
+  const fresh = 'xoxb-fake-fresh-0001';
+  w.fake.script['auth.test'] = (request) =>
+    request.authorization === `Bearer ${fresh}`
+      ? {
+          status: 200,
+          headers: { 'x-oauth-scopes': 'chat:write,chat:write.customize,chat:write.public,reactions:write' },
+          body: { ok: true, team_id: 'T0001', user_id: 'U0BOT0001', bot_id: 'B0BOT0001' },
+        }
+      : { ok: false, error: 'invalid_auth' };
+  const before = w.fake.script['chat.postMessage'] as Reply;
+  // The admin regenerated the token, and the person pasted the new one while the post with the old one was out.
+  w.fake.script['chat.postMessage'] = async (request) => {
+    if (request.authorization !== BOT) return before(request);
+    await storeBotToken(w.context, 'acme', fresh, { fetch: w.fake.fetch });
+    return { ok: false, error: 'token_revoked' };
+  };
+  await assert.rejects(send(w, prepared), (error: unknown) => {
+    assert.ok(error instanceof CommsError, String(error));
+    assert.equal(error.details?.reason, 'app-token-revoked');
+    assert.match(`${error.message} ${error.hint ?? ''}`, /nothing was posted/);
+    assert.match(String(error.hint), /a newer token .*was kept/i);
+    const said = `${error.message} ${error.hint ?? ''} ${JSON.stringify(error.details ?? {})}`;
+    assert.equal(said.includes(fresh), false, 'the new token was printed');
+    assert.equal(said.includes('fake-bot-token-0'), false, 'the refused token was printed');
+    return true;
+  });
+  const kept = await botToken(w);
+  assert.notEqual(kept, null, 'the token pasted since was deleted');
+  assert.equal(parseBundle(kept, slackHandoffs())?.accessToken, fresh);
+  const held = await account(w);
+  assert.equal(held.botUserId, 'U0BOT0001', 'the account no longer names the bot user of the token pasted since');
+  assert.equal(held.appTokenRevoked, undefined, 'the refusal of the old token was recorded over the new one');
+  // And the next prepare goes as the app again, with the new token.
+  assert.equal((await preparePost(w)).label?.route, 'app');
 });
 
 test('any other refusal of an app post keeps the bot token', async (t) => {

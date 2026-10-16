@@ -60,9 +60,10 @@ export interface AppIdentity {
   readonly call: () => Promise<SlackCall>;
   /**
    * Forgets the bot token after Slack refused the token itself (CUE-493, `app-token.ts`): deleted, the bot user taken
-   * off the account, and why recorded, so the next prepare takes the fallback.
+   * off the account, and why recorded, so the next prepare takes the fallback — only while the token stored is the one
+   * the refused call carried. `kept` when another was pasted since, and left as it is.
    */
-  readonly forget?: ((slackError: string) => Promise<void>) | undefined;
+  readonly forget?: ((slackError: string) => Promise<'forgotten' | 'kept' | undefined>) | undefined;
   /** The organisation whose profile connected the account, when one did: whose admin holds the agent app's token. */
   readonly organisation?: string | undefined;
 }
