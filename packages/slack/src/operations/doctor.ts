@@ -4,6 +4,7 @@ import {
   describeOtherSlackServer,
   findOtherSlackServers,
   handoffSentence,
+  handoffSentenceToFill,
   isCommand,
   isProductServer,
   listRegisteredServers,
@@ -27,7 +28,7 @@ import { VERSION } from '../version.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
 import { type PendingRevocationResult, pendingRevocationResult, retryPendingRevocations } from './revocations.ts';
 import { openWorkspace } from './session.ts';
-import { botSecretRefFor, listWorkspaces, requireWorkspace } from './workspaces.ts';
+import { botSecretRefFor, clientSecretRefOf, listWorkspaces, requireWorkspace } from './workspaces.ts';
 
 /**
  * What has to be true for this to work, and the commands or actions that fix each thing that is not.
@@ -519,23 +520,87 @@ export function doctor(input: DoctorInput): DoctorResult {
           fix: null,
           workspace: workspace.alias,
         });
+      } else if (workspace.organisation !== undefined) {
+        /*
+         * Connected through an organisation profile's shared app. Neither way works for it: the client-secret sign-in
+         * refuses a profile account — the administrator holds the secret, not its members — and paste-once refuses the
+         * rotating token an organisation's app has. So this names no command. And it is `ok`, a note rather than a
+         * warning, as the read install's `files` row is: posting as the person, labelled, is how such a workspace
+         * works, nothing its person can do changes that, and a warning on every healthy one is one people stop reading.
+         */
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'ok',
+          detail:
+            "connected through an organisation profile, so an agent's posts go out as you, labelled in their text. Posting as the app is not available through an organisation’s shared app yet",
+          fix: null,
+          workspace: workspace.alias,
+        });
       } else {
+        /*
+         * A person's own app, and only a way that can work for it.
+         *
+         * - Connected with its client secret, it lacks only its bot token: signing in again with the secret brings it.
+         * - Connected by PKCE, as the standard manifest's app is, it cannot get one: Slack refuses bot scopes to a PKCE
+         *   app, and PKCE cannot be turned off on an existing one. What the 2026-10-16 live check proved works is a new
+         *   app with PKCE off, connected in place of this one, since one connection per person per workspace is kept.
+         * - Paste-once, either way, only where its credential does not rotate: rotation is the app's setting, so a
+         *   rotating credential says the bot token on the app's page rotates too, and paste-once refuses that.
+         */
+        const account = input.config.accounts[workspace.alias];
+        const secretApp = account !== undefined && clientSecretRefOf(account) !== undefined;
+        const pasteOnce = !rotates(bundle);
+        const reauth = handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']);
+        const way = secretApp
+          ? 'sign in again with its client secret, which brings the bot token'
+          : 'connect it through a new app with PKCE off, in three steps: it signs in with PKCE, Slack gives a PKCE app no bot token, and PKCE cannot be turned off on an existing app';
+        const notPasted = pasteOnce
+          ? ''
+          : ". Pasting its bot token is not offered: this app's tokens rotate, so a pasted one would stop working within twelve hours, and pasting refuses it";
+        const newApp = [
+          handoffSentence(
+            handoffs.own(['manifest', '--mode', 'send', '--with-client-secret']),
+            (command) =>
+              `1. Create a new app from ${command}, which picks its own free port (a workspace on Slack's free plan holds at most 10 apps).`,
+            {
+              instead:
+                "1. Create a new app from the send manifest with PKCE off (slack_manifest with mode send and pkce false), which picks its own free port (a workspace on Slack's free plan holds at most 10 apps).",
+            },
+          ),
+          handoffSentence(
+            handoffs.own(['workspace', 'remove', workspace.alias]),
+            (command) => `2. Remove this connection: ${command}. Only one connection per person per workspace is kept.`,
+            {
+              instead:
+                '2. Remove this connection with slack_workspace_remove. Only one connection per person per workspace is kept.',
+            },
+          ),
+          handoffSentenceToFill(
+            handoffs.own(['workspace', 'add', workspace.alias, '--mode', 'send']),
+            ['--client-id', '<id>', '--port', '<port>', '--with-client-secret'],
+            (command) =>
+              `3. Connect the new app, in your own terminal, with its Client ID and port: ${command}. It asks for the Client Secret without showing it.`,
+            {
+              instead:
+                '3. Connect the new app in your own terminal, with `workspace add`, its Client ID and port, and `--with-client-secret`.',
+            },
+          ),
+        ];
+        const paste = [
+          handoffs.own(['workspace', 'bot', workspace.alias]),
+          ' — paste the "Bot User OAuth Token" once, from the app’s OAuth & Permissions page after Install to Workspace; or',
+        ];
         checks.push({
           id: 'app-identity',
           title,
           status: 'warn',
-          detail:
-            "no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, give it the bot token one of two ways",
-          fix: remedy(
-            [
-              handoffs.own(['workspace', 'bot', workspace.alias]),
-              ' — paste the "Bot User OAuth Token" once, from the app’s OAuth & Permissions page after Install to Workspace; or',
-            ],
-            [
-              handoffs.own(['workspace', 'reauth', workspace.alias, '--mode', 'send', '--with-client-secret']),
-              ' — sign in with the app’s client secret, for an app with PKCE off',
-            ],
-          ),
+          detail: `no app bot token is stored for it, so an agent's posts go out as you, labelled in their text. To post as the app, ${
+            pasteOnce ? 'paste its bot token once, or ' : ''
+          }${way}${notPasted}`,
+          fix: secretApp
+            ? remedy(...(pasteOnce ? [paste] : []), [reauth, ' — sign in again with the app’s client secret'])
+            : remedy(...(pasteOnce ? [paste] : []), ...newApp),
           workspace: workspace.alias,
         });
       }
@@ -579,6 +644,11 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks, ...(input.cleanup ? { cleanup: input.cleanup } : {}) };
+}
+
+/** Whether the person's own credential shows its app rotates tokens: a refresh token, a refresh expiry, or a refresh under way or spent. */
+function rotates(bundle: TokenBundle): boolean {
+  return bundle.refreshToken !== undefined || bundle.refreshExpiresAt !== undefined || bundle.state !== 'ready';
 }
 
 export interface DoctorRun {

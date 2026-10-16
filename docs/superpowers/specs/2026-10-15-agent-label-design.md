@@ -242,7 +242,14 @@ chose. D7 gets a note pointing here.
 
 **An existing `send` workspace keeps working without a new sign-in.** Until a bot token reaches this machine by
 either way above, an `agent` message takes the labelled fallback (S3). `doctor` names both ways to switch to the app's
-identity. Nothing is silently unlabelled.
+identity. Nothing is silently unlabelled. (Amended 2026-10-16, after the owner's live check: `doctor` names only a way
+that can work. Paste-once refuses a rotating token, so it is not offered for an app whose credential rotates. A
+workspace connected through an organisation profile gets a note, with no command, since paste-once refuses its
+rotating tokens and the client-secret sign-in refuses a profile account. A person's own app connected by PKCE is not
+offered the client-secret sign-in, since Slack refuses bot scopes to a PKCE app and PKCE cannot be turned off on it:
+it gets the steps the live check proved, a new app from the client-secret manifest, `workspace remove`, then
+`workspace add … --with-client-secret`. Only an own app already connected with its client secret is offered the
+client-secret sign-in again.)
 
 ### S2 — The route is chosen before the preview, and never changed after it
 

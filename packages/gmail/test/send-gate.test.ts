@@ -13,7 +13,7 @@ import {
 } from '../../core/test/helpers/hostile-approval.ts';
 import { renderSendPreparation, renderSent } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
-import { createDraft } from '../src/operations/drafts.ts';
+import { createDraft, replyDraft } from '../src/operations/drafts.ts';
 import { inboxPolicy } from '../src/operations/inboxes.ts';
 import {
   beginApproval,
@@ -23,7 +23,7 @@ import {
   prepareSend,
   revokeApproval,
 } from '../src/operations/send.ts';
-import type { FakeGoogle } from './support/fake-google.ts';
+import type { FakeGoogle, FakeMessage } from './support/fake-google.ts';
 import { assertNoBareCommand, gmailInline } from './support/handoffs.ts';
 import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 import { cli, connect } from './support/surfaces.ts';
@@ -35,13 +35,19 @@ import { cli, connect } from './support/surfaces.ts';
  */
 
 async function connected(
-  options: { sendPolicy?: 'chat' | 'confirm' | 'never'; riskEscalation?: boolean } = {},
+  options: {
+    sendPolicy?: 'chat' | 'confirm' | 'never';
+    riskEscalation?: boolean;
+    /** Mail already in the mailbox, to reply to. */
+    messages?: Record<string, FakeMessage>;
+  } = {},
 ): Promise<{ harness: Harness; context: GmailContext; google: FakeGoogle }> {
   const harness = await newHarness({
     accounts: [
       {
         sub: 'sub-1',
         email: 'jo@example.test',
+        ...(options.messages ? { messages: options.messages } : {}),
         sendAs: [{ sendAsEmail: 'jo@example.test', displayName: 'Jo Example', isDefault: true, isPrimary: true }],
       },
     ],
@@ -87,6 +93,43 @@ test('prepare shows the message, records an approval, and sends nothing', async 
 
   // Preparing is not sending, and nothing reached a send endpoint.
   assert.equal(google.requests.filter((request) => request.path.endsWith('/send')).length, 0);
+});
+
+test("the preview names a conversation only for a reply, though Gmail gives a new message's draft a thread id too", async () => {
+  const { context, google } = await connected({
+    riskEscalation: false,
+    messages: {
+      m1: {
+        id: 'm1',
+        threadId: 't1',
+        labelIds: ['INBOX'],
+        internalDate: String(Date.parse('2026-09-17T16:02:00Z')),
+        payload: {
+          partId: '',
+          mimeType: 'text/plain',
+          headers: [
+            { name: 'From', value: 'Sam Lee <sam@partner.test>' },
+            { name: 'To', value: 'Jo Example <jo@example.test>' },
+            { name: 'Subject', value: 'Tuesday' },
+            { name: 'Message-ID', value: '<abc@mail.partner.test>' },
+          ],
+          body: { size: 5, data: Buffer.from('Hello', 'utf8').toString('base64url') },
+        },
+      },
+    },
+  });
+
+  // A new message: its draft has a thread id, as every Gmail draft has, and answers nothing.
+  const fresh = await draftTo(context, ['sam@partner.test']);
+  assert.ok(google.accounts.get('sub-1')?.drafts?.[fresh]?.message.threadId, 'the new draft has no thread id');
+  const newPreview = (await prepareSend(context, 'work', fresh)).preview;
+  assert.doesNotMatch(newPreview, /reply in conversation/, 'a new message was shown as a reply');
+  assert.doesNotMatch(newPreview, /^Thread:/m);
+
+  // A reply: In-Reply-To and References name the message it answers, so the preview says which conversation.
+  const reply = await replyDraft(context, 'work', 'm1', { text: 'Tuesday works.' });
+  const replyPreview = (await prepareSend(context, 'work', reply.draftId)).preview;
+  assert.match(replyPreview, /^Thread: +reply in conversation t1$/m);
 });
 
 test('prepare and send echo fields safely, and the approval id alone sends the bound Gmail draft', async () => {

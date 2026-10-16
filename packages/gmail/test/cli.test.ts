@@ -1165,6 +1165,11 @@ test('the terminal shows the shared preview once, as the approval — truncated 
   const stored = harness.google.accounts.get('sub-1')?.drafts?.[draft.draftId];
   assert.ok(stored);
   stored.message.threadId = thread;
+  // A reply, which is what makes the preview name its conversation: every Gmail draft has a thread id.
+  (stored.message.payload as { headers: { name: string; value: string }[] }).headers.push({
+    name: 'In-Reply-To',
+    value: '<abc@mail.partner.test>',
+  });
   const prepared = await prepareSend(context, 'work', draft.draftId);
   assert.equal(prepared.effectivePolicy, 'confirm');
 
