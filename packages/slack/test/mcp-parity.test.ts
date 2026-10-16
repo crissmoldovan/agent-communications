@@ -746,9 +746,11 @@ test('a word that is not one is refused with USAGE by the operation, and the sch
     };
     assert.deepEqual(enumOf('slack_workspace_policy', 'sendPolicy'), ['chat', 'confirm', 'never']);
     assert.deepEqual(enumOf('slack_workspace_policy', 'changePolicy'), ['chat', 'confirm']);
-    for (const tool of ['slack_mode_set', 'slack_workspace_add', 'slack_workspace_reauth', 'slack_manifest']) {
+    for (const tool of ['slack_mode_set', 'slack_workspace_add', 'slack_workspace_reauth']) {
       assert.deepEqual(enumOf(tool, 'mode'), ['read', 'send'], tool);
     }
+    // A manifest can also be an organisation's agent app (CUE-493), which no workspace is connected in.
+    assert.deepEqual(enumOf('slack_manifest', 'mode'), ['read', 'send', 'agent']);
     assert.deepEqual(enumOf('slack_post_prepare', 'broadcast'), ['here', 'channel', 'everyone']);
   } finally {
     await close();

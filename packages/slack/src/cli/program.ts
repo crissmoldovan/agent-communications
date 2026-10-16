@@ -53,7 +53,7 @@ import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
-import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
+import { type InstallMode, parseMode, renderAgentManifest, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
@@ -110,6 +110,7 @@ import { askHidden, readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
   renderAgentIcon,
+  renderAgentManifestHelp,
   renderAppCreated,
   renderAppUpdated,
   renderAppUpdateNeeded,
@@ -451,7 +452,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('manifest')
     .description('the Slack app to create, as a manifest you can paste')
-    .addOption(modeOption())
+    .addOption(
+      new Option(
+        '--mode <mode>',
+        "how much access to ask Slack for; `agent` for an organisation's bot-only agent app, whose token members paste",
+      )
+        .choices(['read', 'send', 'agent'])
+        .default('read'),
+    )
     .option(
       '--port <port>',
       'the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app',
@@ -465,7 +473,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
         const result = await manifestFor(context, {
-          mode: String(flags.mode) as InstallMode,
+          mode: String(flags.mode),
           port: flags.port,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
           ...(flags.withClientSecret === true ? { pkce: false } : {}),
@@ -474,6 +482,9 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           result,
           output(),
           (data) => {
+            // The organisation's agent app: its own steps, and its own manifest, with no port in either.
+            if (data.mode === 'agent')
+              return `${renderAgentManifestHelp(data, options.color)}\n\n${renderAgentManifest()}`;
             const pkce = data.manifest.oauth_config.pkce_enabled;
             // The PKCE app's text is this command's own, as it was; the client-secret app's is the operation's steps.
             const help = pkce

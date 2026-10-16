@@ -21,7 +21,7 @@ import type { DoctorResult } from '../operations/doctor.ts';
 import type { DeletedDraft, DraftView } from '../operations/drafts.ts';
 import type { FileDownloadQuestion, FileDownloadResult } from '../operations/files.ts';
 import type { AgentIconResult } from '../operations/icon.ts';
-import type { ManifestResult } from '../operations/manifest.ts';
+import type { AgentManifestResult, ManifestResult } from '../operations/manifest.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
@@ -606,6 +606,21 @@ export function renderClientSecretManifestHelp(result: ManifestResult, color: bo
           '',
           paint(color, 'dim', `Keep --port ${result.port}: Slack matches the redirect URL in this manifest exactly.`),
         ]),
+  ].join('\n');
+}
+
+/**
+ * The organisation's agent app (CUE-493): the operation's own steps and notes, as `slack_manifest` returns them, so the
+ * administrator at a terminal and an agent reading the tool are told the same thing. Steps first — they are what to do —
+ * then what to weigh before sharing the token.
+ */
+export function renderAgentManifestHelp(result: AgentManifestResult, color: boolean): string {
+  return [
+    paint(color, 'bold', "Your organisation's agent app: one bot-only app, whose token members paste"),
+    '',
+    ...result.steps.map((step, i) => `${i + 1}. ${step}`),
+    '',
+    ...result.notes.map((note) => paint(color, 'dim', note)),
   ].join('\n');
 }
 
