@@ -28,9 +28,10 @@ import type { InstallMode } from '../manifest.ts';
 import { SLACK_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
 import { appTokenRevokedOf } from './app-token.ts';
+import { type AgentAppProbe, probeAgentApp } from './bot-token.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
 import { type PendingRevocationResult, pendingRevocationResult, retryPendingRevocations } from './revocations.ts';
-import { openWorkspace } from './session.ts';
+import { openWorkspace, type SessionDeps } from './session.ts';
 import { botSecretRefFor, clientSecretRefOf, listWorkspaces, requireWorkspace } from './workspaces.ts';
 
 /**
@@ -131,6 +132,12 @@ export interface DoctorInput {
    * unknown for a workspace that records a bot user — never as able to post as the app.
    */
   readonly appTokens?: ReadonlyMap<string, 'stored' | 'missing' | 'unknown'> | undefined;
+  /**
+   * For each send workspace whose organisation's profile names its agent app and that stores a bot token: whether that
+   * token is the agent app's, as Slack says (`probeAgentApp`). Absent for an alias means nobody asked — offline — which
+   * is reported as unknown, never as the agent app's.
+   */
+  readonly agentApps?: ReadonlyMap<string, AgentAppProbe> | undefined;
   /**
    * Check only this workspace, by its current name. The checks about the machine — the rate limit, the MCP entries —
    * are reported either way, as Gmail's doctor reports them for one mailbox.
@@ -681,6 +688,63 @@ export function doctor(input: DoctorInput): DoctorResult {
           workspace: workspace.alias,
         });
       }
+
+      /*
+       * The stored token against the agent app the profile names now (CUE-493). The paste checks it against the agent
+       * app the profile named then — and a token pasted before the organisation added its agent-app file was checked
+       * against none. So doctor asks again, as the paste asks, and says when it is another app's: posts go out as
+       * that app, under the APP badge, not as the organisation's.
+       */
+      const agent =
+        workspace.organisation === undefined
+          ? undefined
+          : organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId);
+      if (agent !== undefined && token === 'stored') {
+        const probe = input.agentApps?.get(workspace.alias);
+        const agentTitle = `The agent app for ${workspace.alias}`;
+        const expected = displayed(agent.appId);
+        if (probe?.kind === 'match') {
+          checks.push({
+            id: 'agent-app',
+            title: agentTitle,
+            status: 'ok',
+            detail: `the bot token stored is ${displayed(workspace.organisation)}'s agent app's (${expected}), as Slack says`,
+            fix: null,
+            workspace: workspace.alias,
+          });
+        } else if (probe?.kind === 'other') {
+          checks.push({
+            id: 'agent-app',
+            title: agentTitle,
+            status: 'warn',
+            detail: `the bot token stored is the app ${probe.appId}${probe.name ? ` ("${probe.name}")` : ''}'s, not ${displayed(workspace.organisation)}'s agent app, ${expected}, which its profile names: an agent's posts go out as that other app`,
+            fix: remedy(
+              handoffSentence(
+                handoffs.own(['workspace', 'bot', workspace.alias]),
+                (command) =>
+                  `Ask your organisation's admin for the agent app's token, then run ${command} in your own terminal and paste it there, never into a chat.`,
+                {
+                  instead:
+                    "Ask your organisation's admin for the agent app's token, then paste it with `workspace bot` in your own terminal, never into a chat.",
+                },
+              ),
+            ),
+            workspace: workspace.alias,
+          });
+        } else {
+          checks.push({
+            id: 'agent-app',
+            title: agentTitle,
+            status: 'unknown',
+            detail:
+              probe === undefined
+                ? `whether the bot token stored is ${displayed(workspace.organisation)}'s agent app's (${expected}) was not checked: Slack was not asked`
+                : `whether the bot token stored is ${displayed(workspace.organisation)}'s agent app's (${expected}) could not be checked: ${probe.why}`,
+            fix: null,
+            workspace: workspace.alias,
+          });
+        }
+      }
     }
   }
 
@@ -740,6 +804,11 @@ export interface DoctorRun {
   readonly workspace?: string | undefined;
   /** The fetch `auth.test` goes through. Injected so a test never reaches the real Slack. */
   readonly probe?: ProbeFetch | undefined;
+  /**
+   * The session the agent-app check goes through (`probeAgentApp`): `auth.test` with the stored bot token, and
+   * `bots.info` with the member's own. Injected so a test never reaches the real Slack.
+   */
+  readonly session?: SessionDeps | undefined;
 }
 
 /**
@@ -876,6 +945,33 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
     }
   }
   /*
+   * A stored bot token against the agent app its organisation's profile names (CUE-493), asked as the paste asks: one
+   * pasted before the profile named the app was checked against nothing. Online only, and only where there is
+   * something to check.
+   */
+  const agentApps = new Map<string, AgentAppProbe>();
+  if (options.offline !== true && secrets !== null) {
+    for (const view of listWorkspaces(config)) {
+      if (only !== undefined && view.alias !== only) continue;
+      const account = lookupName(config, 'account', view.alias);
+      if (!account || appTokens.get(view.alias) !== 'stored' || view.organisation === undefined) continue;
+      const agent = organisationAgentApp(config, view.organisation, view.workspaceId);
+      if (agent === undefined) continue;
+      let stored: string | undefined;
+      try {
+        stored = parseBundle(await secrets.get(botSecretRefFor(account.id)), handoffs)?.accessToken;
+      } catch {
+        stored = undefined;
+      }
+      agentApps.set(
+        view.alias,
+        stored === undefined
+          ? { kind: 'unknown', why: 'the stored bot token could not be read' }
+          : await probeAgentApp(context, view.alias, view.organisation, stored, agent.appId, options.session),
+      );
+    }
+  }
+  /*
    * What the MCP clients have registered: other Slack servers, and whether our own entries run this release and
    * still start. Read from their config files, so it needs no network and is done offline too.
    */
@@ -891,6 +987,7 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
     handoffs,
     bundles,
     appTokens,
+    agentApps,
     identities,
     registeredServers,
     missingFiles,

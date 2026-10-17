@@ -75,6 +75,9 @@ test('a security release puts its line first in the next post preview, once, and
     };
     assert.equal(prepared.preview.security, LINE);
     assert.equal(renderChannelPreview(prepared.preview).split('\n')[0], LINE, 'first, as the person reads it');
+    // Not answered yet: a preview prepared before the person says yes to the first asks too.
+    const meanwhile = await call('slack_post_prepare', { workspace: 'acme', channel: 'C1', text: 'one more thing' });
+    assert.equal((meanwhile.structuredContent as { preview: { security?: string } }).preview.security, LINE);
     // The person's yes to that preview posts.
     const posted = await call('slack_post_send', {
       workspace: 'acme',
@@ -84,7 +87,7 @@ test('a security release puts its line first in the next post preview, once, and
     });
     assert.notEqual(posted.isError, true, JSON.stringify(posted.structuredContent));
     assert.equal(fake.count('chat.postMessage'), 1);
-    // Asked once.
+    // Asked once: the person's yes to a preview that carried it answered it.
     const next = await call('slack_post_prepare', { workspace: 'acme', channel: 'C1', text: 'and again' });
     assert.equal((next.structuredContent as { preview: { security?: string } }).preview.security, undefined);
   } finally {

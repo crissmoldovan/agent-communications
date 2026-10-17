@@ -24,6 +24,7 @@ import {
   updateCheckSwitchedOff,
   updateVerdict,
   within,
+  withSecurityShown,
 } from './update-state.ts';
 import { isBehind, isVersion } from './versions.ts';
 
@@ -137,6 +138,11 @@ export interface NoticeDecision {
   background: BackgroundNotice | null;
   /** Registrations the next approved update moves onto the stable launcher: said with the notice, or alone. */
   moves: number;
+  /**
+   * The background job set up here that has not run in 48 hours: since when (`EffectiveUpdates.jobSilent`). Said with
+   * the notice, or alone, spaced as the notice is; null when the job works or there is none.
+   */
+  jobSilent: string | null;
   /** `auto` with no background job, one that could be set up here: the notice offers it, naming its approval. */
   offerJob: boolean;
 }
@@ -162,8 +168,8 @@ async function decideNotice(
   where: UpdateSurface,
 ): Promise<NoticeDecision | null> {
   if (updateCheckSwitchedOff(options.env) !== null) return null;
-  const updates = await effectiveUpdates(options.core, options.env);
   const now = options.now ?? (() => new Date());
+  const updates = await effectiveUpdates(options.core, options.env, now());
   const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
   const offerJob = updates.level === 'auto' && !updates.background && (await jobCanBeSetUp(options.core, updates));
   const spacing = spacingOf(updates, where.surface);
@@ -185,8 +191,9 @@ async function decideNotice(
     const quiet = updates.level === 'never' || pauseEnd(record, at) !== null;
     const background = quiet ? null : backgroundFor(record.backgroundNotice, options.running);
     const moves = quiet || spaced ? 0 : (record.moves ?? 0);
-    if (notice === null && background === null && moves === 0) return null;
-    return { notice, background, moves, offerJob: offerJob && notice !== null };
+    const jobSilent = quiet || spaced ? null : (updates.jobSilent?.since ?? null);
+    if (notice === null && background === null && moves === 0 && jobSilent === null) return null;
+    return { notice, background, moves, jobSilent, offerJob: offerJob && (notice !== null || jobSilent !== null) };
   };
   // Most calls have nothing to say: they read the file and take no lock, so a server's calls never queue behind one.
   if (due(await readUpdateCheck(options.core.paths.stateDir), now()) === null) return null;
@@ -196,7 +203,7 @@ async function decideNotice(
     if (decision === null) return null;
     const stamp = at.toISOString();
     // A line about this machine's updates spaces the next one; a background run's word alone is an event, said once.
-    const spaces = decision.notice !== null || decision.moves > 0;
+    const spaces = decision.notice !== null || decision.moves > 0 || decision.jobSilent !== null;
     const written: UpdateCheckRecord = {
       ...record,
       ...(spaces ? { noticeAt: stamp } : {}),
@@ -290,6 +297,16 @@ export function serverNoticeLine(notice: PendingUpdate & Partial<Notice>, env: N
   return `${PRODUCT} ${notice.latest} is out${whatItIs(notice)}; say "update" ${notice.security ? 'soon' : 'when it suits you'}.${paused}`;
 }
 
+/**
+ * The line for a background job that has not run in 48 hours (U4, U7): as though there were none, every notice and the
+ * security line are said again, and this says why, and where to look.
+ */
+export function jobSilentLine(since: string): string {
+  const at = new Date(since);
+  const day = Number.isFinite(at.getTime()) ? localStamp(at).slice(0, 10) : 'it was set up';
+  return `${PRODUCT}: background updates have not run since ${day}; check Login Items (macOS) or run doctor.`;
+}
+
 /** How many registrations, in words: "one registration", "2 registrations". */
 const registrations = (count: number): string => (count === 1 ? 'one registration' : `${count} registrations`);
 
@@ -305,6 +322,7 @@ export function serverDecisionLine(decision: NoticeDecision, env: NodeJS.Process
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(serverNoticeLine(notice, env));
   }
+  if (decision.jobSilent) parts.push(jobSilentLine(decision.jobSilent));
   if (moves > 0) {
     parts.push(
       notice !== null
@@ -340,12 +358,14 @@ function pausedWords(notice: Partial<Notice>): string {
  * The line a send or post preview opens with when a security fix is out and this machine does not install it on its
  * own (design 2026-10-16, U7): `A security fix is out (0.20.1): update first, or approve to send anyway` — or null.
  *
- * Every channel's send and post prepare calls this, once it has prepared the approval. On `every-14-days`, on `never`,
- * and on `auto` while its background job is not set up, a release whose manifest declares a security fix — one this
- * process is behind — is asked about once, in the next preview: what it returns is recorded as asked, under the
- * file's lock, so the preview after it is as it always was. The person's yes to that preview is the answer; the line
- * is display only, never in what an approval binds. A pause never holds it. Nothing at all where the environment
- * switched updates off, and it never throws: a preview is never refused on its account.
+ * Every channel's send and post prepare calls this, once it has prepared the approval, and names it (`approvalId`). On
+ * `every-14-days`, on `never`, and on `auto` while its background job is not set up or does not run, a release whose
+ * manifest declares a security fix — one this process is behind — is asked about in every preview until the person
+ * answers: the approval it was shown on is recorded, under the file's lock, and the person's yes to it — approved, or
+ * sent (`securityAnswered`, which the approval store calls) — is the answer. A preview prepared and never answered,
+ * set aside, run out or refused, answers nothing, so the next one asks again. The line is display only, never in what
+ * an approval binds. A pause never holds it. Nothing at all where the environment switched updates off, and it never
+ * throws: a preview is never refused on its account.
  */
 export async function securityNotice(options: {
   core: Core;
@@ -354,6 +374,8 @@ export async function securityNotice(options: {
   running: string;
   /** What the person approves: `send` for mail, `post` for a channel message. */
   act?: string | undefined;
+  /** The approval the preview is for: the person's yes to it answers the line. Left out, nothing answers it. */
+  approvalId?: string | undefined;
 }): Promise<string | null> {
   try {
     if (updateCheckSwitchedOff(options.env) !== null) return null;
@@ -365,13 +387,19 @@ export async function securityNotice(options: {
       return version === null || record.securityAsked === version ? null : version;
     };
     // Nothing to ask, as nearly always: read, and no lock taken.
-    if (asked(await readUpdateCheck(options.core.paths.stateDir)) === null) return null;
-    const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
-      const version = asked(record);
-      return version === null ? null : { record: { ...record, securityAsked: version }, result: version };
-    });
-    if (decided.result === undefined) return null;
-    return `A security fix is out (${decided.result}): update first, or approve to ${options.act ?? 'send'} anyway`;
+    const version = asked(await readUpdateCheck(options.core.paths.stateDir));
+    if (version === null) return null;
+    const { approvalId } = options;
+    let shown = version;
+    if (approvalId !== undefined) {
+      const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
+        const now = asked(record);
+        return now === null ? null : { record: withSecurityShown(record, now, approvalId), result: now };
+      });
+      if (decided.result === undefined) return null;
+      shown = decided.result;
+    }
+    return `A security fix is out (${shown}): update first, or approve to ${options.act ?? 'send'} anyway`;
   } catch {
     return null;
   }
@@ -525,6 +553,7 @@ export function commandDecisionLine(
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(commandNoticeLine(core, notice, channel, platform));
   }
+  if (decision.jobSilent) parts.push(jobSilentLine(decision.jobSilent));
   if (moves > 0) {
     parts.push(
       notice !== null

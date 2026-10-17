@@ -996,6 +996,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           offline: flags.offline === true,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
           probe: deps.probe,
+          session: { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);

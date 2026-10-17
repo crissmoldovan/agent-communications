@@ -379,7 +379,9 @@ the profile names the app, and otherwise notes that posts go out as you, labelle
 
    Its organisation and workspace must be the profile's. It holds no secret. Members pick it up with `git pull` and
    `agentcomms org update rgc`, which shows the app id and the file's SHA-256 and asks before applying, as any change
-   to the profile does. It is a file of its own, not a key in the profile, because every release before 0.20.0 refuses
+   to the profile does. A token a member pasted before the file was added was checked against no app, so `doctor`
+   checks the stored token as the paste does — `auth.test` with it, `bots.info` with the member's own token — and warns
+   when it is another app's. It is a file of its own, not a key in the profile, because every release before 0.20.0 refuses
    a profile with a key it does not know: a member who has not updated yet keeps reading the profile as it is, and
    never opens this file.
 
@@ -390,7 +392,9 @@ reaction, edit or deletion a member's agent makes with the old token comes back 
 would need its own preview — and the old token is removed from that member's machine, as narrowing or removal removes
 it. From the next prepare on, their agent's posts go out as them, labelled, and `doctor` says when the token was revoked
 and to ask you for the new one. Editing or deleting a message the app posted waits for the new token: only the app can
-change its own messages. Any other refusal keeps the token.
+change its own messages. Any other refusal keeps the token. Only the token the refused act carried is removed,
+compared by its SHA-256: a new one pasted while that act was out is kept, and the next prepare posts as the app with
+it.
 
 **What one shared token means.** Everyone who pastes it holds the same token, and Slack lets it post under any name,
 with the APP badge beside it. These tools always name a post after the member who approved it, and an app message can

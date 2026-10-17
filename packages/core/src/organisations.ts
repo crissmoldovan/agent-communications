@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, lstatSync, readlinkSync } from 'node:fs';
 import { type FileHandle, open } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { isDangerous } from './chars.ts';
 import type {
@@ -365,13 +365,48 @@ function utf8(bytes: Buffer, what: string): string {
   }
 }
 
+/** The most symbolic links followed from a profile's path to its file: as many as the system itself follows. */
+const LINK_HOPS = 40;
+
+/**
+ * The file a profile's path names, through every symbolic link at its end: the path itself when it is not a link, or
+ * cannot be looked at — what reading it then finds is the bounded read's to say. A link's target is read against the
+ * folder the link is in. The folders on the way are left as they are spelt: the file beside the result is in the same
+ * folder whatever they resolve to.
+ *
+ * What the files beside a profile are looked for beside (`readProfileFile`): an organisation keeps them beside its
+ * profile, in its own checkout, and a person who links to that profile from somewhere else has linked to the profile
+ * alone. Looked for beside the link, a caps file is not there, and the caps it names would be lifted.
+ */
+export function profileTarget(path: string): string {
+  let at = path;
+  for (let hops = 0; hops < LINK_HOPS; hops += 1) {
+    let link: string;
+    try {
+      if (!lstatSync(at).isSymbolicLink()) return at;
+      link = readlinkSync(at);
+    } catch {
+      return at;
+    }
+    at = resolve(dirname(at), link);
+  }
+  throw new CommsError('USAGE', `${shownPath(path)} is a chain of more than ${LINK_HOPS} symbolic links`, {
+    hint: 'Pass the path of the profile file itself.',
+  });
+}
+
 /**
  * Reads a profile from an absolute path (`readBounded`), and each file the organisation keeps beside it when there is
  * one: its update caps (`updatesPathFor`) and its agent app (`agentAppPathFor`). Each is bound by the SHA-256 of its
  * own exact bytes.
+ *
+ * The path is resolved once, through any symbolic link at its end (`profileTarget`): the profile is read from the file
+ * it names, and the files beside it are looked for beside that file — never beside the link, where they are not, and
+ * where a file of somebody else's could be. The path recorded, and read again by `org update`, is the one given.
  */
 export async function readProfileFile(path: string): Promise<ProfileFile> {
-  const bytes = (await readBounded(path, {
+  const target = profileTarget(path);
+  const bytes = (await readBounded(target, {
     unopened: () => {
       throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
         hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
@@ -381,8 +416,8 @@ export async function readProfileFile(path: string): Promise<ProfileFile> {
     size: 'a profile',
   })) as Buffer;
   const profile = parseProfile(utf8(bytes, 'the organisation profile'));
-  const updates = await readUpdatesFile(updatesPathFor(path), profile);
-  const agentApp = await readAgentAppFile(agentAppPathFor(path), profile);
+  const updates = await readUpdatesFile(updatesPathFor(target), profile);
+  const agentApp = await readAgentAppFile(agentAppPathFor(target), profile);
   return {
     path,
     sha256: createHash('sha256').update(bytes).digest('hex'),
@@ -1316,6 +1351,16 @@ async function readUpdatesFile(path: string, profile: OrganisationProfile): Prom
     ...(max === undefined ? {} : { max }),
     ...(background === undefined ? {} : { background: false as const }),
   };
+}
+
+/**
+ * The caps file beside a profile, read with no profile to hold it to but the organisation's word: what stands in for
+ * the caps the configuration records when `config.json` cannot be read (`effectiveUpdates`, failing closed). Beside the
+ * file the path names (`profileTarget`), in the same bounded, strict read, held to the same organisation. Refused as
+ * `readProfileFile` refuses it; undefined when there is none.
+ */
+export async function readUpdatesBeside(profilePath: string, organisation: string): Promise<UpdatesFile | undefined> {
+  return readUpdatesFile(updatesPathFor(profileTarget(profilePath)), { organisation } as OrganisationProfile);
 }
 
 /** The caps, as a preview and the doctor say them: "at most never, no background updates", or "no caps". */

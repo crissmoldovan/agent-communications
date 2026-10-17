@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process';
-import { readFile, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants } from 'node:fs';
+import { access, readFile, rm, stat } from 'node:fs/promises';
+import { join, posix, win32 } from 'node:path';
 import type { AuditLog } from './audit.ts';
 import { CommsError } from './errors.ts';
 import { replaceFileInPlace, writeFileAtomic } from './fs.ts';
 import { launcherPaths } from './launcher.ts';
+import { withFileLock } from './lock.ts';
+import { nodeProgram } from './node-program.ts';
 import { homeDirectory } from './paths.ts';
-import { childEnvironment, windowsSystemProgram } from './system-programs.ts';
+import { absoluteSearchPath, childEnvironment, windowsSystemProgram } from './system-programs.ts';
 
 /**
  * The per-user background update job (design 2026-10-16 U4; plan Track C): one writer per platform, each needing no
@@ -27,14 +30,22 @@ import { childEnvironment, windowsSystemProgram } from './system-programs.ts';
  * starts with none of the shell's environment, so a folder chosen there (`AGENT_COMMS_CONFIG_DIR`, `XDG_CONFIG_HOME`)
  * would not reach it: pinned, the run reads exactly the installation that set it up.
  *
+ * On Windows the launcher is a Node script with no extension (`launcher.ts`), which Task Scheduler cannot start: the
+ * task's program is the Node the locator names (CUE-492), as a managed registration's is, and the launcher is its
+ * first argument.
+ *
  * Every command goes through a runner (`UpdateJobRunner`): the real one runs the system's own program, a test hands in
  * one that records. Nothing here is a change on its own — setting the job up is a change the person approves, in
  * `operations/update-job.ts` — and nothing here ever sends, posts or approves anything.
  *
  * **The record.** Setting it up writes `<state>/update-job.json`, holding `{ platform, installedAt, label }`, and
- * removing it deletes that file. Track A reads it through `updateJobInstalled(core)`: `auto` without its job behaves as
- * a daily check with a notice that offers the setup (U2). The record is also what tells this installation's job from
- * one another installation wrote at the same per-user place: the place is fixed, the installations are not.
+ * removing it deletes that file. Every background run adds `lastRun` to it (`recordUpdateJobRun`). Track A reads it
+ * through `updateJobHealth`: the job counts as working only when it ran in the last 48 hours, or was set up less than 48
+ * hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires, a task the
+ * scheduler cannot start all leave the record in place, and a record alone silenced every notice, the security line
+ * included. Otherwise `auto` behaves as a daily check with a notice that offers the setup (U2). The record is also what
+ * tells this installation's job from one another installation wrote at the same per-user place: the place is fixed,
+ * the installations are not.
  */
 
 /** macOS's launchd label, and the plist's name. */
@@ -73,6 +84,13 @@ export interface UpdateJobDeps {
   random?: (() => number) | undefined;
   /** The clock `installedAt` is read from. */
   now?: (() => Date) | undefined;
+  /**
+   * The Node the Windows task starts the launcher with: an absolute path. Left out, the one the locator names
+   * (`nodeProgram`, CUE-492), as a managed registration's is.
+   */
+  node?: string | undefined;
+  /** Where `systemctl` is looked for: `SYSTEMCTL_DIRECTORIES` unless a test hands in a folder of its own. */
+  systemDirectories?: readonly string[] | undefined;
 }
 
 /** Everything one platform's writer needs, resolved once. */
@@ -82,8 +100,12 @@ export interface UpdateJobContext {
   stateDir: string;
   /** The stable core launcher the job runs. */
   launcher: string;
+  /** The Node the Windows task starts the launcher with: the task's program there. Unused elsewhere. */
+  node: string;
   /** The folder pins every registration carries, in the installer's order, before `update --background`. */
   pins: readonly string[];
+  /** Where `systemctl` is looked for, in order (`systemctlProgram`). */
+  systemDirectories: readonly string[];
   env: NodeJS.ProcessEnv;
   run: UpdateJobRunner;
   uid: number;
@@ -116,12 +138,21 @@ export function updateJobContext(
   const platform = options.platform ?? process.platform;
   const deps = options.deps ?? {};
   const { configDir, stateDir, dataDir, secretsDir } = core.paths;
+  const node = deps.node ?? (platform === 'win32' ? nodeProgram(env, platform) : process.execPath);
+  if (!posix.isAbsolute(node) && !win32.isAbsolute(node)) {
+    throw new CommsError(
+      'CONFIG',
+      `the background update job's Node has to be named by its full path, not ${JSON.stringify(node)}`,
+    );
+  }
   return {
     platform,
     home: homeDirectory(env),
     stateDir,
     launcher: options.launcher ?? coreLauncherPath(dataDir),
+    node,
     pins: ['--config-dir', configDir, '--state-dir', stateDir, '--data-dir', dataDir, '--secrets-dir', secretsDir],
+    systemDirectories: deps.systemDirectories ?? SYSTEMCTL_DIRECTORIES,
     env,
     run: deps.run ?? systemRunner(env, platform),
     uid: deps.uid ?? process.getuid?.() ?? 0,
@@ -131,9 +162,13 @@ export function updateJobContext(
   };
 }
 
-/** What the job runs: the launcher, the folder pins, `update --background`. */
-export function updateJobCommand(context: Pick<UpdateJobContext, 'launcher' | 'pins'>): string[] {
-  return [context.launcher, ...context.pins, ...UPDATE_JOB_WORDS];
+/**
+ * What the job runs: the launcher, the folder pins, `update --background` — on Windows after the Node, which is the
+ * task's program there: the launcher is a Node script with no extension, and Task Scheduler cannot start one.
+ */
+export function updateJobCommand(context: Pick<UpdateJobContext, 'platform' | 'node' | 'launcher' | 'pins'>): string[] {
+  const words = [context.launcher, ...context.pins, ...UPDATE_JOB_WORDS];
+  return context.platform === 'win32' ? [context.node, ...words] : words;
 }
 
 /** The real runner: the program by its path, no shell, a minute at most, its window hidden on Windows. */
@@ -167,11 +202,20 @@ export interface UpdateJobMarker {
   installedAt: string;
   /** The job's name on its platform: the launchd label, the systemd timer, the Windows task. */
   label: string;
+  /** When a background run last ran, as an ISO time: what says the job works, not only that it was set up. */
+  lastRun?: string | undefined;
 }
 
 export function updateJobMarkerPath(stateDir: string): string {
   return join(stateDir, 'update-job.json');
 }
+
+/** One write of the record at a time: its setup, its removal and every run's `lastRun`. */
+function withMarkerLock<T>(stateDir: string, change: () => Promise<T>): Promise<T> {
+  return withFileLock(join(stateDir, '.update-job.lock'), change, { timeoutMs: 5_000 });
+}
+
+const isTime = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
 /** The record, or null when there is none — or none this release can read, which is treated as none. */
 export async function readUpdateJobMarker(stateDir: string): Promise<UpdateJobMarker | null> {
@@ -191,12 +235,73 @@ export async function readUpdateJobMarker(stateDir: string): Promise<UpdateJobMa
   ) {
     return null;
   }
-  return { platform: record.platform as UpdateJobPlatform, installedAt: record.installedAt, label: record.label };
+  return {
+    platform: record.platform as UpdateJobPlatform,
+    installedAt: record.installedAt,
+    label: record.label,
+    ...(isTime(record.lastRun) ? { lastRun: record.lastRun } : {}),
+  };
 }
 
-/** Whether this installation has set up its background job: what Track A's levels read (U2). */
+/** Whether this installation has set up its background job: the record is there. Not whether it works. */
 export async function updateJobInstalled(core: { paths: { stateDir: string } }): Promise<boolean> {
   return (await readUpdateJobMarker(core.paths.stateDir)) !== null;
+}
+
+/**
+ * How long a job may go without a run and still count as working: two days, so one missed day — a Mac asleep through
+ * its hour, a laptop off for a day — is not a failure, and a job that never runs is found within two.
+ */
+export const UPDATE_JOB_SILENT_MS: number = 48 * 60 * 60 * 1000;
+
+/** A few minutes either way, as two processes' clocks are read at slightly different moments. */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+function within(at: string | undefined, now: Date, intervalMs: number): boolean {
+  if (at === undefined || !isTime(at)) return false;
+  const since = now.getTime() - Date.parse(at);
+  return since >= -CLOCK_SKEW_MS && since < intervalMs;
+}
+
+/** What the record says of the job: whether it works, and since when it has been silent when it does not. */
+export interface UpdateJobHealth {
+  marker: UpdateJobMarker;
+  /**
+   * It ran in the last 48 hours, or was set up less than 48 hours ago and has not had its first run yet. A time from
+   * more than a few minutes in the future is not trusted.
+   */
+  working: boolean;
+  /** When it last ran — or, never having run, when it was set up: what "has not run since" names. */
+  since: string;
+}
+
+/** The job's health, from its record; null when there is none (`readUpdateJobMarker`). */
+export async function updateJobHealth(stateDir: string, now: Date = new Date()): Promise<UpdateJobHealth | null> {
+  const marker = await readUpdateJobMarker(stateDir);
+  if (marker === null) return null;
+  return {
+    marker,
+    working: within(marker.lastRun, now, UPDATE_JOB_SILENT_MS) || within(marker.installedAt, now, UPDATE_JOB_SILENT_MS),
+    since: marker.lastRun ?? marker.installedAt,
+  };
+}
+
+/**
+ * Records that a background run ran, at `at`, on the job's record — when there is one: a run with no job set up, one a
+ * person started by hand, writes none. Every run does, one that finds nothing to do included. Says whether it wrote.
+ */
+export async function recordUpdateJobRun(stateDir: string, at: Date): Promise<boolean> {
+  // Nearly always read once and done with: no record, no lock, and no state folder made for one.
+  if ((await readUpdateJobMarker(stateDir)) === null) return false;
+  return withMarkerLock(stateDir, async () => {
+    const marker = await readUpdateJobMarker(stateDir);
+    if (marker === null) return false;
+    await writeFileAtomic(
+      updateJobMarkerPath(stateDir),
+      `${JSON.stringify({ ...marker, lastRun: at.toISOString() }, null, 2)}\n`,
+    );
+    return true;
+  });
 }
 
 function labelOf(platform: UpdateJobPlatform): string {
@@ -279,7 +384,41 @@ function hasControlCharacter(word: string): boolean {
 
 // ── Linux ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const SYSTEMCTL = 'systemctl';
+/**
+ * Where `systemctl` is looked for, in order: the system's own folders, never PATH — as `launchctl` is `/bin/launchctl`
+ * and `ps` is `/bin/ps` or `/usr/bin/ps`. A name is looked up, and a lookup can reach the folder this was started from,
+ * where a download may have saved a stranger's `systemctl`, which would then run with the person's rights.
+ */
+export const SYSTEMCTL_DIRECTORIES: readonly string[] = Object.freeze(['/usr/bin', '/bin']);
+
+/** The first executable `systemctl` in `directories` — absolute folders only — or null when none holds one. */
+export async function systemctlProgram(directories: readonly string[] = SYSTEMCTL_DIRECTORIES): Promise<string | null> {
+  for (const directory of absoluteSearchPath(directories)) {
+    const candidate = join(directory, 'systemctl');
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not here.
+    }
+  }
+  return null;
+}
+
+/** `systemctl` for this context, or refused — before anything is written or run — when the system has none of its own. */
+async function requireSystemctl(context: UpdateJobContext, removing = false): Promise<string> {
+  const found = await systemctlProgram(context.systemDirectories);
+  if (found !== null) return found;
+  throw new CommsError(
+    'CONFIG',
+    `systemd's systemctl is not in ${context.systemDirectories.join(' or ')}, so ${removing ? 'the background update job was left as it is' : 'nothing was set up'}`,
+    {
+      hint: 'It is looked for only where the system keeps it, never through PATH. A systemd user session is what the background update job needs on Linux.',
+    },
+  );
+}
+
 const UNIT_HEADER = '# Written by agent-communications. Its update --background-job off removes it.';
 const UNIT_DESCRIPTION = 'agent-communications: install verified releases in the background';
 
@@ -467,6 +606,14 @@ async function exists(path: string): Promise<boolean> {
   );
 }
 
+/** The first word of a task's arguments, as `windowsWord` writes one: in double quotes, or up to the first space. */
+function firstWindowsWord(text: string): string {
+  const quoted = /^"([^"]*)"/.exec(text);
+  // `windowsWord` doubles the backslashes before a closing quote: halved again here.
+  if (quoted) return (quoted[1] as string).replace(/\\+$/, (slashes) => slashes.slice(0, slashes.length / 2));
+  return text.split(/\s/)[0] ?? '';
+}
+
 function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
   return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
@@ -545,13 +692,21 @@ export async function inspectUpdateJob(
     const task = await queryWindowsTask(context);
     if (task === null) return { ...base, state: marker === null ? 'not-set-up' : 'missing' };
     const runs = `${task.execute} ${task.arguments}`.trim();
-    if (!samePath(task.execute, context.launcher, platform)) {
+    // Ours: a Node starting this launcher — or 0.20.0's task, which named the launcher as its program and never ran.
+    const ours =
+      samePath(firstWindowsWord(task.arguments), context.launcher, platform) ||
+      samePath(task.execute, context.launcher, platform);
+    if (!ours) {
       return marker === null
         ? { ...base, state: 'foreign', runs, reason: `it runs ${runs}` }
         : { ...base, state: 'stale', runs, reason: `it runs ${runs}` };
     }
-    const [, ...args] = command;
-    return oursAsItShould(context, base, task.arguments === args.map(windowsWord).join(' '));
+    const [program = '', ...args] = command;
+    return oursAsItShould(
+      context,
+      base,
+      samePath(task.execute, program, platform) && task.arguments === args.map(windowsWord).join(' '),
+    );
   }
   return { platform, where: '', files: [], marker, state: 'not-set-up' };
 }
@@ -619,6 +774,7 @@ export async function installUpdateJob(
       throw commandFailed('launchd did not load the background update job', loaded);
     }
   } else if (platform === 'linux') {
+    const systemctl = await requireSystemctl(context);
     const units = systemdUnitPaths(context.home);
     await replaceFileInPlace(units.service, systemdService(command));
     await replaceFileInPlace(units.timer, systemdTimer());
@@ -626,10 +782,10 @@ export async function installUpdateJob(
       ['--user', 'daemon-reload'],
       ['--user', 'enable', '--now', `${UPDATE_JOB_NAME}.timer`],
     ]) {
-      const answer = await context.run(SYSTEMCTL, args);
+      const answer = await context.run(systemctl, args);
       if (answer.status !== 0) {
         await Promise.all([rm(units.service, { force: true }), rm(units.timer, { force: true })]);
-        await context.run(SYSTEMCTL, ['--user', 'daemon-reload']);
+        await context.run(systemctl, ['--user', 'daemon-reload']);
         throw commandFailed('systemd did not enable the background update timer', answer);
       }
     }
@@ -639,7 +795,9 @@ export async function installUpdateJob(
     if (answer.status !== 0) throw commandFailed('Task Scheduler did not register the background update task', answer);
   }
   const marker: UpdateJobMarker = { platform, installedAt: context.now().toISOString(), label };
-  await writeFileAtomic(updateJobMarkerPath(context.stateDir), `${JSON.stringify(marker, null, 2)}\n`);
+  await withMarkerLock(context.stateDir, () =>
+    writeFileAtomic(updateJobMarkerPath(context.stateDir), `${JSON.stringify(marker, null, 2)}\n`),
+  );
   return {
     platform,
     label,
@@ -681,7 +839,8 @@ export async function removeUpdateJob(
   inspection?: UpdateJobInspection,
 ): Promise<UpdateJobRemoved> {
   const seen = inspection ?? (await inspectUpdateJob(context, { query: 'always' }));
-  const forget = () => rm(updateJobMarkerPath(context.stateDir), { force: true });
+  const forget = () =>
+    withMarkerLock(context.stateDir, () => rm(updateJobMarkerPath(context.stateDir), { force: true }));
   if (seen.state === 'not-set-up') return { removed: false, where: seen.where, files: [] };
   if (seen.state === 'foreign') {
     await forget();
@@ -704,7 +863,8 @@ export async function removeUpdateJob(
   } else if (platform === 'linux') {
     const units = systemdUnitPaths(context.home);
     if (seen.state !== 'missing') {
-      const answer = await context.run(SYSTEMCTL, ['--user', 'disable', '--now', `${UPDATE_JOB_NAME}.timer`]);
+      const systemctl = await requireSystemctl(context, true);
+      const answer = await context.run(systemctl, ['--user', 'disable', '--now', `${UPDATE_JOB_NAME}.timer`]);
       if (answer.status !== 0 && !/not loaded|does not exist|no such file/i.test(answer.stderr)) {
         throw commandFailed('systemd did not disable the background update timer; it was left as it is', answer, true);
       }
@@ -712,7 +872,7 @@ export async function removeUpdateJob(
         if (await exists(file)) deleted.push(file);
         await rm(file, { force: true });
       }
-      await context.run(SYSTEMCTL, ['--user', 'daemon-reload']);
+      await context.run(systemctl, ['--user', 'daemon-reload']);
     }
   } else if (platform === 'win32' && seen.state !== 'missing') {
     const answer = await runPowerShell(context, windowsUnregisterScript());

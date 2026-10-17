@@ -609,7 +609,7 @@ test('a level that is not auto stops before the registry; an organisation that t
   await untouched(m, result, quiet.installer.calls);
 
   const job = recorder();
-  const jobDeps = { run: job.run, uid: 501, random: () => 0.5, now: () => NOW };
+  const jobDeps = { run: job.run, uid: 501, random: () => 0.5, now: () => NOW, systemDirectories: [systemBin()] };
   await installUpdateJob(updateJobContext(m.core, m.env, { platform: 'linux', deps: jobDeps }));
   assert.equal(await updateJobInstalled(m.core), true);
 
@@ -633,6 +633,13 @@ test('a level that is not auto stops before the registry; an organisation that t
   assert.equal(notice?.outcome, 'job-removed');
   assert.match(String(notice?.text), /organisation profile/);
 });
+
+/** A system folder of the test's own with a `systemctl` in it: the job's runner only records it, and nothing runs it. */
+function systemBin(): string {
+  const dir = tempDir('comms-update-background-system-');
+  writeFileSync(join(dir, 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  return dir;
+}
 
 /** An organisation record whose profile caps updates, as `org add` leaves one (design 2026-10-16, U8). */
 function capped(updates: { max?: string; background?: boolean }): Record<string, unknown> {
@@ -675,7 +682,13 @@ test('a run reads Track A’s settings: the level set, 0.18’s switch, the orga
 
   // An organisation's `background: false` removes the job at the run, and leaves the notice.
   const off = await launched({ ...capped({ background: false }) });
-  const jobDeps = { run: recorder().run, uid: 501, random: () => 0.5, now: () => NOW };
+  const jobDeps = {
+    run: recorder().run,
+    uid: 501,
+    random: () => 0.5,
+    now: () => NOW,
+    systemDirectories: [systemBin()],
+  };
   await installUpdateJob(updateJobContext(off.core, off.env, { platform: 'linux', deps: jobDeps }));
   const stopped = await runBackgroundUpdate(
     off.core,

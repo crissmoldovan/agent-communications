@@ -9,6 +9,7 @@ import { PlanStore } from './plans.ts';
 import { keychainNamespace, openSecretStore, type SecretStore, type SecretStoreKind } from './secrets.ts';
 import { InboxStateStore } from './state.ts';
 import { TaintStore } from './taint.ts';
+import { securityAnswered } from './update-state.ts';
 
 /** Everything a provider package needs from the core, wired to one config directory. */
 export interface Core {
@@ -60,7 +61,14 @@ export function openCore(options: OpenCoreOptions = {}): Core {
     // The store's one window on the configuration — bound to this `ConfigStore`, whose `load` reads private state and
     // so must never be passed loose.
     // Its daily retention records each deletion in this same audit log (design 2026-10-05 §D9).
-    approvals: new ApprovalStore(paths.stateDir, { now, handoffs, loadConfig: () => config.load(), audit }),
+    approvals: new ApprovalStore(paths.stateDir, {
+      now,
+      handoffs,
+      loadConfig: () => config.load(),
+      audit,
+      // A send or post answered: the security line its preview carried counts as asked (design 2026-10-16, U7).
+      answered: (approvalId) => securityAnswered(paths.stateDir, approvalId),
+    }),
     ledger: new SendLedger(paths.stateDir, now),
     plans: new PlanStore(paths.stateDir, now),
     taint: new TaintStore(paths.stateDir, now),

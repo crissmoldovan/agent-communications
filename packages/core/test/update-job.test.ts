@@ -10,6 +10,7 @@ import { type Core, openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
+import { nodeProgram } from '../src/node-program.ts';
 import { doctor } from '../src/operations/maintenance.ts';
 import { updateJobChange } from '../src/operations/update-job.ts';
 import { updateLevelChange } from '../src/operations/update-settings.ts';
@@ -19,6 +20,8 @@ import {
   installUpdateJob,
   launchAgentPlist,
   removeUpdateJob,
+  SYSTEMCTL_DIRECTORIES,
+  systemctlProgram,
   systemdService,
   systemdTimer,
   type UpdateJobDeps,
@@ -106,11 +109,19 @@ function pins(core: Core): string[] {
 }
 
 const FIXED = new Date('2026-10-16T09:00:00.000Z');
+/** The Node a Windows task starts the launcher with, as the test names it. */
+const NODE = 'C:\\Program Files\\nodejs\\node.exe';
+/** A system folder of the test's own, holding a `systemctl` nothing runs: the runner only records it. */
+const SYSTEM_BIN = tempDir('comms-update-job-system-');
+const SYSTEMCTL = join(SYSTEM_BIN, 'systemctl');
+writeFileSync(SYSTEMCTL, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 const deps = (run: UpdateJobRunner, over: Partial<UpdateJobDeps> = {}): UpdateJobDeps => ({
   run,
   uid: 501,
   random: () => 0.5,
   now: () => FIXED,
+  node: NODE,
+  systemDirectories: [SYSTEM_BIN],
   ...over,
 });
 
@@ -246,6 +257,50 @@ test('Windows: the task scripts, exactly — daily, an hour of random delay, whe
   }
 });
 
+test('Windows: the task starts the located Node with the launcher as its first argument — the exact action', () => {
+  // Task Scheduler starts a program, and the launcher is a Node script with no extension: it cannot be the program.
+  const node = 'C:\\Program Files\\nodejs\\node.exe';
+  const launcher = 'D:\\Profiles\\Jo Example\\data\\launch\\core';
+  const command = updateJobCommand({
+    platform: 'win32',
+    node,
+    launcher,
+    pins: ['--config-dir', 'D:\\Profiles\\Jo Example\\config', '--state-dir', 'D:\\state'],
+  });
+  assert.deepEqual(command, [
+    node,
+    launcher,
+    '--config-dir',
+    'D:\\Profiles\\Jo Example\\config',
+    '--state-dir',
+    'D:\\state',
+    'update',
+    '--background',
+  ]);
+  const action = windowsRegisterScript(command).split('\n')[1];
+  assert.equal(
+    action,
+    '$action = New-ScheduledTaskAction -Execute \'C:\\Program Files\\nodejs\\node.exe\' -Argument \'"D:\\Profiles\\Jo Example\\data\\launch\\core" --config-dir "D:\\Profiles\\Jo Example\\config" --state-dir D:\\state update --background\'',
+  );
+  // macOS and Linux start the launcher itself: a shell script with its own #! line.
+  for (const platform of ['darwin', 'linux'] as const) {
+    assert.deepEqual(updateJobCommand({ platform, node, launcher: '/data/launch/core', pins: [] }), [
+      '/data/launch/core',
+      'update',
+      '--background',
+    ]);
+  }
+  // Left out, the Node is the one the locator names (CUE-492), as a managed registration's is.
+  const m = machine();
+  const located = updateJobContext(m.core, m.env, {
+    platform: 'win32',
+    launcher: m.launcher,
+    deps: deps(recorder().run, { node: undefined }),
+  });
+  assert.equal(updateJobCommand(located)[0], nodeProgram(m.env, 'win32'));
+  assert.equal(updateJobCommand(located)[1], m.launcher);
+});
+
 test('the job runs the stable core launcher, pinned to this installation’s four folders, with update --background', () => {
   const m = machine();
   const context = updateJobContext(m.core, m.env, {
@@ -316,8 +371,8 @@ test('Linux: install writes both units, reloads and enables the timer; remove di
   assert.equal(readFileSync(units.service, 'utf8'), systemdService(updateJobCommand(context)));
   assert.equal(readFileSync(units.timer, 'utf8'), systemdTimer());
   assert.deepEqual(calls, [
-    { program: 'systemctl', args: ['--user', 'daemon-reload'] },
-    { program: 'systemctl', args: ['--user', 'enable', '--now', 'agentcomms-update.timer'] },
+    { program: SYSTEMCTL, args: ['--user', 'daemon-reload'] },
+    { program: SYSTEMCTL, args: ['--user', 'enable', '--now', 'agentcomms-update.timer'] },
   ]);
   assert.equal(
     JSON.parse(readFileSync(updateJobMarkerPath(m.core.paths.stateDir), 'utf8')).label,
@@ -327,12 +382,57 @@ test('Linux: install writes both units, reloads and enables the timer; remove di
   calls.length = 0;
   assert.equal((await removeUpdateJob(context)).removed, true);
   assert.deepEqual(calls, [
-    { program: 'systemctl', args: ['--user', 'disable', '--now', 'agentcomms-update.timer'] },
-    { program: 'systemctl', args: ['--user', 'daemon-reload'] },
+    { program: SYSTEMCTL, args: ['--user', 'disable', '--now', 'agentcomms-update.timer'] },
+    { program: SYSTEMCTL, args: ['--user', 'daemon-reload'] },
   ]);
   assert.equal(existsSync(units.service), false);
   assert.equal(existsSync(units.timer), false);
   assert.equal(await updateJobInstalled(m.core), false);
+});
+
+test('Linux: systemctl is the system’s own, from /usr/bin or /bin, never found through PATH — and with none there, nothing is done', async () => {
+  assert.deepEqual(SYSTEMCTL_DIRECTORIES, ['/usr/bin', '/bin']);
+  const empty = tempDir('comms-update-job-empty-');
+  // The first folder that holds it; a relative folder is never looked in, whatever it holds.
+  assert.equal(await systemctlProgram(['relative/bin', empty, SYSTEM_BIN]), SYSTEMCTL);
+  assert.equal(await systemctlProgram([empty]), null);
+  if (process.platform !== 'win32') {
+    // A file that cannot be run is not the program.
+    const plain = tempDir('comms-update-job-plain-');
+    writeFileSync(join(plain, 'systemctl'), 'not a program\n', { mode: 0o644 });
+    assert.equal(await systemctlProgram([plain]), null);
+  }
+
+  // A systemctl on PATH — in the folder this was started from, a download's — is never the one run.
+  const m = machine();
+  const onPath = join(m.home, 'bin');
+  mkdirSync(onPath, { recursive: true });
+  writeFileSync(join(onPath, 'systemctl'), '#!/bin/sh\n', { mode: 0o755 });
+  const { calls, run } = recorder();
+  const context = updateJobContext(m.core, m.env, {
+    platform: 'linux',
+    launcher: m.launcher,
+    deps: deps(run, { systemDirectories: [empty] }),
+  });
+  await assert.rejects(installUpdateJob(context), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'CONFIG');
+    assert.match(error.message, /systemctl/);
+    assert.ok(error.message.includes(empty), `it names where it looked: ${error.message}`);
+    return true;
+  });
+  assert.deepEqual(calls, [], 'nothing was run');
+  assert.equal(existsSync(unitsOf(m).service), false, 'nothing was written');
+  assert.equal(existsSync(unitsOf(m).timer), false);
+  assert.equal(await updateJobInstalled(m.core), false);
+
+  // Set up where it is there; then, gone, removing it is refused and the job is left as it is.
+  await installUpdateJob(updateJobContext(m.core, m.env, { platform: 'linux', launcher: m.launcher, deps: deps(run) }));
+  calls.length = 0;
+  await assert.rejects(removeUpdateJob(context), /systemctl/);
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(unitsOf(m).service), true, 'the job was taken away without systemd being told');
+  assert.equal(await updateJobInstalled(m.core), true);
 });
 
 test('Windows: install registers the task through PowerShell; remove unregisters it — each looked up first', async () => {
@@ -342,7 +442,7 @@ test('Windows: install registers the task through PowerShell; remove unregisters
     const script = scriptOf(call);
     if (script.includes('Get-ScheduledTask')) {
       return {
-        stdout: registered ? JSON.stringify({ execute: m.launcher, arguments: windowsArguments(m) }) : 'null',
+        stdout: registered ? JSON.stringify({ execute: NODE, arguments: windowsArguments(m) }) : 'null',
       };
     }
     if (script.includes('Register-ScheduledTask')) registered = true;
@@ -365,9 +465,12 @@ test('Windows: install registers the task through PowerShell; remove unregisters
   assert.equal(await updateJobInstalled(m.core), false);
 });
 
-/** What the Windows task's `-Argument` is for this machine: its pins and `update --background`, as the writer quotes them. */
+/**
+ * What the Windows task's `-Argument` is for this machine: the launcher, its pins and `update --background`, as the
+ * writer quotes them. The task's program is the Node (`NODE`).
+ */
 function windowsArguments(m: Machine): string {
-  const script = windowsRegisterScript([m.launcher, ...pins(m.core), 'update', '--background']);
+  const script = windowsRegisterScript([NODE, m.launcher, ...pins(m.core), 'update', '--background']);
   const found = /-Argument '((?:[^']|'')*)'/.exec(script)?.[1] ?? '';
   return found.replaceAll("''", "'");
 }
@@ -676,6 +779,8 @@ async function jobRow(m: Machine, platform: NodeJS.Platform, run: UpdateJobRunne
     platform,
     keyring: null,
     updateJob: deps(run),
+    // The job was set up at FIXED: the doctor reads whether it has run since on the same clock.
+    now: () => FIXED,
     ...(background === undefined ? {} : { background }),
   });
   return report.checks.filter((check) => check.name === 'background update job');
@@ -749,9 +854,17 @@ test('the doctor on Linux reads the units; on Windows it asks the scheduler only
   assert.match(String((await jobRow(windows, 'win32', asked.run))[0]?.detail), /^missing: /);
   assert.deepEqual(asked.calls.map(scriptOf), [windowsQueryScript()]);
   const there = recorder(() => ({
-    stdout: JSON.stringify({ execute: windows.launcher, arguments: windowsArguments(windows) }),
+    stdout: JSON.stringify({ execute: NODE, arguments: windowsArguments(windows) }),
   }));
   assert.match(String((await jobRow(windows, 'win32', there.run))[0]?.detail), /^installed: /);
+  // 0.20.0's task, which named the launcher as its program: this installation's, and not what this release writes.
+  const legacy = recorder(() => ({
+    stdout: JSON.stringify({
+      execute: windows.launcher,
+      arguments: windowsArguments(windows).slice(windowsArguments(windows).indexOf(' --config-dir') + 1),
+    }),
+  }));
+  assert.match(String((await jobRow(windows, 'win32', legacy.run))[0]?.detail), /^stale: /);
 });
 
 test('the doctor names a profile that turns background updates off, while the job is still there', async () => {

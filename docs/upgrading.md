@@ -96,7 +96,7 @@ older than 0.20.0, and a script that branched on `11` can drop that branch.
 
 | Level | Checks | Notices |
 |---|---|---|
-| `auto` (the default) | daily | until background updates are set up, a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
+| `auto` (the default) | daily | until background updates are set up — and whenever the job has not run in 48 hours — a daily check with a notice; after, only what needs the person — a restart, a major release, a release needing a decision |
 | `every-14-days` | at most once every 14 days | at most once every 14 days |
 | `never` | never: no registry request | none |
 
@@ -112,21 +112,29 @@ pause clears nothing. A new pause replaces the old one, and none lasts longer th
 however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` says when it ends.
 
 **A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
-`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up —
+`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up or
+has not run in 48 hours —
 whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
 preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
-send anyway` (`… to post anyway` on Slack) — asked once on the machine. The person's yes to that preview is the answer:
-the line is shown, never part of what the approval binds.
+send anyway` (`… to post anyway` on Slack). It is asked in every preview until the person answers one: once a send or
+post whose preview carried it is approved, or sent, it counts as asked on the machine and is not shown again for that
+release. A preview prepared and never answered — set aside, run out, refused — answers nothing, so the next one asks
+again. The line is shown, never part of what the approval binds.
 
 **An organisation's caps.** An organisation can only make its members' updates stricter, in a file beside its
 profile — `acme.agentcomms.updates.json` beside `acme.agentcomms.json` — holding
-`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. It is not in the
+`{ "organisation": "acme", "max": "every-14-days" | "never", "background": false }`, each cap optional. A profile
+named through a symbolic link has its files read beside the file the link names, where the organisation keeps them,
+never beside the link. It is not in the
 profile itself: every release from 0.13.0 to 0.19.0 refuses a profile with a key it does not know, at every level, and a
 member not yet on 0.20.0 would lose `org update` for the whole profile. Those releases never open the file beside it.
 `org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
 file is approved first even when the profile's bytes are unchanged, and a record edited by hand is put back at once. A
 member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
-`max` other than those two words is refused. `doctor` names the cap and the profile it comes from.
+`max` other than those two words is refused. `doctor` names the cap and the profile it comes from. A `config.json`
+that cannot be read lifts no cap: the strictest cap that can still be read in its place holds — what the file still
+records of each organisation, read as plain JSON, and each caps file beside its profile, read again — nothing installs
+in the background meanwhile, and `doctor` says so on its update check row.
 
 `--later` and `--auto on|off` (`later` and `auto`) are retired: each is refused, naming what replaced it.
 
@@ -152,14 +160,25 @@ runs, what macOS shows, and how to remove it.
 | Platform | The job | When it runs |
 |---|---|---|
 | macOS | `~/Library/LaunchAgents/com.agentcomms.update.plist`, loaded with `launchctl bootstrap gui/<uid>` | daily at 10:00 local time and a minute chosen at random when it is set up; at the next wake if the Mac was asleep |
-| Linux | `~/.config/systemd/user/agentcomms-update.service` and `.timer`, enabled with `systemctl --user enable --now` | daily, at a random moment in the hour after midnight; at the next start if the computer was off |
+| Linux | `~/.config/systemd/user/agentcomms-update.service` and `.timer`, enabled with `systemctl --user enable --now` — the system's own `systemctl`, from `/usr/bin` or `/bin`, never one found through PATH; with neither, nothing is set up | daily, at a random moment in the hour after midnight; at the next start if the computer was off |
 | Windows | the task `agentcomms-update` in Task Scheduler, registered without elevation | daily at 10:00 local time, after a random delay of up to an hour; as soon as it can after a missed start, on battery too |
 
 It runs the stable core launcher, `<data>/launch/core`, with `update --background` and this installation's four folders
-pinned, so it reads the same configuration whatever the environment it starts in. Setting it up writes
+pinned, so it reads the same configuration whatever the environment it starts in. On Windows the launcher is a Node
+script with no extension, which Task Scheduler cannot start, so the task's program is the Node a managed registration
+names, with the launcher as its first argument; a task 0.20.0 registered with the launcher as its program never ran, and
+`doctor` reports it as stale until `update --background-job on` writes it again. Setting it up writes
 `update-job.json` in the state directory; removing it deletes that file. On macOS 13 and later, macOS shows
 "Background Items Added" once and lists the job under System Settings → General → Login Items, where it can be switched
 off.
+
+**A job that does not run is no job.** Every background run, one that finds nothing to do included, records when it
+ran (`lastRun` in `update-job.json`). The job counts as working only when it ran in the last 48 hours, or was set up
+less than 48 hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires
+or a task that cannot start keeps its file, and counts as none: every notice and the security line are given as though
+no job were set up, with the offer to set it up again, and one more line —
+`background updates have not run since <date>; check Login Items (macOS) or run doctor`. `doctor` warns of it on the
+job's row, and says where to look on each platform.
 
 `agentcomms update --background-job off` (or `backgroundJob: "off"`) removes it at once, and so does choosing a level
 at which nothing installs in the background, `update --level every-14-days` or `--level never`. Run it before you uninstall: npm runs no script of a package as it removes it. A job at

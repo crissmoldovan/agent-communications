@@ -808,6 +808,13 @@ export interface ApprovalStoreOptions {
    * count and interrupt every step. Every other read and write of the store is unaffected.
    */
   io?: ApprovalIo | undefined;
+  /**
+   * Told when a person has answered a send or post: approved at a terminal, or claimed to be sent — the person's yes
+   * under the chat policy (design 2026-10-16, U7: the security line a preview carried counts as asked once its approval
+   * is answered). Never when it is only prepared, refused or revoked. Awaited, and whatever it throws is ignored:
+   * nothing it does may stop a send. `openCore` passes `securityAnswered`.
+   */
+  answered?: ((approvalId: string) => Promise<void>) | undefined;
 }
 
 export class ApprovalStore {
@@ -815,12 +822,16 @@ export class ApprovalStore {
   readonly #now: () => Date;
   readonly #handoffs: CliHandoffs | undefined;
   readonly #loadConfig: (() => Promise<Config | null>) | undefined;
+  /** `ApprovalStoreOptions.answered`, never throwing. */
+  readonly answered: ((approvalId: string) => Promise<void>) | undefined;
 
   constructor(stateDir: string, options: ApprovalStoreOptions = {}) {
     this.directory = join(stateDir, 'approvals');
     this.#handoffs = options.handoffs;
     this.#now = options.now ?? (() => new Date());
     this.#loadConfig = options.loadConfig;
+    const answered = options.answered;
+    this.answered = answered === undefined ? undefined : (approvalId) => answered(approvalId).catch(() => undefined);
     registerStoreInternals(this, {
       directory: this.directory,
       now: () => this.#now(),
@@ -1425,6 +1436,8 @@ export class ApprovalStore {
     );
     const failed = failure as Failure | null;
     if (failed) throw refusedAfter(refusalFor(done.record)(failed.code, failed.reason, done.record), done);
+    // A send or post the person approved: whatever its preview asked them, they have answered.
+    if (kind === 'send' && done.record.state === 'approved') await this.answered?.(approvalId);
     return done.record;
   }
 
@@ -1502,6 +1515,8 @@ export class ApprovalStore {
     if (failed) throw refusedAfter(refuse(failed.code, failed.reason, done.record), done);
     const claimToken = randomBytes(16).toString('hex');
     await this.#markClaimed(done, claimToken);
+    // Claimed to be sent: the person's yes, at a terminal before or in the chat now. Its preview's question is answered.
+    await this.answered?.(approvalId);
     return { record: done.record, claimToken, approval: done.approval };
   }
 

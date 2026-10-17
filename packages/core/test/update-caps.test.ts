@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { type GatedChange, gatedChange } from '../src/change-flow.ts';
@@ -138,6 +138,45 @@ test('the caps file only tightens, names its own organisation, and is as strict 
   }
 });
 
+test('a profile named through a symbolic link has its side files read beside the file it links to, not beside the link', {
+  skip: process.platform === 'win32' ? 'a symbolic link needs Developer Mode on Windows' : false,
+}, async () => {
+  const o = org({ max: 'never', background: false });
+  const agentApp = join(dirname(o.profile), 'acme.agentcomms.agent-app.json');
+  writeFileSync(
+    agentApp,
+    `${JSON.stringify({
+      agentcomms: 'organisation-agent-app',
+      version: 1,
+      organisation: 'acme',
+      slack: { workspace: 'TACME0001', appId: 'A0AGENT0001' },
+    })}\n`,
+  );
+  // The person keeps a link to the organisation's checkout, by a path relative to the link's folder.
+  const elsewhere = join(o.m.home, 'elsewhere');
+  mkdirSync(elsewhere);
+  const link = join(elsewhere, 'acme.json');
+  symlinkSync(relative(elsewhere, o.profile), link);
+  // Beside the link is not where the organisation keeps its caps: a file there says nothing.
+  writeFileSync(
+    join(elsewhere, 'acme.updates.json'),
+    `${JSON.stringify({ organisation: 'acme', max: 'every-14-days' })}\n`,
+  );
+  const read = await readProfileFile(link);
+  assert.equal(read.path, link, 'the path the person chose is the one recorded, and read again');
+  assert.deepEqual([read.updates?.max, read.updates?.background, read.updates?.path], ['never', false, o.updates]);
+  assert.equal(read.agentApp?.appId, 'A0AGENT0001');
+  assert.equal(read.agentApp?.path, agentApp);
+  // A link to the link: followed to the file at the end.
+  const chain = join(elsewhere, 'chain.json');
+  symlinkSync(link, chain);
+  assert.equal((await readProfileFile(chain)).updates?.path, o.updates);
+  // Added through the link, the caps are in force, and where they come from is the file they were read from.
+  await approved(o, (approvalId) => orgAddChange(o.m.core, { file: link, approvalId }, options(o.m)));
+  const capped = await effectiveUpdates(o.m.core, o.m.env);
+  assert.deepEqual([capped.level, capped.cap?.source, capped.backgroundOff?.source], ['never', o.updates, o.updates]);
+});
+
 // ── Adding and changing them ─────────────────────────────────────────────────────────────────────────────────────
 
 test('caps are added with the profile, under its approval, and its preview says what they do', async () => {
@@ -238,6 +277,87 @@ test('the doctor names the cap and where it comes from', async () => {
   const line = report.checks.find((check) => check.name === 'update check');
   assert.match(String(line?.detail), /^every-14-days \(capped by acme’s profile, .*acme\.agentcomms\.updates\.json\)/);
   assert.match(String(line?.detail), /background updates off by acme’s profile/);
+});
+
+/** config.json made unreadable as this release reads it: still JSON, and refused by its schema. */
+function breakConfig(o: Org): void {
+  const raw = JSON.parse(readFileSync(o.m.configPath, 'utf8')) as Record<string, unknown>;
+  writeFileSync(o.m.configPath, `${JSON.stringify({ ...raw, accounts: 'not a map' }, null, 2)}\n`);
+}
+
+test('an unreadable config.json fails closed for the cap: the strictest cap of the organisation files still readable holds', async () => {
+  const o = org({ max: 'never', background: false });
+  await add(o);
+  breakConfig(o);
+  await assert.rejects(o.m.core.config.load(), 'the configuration is unreadable, as the test means it to be');
+  const updates = await effectiveUpdates(o.m.core, o.m.env);
+  assert.deepEqual(
+    [
+      updates.level,
+      updates.cap?.organisation,
+      updates.cap?.source,
+      updates.backgroundOff?.organisation,
+      updates.background,
+    ],
+    ['never', 'acme', o.updates, 'acme', false],
+  );
+  assert.match(String(updates.unreadableConfig?.reason), /config\.json/);
+  // never asks nobody, as with the configuration read.
+  const asked: string[] = [];
+  const outcome = await checkForUpdates(o.m.core, o.m.env, {
+    deps: deps(async (name) => {
+      asked.push(name);
+      return LATEST;
+    }),
+  });
+  assert.equal(outcome.asked, false);
+  assert.deepEqual(asked, [], 'a member capped at never asked the registry with config.json unreadable');
+  await seed(o.m, { latest: LATEST, behind: true });
+  assert.equal(await serverNotice(o.m), null);
+  // The doctor says the configuration could not be read, and where the cap in force comes from instead.
+  const report = await doctor(o.m.core, o.m.env, { keyring: null, platform: 'darwin' });
+  const line = report.checks.find((check) => check.name === 'update check');
+  assert.equal(line?.warn, true);
+  assert.match(String(line?.detail), /^never \(capped by acme’s profile, .*acme\.agentcomms\.updates\.json\)/);
+  assert.match(
+    String(line?.detail),
+    /config\.json could not be read, so the caps of the organisation files still readable hold/,
+  );
+});
+
+test('with config.json unreadable, a caps file gone or broken still caps by what was recorded of it, and the strictest wins', async () => {
+  // Gone since it was recorded: the record of it, read loosely from the file, still caps.
+  const gone = org({ max: 'never' });
+  await add(gone);
+  rmSync(gone.updates);
+  breakConfig(gone);
+  assert.equal((await effectiveUpdates(gone.m.core, gone.m.env)).level, 'never');
+  // Broken since: it cannot be read, and what was recorded of it stands.
+  const broken = org({ max: 'every-14-days' });
+  await add(broken);
+  writeFileSync(broken.updates, '{ not json');
+  breakConfig(broken);
+  assert.equal((await effectiveUpdates(broken.m.core, broken.m.env)).level, 'every-14-days');
+  // Changed since to stricter: the file, read again, is stricter than the record, and the stricter holds.
+  const tighter = org({ max: 'every-14-days' });
+  await add(tighter);
+  writeFileSync(tighter.updates, `${JSON.stringify({ organisation: 'acme', max: 'never' })}\n`);
+  breakConfig(tighter);
+  assert.equal((await effectiveUpdates(tighter.m.core, tighter.m.env)).level, 'never');
+  // Nothing to read in its place — not JSON at all, so no organisation can be found: the default, and the doctor says so.
+  const lost = org({ max: 'never' });
+  await add(lost);
+  writeFileSync(lost.m.configPath, '{ not json');
+  const updates = await effectiveUpdates(lost.m.core, lost.m.env);
+  assert.deepEqual([updates.level, updates.cap, updates.background], ['auto', undefined, false]);
+  const report = await doctor(lost.m.core, lost.m.env, { keyring: null, platform: 'darwin' });
+  const line = report.checks.find((check) => check.name === 'update check');
+  assert.equal(line?.warn, true);
+  assert.match(String(line?.detail), /^auto \(a daily check with a notice\) · /);
+  assert.match(
+    String(line?.detail),
+    /config\.json could not be read, and no organisation’s caps could be read in its place/,
+  );
 });
 
 test('an organisation with no caps file changes nothing', async () => {

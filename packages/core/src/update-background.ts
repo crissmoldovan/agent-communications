@@ -33,7 +33,7 @@ import {
 } from './mcp-install.ts';
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 import { childEnvironment } from './system-programs.ts';
-import { backgroundJobAtRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
+import { backgroundJobAtRun, recordUpdateJobRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
 import { withUpdateLock } from './update-lock.ts';
 import {
   type ProvenanceDeps,
@@ -919,6 +919,8 @@ export async function runBackgroundUpdate(
           });
   }
   const result = finish(partial);
+  // Every run says it ran, one that found nothing to do included: a job that never runs silences no notice (U4, U7).
+  await recordUpdateJobRun(core.paths.stateDir, run.now).catch(() => undefined);
   await core.audit
     .append({
       inboxId: '',

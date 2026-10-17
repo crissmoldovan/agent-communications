@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './config.ts';
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { withFileLock } from './lock.ts';
-import { organisationsOf, updatesPathFor } from './organisations.ts';
-import { updateJobInstalled } from './update-job.ts';
+import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
+import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -111,10 +112,16 @@ export interface UpdateCheckRecord {
    */
   release: ReleaseFacts | null;
   /**
-   * The security release a send or post preview has already carried the line for (design 2026-10-16, U7): it is asked
-   * once, and the person's yes to that preview is the answer.
+   * The security release the person has answered the line about (design 2026-10-16, U7): a send or post whose preview
+   * carried it was approved, or sent. It is asked until then, and never after.
    */
   securityAsked: string | null;
+  /**
+   * The security release the line is out for, and the approvals whose previews carried it (`securityShown`): the
+   * person's yes to any of them is the answer (`securityAnswered`). Additive: a release that does not know the field
+   * ignores it.
+   */
+  securityShown?: SecurityShown | null | undefined;
   /**
    * What the last background run left for the next session to say (design 2026-10-16 U5 step 7): a release it
    * installed, which a restart picks up, or one it would not install, and why. Null when it left nothing. Additive:
@@ -127,6 +134,23 @@ export interface UpdateCheckRecord {
    * update that edits a client's configuration, and the notice says so. Null when it is not known. Additive.
    */
   moves?: number | null | undefined;
+}
+
+/** The security release a preview's line was about, and the approvals whose previews carried it, the latest last. */
+export interface SecurityShown {
+  version: string;
+  approvals: string[];
+}
+
+/** How many approvals carrying the line are remembered: the latest, which are the ones a person can still answer. */
+const SHOWN_LIMIT = 32;
+
+function readSecurityShown(value: unknown): SecurityShown | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { version, approvals } = value as Record<string, unknown>;
+  if (!isVersion(version) || !Array.isArray(approvals)) return null;
+  const ids = approvals.filter((id): id is string => typeof id === 'string' && APPROVAL_ID_PATTERN.test(id));
+  return { version, approvals: ids.slice(-SHOWN_LIMIT) };
 }
 
 /** What a release's core manifest declares under `agentcommsRelease`, for its version. */
@@ -204,6 +228,7 @@ export const EMPTY_UPDATE_CHECK: Readonly<UpdateCheckRecord> = Object.freeze({
   pausedUntil: null,
   release: null,
   securityAsked: null,
+  securityShown: null,
   backgroundNotice: null,
   moves: null,
 });
@@ -256,6 +281,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     pausedUntil: isTime(held.pausedUntil) ? held.pausedUntil : null,
     release: readRelease(held.release),
     securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
+    securityShown: readSecurityShown(held.securityShown),
     backgroundNotice: readBackgroundNotice(held.backgroundNotice),
     moves: typeof held.moves === 'number' && Number.isInteger(held.moves) && held.moves >= 0 ? held.moves : null,
   };
@@ -346,18 +372,39 @@ export interface EffectiveUpdates {
   /** What decided `level`: the configuration and its caps, or the environment. */
   by: 'setting' | 'CI' | typeof UPDATE_CHECK_ENV | typeof UPDATES_ENV;
   /**
-   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up
-   * (`updateJobInstalled`). Until then `auto` behaves as a daily check with a notice (U2).
+   * Whether the background job installs updates: `auto`, no organisation's `background: false`, and the job set up and
+   * working (`updateJobHealth`): it ran in the last 48 hours, or was set up less than 48 hours ago and has not had its
+   * first run yet. Until then `auto` behaves as a daily check with a notice (U2), as with no job at all.
    */
   background: boolean;
+  /**
+   * The job set up here, on `auto` with nothing turning it off, that has not run in 48 hours: since when — its last
+   * run, or its setup when it never ran. The notice and the doctor say so; absent when there is no job, or it works.
+   */
+  jobSilent?: { since: string } | undefined;
   /** The strictest `max` an organisation profile here names, when it is below the level set: the cap in force. */
   cap?: (UpdateCapSource & { level: 'every-14-days' | 'never' }) | undefined;
   /** The organisation whose profile turns background updates off, when one does. */
   backgroundOff?: UpdateCapSource | undefined;
+  /**
+   * `config.json` could not be read (design 2026-10-16 U8, failing closed): why, and how many organisations' caps were
+   * read in its place — from the files beside their profiles, and what the file still says of them. The strictest of
+   * those is the cap; with none, the default. Nothing installs in the background meanwhile.
+   */
+  unreadableConfig?: { reason: string; read: number } | undefined;
 }
 
 /** How much a level updates: `auto` 2, `every-14-days` 1, `never` 0. */
 const rankOf = (level: UpdateLevel): number => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
+
+/** `profileTarget`, for a path read back from the configuration: one it cannot follow is shown as it is. */
+function safeTarget(path: string): string {
+  try {
+    return profileTarget(path);
+  } catch {
+    return path;
+  }
+}
 
 /**
  * The caps the organisation profiles here name (design 2026-10-16, U8): the strictest `max`, and the first profile
@@ -370,7 +417,8 @@ export function organisationCaps(config: Config): Pick<EffectiveUpdates, 'cap' |
   for (const [organisation, record] of Object.entries(organisationsOf(config)).sort(([a], [b]) => a.localeCompare(b))) {
     const caps = record.updates;
     if (caps === undefined) continue;
-    const where = { organisation, source: updatesPathFor(record.source.path) };
+    // Beside the file the profile's path names, where it was read from: not beside a link to it (`profileTarget`).
+    const where = { organisation, source: updatesPathFor(safeTarget(record.source.path)) };
     if (caps.max !== undefined) {
       const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
       if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { ...where, level };
@@ -400,22 +448,96 @@ export function configuredUpdates(config: Config): Pick<EffectiveUpdates, 'level
 }
 
 /**
- * The level in force here, read from the environment first, then the configuration and its organisations' caps. A
- * configuration that cannot be read counts as `auto`, the default: what is wrong with it is for the doctor and the
- * tools to say, and it must not quietly turn updates off.
+ * The caps that stand in for the configuration's when `config.json` cannot be read (U8, failing closed): for every
+ * organisation the file still names — read loosely, as JSON, whatever its schema says — the caps it records, and the
+ * caps file beside its profile, read again (`readUpdatesBeside`). The strictest `max` of them all, and the first
+ * `background: false`. A caps file that cannot be read is passed over; what the configuration recorded of it stands.
+ * A file that is not JSON at all names no organisation, and so no cap.
  */
-export async function effectiveUpdates(core: Core, env: NodeJS.ProcessEnv): Promise<EffectiveUpdates> {
-  let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff'> = { level: 'auto', set: 'auto' };
+async function capsWithoutConfig(
+  core: Core,
+): Promise<Pick<EffectiveUpdates, 'cap' | 'backgroundOff'> & { read: number }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(core.config.path, 'utf8'));
+  } catch {
+    return { read: 0 };
+  }
+  const organisations = (raw as { organisations?: unknown } | null)?.organisations;
+  if (typeof organisations !== 'object' || organisations === null) return { read: 0 };
+  let cap: EffectiveUpdates['cap'];
+  let backgroundOff: EffectiveUpdates['backgroundOff'];
+  let read = 0;
+  const take = (organisation: string, source: string, caps: { max?: unknown; background?: unknown }) => {
+    read += 1;
+    if (caps.max !== undefined) {
+      const level = caps.max === 'every-14-days' ? 'every-14-days' : 'never';
+      if (cap === undefined || rankOf(level) < rankOf(cap.level)) cap = { organisation, source, level };
+    }
+    if (caps.background === false && backgroundOff === undefined) backgroundOff = { organisation, source };
+  };
+  for (const [organisation, record] of Object.entries(organisations).sort(([a], [b]) => a.localeCompare(b))) {
+    const held = (typeof record === 'object' && record !== null ? record : {}) as {
+      source?: { path?: unknown };
+      updates?: { max?: unknown; background?: unknown };
+    };
+    const path = typeof held.source?.path === 'string' && isAbsolute(held.source.path) ? held.source.path : undefined;
+    const source = path === undefined ? core.config.path : updatesPathFor(safeTarget(path));
+    if (typeof held.updates === 'object' && held.updates !== null) take(organisation, source, held.updates);
+    if (path === undefined) continue;
+    try {
+      const file = await readUpdatesBeside(path, organisation);
+      if (file !== undefined) take(organisation, file.path, file);
+    } catch {
+      // Not readable now: what the configuration recorded of it, above, stands.
+    }
+  }
+  return { ...(cap ? { cap } : {}), ...(backgroundOff ? { backgroundOff } : {}), read };
+}
+
+/**
+ * The level in force here, read from the environment first, then the configuration and its organisations' caps.
+ *
+ * A configuration that cannot be read sets the default, `auto` — what is wrong with it is for the doctor and the tools
+ * to say, and it must not quietly turn updates off — but it never lifts an organisation's cap: the strictest cap that
+ * can still be read in its place holds (`capsWithoutConfig`), and nothing installs in the background, which reads the
+ * configuration too.
+ */
+export async function effectiveUpdates(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  now: Date = new Date(),
+): Promise<EffectiveUpdates> {
+  let configured: Pick<EffectiveUpdates, 'level' | 'set' | 'cap' | 'backgroundOff' | 'unreadableConfig'>;
   try {
     configured = configuredUpdates(await core.config.load());
-  } catch {
-    // The default, as above.
+  } catch (error) {
+    const { read, cap, backgroundOff } = await capsWithoutConfig(core);
+    configured = {
+      level: cap?.level ?? 'auto',
+      set: 'auto',
+      ...(cap ? { cap } : {}),
+      ...(backgroundOff ? { backgroundOff } : {}),
+      unreadableConfig: { reason: shownText(error instanceof Error ? error.message : String(error), 200), read },
+    };
   }
   const { level, set, ...extra } = configured;
   const switched = updateCheckSwitchedOff(env);
   if (switched !== null) return { level: 'never', set, by: switched, background: false, ...extra };
-  const background = level === 'auto' && extra.backgroundOff === undefined && (await updateJobInstalled(core));
-  return { level, set, by: 'setting', background, ...extra };
+  if (level !== 'auto' || extra.backgroundOff !== undefined || extra.unreadableConfig !== undefined) {
+    return { level, set, by: 'setting', background: false, ...extra };
+  }
+  // A record alone is not a job that works: one switched off in Login Items keeps its record for ever (U4, U7).
+  const job = await updateJobHealth(core.paths.stateDir, now);
+  const background = job?.working === true;
+  return {
+    level,
+    set,
+    by: 'setting',
+    background,
+    ...extra,
+    ...(job !== null && !job.working ? { jobSilent: { since: job.since } } : {}),
+  };
 }
 
 /** Whether a check may run at all, how often, and if not, what turned it off: the environment, then the level. */
@@ -438,10 +560,11 @@ export async function updateCheckEnabled(
 export const UPDATE_JOB_MARKER = 'update-job.json';
 
 /**
- * Whether the background update job is set up on this machine: Track C's own reading of its marker, so the notice, the
- * security line, the doctor and the job's setup agree on it. A marker this release cannot read is no job.
+ * Whether the background update job is set up on this machine, and whether it works: Track C's own reading of its
+ * marker, so the notice, the security line, the doctor and the job's setup agree on it. A marker this release cannot
+ * read is no job; a marker whose job has not run in 48 hours is a job that does not work (`effectiveUpdates`).
  */
-export { updateJobInstalled };
+export { updateJobHealth, updateJobInstalled };
 
 /**
  * When a pause ends, while one holds at `now` — or null. A pause holds from when it was asked until its end, and only
@@ -465,6 +588,37 @@ export function securityRelease(record: UpdateCheckRecord, running: string): str
   const latest = countedLatest(record);
   if (latest === null || record.release?.version !== latest || !record.release.security) return null;
   return isVersion(running) && isBehind(running, latest) ? latest : null;
+}
+
+/**
+ * Records that a preview carried the security line for `version`, on the approval `approvalId` (design 2026-10-16, U7):
+ * the person's yes to it — approved, or sent — is the answer (`securityAnswered`). A line about another release starts
+ * the list afresh.
+ */
+export function withSecurityShown(record: UpdateCheckRecord, version: string, approvalId: string): UpdateCheckRecord {
+  const held = record.securityShown?.version === version ? record.securityShown.approvals : [];
+  const approvals = [...held.filter((id) => id !== approvalId), approvalId].slice(-SHOWN_LIMIT);
+  return { ...record, securityShown: { version, approvals } };
+}
+
+/**
+ * The person answered the security line (design 2026-10-16, U7): the send or post `approvalId` was approved, or claimed
+ * to be sent. When its preview carried the line, that release counts as asked from now on, and the next preview is as
+ * it always was. An approval no preview carried it on answers nothing. Called by the approval store
+ * (`ApprovalStoreOptions.answered`); it never throws, and a send never waits long on it.
+ */
+export async function securityAnswered(stateDir: string, approvalId: string): Promise<void> {
+  const carried = (record: UpdateCheckRecord) => record.securityShown?.approvals.includes(approvalId) === true;
+  try {
+    // Nearly always nothing to do: read, and no lock taken.
+    if (!carried(await readUpdateCheck(stateDir))) return;
+    await changeUpdateCheck(stateDir, (record) => {
+      if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
+      return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
+    });
+  } catch {
+    // The answer is the person's yes, given; failing to record it only means the line is shown once more.
+  }
 }
 
 /** A local time as a person reads it in a preview: `2026-09-29 00:00`. */
