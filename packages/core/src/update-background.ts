@@ -46,9 +46,11 @@ import {
   oldestVersion,
   type RegistryAnswer,
   type ReleaseRegistry,
+  type ReleaseVerifier,
   releaseDeclaration,
   releaseIntegrity,
   releasesBetween,
+  runtimeIntegrityProblem,
 } from './update-release.ts';
 import {
   type BackgroundNotice,
@@ -309,19 +311,6 @@ async function launchedPackages(dataDir: string): Promise<Launched[]> {
 
 function product(channel: ServerId, version: string): McpProduct {
   return { ...serverFacts(channel), version, moduleUrl: '' };
-}
-
-/** The integrity npm recorded for the package it installed into a runtime, from the runtime's own lockfile. */
-async function installedIntegrity(runtime: string, packageName: string): Promise<string | null> {
-  try {
-    const lock = JSON.parse(await readFile(join(runtime, 'package-lock.json'), 'utf8')) as {
-      packages?: Record<string, { integrity?: unknown } | undefined>;
-    };
-    const integrity = lock.packages?.[`node_modules/${packageName}`]?.integrity;
-    return typeof integrity === 'string' ? integrity : null;
-  } catch {
-    return null;
-  }
 }
 
 /** A command run to its end, its stdout read, given up on after `timeoutMs`. */
@@ -752,17 +741,25 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       return failed(item, `it could not be installed: ${toCommsError(error).message}`, 'install');
     }
   }
+  // What npm installed is what was verified: each package's own tarball, and every package of this suite it depends on.
+  const known = new Map(
+    packages.flatMap((item) =>
+      item.provenance ? [[`${item.package}@${item.provenance.version}`, item.provenance.sha512] as const] : [],
+    ),
+  );
+  const verifier =
+    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  const verify: ReleaseVerifier = (release) =>
+    verifyProvenance(release, { fetch: deps.provenance?.fetch, verifyBundle: verifier });
   for (const item of packages) {
-    const integrity = await installedIntegrity(item.runtime, item.package);
     const attested = item.provenance?.sha512;
-    const hex = integrity?.startsWith('sha512-') ? Buffer.from(integrity.slice(7), 'base64').toString('hex') : null;
-    if (attested === undefined || hex !== attested) {
+    const problem =
+      attested === undefined
+        ? 'its provenance was not verified'
+        : await runtimeIntegrityProblem(item.runtime, item.package, attested, { verify, known });
+    if (problem !== null) {
       item.checked = false;
-      return failed(
-        item,
-        `what was installed is not the tarball whose provenance was verified (${integrity === null ? 'no integrity recorded' : 'another integrity'})`,
-        'tarball',
-      );
+      return failed(item, problem, 'tarball');
     }
     const checked = await selfCheck({
       channel: item.channel,

@@ -1006,7 +1006,7 @@ function releasesOf(
  * handed in beside a stand-in: then every release is refused, and nothing reaches the network.
  */
 function releaseSources(
-  core: Core,
+  core: Pick<Core, 'paths'> | InstallContext['core'],
   env: NodeJS.ProcessEnv,
   deps: UpdateDeps,
 ): { registry: ReleaseRegistry | null; verify: ReleaseVerifier | null } {
@@ -1521,13 +1521,14 @@ async function integrityProblem(
   planned: Planned,
   packageName: string,
   version: string,
+  check: { verify: ReleaseVerifier | null; known: Map<string, string> },
 ): Promise<string | null> {
   const verified = planned.verified.get(packageName);
   const runtime = managedRuntimeDir(dataDir, packageName, version);
   if (verified === undefined || verified.version !== version) {
     return `${packageName}@${version} was not verified before the preview, so ${runtime} is not used`;
   }
-  return runtimeIntegrityProblem(runtime, packageName, verified.sha512);
+  return runtimeIntegrityProblem(runtime, packageName, verified.sha512, check);
 }
 
 async function applyUpdate(context: InstallContext, planned: Planned, deps: UpdateDeps): Promise<UpdateResult> {
@@ -1542,6 +1543,17 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   // The runtimes first: a registration whose runtime could not be installed is not attempted, and stays as it was.
   const missing = new Map<string, string>();
   const { dataDir } = context.core.paths;
+  // What each runtime holds is checked against what was verified — its own package, and every package of this suite
+  // it depends on, which is verified now when it was not before the preview.
+  const check = {
+    verify: releaseSources(context.core, context.env, deps).verify,
+    known: new Map(
+      [...planned.verified.values()].map((provenance) => [
+        `${provenance.package}@${provenance.version}`,
+        provenance.sha512,
+      ]),
+    ),
+  };
   for (const runtime of planned.runtimes) {
     const base = {
       kind: 'runtime' as const,
@@ -1558,7 +1570,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
       continue;
     }
     // What npm left is the tarball whose provenance was verified, or nothing is switched to it or registered on it.
-    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.latest);
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.latest, check);
     if (problem === null) steps.push({ ...base, outcome: 'installed' });
     else {
       missing.set(runtime.package, 'is not the tarball whose provenance was verified');
@@ -1580,7 +1592,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   const installedNow = new Set(planned.runtimes.map((runtime) => runtime.package));
   for (const runtime of used) {
     if (installedNow.has(runtime.package) || missing.has(runtime.package)) continue;
-    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.version);
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.version, check);
     if (problem === null) continue;
     missing.set(runtime.package, 'is not the tarball whose provenance was verified');
     steps.push({

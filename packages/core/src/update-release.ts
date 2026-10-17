@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { displayUrl } from './mcp-clients.ts';
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 import { type ProvenanceRelease, type ProvenanceVerdict, sha512Hex } from './update-provenance.ts';
+import { PIN_WORDS } from './update-words.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -140,30 +141,64 @@ export { PIN_WORDS } from './update-words.ts';
 export const BUILT_BY =
   "this repository's release workflow (.github/workflows/release.yml) at the tag of its version, on a GitHub-hosted runner, as its Sigstore provenance shows";
 
+/** The scope every package of this suite is published under, and so attested for. */
+const SUITE = '@agentcomms/';
+
 /**
- * Why the runtime at `runtime` is not the release whose provenance was verified, or null when it is: the integrity npm
- * recorded for `packageName` in the runtime's own lockfile has to be the very SHA-512 the attestation signs. npm checks
- * the tarball it downloads against the integrity the registry gives it then, and records that; a registry that gave
+ * Why the runtime at `runtime` is not what was verified, or null when it is (security review of 0.20.0, severity 5).
+ *
+ * Every package of this suite npm installed in it — `packageName` itself, and any of ours it depends on at any depth,
+ * as Gmail depends on core — has to be, by the runtime's own lockfile, a tarball whose provenance verified: the one
+ * whose SHA-512 is `sha512` for `packageName`, and for each other either one already verified (`known`, by
+ * `package@version`, the SHA-512 it signs) or one `verify` verifies now, against the integrity npm recorded. npm checks
+ * each tarball it downloads against the integrity the registry gives it then, and records that; a registry that gave
  * another one to the install than to the check, or a runtime made some other way, is caught here.
+ *
+ * The packages of others it holds are checked by npm alone, against the registry's integrity: no pin says who builds
+ * them (SECURITY.md says so). No package's install script ran (`installManagedRuntime`).
  */
 export async function runtimeIntegrityProblem(
   runtime: string,
   packageName: string,
   sha512: string,
+  options: { verify?: ReleaseVerifier | null | undefined; known?: Map<string, string> | undefined } = {},
 ): Promise<string | null> {
-  let lock: { packages?: Record<string, { integrity?: unknown } | undefined> } | null;
+  let lock: { packages?: Record<string, { version?: unknown; integrity?: unknown } | undefined> } | null;
   try {
     lock = JSON.parse(await readFile(join(runtime, 'package-lock.json'), 'utf8')) as typeof lock;
   } catch {
     lock = null;
   }
-  const integrity = lock?.packages?.[`node_modules/${packageName}`]?.integrity;
+  const own = `node_modules/${packageName}`;
+  const integrity = lock?.packages?.[own]?.integrity;
   if (typeof integrity !== 'string') {
     return `what is in ${runtime} cannot be shown to be the tarball whose provenance was verified: its lockfile records no integrity for ${packageName}`;
   }
-  return sha512Hex(integrity) === sha512
-    ? null
-    : `what is in ${runtime} is not the tarball whose provenance was verified: its lockfile records another integrity for ${packageName}`;
+  if (sha512Hex(integrity) !== sha512) {
+    return `what is in ${runtime} is not the tarball whose provenance was verified: its lockfile records another integrity for ${packageName}`;
+  }
+  const known = options.known ?? new Map<string, string>();
+  for (const [key, entry] of Object.entries(lock?.packages ?? {})) {
+    if (key === own) continue;
+    const name = key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
+    if (!key.includes('node_modules/') || !name.startsWith(SUITE)) continue;
+    const version = entry?.version;
+    const recorded = entry?.integrity;
+    if (!isVersion(version) || typeof recorded !== 'string' || sha512Hex(recorded) === null) {
+      return `${name}, which ${packageName} in ${runtime} depends on, cannot be shown to be a verified tarball: its lockfile records no version or no SHA-512 integrity for it`;
+    }
+    const hex = sha512Hex(recorded) as string;
+    if (known.get(`${name}@${version}`) === hex) continue;
+    if (!options.verify) {
+      return `${name}@${version}, which ${packageName} in ${runtime} depends on, cannot be verified here`;
+    }
+    const verdict = await options.verify({ packageName: name, version, integrity: recorded });
+    if (!verdict.ok) {
+      return `${name}@${version}, which ${packageName} in ${runtime} depends on, is not a tarball built by this repository's release workflow — ${PIN_WORDS[verdict.field]}`;
+    }
+    known.set(`${name}@${version}`, hex);
+  }
+  return null;
 }
 
 /** A release since the one installed that says it needs a decision, and whether its provenance verified. */

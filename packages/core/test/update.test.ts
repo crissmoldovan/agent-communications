@@ -189,6 +189,8 @@ function makeRuntime(
   version: string,
   server = false,
   tarball?: string | undefined,
+  /** More of what npm installed, by lockfile key: the packages it depends on. */
+  more: Record<string, { version: string; integrity?: string }> = {},
 ): string {
   const root = managedRuntimeDir(m.dataDir, packageName, version);
   const entry = managedRuntimeEntry(m.dataDir, packageName, version);
@@ -237,7 +239,10 @@ function makeRuntime(
     join(root, 'package-lock.json'),
     JSON.stringify({
       lockfileVersion: 3,
-      packages: { [`node_modules/${packageName}`]: { version, integrity: tarball ?? tarballOf(packageName, version) } },
+      packages: {
+        [`node_modules/${packageName}`]: { version, integrity: tarball ?? tarballOf(packageName, version) },
+        ...more,
+      },
     }),
   );
   return root;
@@ -350,6 +355,8 @@ function fakes(
     installs?: Record<string, string>;
     /** Releases the registry lists besides each package's latest, with what core's manifest declares. */
     releases?: ListedRelease[];
+    /** What else npm installed in a package's runtime, by lockfile key. */
+    more?: Record<string, Record<string, { version: string; integrity?: string }>>;
   } = {},
 ): Fakes {
   const { asked, latestVersion } = registry(options.latest ?? EVERYTHING_LATEST);
@@ -377,7 +384,14 @@ function fakes(
     installRuntime: async (packageName: string, version: string) => {
       runtimes.push(`${packageName}@${version}`);
       if (options.runtimeFails?.includes(packageName)) throw new Error(`npm could not fetch ${packageName}@${version}`);
-      makeRuntime(m, packageName, version, options.serverRuntimes === true, options.installs?.[packageName]);
+      makeRuntime(
+        m,
+        packageName,
+        version,
+        options.serverRuntimes === true,
+        options.installs?.[packageName],
+        options.more?.[packageName],
+      );
     },
   };
 }
@@ -1192,6 +1206,29 @@ test('a runtime that is not the verified tarball — installed now, or found on 
     assert.equal(await pointedAt(other.m, PACKAGES.gmail), undefined);
   } finally {
     await tool.close();
+  }
+
+  // Its own tarball is the verified one, and the core it depends on was published without provenance: not used.
+  const third = behindEverywhere();
+  const nested = `node_modules/${PACKAGES.gmail}/node_modules/${PACKAGES.core}`;
+  const depending = fakes(third.m, {
+    global: { [PACKAGES.core]: OLD },
+    more: { [PACKAGES.gmail]: { [nested]: { version: '98.0.0', integrity: tarballOf(PACKAGES.core, '98.0.0') } } },
+  });
+  depending.attestations.change[`${PACKAGES.core}@98.0.0`] = 'missing';
+  const by = await connect(third.m, { update: depending });
+  try {
+    const first = await by.ok('comms_update', { noVerify: true });
+    const done = await by.ok('comms_update', { noVerify: true, approvalId: first.approvalId });
+    const runtime = (done.result as { steps: Item[] }).steps.find((step) => step.kind === 'runtime');
+    assert.equal(runtime?.outcome, 'failed');
+    assert.match(
+      String(runtime?.detail),
+      /@agentcomms\/core@98\.0\.0, which @agentcomms\/gmail .* depends on, is not a tarball built by/,
+    );
+    assert.equal(await pointedAt(third.m, PACKAGES.gmail), undefined);
+  } finally {
+    await by.close();
   }
 });
 

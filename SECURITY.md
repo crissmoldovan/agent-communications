@@ -105,6 +105,19 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   whole cannot be known from here, and saving into it is the person's choice, made when they answer the question.
   Under WSL, a file saved onto a Windows drive carries no internet mark.
 
+- **An update verifies this project's packages, not everyone's.** Every `@agentcomms` package an update installs or
+  switches to is held to its Sigstore provenance, and so is every `@agentcomms` package npm puts in a runtime beside
+  it. The packages of others that a runtime or a global package depends on are checked by npm alone, against the
+  integrity the registry gives: nothing pins who builds them. No package's install script runs as an update installs
+  (`--ignore-scripts`), so their code first runs when a server or command starts. A global package is verified before
+  `npm install -g`, but npm keeps no lockfile for it, so what it installed is not checked afterwards; and an npx
+  registration's client fetches its package from npm each time it starts, which only that client checks.
+- **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
+  not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
+  acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that
+  release's hold between 72 and 24 hours, or make it wait for the person — or not wait, where its own release said it
+  needs a decision. It cannot make anything but a release built by this repository's release workflow install.
+
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
 
 - **A Slack app's bot token can post under any name.** Posting as the app needs `chat:write.customize`, which lets

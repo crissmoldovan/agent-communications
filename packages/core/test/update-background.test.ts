@@ -98,6 +98,8 @@ function makeRuntime(
   packageName: string,
   version: string,
   integrity = integrityOf(`${packageName}@${version}`),
+  /** More of what npm installed, by lockfile key: the packages it depends on. */
+  more: Record<string, { version: string; integrity?: string }> = {},
 ) {
   const root = managedRuntimeDir(m.dataDir, packageName, version);
   const cli = managedRuntimeEntry(m.dataDir, packageName, version);
@@ -110,7 +112,10 @@ function makeRuntime(
   );
   writeFileSync(
     join(root, 'package-lock.json'),
-    JSON.stringify({ lockfileVersion: 3, packages: { [`node_modules/${packageName}`]: { version, integrity } } }),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { [`node_modules/${packageName}`]: { version, integrity }, ...more },
+    }),
   );
   return root;
 }
@@ -195,12 +200,19 @@ function attestations(change: Record<string, Partial<ProvenanceShape> | 'missing
 }
 
 /** The installer: a runtime written as npm leaves one — or a failure, or another tarball — and every call recorded. */
-function installer(m: Machine, options: { fail?: string; integrity?: Record<string, string> } = {}) {
+function installer(
+  m: Machine,
+  options: {
+    fail?: string;
+    integrity?: Record<string, string>;
+    more?: Record<string, Record<string, { version: string; integrity?: string }>>;
+  } = {},
+) {
   const calls: string[] = [];
   const install = async (packageName: string, version: string) => {
     calls.push(`${packageName}@${version}`);
     if (options.fail === packageName) throw new Error('npm could not install it');
-    return makeRuntime(m, packageName, version, options.integrity?.[packageName]);
+    return makeRuntime(m, packageName, version, options.integrity?.[packageName], options.more?.[packageName]);
   };
   return { install, calls };
 }
@@ -708,6 +720,68 @@ test('a self-check that fails, or an installed tarball that is not the one verif
   assert.equal(swapped.outcome, 'failed');
   assert.match(swapped.reason, /not the tarball whose provenance was verified/);
   await untouched(n, swapped, []);
+});
+
+test('every package of this suite in a runtime is a verified tarball, not only its own: the core Gmail depends on too', async () => {
+  const nested = `node_modules/${GMAIL}/node_modules/${CORE_PACKAGE}`;
+  const cases: [
+    string,
+    Record<string, { version: string; integrity?: string }>,
+    Record<string, 'missing'>,
+    BackgroundRunResult['outcome'],
+  ][] = [
+    [
+      'the release of core verified for its own launcher',
+      { [nested]: { version: LATEST, integrity: integrityOf(`${CORE_PACKAGE}@${LATEST}`) } },
+      {},
+      'installed',
+    ],
+    [
+      'another core, whose provenance verifies',
+      { [nested]: { version: OLD, integrity: integrityOf(`${CORE_PACKAGE}@${OLD}`) } },
+      {},
+      'installed',
+    ],
+    [
+      'another tarball of the release',
+      { [nested]: { version: LATEST, integrity: integrityOf('another tarball') } },
+      {},
+      'failed',
+    ],
+    [
+      'another core, published without provenance',
+      { [nested]: { version: OLD, integrity: integrityOf(`${CORE_PACKAGE}@${OLD}`) } },
+      { [`${CORE_PACKAGE}@${OLD}`]: 'missing' },
+      'failed',
+    ],
+    ['one with no integrity recorded', { [nested]: { version: LATEST } }, {}, 'failed'],
+  ];
+  for (const [label, more, change, outcome] of cases) {
+    const m = await launched();
+    const w = world(m);
+    const inst = installer(m, { more: { [GMAIL]: more } });
+    const att = attestations(change);
+    const result = await runBackgroundUpdate(
+      m.core,
+      m.env,
+      {},
+      {
+        ...w.deps,
+        install: inst.install,
+        provenance: { ...w.deps.provenance, fetch: att.fetch },
+      },
+    );
+    assert.equal(result.outcome, outcome, `${label}: ${result.reason}`);
+    if (outcome === 'failed') {
+      await untouched(m, result, []);
+      assert.match(result.reason, new RegExp(CORE_PACKAGE), label);
+      assert.equal(
+        (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text,
+        BACKGROUND_WORDS.failed(LATEST, 'tarball'),
+        label,
+      );
+    }
+  }
 });
 
 test('a switch that fails part-way puts back the launchers already switched', async () => {

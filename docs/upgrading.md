@@ -49,7 +49,8 @@ else, refuses the whole update with `BAD_DATA` — `nothing was installed or cha
 verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
 No flag or setting skips it. A release it takes the machine past that says it needs a decision — 0.21.0, on the way
 from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words, with whether it verified: your yes to the preview
-is that decision, so read its release notes first. After installing, each runtime must hold the very tarball that was verified, as npm's
+is that decision, so read its release notes first. Runtimes and global packages are installed with `--ignore-scripts`: no package's install script runs before its
+tarball has been checked (nothing published here, nor anything it depends on, needs one). After installing, each runtime must hold the very tarball that was verified, as npm's
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
 registered on, and its step says so.
 
@@ -219,8 +220,9 @@ security fix's shorter hold and its way past a pause, a needed decision, a major
 registry's word can only hold a release back: a pause holds one that does not say it is a security fix. A release that
 does not verify is only refused, and its notice says only that.
 
-Then it installs each package into a runtime of its own, checks that npm installed the tarball whose provenance was
-verified, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
+Then it installs each package into a runtime of its own — npm told to run no package's install script — checks that
+npm installed the tarball whose provenance was verified, and that every other package of this suite in the runtime (the
+core Gmail depends on, say) is a tarball whose provenance verifies too, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
 reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
 switches nothing. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
 launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
