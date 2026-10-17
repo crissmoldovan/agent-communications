@@ -39,8 +39,29 @@ connection changing.
   that version is held until a newer one comes out.
 - **A security fix** is mentioned at once, whatever the level. If it isn't installed yet, the next send or post
   preview begins with it, once.
+- **Every way in is checked the same way.** A by-hand `agentcomms update` or `comms_update`, and a first
+  `mcp install`, verify every package's provenance before installing anything, with the same pins as the background
+  run. Any failure refuses the whole change, with nothing installed. There is no bypass.
+- **Nothing a release says about itself is trusted before it is verified.** That covers whether it is a security fix,
+  whether it needs a decision, and whether it is a major. Notices use fixed wording and plain version numbers only,
+  never text taken from the registry.
+- **A release that needs your decision can't be stepped over.** A later patch that doesn't say so itself still waits
+  for you.
+- **Install scripts don't run.** Runtimes and global packages are installed with `--ignore-scripts`. No package in the
+  closure needs one, and a test keeps it that way.
+- **Background updates count as on only while they actually run.** If the job hasn't run in 48 hours, for example
+  after being switched off in Login Items, the full notices come back, security fixes included. Doctor says so too.
+- **A channel's own install command still works.** `agent-gmail mcp install` and `npx -y @agentcomms/<channel> mcp
+  install` install only the exact version you are already running (the code npx just fetched), say that it was not
+  verified, and name `agentcomms mcp install --server <channel>`, which checks it. Any other version is refused.
+  `--launcher npx` fetches unverified each time a client starts it; the managed launcher's runtime is verified.
 - **An organisation can only make updates stricter.** A file beside its profile can cap members at `every-14-days`
   or `never`, or forbid background updates.
+
+**Slack, choose how an agent's post looks, per workspace.** Slack puts its own **APP** tag on every app post, and
+no app can hide or rename it. `agentcomms label style <workspace> app|labelled` (or `comms_label` with `style`) picks
+`app`, the default, with that tag, which nobody can fake; or `labelled`, where an agent's posts go out as you, starting
+"Your Name (agent): …". Moving to `labelled` shows a preview and needs your yes; moving back is at once.
 
 **Slack, posting as the app for organisations** (CUE-493).
 - An admin creates one extra bot-only app with `agent-slack manifest --mode agent`, installs it once, and shares its
