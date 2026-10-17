@@ -34,7 +34,7 @@ import { doctor } from '../src/operations/maintenance.ts';
 import { releaseFactsReader, type UpdateDeps, updateCheck } from '../src/operations/update.ts';
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { registration, writeManaged } from './fixtures/cli-command/trees.ts';
+import { writeManaged } from './fixtures/cli-command/trees.ts';
 import { assertNoBareCommand, coreHandoffs, locatedCoreLine } from './helpers/handoffs.ts';
 import {
   attestationsEndpoint,
@@ -790,14 +790,26 @@ test('an entry pinned to a renamed account, or written by hand, is behind and le
     assert.match(String(renamed?.reason), /"work" was renamed to "acme\/gmail"/);
     assert.equal(hand?.launcher, 'other');
     assert.equal(hand?.updatable, false);
-    // Gmail's own `mcp install` registers it again, and nothing registered here is a Gmail of this release in a file
-    // core can check: so it says that, and invents no command (CUE-403).
+    // Core's own `mcp install --server gmail` registers it again, located (CUE-403): never Gmail's own, which registers
+    // the release it is, and the one found here may be the old one (re-review of 0.20.0, severity 3).
     assert.ok(
       String(hand?.reason).startsWith(
-        `it was not written by \`mcp install\`, so how it starts cannot be carried over; Gmail ${VERSION} (@agentcomms/gmail) is not locatable here: `,
+        'it was not written by `mcp install`, so how it starts cannot be carried over; register it again with `',
       ),
       String(hand?.reason),
     );
+    locatedCoreLine(String(hand?.reason), [
+      'mcp',
+      'install',
+      '--server',
+      'gmail',
+      '--client',
+      'cursor',
+      '--name',
+      'gmail-hand',
+      '--read-only',
+      '--force',
+    ]);
     assertNoBareCommand(String(hand?.reason));
     assert.deepEqual(of(check.behind, 'runtime'), [], 'no runtime is needed by what cannot be moved');
 
@@ -832,12 +844,17 @@ test('the command that registers an entry again by hand gives its name as one wo
       (item) => item.name === 'gmail by hand',
     );
     const words = ['mcp', 'install', '--client', 'cursor', '--name', 'gmail by hand', '--read-only', '--force'];
-    const located = coreHandoffs(m.core.paths, 'darwin')
-      .withRegistrations([registration({ command: process.execPath, args: [gmail.entry, 'mcp'] })])
-      .of('gmail', words);
+    // Core's own command, located — never Gmail's own, which registers its own release (re-review of 0.20.0, sev. 3).
+    const located = coreHandoffs(m.core.paths, 'darwin').core([
+      'mcp',
+      'install',
+      '--server',
+      'gmail',
+      ...words.slice(2),
+    ]);
     assert.ok(
-      isCommand(located) && located.words[1] === realpathSync(gmail.entry),
-      'Gmail is located from its registration',
+      isCommand(located) && !located.words.includes(realpathSync(gmail.entry)),
+      'the command is Gmail’s own, not core’s',
     );
     assert.ok(String(hand?.reason).includes(inlineCommand(located)), String(hand?.reason));
     assert.ok(String(hand?.reason).includes("--name 'gmail by hand' --read-only --force`"), String(hand?.reason));
@@ -874,7 +891,7 @@ test('a command to register again with a name Windows cannot print is shown as i
     const hand = registrations.find((item) => item.name === '$x&whoami&');
     assert.ok(
       String(hand?.reason).endsWith(
-        `"mcp","install","--client","cursor","--name","\\u0024x&whoami&","--read-only","--force"]\` ${said}`,
+        `"mcp","install","--server","gmail","--client","cursor","--name","\\u0024x&whoami&","--read-only","--force"]\` ${said}`,
       ),
       String(hand?.reason),
     );
@@ -882,7 +899,7 @@ test('a command to register again with a name Windows cannot print is shown as i
     const noClaude = registrations.find((item) => item.client === 'claude-code');
     assert.ok(
       String(noClaude?.reason).endsWith(
-        `"mcp","install","--client","claude-code","--name","slack 50\\u0025","--force"]\` ${said} where it is`,
+        `"mcp","install","--server","slack","--client","claude-code","--name","slack 50\\u0025","--force"]\` ${said} where it is`,
       ),
       String(noClaude?.reason),
     );

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,7 @@ import type { SecretStore } from '../src/secrets.ts';
 import { sendEpochOf } from '../src/send-epoch.ts';
 import { VERSION } from '../src/version.ts';
 import { v1SendRecord, writeV1Record } from './fixtures/approval-v1-0.13.0.ts';
-import { pinArgs, registration, writeManaged } from './fixtures/cli-command/trees.ts';
+import { pinArgs, writeManaged } from './fixtures/cli-command/trees.ts';
 import { assertNoBareCommand, coreCommand, coreHandoffs, coreInline, locatedCoreLine } from './helpers/handoffs.ts';
 import {
   assertExpectWrapped,
@@ -627,13 +627,24 @@ test('the doctor: a channel with accounts that no client starts is something to 
         ok: true,
         warn: true,
         detail: `registered with cursor as "gmail" in ${cursor}, but its suite path pins are incomplete (missing --config-dir, --state-dir, --data-dir, --secrets-dir), so it finds its folders from whatever environment cursor starts it with`,
+        // Core's own command, located (re-review of 0.20.0, severity 3): Gmail's own registers the release it is.
         fix: `Register it again: ${inlineCommand(
-          coreHandoffs(m.core.paths, 'darwin')
-            .withRegistrations([registration({ command: process.execPath, args: [entry, 'mcp'] })])
-            .of('gmail', ['mcp', 'install', '--client', 'cursor', '--force']) as PrintedCommand,
+          coreHandoffs(m.core.paths, 'darwin').core([
+            'mcp',
+            'install',
+            '--server',
+            'gmail',
+            '--client',
+            'cursor',
+            '--force',
+          ]) as PrintedCommand,
         )}.`,
       },
     ],
+  );
+  assert.ok(
+    !String(unpinned.checks.find((check) => check.name === 'gmail server')?.fix).includes(realpathSync(entry)),
+    "the repair runs Gmail's own command, which registers its own release",
   );
   assert.equal(unpinned.report.ok, true, 'an entry that starts is not a failure');
   assert.equal(readFileSync(cursor, 'utf8'), legacy);
@@ -692,8 +703,21 @@ test('the doctor fails a registration whose runtime has gone, and says what regi
       ok: false,
       // One row for the entry, naming both of its problems: the one command repairs them both.
       detail: `registered with claude-code as "slack" in ${claude}, but ${gone} is no longer there, so claude-code cannot start it; its suite path pins are incomplete (missing --config-dir, --state-dir, --data-dir, --secrets-dir) too`,
-      // The one registration of Slack is the broken one, so Slack's own command is not locatable here: it says that.
-      fix: `Slack ${VERSION} (@agentcomms/slack) is not locatable here: none of the 1 registration of it is ${VERSION} in a file this can check (1 whose package cannot be found or read). Install or update it through your usual route, then try again.`,
+      // Core's own command registers it again (re-review of 0.20.0, severity 3): it is there whether or not Slack's
+      // own command is, and registers core's release, not the one an entry behind still starts.
+      fix: `Register it again: ${inlineCommand(
+        coreHandoffs(m.core.paths, 'darwin').core([
+          'mcp',
+          'install',
+          '--server',
+          'slack',
+          '--client',
+          'claude-code',
+          '--workspace',
+          'acme/slack',
+          '--force',
+        ]) as PrintedCommand,
+      )}.`,
     },
   ]);
   assert.equal(report.ok, false, 'a server a client cannot start is a failure');
@@ -824,10 +848,13 @@ test('the doctor gives the name of an entry to register again as one word, quote
     'acme/slack',
     '--force',
   ];
-  const repair = coreHandoffs(m.core.paths, 'darwin')
-    .withRegistrations([registration(working)])
-    .of('slack', words);
+  // Core's own command, located: Slack's own would register the release it is (re-review of 0.20.0, severity 3).
+  const repair = coreHandoffs(m.core.paths, 'darwin').core(['mcp', 'install', '--server', 'slack', ...words.slice(2)]);
   assert.ok(isCommand(repair) && repair.line?.includes(" --name 'slack acme' "), JSON.stringify(repair));
+  assert.ok(
+    !String(repair.line).includes(realpathSync(String(working.args[0]))),
+    "the repair runs Slack's own command",
+  );
   assert.equal(
     checks.find((check) => check.name === 'slack server' && check.ok === false)?.fix,
     `Register it again: ${inlineCommand(repair)}.`,
@@ -855,7 +882,7 @@ test('the doctor shows a repair with a name Windows cannot print as its words, n
   const fix = String(report.checks.find((check) => check.name === 'slack server' && check.ok === false)?.fix);
   assert.ok(
     fix.endsWith(
-      `"mcp","install","--client","claude-code","--name","\\u0024x&whoami&","--workspace","acme/slack","--force"]\` (the command's words, written as JSON: one of them cannot be quoted the same way for cmd.exe and for PowerShell, so type the command yourself, with that word quoted for the shell you use).`,
+      `"mcp","install","--server","slack","--client","claude-code","--name","\\u0024x&whoami&","--workspace","acme/slack","--force"]\` (the command's words, written as JSON: one of them cannot be quoted the same way for cmd.exe and for PowerShell, so type the command yourself, with that word quoted for the shell you use).`,
     ),
     fix,
   );

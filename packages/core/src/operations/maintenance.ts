@@ -4,7 +4,7 @@ import { integrityRefusal, kindOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
 import { revokeChange } from '../changes.ts';
-import { type Channel, isChannel, type ServerId, serverFacts } from '../channel-servers.ts';
+import { type Channel, type ServerId, serverFacts } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
 import { stripInvisible } from '../chars.ts';
 import { inlineCommand } from '../cli-runtime.ts';
@@ -724,11 +724,11 @@ function registerAgain(channel: ServerId, entry: ChannelRegistration, handoffs: 
   words.push(...entry.narrowing);
   if (entry.launcher === 'npx' || entry.launcher === 'local') words.push('--launcher', entry.launcher);
   words.push('--force');
+  // Core's own command, located, for every server (re-review of 0.20.0, severity 3): a channel's own `mcp install`
+  // registers the release that command is, and the one found here may be the old one an entry behind still starts.
   // The entry's name and pins are read from the client's file, which may hold anything: a located command shows them
-  // as words to type where no Windows line is safe, and a product not locatable here says so instead.
-  const handoff = isChannel(channel)
-    ? handoffs.of(channel, words)
-    : handoffs.core(['mcp', 'install', '--server', channel, ...words.slice(2)]);
+  // as words to type where no Windows line is safe.
+  const handoff = handoffs.core(['mcp', 'install', '--server', channel, ...words.slice(2)]);
   return remedy(handoffSentence(handoff, (command) => `Register it again: ${command}.`));
 }
 

@@ -379,8 +379,10 @@ async function latestReleases(
 }
 
 /**
- * How to register an entry again by hand: its channel's own `mcp install`, with every flag that decides its reach —
- * located as that channel's command among this machine's registrations, or why it is not locatable here (CUE-403).
+ * How to register an entry again by hand: core's own `mcp install --server <channel>`, located, with every flag that
+ * decides its reach (CUE-403). Never the channel's own: it registers the release that command is, and the one found
+ * among this machine's registrations may be the old one the entry behind still starts (re-review of 0.20.0, severity
+ * 3). Core registers its own release, the one this update brings the machine to.
  *
  * The entry's name and pins are read from the client's file, which may hold anything, so on Windows the command may
  * have no line to paste: the reasons below give it with `handoffSentence`, which shows it as words then.
@@ -390,9 +392,7 @@ function installHandoff(item: RegistrationItem, handoffs: CliHandoffs): Handoff 
   const words = ['mcp', 'install', '--client', item.client];
   if (item.name !== facts.defaultServerName) words.push('--name', item.name);
   words.push(...item.narrowing, '--force');
-  return isChannel(item.channel)
-    ? handoffs.of(item.channel, words)
-    : handoffs.core(['mcp', 'install', '--server', item.channel, ...words.slice(2)]);
+  return handoffs.core(['mcp', 'install', '--server', item.channel, ...words.slice(2)]);
 }
 
 /**
