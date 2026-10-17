@@ -157,12 +157,18 @@ const refusalAsync = async (fn: () => unknown): Promise<string> => {
 };
 
 // The golden intentionally includes the new owned-shim sentence for POSIX managed installs; Windows offers no shim.
+// A first install verifies the release it fetches, against the test's own trust root: nothing reaches npm.
 const posixServerInstallChange = (
   core: Core,
   env: NodeJS.ProcessEnv,
   request: ServerInstallRequest,
   own?: Parameters<typeof serverInstallChange>[3],
-) => serverInstallChange(core, env, request, own, { platform: 'darwin' });
+) =>
+  serverInstallChange(core, env, request, own, {
+    platform: 'darwin',
+    registry: registryOf(() => VERSION),
+    verifyRelease: testReleaseVerifier(),
+  });
 
 /** Every sentence this test holds still, by a key that says where it came from. */
 async function collect(): Promise<Record<string, string>> {

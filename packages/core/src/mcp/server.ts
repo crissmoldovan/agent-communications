@@ -26,6 +26,7 @@ import { migrationLeftoversError, secretsMigration } from '../operations/secrets
 import {
   CLIENTS,
   channelsAvailable,
+  installVerification,
   LAUNCHERS,
   serverInstallChange,
   serverPruneChange,
@@ -40,6 +41,7 @@ import { checkForUpdates } from '../update-check.ts';
 import { updateToolNotice } from '../update-gate.ts';
 import type { UpdateJobDeps } from '../update-job.ts';
 import { stateReleaseVerifier } from '../update-provenance.ts';
+import { npmRegistry } from '../update-release.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -728,19 +730,25 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
     async (args) => {
       try {
-        const install = serverInstallChange(core, env, {
-          channel: args.channel as (typeof SERVERS)[number],
-          client: args.client as (typeof CLIENTS)[number],
-          name: args.name,
-          account: args.account,
-          inbox: args.inbox,
-          workspace: args.workspace,
-          readOnly: args.readOnly,
-          launcher: args.launcher as (typeof LAUNCHERS)[number] | undefined,
-          force: args.force,
-          print: args.print,
-          noVerify: args.noVerify,
-        });
+        const install = serverInstallChange(
+          core,
+          env,
+          {
+            channel: args.channel as (typeof SERVERS)[number],
+            client: args.client as (typeof CLIENTS)[number],
+            name: args.name,
+            account: args.account,
+            inbox: args.inbox,
+            workspace: args.workspace,
+            readOnly: args.readOnly,
+            launcher: args.launcher as (typeof LAUNCHERS)[number] | undefined,
+            force: args.force,
+            print: args.print,
+            noVerify: args.noVerify,
+          },
+          undefined,
+          installVerification(updateDeps, npmRegistry(env)),
+        );
         const outcome = await gatedChange(core, install, {
           surface: 'mcp',
           channel: 'core',

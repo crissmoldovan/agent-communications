@@ -54,6 +54,18 @@ tarball has been checked (nothing published here, nor anything it depends on, ne
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
 registered on, and its step says so.
 
+**A first install is verified the same way.** A managed `mcp install` — core's
+`agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — that fetches a release's runtime from npm, because it is
+not on this machine yet, verifies that release before the preview is made and again when the approval is claimed,
+with the same pins and the same `BAD_DATA` refusal, and nothing is prepared to approve when it does not verify. The
+preview ends with the same line: `@agentcomms/gmail@<version> was verified before this preview: …`. After npm has
+installed it, with `--ignore-scripts`, the runtime must hold the very tarball that verified, and every `@agentcomms`
+package in it — the core Gmail depends on — must verify too, or the runtime is removed, the launcher is not pointed at
+it, and nothing is registered. Only core carries Sigstore, so a channel's own `mcp install` (`agent-gmail mcp install --client <client>`,
+`npx -y @agentcomms/gmail mcp install --client <client>`) cannot verify: where it would fetch a runtime it refuses, naming core's command
+that does the same install. Where the runtime is already on this machine, or with `--launcher npx` or `--print`, which
+fetch nothing now, it registers as before.
+
 Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
 same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign
 file unchanged. A symlinked bin directory works; if it is redirected while an operation is in progress, the mutation

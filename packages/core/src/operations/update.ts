@@ -71,12 +71,12 @@ import {
   declaredSince,
   npmRegistry,
   oldestVersion,
-  PIN_WORDS,
   type RegistryAnswer,
   type ReleaseRegistry,
+  type ReleaseSources,
   type ReleaseVerifier,
-  releaseIntegrity,
   runtimeIntegrityProblem,
+  verifyReleaseSet,
 } from '../update-release.ts';
 import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { shownRelease } from '../update-words.ts';
@@ -1006,10 +1006,7 @@ function releasesOf(
  * stand-in, and the verifier its caller handed in — core's CLI and server hand in one with npm's attestations and
  * sigstore-js. Null where there is none: then every release is refused, and nothing reaches the network.
  */
-function releaseSources(
-  env: NodeJS.ProcessEnv,
-  deps: UpdateDeps,
-): { registry: ReleaseRegistry | null; verify: ReleaseVerifier | null; why: string } {
+function releaseSources(env: NodeJS.ProcessEnv, deps: UpdateDeps): ReleaseSources {
   const standIn = deps.latestVersion !== undefined || deps.registry !== undefined;
   return {
     registry: deps.registry ?? (deps.latestVersion === undefined ? npmRegistry(env) : null),
@@ -1020,52 +1017,16 @@ function releaseSources(
   };
 }
 
-/** The refusal of a whole update for one release that did not verify: which, and which pin — never what it held. */
-function unverified(packageName: string, version: string, why: string, pin: string): CommsError {
-  return new CommsError(
-    'BAD_DATA',
-    `nothing was installed or changed: ${packageName}@${version} could not be verified as built by this repository's release workflow — ${why}`,
-    {
-      hint: "An update installs only a release whose Sigstore provenance shows it was built by this repository's release workflow at the tag of its version, on a GitHub-hosted runner, and nothing skips that check. Nothing was prepared to approve. A release published minutes ago can be without its attestation for a while: try again later. If it still does not verify, do not install it some other way; report it as SECURITY.md says.",
-      details: { package: packageName, version, pin },
-    },
-  );
-}
-
 /**
- * Verifies every release in `wanted` — its tarball's integrity as the registry gives it, and npm's attestation for it,
- * held to the pins the background run holds a release to (design 2026-10-16 U5 step 3). The first that does not verify
- * refuses the whole update; what verified is returned by package, for the preview and for the integrity check after
- * install. Reads; changes nothing.
+ * Verifies every release in `wanted` before an update installs or switches to it: the shared check
+ * (`verifyReleaseSet`), from this update's sources. The first that does not verify refuses the whole update.
  */
-async function verifyReleases(
+function verifyReleases(
   env: NodeJS.ProcessEnv,
   deps: UpdateDeps,
   wanted: ReadonlyMap<string, string>,
 ): Promise<Map<string, VerifiedProvenance>> {
-  const verified = new Map<string, VerifiedProvenance>();
-  if (wanted.size === 0) return verified;
-  const { registry, verify, why } = releaseSources(env, deps);
-  for (const [packageName, version] of [...wanted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    if (registry === null || verify === null) throw unverified(packageName, version, why, 'verifier');
-    let integrity: string | null;
-    try {
-      integrity = releaseIntegrity((await registry(packageName)).packument, version);
-    } catch (error) {
-      throw new CommsError(
-        'PROVIDER_UNAVAILABLE',
-        `nothing was installed or changed: the registry's document of ${packageName} could not be read to verify ${version}: ${message(error)}`,
-        { hint: 'Try again once the registry can be reached.' },
-      );
-    }
-    if (integrity === null) {
-      throw unverified(packageName, version, 'the registry gives no tarball integrity for it', 'subject');
-    }
-    const verdict = await verify({ packageName, version, integrity });
-    if (!verdict.ok) throw unverified(packageName, version, PIN_WORDS[verdict.field], verdict.field);
-    verified.set(packageName, verdict.provenance);
-  }
-  return verified;
+  return verifyReleaseSet(releaseSources(env, deps), wanted, 'update');
 }
 
 /**

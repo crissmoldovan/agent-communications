@@ -67,6 +67,7 @@ import { migrationLeftoversError, secretsMigration } from './operations/secrets-
 import {
   type ChannelsReport,
   channelsAvailable,
+  installVerification,
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
@@ -94,6 +95,7 @@ import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } 
 import { exemptFromUpdateNotice, updateNoticeAtTerminal } from './update-gate.ts';
 import type { UpdateJobDeps } from './update-job.ts';
 import { stateReleaseVerifier } from './update-provenance.ts';
+import { npmRegistry } from './update-release.ts';
 import { VERSION } from './version.ts';
 
 /**
@@ -879,19 +881,25 @@ export async function main(
           if (values['no-verify']) words.push('--no-verify');
           const result = await gatedChangeAtTerminal(
             core,
-            serverInstallChange(core, env, {
-              channel: values.server ?? 'core',
-              client: values.client as SupportedClient,
-              name: values.name,
-              account: values.account,
-              inbox: values.inbox,
-              workspace: values.workspace,
-              readOnly: values['read-only'],
-              launcher: values.launcher as Launcher | undefined,
-              force: values.force,
-              print: values.print,
-              noVerify: values['no-verify'],
-            }),
+            serverInstallChange(
+              core,
+              env,
+              {
+                channel: values.server ?? 'core',
+                client: values.client as SupportedClient,
+                name: values.name,
+                account: values.account,
+                inbox: values.inbox,
+                workspace: values.workspace,
+                readOnly: values['read-only'],
+                launcher: values.launcher as Launcher | undefined,
+                force: values.force,
+                print: values.print,
+                noVerify: values['no-verify'],
+              },
+              undefined,
+              installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+            ),
             { ...approval, rerun: words },
           );
           // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not

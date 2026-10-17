@@ -38,6 +38,7 @@ import {
   HOSTILE_EXPECT,
   HOSTILE_FILE_NAME,
 } from './helpers/hostile-approval.ts';
+import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -772,7 +773,8 @@ test('a Windows managed-install plan does not claim that it will write a CLI shi
     m.env,
     { channel: 'core', client: 'cursor', noVerify: true },
     undefined,
-    { platform: 'win32' },
+    // A first install verifies the release it fetches: against the test's own trust root, so nothing reaches npm.
+    { platform: 'win32', registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier() },
   ).plan(config);
 
   assert.doesNotMatch(

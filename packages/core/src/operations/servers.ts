@@ -1,4 +1,4 @@
-import { access, constants, readFile, realpath } from 'node:fs/promises';
+import { access, constants, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GatedChange } from '../change-flow.ts';
@@ -37,6 +37,7 @@ import {
   type InstallContext,
   type InstallOptions,
   type InstallResult,
+  installManagedRuntime,
   installRemedyOf,
   isProductServer,
   type Launcher,
@@ -59,6 +60,16 @@ import { resolveName } from '../names.ts';
 import { isBehind } from '../npm.ts';
 import { homeDirectory, type PathOverrides } from '../paths.ts';
 import { launcherOf, registrationPathPins, registrationVersion } from '../registrations.ts';
+// Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
+import type { VerifiedProvenance } from '../update-provenance.ts';
+import {
+  BUILT_BY,
+  type ReleaseRegistry,
+  type ReleaseSources,
+  type ReleaseVerifier,
+  runtimeIntegrityProblem,
+  verifyReleaseSet,
+} from '../update-release.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -231,6 +242,39 @@ export type ServerInstallResult = InstallResult & {
 export interface ServerInstallDeps {
   /** The platform whose install behavior is planned; this process's unless a test supplies another. */
   platform?: NodeJS.Platform | undefined;
+  /**
+   * Every package's full document on the registry, read for the tarball integrity of the runtime a first install
+   * fetches. Handed in, as the verifier is: core's CLI and server hand in the registry npm reads (`npmRegistry`), and
+   * nothing here reaches the network on its own — WhatsApp's bundle, which carries this module, reaches none. Without
+   * one, an install that would fetch a runtime is refused.
+   */
+  registry?: ReleaseRegistry | null | undefined;
+  /**
+   * Verifies the release a first install fetches from npm, with the pins and the refusal of the update by hand
+   * (`verifyReleaseSet`; security review of 0.20.0). Core's CLI and server hand in theirs (`stateReleaseVerifier`), a
+   * test its own. Without one — a channel's own process, which carries no Sigstore — an install that would fetch a
+   * runtime is refused, naming core's command, and nothing skips it.
+   */
+  verifyRelease?: ReleaseVerifier | undefined;
+}
+
+/**
+ * What a first install verifies with, from an update's own sources: the same registry and verifier, and the registry
+ * npm reads (`npmRegistry`, which the caller hands in) where the update names none. An update handed a stand-in
+ * `latest` and no registry — a test's — reads no real registry, and neither does the install then.
+ */
+export function installVerification(
+  update: {
+    registry?: ReleaseRegistry | undefined;
+    verifyRelease?: ReleaseVerifier | undefined;
+    latestVersion?: unknown;
+  },
+  npm: ReleaseRegistry,
+): Pick<ServerInstallDeps, 'registry' | 'verifyRelease'> {
+  return {
+    registry: update.registry ?? (update.latestVersion === undefined ? npm : null),
+    ...(update.verifyRelease !== undefined ? { verifyRelease: update.verifyRelease } : {}),
+  };
 }
 
 /**
@@ -339,6 +383,14 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
   };
 }
 
+/** What an install's plan found, for its apply to hold the install to: see `serverInstallChange`. */
+interface Planned {
+  product: McpProduct;
+  install: PlannedInstall;
+  /** The release a first install fetches, verified before the preview; undefined when it fetches none. */
+  verified: VerifiedProvenance | undefined;
+}
+
 /**
  * Registering one declared server with one client, as a change.
  *
@@ -378,7 +430,85 @@ export function serverInstallChange(
    * and what it finds then has to be what the plan found — whether it writes or prints, where, what it replaces, and
    * what the server is pinned to — or the person agreed to one thing and got another. See `PlannedInstall`.
    */
-  let planned: { product: McpProduct; install: PlannedInstall } | undefined;
+  let planned: Planned | undefined;
+  /*
+   * Where a first install reads the release's document and verifies it (security review of 0.20.0): the registry and
+   * the verifier the caller handed in — core's CLI and server, npm's and theirs; a test, its stand-ins.
+   */
+  const sources = (): ReleaseSources => ({
+    registry: deps.registry ?? null,
+    verify: deps.verifyRelease ?? null,
+    why:
+      deps.verifyRelease === undefined
+        ? "nothing here can verify provenance: run the install from core's own command or server"
+        : 'this install was handed a verifier and no registry',
+  });
+  /** Where a process that cannot verify — a channel's own, with no Sigstore — sends the person: core, which can. */
+  const verifyInCore = (): string => {
+    const words = ['mcp', 'install', '--server', request.channel, '--client', request.client];
+    if (request.name !== undefined) words.push('--name', request.name);
+    const pin = pinOf(request);
+    const own = pinOption(request.channel);
+    if (pin !== undefined && own !== undefined && own !== 'readOnly') words.push(`--${own}`, pin);
+    if (request.readOnly) words.push('--read-only');
+    if (request.force) words.push('--force');
+    const instead =
+      "Core verifies a release's provenance before it installs it: run core's `mcp install --server` in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.";
+    try {
+      return handoffSentence(
+        requireHandoffs(core, deps.platform).core(words),
+        (command) =>
+          `Core verifies a release's provenance before it installs it: run ${command} in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.`,
+        { instead },
+      );
+    } catch {
+      // A core opened with no caller has no command to name: the words alone, never a bare guess.
+      return instead;
+    }
+  };
+  /*
+   * The runtime a managed registration starts, held to what the plan verified, before the launcher is pointed or
+   * anything is registered. A runtime to fetch is fetched here, with npm running no package's script, and must then
+   * hold the very tarball that verified, every package of ours in it verifying too (`runtimeIntegrityProblem`): one
+   * that does not is removed, and nothing is registered on it. One the plan found on disk is used as it was found, and
+   * one gone since is not fetched unverified.
+   */
+  const verifiedRuntime = async (done: Planned): Promise<void> => {
+    const { dataDir } = core.paths;
+    const { packageName, version } = done.product;
+    const runtime = managedRuntimeDir(dataDir, packageName, version);
+    const there = await reusableRuntime(dataDir, packageName, version);
+    if (done.verified === undefined) {
+      if (there !== null) return;
+      throw new CommsError(
+        'CONFIG',
+        `this registration changed between being planned and being applied: ${runtime} was on this machine when it was planned, and is not now, so it would be fetched from npm without being verified. So nothing was installed or registered`,
+        {
+          hint: 'Run the same install again: it is planned afresh from what is there now, verifies the release it would fetch, and asks again.',
+        },
+      );
+    }
+    if (there === null) {
+      await installManagedRuntime(context, done.product, version).catch(async (error) => {
+        throw await remedyLocated(error, core);
+      });
+    }
+    const { sha512 } = done.verified;
+    const problem = await runtimeIntegrityProblem(runtime, packageName, sha512, {
+      verify: sources().verify,
+      known: new Map([[`${packageName}@${version}`, sha512]]),
+    });
+    if (problem === null) return;
+    if (there === null) await rm(runtime, { recursive: true, force: true }).catch(() => undefined);
+    throw new CommsError(
+      'BAD_DATA',
+      `nothing was registered: ${problem}${there === null ? ', so it was removed' : ''}. The launcher was not pointed at it`,
+      {
+        hint: "An install registers only a runtime whose packages of this suite were all built by this repository's release workflow, as their Sigstore provenance shows. If it happens again, do not install it some other way; report it as SECURITY.md says.",
+        details: { package: packageName, version },
+      },
+    );
+  };
   return {
     plan: async (config) => {
       checkPin(config, request);
@@ -389,7 +519,27 @@ export function serverInstallChange(
         throw await remedyLocated(error, core);
       });
       const { target, previous, effective, kept, command } = preflight;
-      planned = { product, install: plannedInstall(preflight) };
+      /*
+       * A first install fetches the release from npm: verified first, before the preview is made — and again when the
+       * approval is claimed, since the claim plans again — against the pins the update holds a release to. One that
+       * does not verify refuses the install, and nothing is prepared to approve.
+       */
+      const fetches =
+        request.print !== true &&
+        launcher === 'managed' &&
+        (await reusableRuntime(core.paths.dataDir, product.packageName, version)) === null;
+      const from = sources();
+      const verified = fetches
+        ? (
+            await verifyReleaseSet(
+              from,
+              new Map([[product.packageName, version]]),
+              'install',
+              from.registry === null || from.verify === null ? verifyInCore() : undefined,
+            )
+          ).get(product.packageName)
+        : undefined;
+      planned = { product, install: plannedInstall(preflight), verified };
       const effects: string[] = [];
       if (target.writes) {
         // The pin and the switch the server is started with, in the channel's words: "pinned to the mailbox …".
@@ -433,11 +583,7 @@ export function serverInstallChange(
           effects.push(`${request.client} will start it from ${await localCliEntry(product.moduleUrl)}`);
         }
       }
-      if (
-        request.print !== true &&
-        launcher === 'managed' &&
-        (await reusableRuntime(core.paths.dataDir, facts.packageName, version)) === null
-      ) {
+      if (fetches) {
         effects.push(
           `installs ${facts.packageName}@${version} from npm into ${managedRuntimeDir(core.paths.dataDir, facts.packageName, version)}`,
         );
@@ -448,6 +594,10 @@ export function serverInstallChange(
       if (request.print !== true && launcher === 'managed' && managedShimsSupported(context)) {
         const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
         effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
+      }
+      // What it verified, as the update's preview says it: last, one sentence.
+      if (verified !== undefined) {
+        effects.push(`${verified.package}@${verified.version} was verified before this preview: built by ${BUILT_BY}`);
       }
       return {
         before: config,
@@ -462,6 +612,7 @@ export function serverInstallChange(
     apply: async () => {
       if (planned === undefined)
         throw new CommsError('UNEXPECTED', 'the registration was applied before it was planned');
+      if (request.print !== true && launcher === 'managed') await verifiedRuntime(planned);
       const installed = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
         async (error) => {
           throw await remedyLocated(error, core);

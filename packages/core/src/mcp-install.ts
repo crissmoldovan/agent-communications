@@ -557,6 +557,12 @@ export async function installManagedRuntime(
     `${JSON.stringify({ name: `${product.binary}-runtime`, private: true }, null, 2)}\n`,
   );
   const npmCli = await findNpmCli();
+  /*
+   * npm is given the folder's real path. Given one reached through a symbolic link — macOS's /var, a linked home — it
+   * writes its lockfile's keys relative to the real one (`../../…/node_modules/@agentcomms/gmail`), and the check that
+   * the runtime holds the verified tarball, which reads `node_modules/<package>`, could not find it.
+   */
+  const prefix = await realpath(root);
   // No package's script runs as it installs: one would run as the person before anything has checked that what npm
   // installed is the tarball whose provenance was verified. Nothing this suite publishes, nor anything it depends on,
   // needs one (test/install-scripts.test.ts holds that).
@@ -564,7 +570,7 @@ export async function installManagedRuntime(
     npmCli,
     'install',
     '--prefix',
-    root,
+    prefix,
     '--save-exact',
     '--ignore-scripts',
     '--no-audit',

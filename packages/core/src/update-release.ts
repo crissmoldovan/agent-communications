@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { CommsError } from './errors.ts';
 import { displayUrl } from './mcp-clients.ts';
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 // Types only from update-provenance.ts: what it imports at run time — sigstore-js, lazily — stays out of every module
 // that reaches this one, a channel's bundle among them (WhatsApp's no-network test reads that graph).
-import type { ProvenanceRelease, ProvenanceVerdict } from './update-provenance.ts';
+import type { ProvenanceRelease, ProvenanceVerdict, VerifiedProvenance } from './update-provenance.ts';
 import { PIN_WORDS } from './update-words.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -211,6 +212,87 @@ export async function runtimeIntegrityProblem(
     known.set(`${name}@${version}`, hex);
   }
   return null;
+}
+
+/**
+ * Where releases' documents are read and verified, for an update or a first install: the registry, the verifier its
+ * caller handed in — core's CLI and server hand in one with npm's attestations and sigstore-js — and, where either is
+ * missing, why nothing can be verified. Null where there is none: then every release is refused, and nothing reaches
+ * the network.
+ */
+export interface ReleaseSources {
+  registry: ReleaseRegistry | null;
+  verify: ReleaseVerifier | null;
+  why: string;
+}
+
+/** What is refused for want of provenance: what an update or a first install does, in its preview's first word. */
+export type VerifiedAct = 'update' | 'install';
+
+/**
+ * The refusal of a whole update or install for one release that did not verify: which, and which pin — never what it
+ * held. `hint` replaces the general one where there is more to say: where it can be verified, for a process that
+ * cannot.
+ */
+export function unverifiedRelease(
+  packageName: string,
+  version: string,
+  why: string,
+  pin: string,
+  act: VerifiedAct = 'update',
+  hint?: string,
+): CommsError {
+  const which = act === 'update' ? 'An update installs' : 'An install fetches';
+  return new CommsError(
+    'BAD_DATA',
+    `nothing was installed or changed: ${packageName}@${version} could not be verified as built by this repository's release workflow — ${why}`,
+    {
+      hint:
+        hint ??
+        `${which} only a release whose Sigstore provenance shows it was built by this repository's release workflow at the tag of its version, on a GitHub-hosted runner, and nothing skips that check. Nothing was prepared to approve. A release published minutes ago can be without its attestation for a while: try again later. If it still does not verify, do not install it some other way; report it as SECURITY.md says.`,
+      details: { package: packageName, version, pin },
+    },
+  );
+}
+
+/**
+ * Verifies every release in `wanted` — its tarball's integrity as the registry gives it, and npm's attestation for it,
+ * held to the pins the background run holds a release to (design 2026-10-16 U5 step 3). The first that does not verify
+ * refuses the whole update or install (`unverifiedRelease`); what verified is returned by package, for the preview
+ * and for the integrity check after install. Reads; changes nothing. With no registry or no verifier, the first
+ * release is refused before anything is asked.
+ */
+export async function verifyReleaseSet(
+  sources: ReleaseSources,
+  wanted: ReadonlyMap<string, string>,
+  act: VerifiedAct = 'update',
+  noVerifierHint?: string,
+): Promise<Map<string, VerifiedProvenance>> {
+  const verified = new Map<string, VerifiedProvenance>();
+  if (wanted.size === 0) return verified;
+  const { registry, verify, why } = sources;
+  for (const [packageName, version] of [...wanted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (registry === null || verify === null) {
+      throw unverifiedRelease(packageName, version, why, 'verifier', act, noVerifierHint);
+    }
+    let integrity: string | null;
+    try {
+      integrity = releaseIntegrity((await registry(packageName)).packument, version);
+    } catch (error) {
+      throw new CommsError(
+        'PROVIDER_UNAVAILABLE',
+        `nothing was installed or changed: the registry's document of ${packageName} could not be read to verify ${version}: ${error instanceof Error ? error.message : String(error)}`,
+        { hint: 'Try again once the registry can be reached.' },
+      );
+    }
+    if (integrity === null) {
+      throw unverifiedRelease(packageName, version, 'the registry gives no tarball integrity for it', 'subject', act);
+    }
+    const verdict = await verify({ packageName, version, integrity });
+    if (!verdict.ok) throw unverifiedRelease(packageName, version, PIN_WORDS[verdict.field], verdict.field, act);
+    verified.set(packageName, verdict.provenance);
+  }
+  return verified;
 }
 
 /** A release since the one installed that says it needs a decision, and whether its provenance verified. */

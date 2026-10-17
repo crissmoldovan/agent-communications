@@ -134,6 +134,13 @@ makes `cmd.exe` re-parse arguments and can turn metacharacters into commands. On
 or the labelled PowerShell `&` line the result provides.
 [Core MCP tool reference](docs/reference/core-mcp-tools.md).
 
+**A first install verifies what it fetches.** A managed `mcp install` that fetches a release's runtime from npm
+verifies its Sigstore provenance first, as an update does — before the preview and again at your yes — and registers
+it only once npm has installed exactly that tarball. Core carries the verifier: `comms_server_install`, and
+`npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal, do it for any channel. A
+channel's own `mcp install` cannot, so where it would fetch a runtime it refuses and names that core command; with the
+runtime already here it registers as before. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
+
 ### Or package by package
 
 Three independent things ship besides the core server. Take one, or all of them.
