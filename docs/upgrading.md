@@ -224,9 +224,12 @@ Then it installs each package into a runtime of its own — npm told to run no p
 npm installed the tarball whose provenance was verified, and that every other package of this suite in the runtime (the
 core Gmail depends on, say) is a tarball whose provenance verifies too, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
 reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
-switches nothing. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
+switches nothing: a switch that fails puts back the launchers already switched, and one that cannot be put back is
+named in the run's result and its audit line, still switched, and the notice says not every launcher was put back. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
 launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
-or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing.
+or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing:
+it reads Sigstore's trust root into a temporary folder of its own and removes it, where a run keeps it in
+`sigstore` in the state directory.
 
 A background run and a person's update or rollback never overlap: each holds one lock for the machine,
 `.update.lock` in the state directory, while it installs, switches or prunes. A run that finds it held does nothing

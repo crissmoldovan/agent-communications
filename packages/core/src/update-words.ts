@@ -63,6 +63,7 @@ export const BACKGROUND_WORDS: Readonly<{
   refused: (version: string | null) => string;
   failed: (version: string | null, what: FailedWhat) => string;
   stopped: (version: string | null) => string;
+  partlySwitched: (version: string | null) => string;
   heldUnreadable: string;
   jobRemoved: string;
 }> = Object.freeze({
@@ -83,6 +84,8 @@ export const BACKGROUND_WORDS: Readonly<{
     `${shownRelease(version)} was not installed in the background: ${FAILED_WORDS[what]}. Nothing was switched; the next run tries again, and comms_audit_tail shows what went wrong.`,
   stopped: (version: string | null) =>
     `${shownRelease(version)} was not installed in the background, and nothing was switched; the next run tries again, and comms_audit_tail shows what went wrong.`,
+  partlySwitched: (version) =>
+    `${shownRelease(version)} was not installed in the background: a launcher could not be switched, and not every launcher could be put back, so some here start ${shownRelease(version)} from their next start and some the release before. comms_audit_tail says which.`,
   heldUnreadable:
     'No update is installed in the background while update-held.json in the state directory cannot be read: it says which releases were rolled back. Delete it to hold none.',
   jobRemoved:
@@ -108,6 +111,7 @@ function sentencesFor(outcome: BackgroundNotice['outcome'], version: string | nu
       return [
         words.stopped(version),
         ...(Object.keys(FAILED_WORDS) as FailedWhat[]).map((what) => words.failed(version, what)),
+        words.partlySwitched(version),
         words.heldUnreadable,
       ];
     case 'job-removed':

@@ -27,7 +27,9 @@ import { updateLockPath } from '../src/update-lock.ts';
 import {
   ATTESTATIONS_BASE,
   type AttestationFetch,
+  loadSigstore,
   type ProvenanceField,
+  type SigstoreModules,
   sigstoreBundleVerifier,
 } from '../src/update-provenance.ts';
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
@@ -1036,6 +1038,74 @@ test('two runs at once: the second finds the first under way and does nothing', 
   assert.equal(busy.outcome, 'busy');
   assert.deepEqual(second.installer.calls, []);
   assert.equal((await first).outcome, 'installed');
+});
+
+test('a dry run reads Sigstore’s trust root into a folder of its own, removed after; a run, into the state directory', async () => {
+  // sigstore-js itself, with its TUF reader standing in: it says where it was told to keep its cache, and leaves a file
+  // there as TUF would, then hands back the test's trust root. Nothing reaches Sigstore.
+  const asked: string[] = [];
+  const load = async (): Promise<SigstoreModules> => {
+    const real = await loadSigstore();
+    return {
+      ...real,
+      tuf: {
+        getTrustedRoot: async (options) => {
+          const cache = String(options?.cachePath);
+          asked.push(cache);
+          mkdirSync(cache, { recursive: true });
+          writeFileSync(join(cache, 'root.json'), '{}');
+          return real.protobuf.TrustedRoot.fromJSON(trustedRoot());
+        },
+      },
+    };
+  };
+  const m = await launched();
+  const w = world(m);
+  const deps = { ...w.deps, provenance: { fetch: w.attestations.fetch }, loadSigstore: load };
+  const dry = await runBackgroundUpdate(m.core, m.env, { dryRun: true }, deps);
+  assert.equal(dry.outcome, 'would-install', dry.reason);
+  assert.ok(asked.length > 0, 'the trust root was read');
+  const state = m.core.paths.stateDir;
+  for (const cache of asked) {
+    assert.ok(!cache.startsWith(state), `a dry run kept its cache in the state directory: ${cache}`);
+    assert.equal(existsSync(cache), false, `a dry run left its cache behind: ${cache}`);
+  }
+  assert.equal(existsSync(join(state, 'sigstore')), false, 'a dry run wrote nothing in the state directory');
+
+  asked.length = 0;
+  const done = await runBackgroundUpdate(m.core, m.env, {}, deps);
+  assert.equal(done.outcome, 'installed', done.reason);
+  assert.deepEqual([...new Set(asked)], [join(state, 'sigstore')]);
+});
+
+test('a switch that fails part-way, whose putting back fails too, says which launchers were not put back', async () => {
+  const m = await launched();
+  // Gmail's CLI is gone by the time the pointers are switched, so its switch fails; core's, put back, is not.
+  const vanishing = checker({
+    after: (packageName) => {
+      if (packageName === GMAIL) rmSync(managedRuntimeEntry(m.dataDir, GMAIL, LATEST));
+    },
+  });
+  const result = await runBackgroundUpdate(
+    m.core,
+    m.env,
+    {},
+    { ...world(m).deps, selfCheck: vanishing.selfCheck, launchers: { restore: async () => false } },
+  );
+  assert.equal(result.outcome, 'failed');
+  assert.doesNotMatch(result.reason, /every launcher was put back/);
+  assert.match(result.reason, /could not be put back: core/);
+  assert.deepEqual(
+    result.packages.map((item) => [item.package, item.switched]),
+    [
+      [CORE_PACKAGE, true],
+      [GMAIL, false],
+    ],
+    'what is switched is said as it is',
+  );
+  assert.deepEqual(await pointerOf(m, CORE_PACKAGE), { current: `${LATEST}-core`, previous: `${OLD}-core` });
+  const notice = (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice;
+  assert.equal(notice?.text, BACKGROUND_WORDS.partlySwitched(LATEST));
 });
 
 test('agentcomms update --background [--dry-run]: the run, as the job starts it; one mode at a time, and no approval', async () => {

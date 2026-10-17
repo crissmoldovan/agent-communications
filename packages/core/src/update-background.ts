@@ -34,8 +34,10 @@ import { childEnvironment } from './system-programs.ts';
 import { backgroundJobAtRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
 import { withUpdateLock } from './update-lock.ts';
 import {
+  type BundleVerifier,
   type ProvenanceDeps,
   type ProvenanceVerdict,
+  type SigstoreModules,
   sigstoreBundleVerifier,
   type VerifiedProvenance,
   verifyProvenance,
@@ -143,6 +145,12 @@ export interface BackgroundDeps {
   /** For Track C's `backgroundJobAtRun`: its runner, so a test never removes a real job. */
   job?: UpdateJobDeps | undefined;
   platform?: NodeJS.Platform | undefined;
+  /** sigstore-js's modules, when no `provenance.verifyBundle` is handed in: for a test, its TUF reader stood in. */
+  loadSigstore?: (() => Promise<SigstoreModules>) | undefined;
+  /** How a pointer is switched and put back: for a test, one that cannot be put back. */
+  launchers?:
+    | { exchange?: typeof exchangePointer | undefined; restore?: typeof restorePointer | undefined }
+    | undefined;
 }
 
 export interface BackgroundRequest {
@@ -369,6 +377,19 @@ interface Run {
   deps: BackgroundDeps;
   dryRun: boolean;
   now: Date;
+  /**
+   * Where sigstore-js keeps Sigstore's trust root, read through TUF: `<state>/sigstore` for a run, and for a dry run a
+   * temporary folder of its own, removed when it ends — a dry run changes nothing.
+   */
+  cachePath: string;
+}
+
+/** The verifier a run checks bundles with: the one handed in, or sigstore-js's, its trust root kept in `cachePath`. */
+function bundleVerifier(run: Run): BundleVerifier {
+  return (
+    run.deps.provenance?.verifyBundle ??
+    sigstoreBundleVerifier({ cachePath: run.cachePath, load: run.deps.loadSigstore })
+  );
 }
 
 type Settled = Omit<BackgroundRunResult, 'dryRun' | 'pruned' | 'jobRemoved'> & {
@@ -497,8 +518,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
 
   // Core's release, verified before anything the registry says of it is acted on — a security fix, a needed decision,
   // a major, a downgrade — or made a notice: one that does not verify is only refused.
-  const verifier =
-    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  const verifier = bundleVerifier(run);
   const coreIntegrity = releaseIntegrity(coreAnswer.packument, latest);
   if (coreIntegrity === null) return stop('held', `${corePackage}@${latest} is not on the registry yet`, facts);
   const coreVerdict = await verifyProvenance(
@@ -747,8 +767,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       item.provenance ? [[`${item.package}@${item.provenance.version}`, item.provenance.sha512] as const] : [],
     ),
   );
-  const verifier =
-    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  const verifier = bundleVerifier(run);
   const verify: ReleaseVerifier = (release) =>
     verifyProvenance(release, { fetch: deps.provenance?.fetch, verifyBundle: verifier });
   for (const item of packages) {
@@ -773,23 +792,34 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
   }
 
   // Every package verified and checked: now the pointers, all of them or none.
-  const done: { name: string; before: LauncherPointer | undefined; runtime: string }[] = [];
+  const exchange = deps.launchers?.exchange ?? exchangePointer;
+  const restore = deps.launchers?.restore ?? restorePointer;
+  const done: { item: BackgroundPackage; name: string; before: LauncherPointer | undefined; runtime: string }[] = [];
   for (const item of packages) {
     const name = launcherName(item.package);
     try {
-      const before = await exchangePointer(dataDir, name, item.runtime);
-      done.push({ name, before, runtime: item.runtime });
+      const before = await exchange(dataDir, name, item.runtime);
+      done.push({ item, name, before, runtime: item.runtime });
       item.switched = true;
     } catch (error) {
+      item.switched = false;
+      // Each one switched is put back — and one that cannot be is said to be still switched, as it is.
+      const left: string[] = [];
       for (const back of done.reverse()) {
-        await restorePointer(dataDir, back.name, back.before, back.runtime).catch(() => false);
+        const put = await restore(dataDir, back.name, back.before, back.runtime).catch(() => false);
+        back.item.switched = !put;
+        if (!put) left.push(back.name);
       }
-      for (const each of packages) each.switched = false;
-      return failed(
+      const why = toCommsError(error).message;
+      if (left.length === 0) {
+        return failed(item, `its launcher could not be switched (${why}), so every launcher was put back`, 'switch');
+      }
+      const result = failed(
         item,
-        `its launcher could not be switched (${toCommsError(error).message}), so every launcher was put back`,
+        `its launcher could not be switched (${why}), and ${left.length === 1 ? 'this launcher' : 'these launchers'} could not be put back: ${left.join(', ')} — ${left.length === 1 ? 'it starts' : 'they start'} ${latest} from ${left.length === 1 ? 'its' : 'their'} next start`,
         'switch',
       );
+      return { ...result, notice: BACKGROUND_WORDS.partlySwitched(latest) };
     }
   }
   const pruned = await prune(run, latest);
@@ -887,21 +917,33 @@ export async function runBackgroundUpdate(
   request: BackgroundRequest = {},
   deps: BackgroundDeps = {},
 ): Promise<BackgroundRunResult> {
-  const run: Run = { core, env, deps, dryRun: request.dryRun === true, now: (deps.now ?? (() => new Date()))() };
+  const dryRun = request.dryRun === true;
+  const run: Run = {
+    core,
+    env,
+    deps,
+    dryRun,
+    now: (deps.now ?? (() => new Date()))(),
+    cachePath: dryRun ? await mkdtemp(join(tmpdir(), 'comms-sigstore-')) : join(core.paths.stateDir, 'sigstore'),
+  };
   const finish = (partial: Settled): BackgroundRunResult => {
     const { noticeOutcome: _left, ...rest } = partial;
     return { ...rest, dryRun: run.dryRun, pruned: partial.pruned ?? [], jobRemoved: partial.jobRemoved ?? false };
   };
   if (run.dryRun) {
-    const decided = await decide(run);
-    if (!('go' in decided)) return finish(decided);
-    const { latest } = decided.partial;
-    return finish({
-      ...decided.partial,
-      outcome: 'would-install',
-      reason: `${latest} would be installed: every package's provenance verified, and it is past its hold`,
-      notice: BACKGROUND_WORDS.installed(latest ?? ''),
-    });
+    try {
+      const decided = await decide(run);
+      if (!('go' in decided)) return finish(decided);
+      const { latest } = decided.partial;
+      return finish({
+        ...decided.partial,
+        outcome: 'would-install',
+        reason: `${latest} would be installed: every package's provenance verified, and it is past its hold`,
+        notice: BACKGROUND_WORDS.installed(latest ?? ''),
+      });
+    } finally {
+      await rm(run.cachePath, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
   let partial: Settled;
   try {
