@@ -120,3 +120,22 @@ test('a background run records lastRun only for an outcome that shows the job wo
   });
   assert.equal((await readUpdateJobMarker(busy.stateDir))?.lastRun, held, 'busy recorded lastRun');
 });
+
+test('a background run a person starts by hand records no lastRun; the job’s own, through the core launcher, does', async () => {
+  const m = machine();
+  mkdirSync(m.stateDir, { recursive: true });
+  const installedAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+  writeFileSync(
+    updateJobMarkerPath(m.stateDir),
+    JSON.stringify({ platform: 'darwin', installedAt, label: 'com.agentcomms.update' }),
+  );
+  const NOW = new Date();
+  // `agentcomms update --background` at a terminal: the command a person runs, from wherever it is installed.
+  const byHand = await runBackgroundUpdate(m.core, m.env, {}, { now: () => NOW });
+  assert.equal(byHand.outcome, 'no-launchers', byHand.reason);
+  assert.equal((await readUpdateJobMarker(m.stateDir))?.lastRun, undefined, 'a run by hand said the job ran');
+  // The job's own: it starts the stable core launcher, which says so to what it starts.
+  const byJob = await runBackgroundUpdate(m.core, { ...m.env, AGENT_COMMS_LAUNCHER: 'core' }, {}, { now: () => NOW });
+  assert.equal(byJob.outcome, 'no-launchers', byJob.reason);
+  assert.equal((await readUpdateJobMarker(m.stateDir))?.lastRun, NOW.toISOString());
+});

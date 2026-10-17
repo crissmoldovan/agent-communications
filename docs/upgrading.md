@@ -230,7 +230,8 @@ off.
 holds a release for its hours or a pause, leaves one for you, or refuses one as unverified — records when it ran
 (`lastRun` in `update-job.json`). A run that could not read the registry (`unavailable`), found the machine's update
 lock held (`busy`) or failed records nothing: a job stuck so, offline for good or behind a lock a hung run keeps, is
-reported as not running once 48 hours have passed. The job counts as working only when it ran in the last 48 hours, or was set up
+reported as not running once 48 hours have passed. Only the job's own runs count: it starts the stable core launcher,
+which says so to what it starts, so `agentcomms update --background` run by hand records nothing. The job counts as working only when it ran in the last 48 hours, or was set up
 less than 48 hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires
 or a task that cannot start keeps its file, and counts as none: every notice and the security line are given as though
 no job were set up, with the offer to set it up again, and one more line —

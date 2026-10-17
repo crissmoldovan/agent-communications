@@ -11,6 +11,7 @@ import { toCommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import {
   exchangePointer,
+  LAUNCHER_ENV,
   type LauncherPointer,
   launcherName,
   launcherRuntimeVersion,
@@ -984,9 +985,14 @@ export async function runBackgroundUpdate(
         : stop('failed', refused.message, undefined, { text: BACKGROUND_WORDS.stopped(null), outcome: 'failed' });
   }
   const result = finish(partial);
-  // A run that did the job's work says it ran, one that found nothing to do included: a job that never runs, or never
-  // gets that far, silences no notice (U4, U7; `JOB_WORKS`).
-  if (JOB_WORKS.has(result.outcome)) await recordUpdateJobRun(core.paths.stateDir, run.now).catch(() => undefined);
+  // A run of the job's that did the job's work says it ran, one that found nothing to do included: a job that never
+  // runs, or never gets that far, silences no notice (U4, U7; `JOB_WORKS`). The job starts the stable core launcher,
+  // which says so to what it starts (`LAUNCHER_ENV`); `update --background` a person runs from their own command is
+  // not the job running, and records nothing (re-review of 0.20.0, severity 2).
+  const byJob = env[LAUNCHER_ENV]?.trim() === 'core';
+  if (byJob && JOB_WORKS.has(result.outcome)) {
+    await recordUpdateJobRun(core.paths.stateDir, run.now).catch(() => undefined);
+  }
   await core.audit
     .append({
       inboxId: '',

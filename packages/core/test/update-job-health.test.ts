@@ -87,11 +87,13 @@ async function commandNotice(m: Machine): Promise<string> {
 
 // ── Each run records it ─────────────────────────────────────────────────────────────────────────────────────────
 
-test('every background run records lastRun on the marker, one that finds nothing to do included; a dry run does not', async () => {
+test('every run of the job records lastRun on the marker, one that finds nothing to do included; a dry run does not', async () => {
   const m = machine();
   marker(m, 24 * 5);
-  // Nothing here starts a stable launcher: the run finds nothing to do, and says so.
-  const run = await runBackgroundUpdate(m.core, m.env, {}, { now: () => NOW });
+  // The job's run, started through the stable core launcher as the job starts it: a run by hand records nothing
+  // (update-job-reach.test.ts). Nothing here has a runtime to start: the run finds nothing to do, and says so.
+  const job = { ...m.env, AGENT_COMMS_LAUNCHER: 'core' };
+  const run = await runBackgroundUpdate(m.core, job, {}, { now: () => NOW });
   assert.equal(run.outcome, 'no-launchers', run.reason);
   const after = await readUpdateJobMarker(m.stateDir);
   assert.equal(after?.lastRun, NOW.toISOString(), 'a run that found nothing to do recorded no lastRun');
@@ -99,12 +101,12 @@ test('every background run records lastRun on the marker, one that finds nothing
 
   // A dry run is a person's question, not the job running: it changes nothing, the marker included.
   const later = new Date(NOW.getTime() + HOUR);
-  await runBackgroundUpdate(m.core, m.env, { dryRun: true }, { now: () => later });
+  await runBackgroundUpdate(m.core, job, { dryRun: true }, { now: () => later });
   assert.equal((await readUpdateJobMarker(m.stateDir))?.lastRun, NOW.toISOString());
 
   // With no job set up, a run writes no marker: a run by hand is not a job.
   const bare = machine();
-  await runBackgroundUpdate(bare.core, bare.env, {}, { now: () => NOW });
+  await runBackgroundUpdate(bare.core, { ...bare.env, AGENT_COMMS_LAUNCHER: 'core' }, {}, { now: () => NOW });
   assert.equal(existsSync(updateJobMarkerPath(bare.stateDir)), false);
 });
 
