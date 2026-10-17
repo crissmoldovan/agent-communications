@@ -38,7 +38,7 @@ import {
   HOSTILE_EXPECT,
   HOSTILE_FILE_NAME,
 } from './helpers/hostile-approval.ts';
-import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
+import { registryOf, tarballOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -1805,6 +1805,15 @@ function eventsRuntime(m: Machine, version: string): string {
   writeFileSync(entry, '');
   writeFileSync(join(dirname(entry), '..', 'package.json'), JSON.stringify({ ...published, version }));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: version } }));
+  // The lockfile npm writes, with the integrity of the tarball the stand-in registry serves and the test's root signs:
+  // core holds a runtime already on disk to the release it verified (re-review of 0.20.0, severity 4).
+  writeFileSync(
+    join(dir, 'package-lock.json'),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { [`node_modules/${packageName}`]: { version, integrity: tarballOf(packageName, version) } },
+    }),
+  );
   return dir;
 }
 
@@ -1816,7 +1825,10 @@ test(
   async () => {
     const m = machine();
     eventsRuntime(m, VERSION);
-    const { ok, close } = await connect(m);
+    // Core verifies the release whose runtime it registers on, against the test's own trust root: nothing reaches npm.
+    const { ok, close } = await connect(m, {
+      update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier() },
+    });
     try {
       const args = { channel: 'events', client: 'cursor', noVerify: true };
       const path = join(m.home, '.local', 'bin', 'agent-events');

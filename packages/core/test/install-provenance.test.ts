@@ -561,3 +561,105 @@ test('core’s tool and its command both verify a first install, with the verifi
   const approvals = await m.core.approvals.list();
   assert.equal(approvals.length, 2, 'only the verified install, from each surface, was prepared to approve');
 });
+
+/** Core's install of Gmail for gemini, on a machine where Gmail's own command already installed its runtime. */
+function coreOnTop(m: ReturnType<typeof machine>, verifyRelease: ServerInstallDeps['verifyRelease']) {
+  return (approvalId?: string) =>
+    gatedChange(
+      m.core,
+      serverInstallChange(m.core, m.env, { channel: 'gmail', client: 'gemini', noVerify: true }, undefined, {
+        registry: npmRegistry(m.env),
+        verifyRelease,
+      }),
+      { surface: 'mcp', channel: 'core', approvalId },
+    );
+}
+
+/** Gmail's own command installs its release, unverified, as the owner's decision allows: prepared, then claimed. */
+async function ownInstall(m: ReturnType<typeof machine>): Promise<void> {
+  const asked = await m.install({}, undefined, GMAIL_OWN);
+  const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
+  assert.equal((await m.install({}, prepared.approvalId, GMAIL_OWN)).status, 'applied');
+  assert.equal(receiptOf(m.runtime).verified, false);
+}
+
+test('core’s install holds a runtime already on disk to the verified release before it registers on it', async () => {
+  if (!(await withNpm())) return;
+  const geminiConfig = (m: ReturnType<typeof machine>) => join(m.home, '.gemini', 'settings.json');
+
+  // The release has no attestation: core refuses at the preview, though nothing is to be fetched (the reviewer's case).
+  {
+    const gmail = packed(GMAIL, 'gmail');
+    const served = await loopback([gmail]);
+    const attest = endpoint([gmail]);
+    try {
+      const m = machine(served.url);
+      await ownInstall(m);
+      attest.set({ [GMAIL]: 'missing' });
+      await assert.rejects(coreOnTop(m, attest.verifyRelease)(), refusedUnverified(GMAIL));
+      assert.equal(existsSync(geminiConfig(m)), false, 'core registered on an unverified runtime');
+      assert.equal(receiptOf(m.runtime).verified, false, 'the receipt changed');
+      assert.ok(existsSync(m.runtime), 'the runtime in use was removed');
+    } finally {
+      await served.close();
+    }
+  }
+
+  // The release verifies, and the runtime on disk is another tarball than the one it signs: refused at the apply, the
+  // runtime left for what uses it, and the person told how to fetch a verified one.
+  {
+    const gmail = packed(GMAIL, 'gmail');
+    const other = packed(GMAIL, 'another gmail');
+    const served = await loopback([gmail], [other]);
+    const attest = endpoint([gmail]);
+    try {
+      const m = machine(served.url);
+      await ownInstall(m);
+      const install = coreOnTop(m, attest.verifyRelease);
+      const asked = await install();
+      assert.equal(asked.status, 'approval-required');
+      const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
+      assert.ok(prepared.preview.includes(`${GMAIL}@${VERSION} was verified before this preview`), prepared.preview);
+      await assert.rejects(install(prepared.approvalId), (error: CommsError) => {
+        assert.equal(error.code, 'BAD_DATA', error.message);
+        assert.match(error.message, /^nothing was registered: /);
+        assert.match(error.message, /is not the tarball whose provenance was verified/);
+        assert.ok(String(error.hint).includes(m.runtime), `the hint does not name the runtime: ${error.hint}`);
+        assert.match(String(error.hint), /verifies it before anything is registered/);
+        return true;
+      });
+      assert.equal(existsSync(geminiConfig(m)), false);
+      assert.ok(existsSync(m.runtime), 'a runtime in use was removed');
+      assert.equal(receiptOf(m.runtime).verified, false);
+    } finally {
+      await served.close();
+    }
+  }
+
+  // The runtime on disk is the verified tarball: registered on, and its receipt now says verified.
+  {
+    const gmail = packed(GMAIL, 'gmail');
+    const served = await loopback([gmail]);
+    const attest = endpoint([gmail]);
+    try {
+      const m = machine(served.url);
+      await ownInstall(m);
+      const fetched = served.tarballsFetched();
+      const install = coreOnTop(m, attest.verifyRelease);
+      const asked = await install();
+      const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
+      const done = await install(prepared.approvalId);
+      assert.equal(done.status, 'applied');
+      const { result } = done as Extract<typeof done, { status: 'applied' }>;
+      assert.equal(result.provenance?.verified, true);
+      assert.ok(existsSync(geminiConfig(m)), 'nothing was registered');
+      assert.equal(served.tarballsFetched(), fetched, 'the runtime was fetched again');
+      assert.deepEqual(
+        { ...receiptOf(m.runtime), at: undefined },
+        { package: GMAIL, version: VERSION, verified: true, at: undefined, by: 'core' },
+      );
+    } finally {
+      await served.close();
+    }
+  }
+});

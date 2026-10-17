@@ -137,7 +137,8 @@ or the labelled PowerShell `&` line the result provides.
 **Core's install verifies what it fetches.** A managed `mcp install` run by core — `comms_server_install`, or
 `npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal — verifies the Sigstore
 provenance of the release it fetches from npm, as an update does, before the preview and again at your yes, and
-registers it only once npm has installed exactly that tarball. A channel's own `mcp install`
+registers it only once npm has installed exactly that tarball; a runtime already on the machine it registers on only
+once that runtime is shown to be that tarball. A channel's own `mcp install`
 (`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
 running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
 verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the

@@ -556,15 +556,22 @@ export function serverInstallChange(
       known: new Map([[`${packageName}@${version}`, sha512]]),
     });
     if (problem === null) {
-      if (there === null) await writeReceipt(runtime, packageName, version, true, 'core');
+      // Fetched now, or found on disk and shown to be the verified tarball: its receipt says so from now on.
+      await writeReceipt(runtime, packageName, version, true, 'core');
       return { package: packageName, version, verified: true };
     }
     if (there === null) await rm(runtime, { recursive: true, force: true }).catch(() => undefined);
+    const general =
+      "An install registers only a runtime whose packages of this suite were all built by this repository's release workflow, as their Sigstore provenance shows. If it happens again, do not install it some other way; report it as SECURITY.md says.";
     throw new CommsError(
       'BAD_DATA',
       `nothing was registered: ${problem}${there === null ? ', so it was removed' : ''}. The launcher was not pointed at it`,
       {
-        hint: "An install registers only a runtime whose packages of this suite were all built by this repository's release workflow, as their Sigstore provenance shows. If it happens again, do not install it some other way; report it as SECURITY.md says.",
+        // A runtime found on disk is left for whatever starts it now: say how to put a verified one in its place.
+        hint:
+          there === null
+            ? general
+            : `To fetch a verified one, remove ${runtime} — whatever starts it stops until it is installed again — and run this install again: it fetches ${packageName}@${version} from npm and verifies it before anything is registered. ${general}`,
         details: { package: packageName, version },
       },
     );
@@ -584,10 +591,15 @@ export function serverInstallChange(
        * approval is claimed, since the claim plans again — against the pins the update holds a release to. One that
        * does not verify refuses the install, and nothing is prepared to approve.
        */
+      const managedApply = request.print !== true && launcher === 'managed';
       const fetches =
-        request.print !== true &&
-        launcher === 'managed' &&
-        (await reusableRuntime(core.paths.dataDir, product.packageName, version)) === null;
+        managedApply && (await reusableRuntime(core.paths.dataDir, product.packageName, version)) === null;
+      /*
+       * A runtime already on disk is held to the verified release too, wherever there is a verifier — core's install
+       * (re-review of 0.20.0, severity 4): one a channel's own command installed unverified, or one made some other
+       * way, is registered on only once it is shown to be the tarball that verified, as the update holds one.
+       */
+      const checksDisk = managedApply && !fetches && deps.verifyRelease !== undefined;
       const from = sources();
       // The release a channel's own command is running, which npx already fetched: the one it may install unverified.
       const running =
@@ -599,7 +611,7 @@ export function serverInstallChange(
         running.packageName === product.packageName &&
         running.version === version;
       const verified =
-        fetches && !unverifiedOwn
+        (fetches && !unverifiedOwn) || checksDisk
           ? (
               await verifyReleaseSet(
                 from,

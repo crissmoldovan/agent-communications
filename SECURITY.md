@@ -117,8 +117,11 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   carries no Sigstore: it installs only the release it is running itself — the same package and version npx already
   fetched to run it, so nothing new runs — says in its preview and its result that it was not verified, and records
   `verified: false` in the runtime's `.agentcomms-install.json`; any other release it refuses, naming core's command.
-  A runtime already on the machine is used as it is found, and `--launcher npx` registers a package its client fetches
-  unverified each time it starts it, as above; the managed launcher's runtime, installed by core, is verified.
+  Core holds a runtime already on the machine to the same: its release is verified and its lockfile must show the
+  attested tarball for every `@agentcomms` package, or core registers nothing on it and says how to fetch a verified
+  one; one that passes has its receipt marked `verified: true`. A channel's own command uses a runtime already there as
+  it finds it, and `--launcher npx` registers a package its client fetches unverified each time it starts it, as
+  above; the managed launcher's runtime, installed or checked by core, is verified.
 - **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
   not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
   acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that

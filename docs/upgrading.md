@@ -55,7 +55,11 @@ lockfile in it records: one that does not, whether installed then or found on di
 registered on, and its step says so.
 
 **A first install is verified the same way, when core makes it.** A managed `mcp install` by core —
-`agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — that fetches a release's
+`agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — verifies the release whose
+runtime it registers on. One already on this machine — a channel's own command installed it unverified, say — must
+show, by its lockfile, the attested tarball of every `@agentcomms` package in it, or nothing is registered on it, it
+is left for whatever starts it now, and the refusal says to remove it and run the install again, which fetches a
+verified one; one that passes has its receipt marked `verified: true`. One that fetches a release's
 runtime from npm, because it is not on this machine yet, verifies that release before the preview is made and again
 when the approval is claimed, with the same pins and the same `BAD_DATA` refusal, and nothing is prepared to approve
 when it does not verify. The preview ends with the same line: `@agentcomms/gmail@<version> was verified before this
