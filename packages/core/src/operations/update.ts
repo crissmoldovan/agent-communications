@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { corruptStubOf, type StoredApproval, stateOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -1039,7 +1039,6 @@ function unverified(packageName: string, version: string, why: string, pin: stri
  * install. Reads; changes nothing.
  */
 async function verifyReleases(
-  core: Core,
   env: NodeJS.ProcessEnv,
   deps: UpdateDeps,
   wanted: ReadonlyMap<string, string>,
@@ -1076,7 +1075,6 @@ async function verifyReleases(
  * says nothing more, since what is installed was verified already.
  */
 async function decidingSince(
-  core: Core,
   env: NodeJS.ProcessEnv,
   deps: UpdateDeps,
   report: UpdateReport,
@@ -1296,9 +1294,9 @@ export function updateChange(
       // Every release it would install or switch to, verified before anything is shown or done: one that does not
       // verify refuses the whole update, and nothing is prepared to approve.
       const wanted = releasesOf(runtimes, pointers, steps, inspection.globals);
-      const verified = await verifyReleases(core, env, deps, wanted);
+      const verified = await verifyReleases(env, deps, wanted);
       // And the releases it takes this machine past: one that needs a decision is said in the preview, in fixed words.
-      const deciding = wanted.size === 0 ? [] : await decidingSince(core, env, deps, inspection.report);
+      const deciding = wanted.size === 0 ? [] : await decidingSince(env, deps, inspection.report);
       planned = {
         report: inspection.report,
         latest: inspection.report.latest,
