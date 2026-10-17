@@ -528,6 +528,7 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'agentLabel.name': 'the name in the agent label',
   'agentLabel.rules': 'who each kind of message appears to come from',
   'agentLabel.slackIcons': 'the icon of the agent’s Slack posts',
+  'agentLabel.slackStyles': 'how the agent’s Slack messages look',
 };
 
 /**
@@ -589,6 +590,9 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
       return 'what a rule sends as `me` goes out as you, with no label: it will look as if you wrote it yourself';
     case 'agentLabel.slackIcons':
       return 'the app’s Slack posts will show this icon beside your name';
+    case 'agentLabel.slackStyles':
+      // Only app → labelled waits (the owner's decision, 2026-10-17): back to app tightens, and is never described here.
+      return 'every agent message there goes out as you, labelled in its words, even where the app could post: it trades Slack’s own APP tag, which no one can fake, for words in the message';
     default:
       return '';
   }

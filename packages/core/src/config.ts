@@ -2001,16 +2001,20 @@ export function agentLabelRuleText(rule: AgentLabelRule): string {
   return `${rule.account}${where}${kinds}: ${rule.as}`;
 }
 
-/** A label setting's value as a loosening carries it: the rules in words, the icons as they are, the rest as text. */
+/**
+ * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles as they are, the
+ * rest as text.
+ */
 function labelSettingValue(loosening: AgentLabelLoosening, value: unknown): SettingValue | undefined {
   if (value === undefined || value === null) return undefined;
   if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
-  if (loosening.path === 'agentLabel.slackIcons') return { ...(value as Readonly<Record<string, string>>) };
+  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles')
+    return { ...(value as Readonly<Record<string, string>>) };
   return String(value);
 }
 
 /** The label settings a change can write, as the file holds them — raw, as `changedSettings` records every setting. */
-const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons'] as const;
+const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons', 'slackStyles'] as const;
 
 function storedAgentLabel(config: Config): Readonly<Record<string, unknown>> {
   const stored = config.agentLabel;

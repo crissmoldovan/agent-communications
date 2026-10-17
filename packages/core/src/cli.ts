@@ -160,6 +160,10 @@ Usage — run these with this CLI, each as the words after its program:
                                 a me rule applies at once
   label icon <account> <:emoji:>|--clear [--approval <id>]
                                 the workspace emoji the app's Slack posts show: approved first
+  label style <account> app|labelled [--approval <id>]
+                                how an agent's Slack messages look there: app, the default, posts as the
+                                app with Slack's APP tag where it can; labelled posts every one as you,
+                                labelled in its words, and is approved first; app applies at once
   mcp                           run the core MCP server on stdio (what an MCP client starts)
   mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
@@ -190,11 +194,11 @@ Usage — run these with this CLI, each as the words after its program:
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
 install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
-rule add --as me and label rule remove --as agent — is shown before it happens. At a terminal you approve it there;
-anything else gets the preview and an approval id (exit 10), and runs the command again with --approval <id> once the
-person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening —
-policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me — applies
-at once and asks nobody, and a --dry-run changes nothing.
+rule add --as me, label rule remove --as agent and label style labelled — is shown before it happens. At a terminal
+you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again with
+--approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
+\`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule
+remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing.
 
 On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
 once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
@@ -366,7 +370,7 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
@@ -830,8 +834,16 @@ export async function main(
           }
           request = { icon: { account, emoji: values.clear ? null : (emoji as string) } };
           rerun = values.clear ? ['label', 'icon', account, '--clear'] : ['label', 'icon', account, emoji as string];
+        } else if (sub === 'style') {
+          taking([]);
+          const [account, style, ...extra] = rest;
+          if (account === undefined || style === undefined || extra.length > 0) {
+            throw usage('usage: label style <account> app|labelled');
+          }
+          request = { style: { account, style } };
+          rerun = ['label', 'style', account, style];
         } else {
-          throw usage('usage: label [word|name|rule add|rule remove|icon]');
+          throw usage('usage: label [word|name|rule add|rule remove|icon|style]');
         }
         const result = await gatedChangeAtTerminal(core, labelChange(core, request, 'cli'), { ...approval, rerun });
         writeResult(result, output, renderLabelChange);
@@ -1168,6 +1180,13 @@ function renderLabel(report: LabelReport): string {
     if (account.icon !== undefined) {
       lines.push(
         `  icon     ${'emoji' in account.icon ? account.icon.emoji : 'your Slack photo, until an agent emoji is set'}`,
+      );
+    }
+    if (account.style !== undefined) {
+      lines.push(
+        account.style === 'labelled'
+          ? '  style    labelled — every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
+          : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
       );
     }
   }

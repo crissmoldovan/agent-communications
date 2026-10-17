@@ -136,7 +136,7 @@ Report or change which local files may be attached to a draft, an email or a pos
 
 ### `comms_label`
 
-Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of `word`, `name`, `addRule`, `removeRule`, `icon`. A new word, name or icon, a rule `as: "me"`, and removing an `agent` rule are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule `as: "agent"`, or removing a `me` rule, labels more and applies at once. Add a `me` rule only when the person asked for that.
+Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of `word`, `name`, `addRule`, `removeRule`, `icon`, `style`. A new word, name or icon, a rule `as: "me"`, removing an `agent` rule, and a Slack workspace's `style` set to `labelled` are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule `as: "agent"`, removing a `me` rule, or a style back to `app`, applies at once. Add a `me` rule, or choose `labelled`, only when the person asked for that.
 
 *writes*
 
@@ -147,6 +147,7 @@ Report or change how what an agent sends is labelled: the person's name and a wo
 | `addRule` | object | no | who a kind of message appears to come from, on one account |
 | `removeRule` | object | no | a rule to take away, as it is listed |
 | `icon` | object | no | the icon of the agent’s Slack posts in one workspace |
+| `style` | object | no | how an agent’s messages look in one Slack workspace |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_orgs_list`

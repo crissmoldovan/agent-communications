@@ -47,6 +47,16 @@ export interface AgentLabelRule {
   readonly as: MessageIdentity;
 }
 
+/**
+ * How an `agent` act looks in one Slack workspace (the owner's decision, 2026-10-17): `app`, the default, posts as the
+ * app where S2 says it can, with Slack's APP tag, and labelled as the person elsewhere; `labelled` posts every one as
+ * the person, labelled as S3's fallback is, even where the app could post. Slack's APP tag cannot be hidden or renamed,
+ * so this is the person's choice between that tag and words in the message.
+ */
+export const SLACK_STYLES: readonly ['app', 'labelled'] = Object.freeze(['app', 'labelled'] as const);
+export type SlackStyle = (typeof SLACK_STYLES)[number];
+export const DEFAULT_SLACK_STYLE: SlackStyle = 'app';
+
 /** L5: `config.json`'s `agentLabel`. Every field may be absent: absent means the word `agent` and no rules. */
 export interface AgentLabelSettings {
   readonly word?: AgentLabelWord;
@@ -54,6 +64,8 @@ export interface AgentLabelSettings {
   readonly rules?: readonly AgentLabelRule[];
   /** S4: a Slack account id's agent emoji, `:name:`. */
   readonly slackIcons?: Readonly<Record<string, string>>;
+  /** A Slack account id's style; a workspace with none is `app`. */
+  readonly slackStyles?: Readonly<Record<string, SlackStyle>>;
 }
 
 /** What a channel knows about one act when it asks who it appears to come from. */
@@ -79,6 +91,18 @@ const FORBIDDEN_NAME_CHARACTERS = /[()<>"@,;:\\]/u;
 
 export function isAgentLabelWord(value: unknown): value is AgentLabelWord {
   return typeof value === 'string' && (AGENT_LABEL_WORDS as readonly string[]).includes(value);
+}
+
+export function isSlackStyle(value: unknown): value is SlackStyle {
+  return typeof value === 'string' && (SLACK_STYLES as readonly string[]).includes(value);
+}
+
+/** A Slack workspace's style, by its account id: `app` unless `labelled` is recorded for it. */
+export function slackStyleOf(settings: AgentLabelSettings | undefined, accountId: string): SlackStyle {
+  const styles = settings?.slackStyles;
+  return styles !== undefined && Object.hasOwn(styles, accountId) && styles[accountId] === 'labelled'
+    ? 'labelled'
+    : DEFAULT_SLACK_STYLE;
 }
 
 /** Why a name cannot be labelled, or undefined when it can. */
@@ -165,7 +189,12 @@ export function resolveIdentity(settings: AgentLabelSettings | undefined, query:
 }
 
 export interface AgentLabelLoosening {
-  readonly path: 'agentLabel.word' | 'agentLabel.name' | 'agentLabel.rules' | 'agentLabel.slackIcons';
+  readonly path:
+    | 'agentLabel.word'
+    | 'agentLabel.name'
+    | 'agentLabel.rules'
+    | 'agentLabel.slackIcons'
+    | 'agentLabel.slackStyles';
   readonly was: unknown;
   readonly now: unknown;
 }
@@ -181,7 +210,9 @@ const ruleKey = (rule: AgentLabelRule): string =>
 
 /**
  * L5: the changes that need the person's confirmation — anything that could leave a message unlabelled or change how
- * the label looks. Adding an `agent` rule or removing a `me` rule tightens, and is not listed.
+ * the label looks. Adding an `agent` rule or removing a `me` rule tightens, and is not listed. A Slack workspace moved
+ * from `app` to `labelled` trades Slack's own APP tag, which no one can fake, for words in the message, so it waits;
+ * moved back to `app`, it tightens. Its values are each moved workspace's style, before and after.
  */
 export function classifyAgentLabelChange(
   before: AgentLabelSettings | undefined,
@@ -201,6 +232,16 @@ export function classifyAgentLabelChange(
     changes.push({ path: 'agentLabel.rules', was: before?.rules ?? [], now: after?.rules ?? [] });
   if (JSON.stringify(sorted(before?.slackIcons)) !== JSON.stringify(sorted(after?.slackIcons)))
     changes.push({ path: 'agentLabel.slackIcons', was: before?.slackIcons ?? {}, now: after?.slackIcons ?? {} });
+  const styled = [...new Set([...Object.keys(before?.slackStyles ?? {}), ...Object.keys(after?.slackStyles ?? {})])]
+    .filter((id) => slackStyleOf(before, id) !== slackStyleOf(after, id))
+    .sort();
+  if (styled.some((id) => slackStyleOf(after, id) === 'labelled')) {
+    changes.push({
+      path: 'agentLabel.slackStyles',
+      was: Object.fromEntries(styled.map((id) => [id, slackStyleOf(before, id)])),
+      now: Object.fromEntries(styled.map((id) => [id, slackStyleOf(after, id)])),
+    });
+  }
   return changes;
 }
 
@@ -233,7 +274,8 @@ function isRule(value: unknown): value is AgentLabelRule {
 /**
  * The stored `agentLabel`, read so that a bad value can only tighten. An unknown word reads as `agent`, an invalid
  * name as no name, and a rule list with any invalid rule is ignored whole: dropping one `agent` rule could leave a
- * broader `me` rule in charge. A malformed icon entry is dropped, falling back to the plain photo.
+ * broader `me` rule in charge. A malformed icon entry is dropped, falling back to the plain photo. A Slack style that is
+ * neither `app` nor `labelled` is dropped too, so that workspace is `app`: the stronger disclosure.
  */
 export function readAgentLabelSettings(raw: unknown): AgentLabelSettings {
   if (typeof raw !== 'object' || raw === null) return {};
@@ -243,6 +285,7 @@ export function readAgentLabelSettings(raw: unknown): AgentLabelSettings {
     name?: string;
     rules?: AgentLabelRule[];
     slackIcons?: Record<string, string>;
+    slackStyles?: Record<string, SlackStyle>;
   } = {};
   if (isAgentLabelWord(stored.word)) settings.word = stored.word;
   if (typeof stored.name === 'string' && nameProblem(stored.name) === undefined) settings.name = stored.name;
@@ -253,6 +296,12 @@ export function readAgentLabelSettings(raw: unknown): AgentLabelSettings {
       (entry): entry is [string, string] => typeof entry[1] === 'string' && EMOJI_NAME.test(entry[1]),
     );
     if (icons.length > 0) settings.slackIcons = Object.fromEntries(icons);
+  }
+  if (typeof stored.slackStyles === 'object' && stored.slackStyles !== null && !Array.isArray(stored.slackStyles)) {
+    const styles = Object.entries(stored.slackStyles as Record<string, unknown>).filter(
+      (entry): entry is [string, SlackStyle] => isSlackStyle(entry[1]),
+    );
+    if (styles.length > 0) settings.slackStyles = Object.fromEntries(styles);
   }
   return settings;
 }

@@ -179,6 +179,17 @@ the core's `classifyChange`:
   shows the phrase exactly as recipients will see it, or the identity each affected kind of message will now have. An
   agent cannot approve one under `confirm`.
 
+**A Slack workspace's style** (added 2026-10-17, the owner's decision). Slack's APP tag on an app post cannot be hidden
+or renamed, so the person chooses, per workspace, how an `agent` message looks there:
+`agentLabel.slackStyles: { <accountId>: "app" | "labelled" }`.
+- **`app`**, the default, is S2 as written. A workspace with no entry is `app`, and so is one whose entry this release
+  cannot read: the stronger disclosure.
+- **`labelled`** posts every `agent` act as the person, labelled as S3's fallback is, even where the app could post
+  (S2).
+- **`app` → `labelled` is a loosening.** Its preview says it trades Slack's own tag, which no one can fake, for words in
+  the message. **`labelled` → `app` tightens**, and applies at once.
+- It is keyed by the account's id, as `slackIcons` is, so it follows a rename and never reaches another account.
+
 **When an older release meets these keys.** Every config schema is a `looseObject`, so releases before this one read
 the keys and ignore them. If one drops them when it writes, every message goes back to `agent` with the word `agent`,
 which is a tightening. Older runtimes still send unlabelled, until `agentcomms update` reaches them (§11).
@@ -191,6 +202,10 @@ One capability in the core: `agentcomms label` on the CLI, and `comms_label` as 
   would see it. Reading needs nobody.
 - **A change** sets the word or the name, adds or removes a rule, or sets or clears a Slack icon, and each goes
   through L5.
+- **A Slack workspace's style** (added 2026-10-17): `agentcomms label style <account> app|labelled`, and `comms_label`
+  with `style: { account, style }`. It is the same operation, through `GatedChange`, with its own row in
+  `capabilities.json`. It refuses an account that is not a Slack workspace. With no change, the report shows each Slack
+  workspace's style.
 
 Each prepare tool on Slack, Gmail and Resend gains an optional `as` parameter, and its CLI command gains `--as`.
 
@@ -264,6 +279,17 @@ The route is part of what the approval binds. At send, a refusal such as `not_in
 meanwhile, ends that send as refused. Nothing is posted under the other identity: posting it that way would be a
 different message, so it needs a new preview and a new yes.
 
+(Added 2026-10-17, the owner's decision, L5.) **In a workspace whose style is `labelled`, the person posts every
+`agent` act, labelled (S3), even where the app could post.**
+- The style is read before the room, so nothing asks Slack whether the app could have posted.
+- A file and an edit keep their own reasons, since what they are fixes their route whatever the style: the app posts
+  no files in this release, and an edit is made by whoever posted the message (S5). So an app message posted before
+  the switch is still edited and deleted by the app.
+- A reaction is the person's, unlabelled, as in the fallback (S6), and its preview says so.
+- The digest binds the route, as it does for every other route. A style changed between the preview and the send
+  refuses the act.
+- An `as: "me"` act is unchanged.
+
 Identity `me` posts with the person's token, as before this release.
 
 ### S3 — The labelled fallback
@@ -333,6 +359,10 @@ The first line names the identity exactly:
 - the labelled fallback: `Cristian Moldovan · labelled "Cristian Moldovan (agent):" at the start of the message ·
   <the reason, e.g. the app cannot post in a direct message between two people>`;
 - `me`: `Sent as you, with no label: it will look as if you wrote it yourself` (L3).
+
+(Added 2026-10-17.) Under the `labelled` style (L5, S2), the fallback's line names the person's choice as its reason:
+`Cristian Moldovan · labelled "Cristian Moldovan (agent):" at the start of the message · you chose labelled posts for
+this workspace`.
 
 ## 5. Gmail
 

@@ -365,6 +365,112 @@ test('icon: an emoji name between colons is recorded for a Slack account through
   assert.equal((await labelOf(m)).slackIcons, undefined);
 });
 
+// ── A Slack workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────
+
+const LABELLED = { style: { account: 'acme/slack', style: 'labelled' } } as const;
+const APP = { style: { account: 'acme/slack', style: 'app' } } as const;
+
+test('style: every Slack workspace is app until the person chooses otherwise, and the report says so', async () => {
+  const report = await labelReport(machine().core);
+  const workspace = report.accounts.find((account) => account.account === 'acme/slack');
+  assert.equal(workspace?.style, 'app');
+  // A mailbox, or an account that sends nothing through these tools, has no Slack style.
+  assert.equal(report.accounts.find((account) => account.account === 'acme/gmail')?.style, undefined);
+  assert.equal(report.accounts.find((account) => account.account === 'acme/whatsapp')?.style, undefined);
+});
+
+test('style: labelled waits for a yes, its preview naming what it trades; it is recorded by the account’s id', async () => {
+  const m = machine({ name: 'Jo Example' });
+  const prepared = waiting(await run(m, LABELLED));
+  assert.match(prepared.preview, /trades Slack’s own APP tag, which no one can fake, for words in the message/);
+  assert.match(
+    prepared.preview,
+    /acme\/slack: every post, reply and file .*as you, beginning "<your name in Slack> \(agent\):/,
+  );
+  assert.match(prepared.preview, /acme\/slack: reactions .*as you, with no label/);
+  assert.equal((await labelOf(m)).slackStyles, undefined, 'nothing is written before the approval');
+  const result = applied(await run(m, LABELLED, prepared.approvalId));
+  assert.equal(result.change, 'style');
+  assert.equal(result.changed, true);
+  assert.deepEqual((await labelOf(m)).slackStyles, { [slack.id]: 'labelled' });
+  assert.equal(result.accounts.find((account) => account.account === 'acme/slack')?.style, 'labelled');
+  // The same again changes nothing, and asks nobody.
+  const again = applied(await run(m, LABELLED));
+  assert.equal(again.changed, false);
+  assert.match(again.note ?? '', /labelled already/);
+});
+
+test('style: back to app tightens, and applies at once with no approval', async () => {
+  const m = machine({ slackStyles: { [slack.id]: 'labelled' } });
+  const result = applied(await run(m, APP));
+  assert.equal(result.changed, true);
+  assert.equal((await labelOf(m)).slackStyles, undefined, 'app is the default, so nothing is kept for it');
+  assert.equal(result.accounts.find((account) => account.account === 'acme/slack')?.style, 'app');
+  assert.deepEqual(await listApprovals(m.core), [], 'a tightening asked somebody');
+  const again = applied(await run(m, APP));
+  assert.equal(again.changed, false);
+  // A style this release cannot read is app already; choosing app writes over it, at once.
+  const unread = machine({ slackStyles: { [slack.id]: 'fancy' } });
+  assert.match((await labelReport(unread.core)).ignored.join('\n'), /acme\/slack.*"fancy".*app/);
+  applied(await run(unread, APP));
+  assert.equal((await labelOf(unread)).slackStyles, undefined);
+  assert.deepEqual((await labelReport(unread.core)).ignored, []);
+});
+
+test('style: only a Slack workspace has one, and it is app or labelled', async () => {
+  const m = machine();
+  const cases: [LabelChangeRequest, string, RegExp][] = [
+    [{ style: { account: 'acme/gmail', style: 'labelled' } }, 'USAGE', /acme\/gmail is not a Slack workspace/],
+    [{ style: { account: 'acme/whatsapp', style: 'labelled' } }, 'USAGE', /acme\/whatsapp is not a Slack workspace/],
+    [{ style: { account: 'acme/slack', style: 'fancy' } }, 'USAGE', /app or labelled/],
+    [{ style: { account: 'acme/slack' } as never }, 'USAGE', /app or labelled/],
+    [{ style: { account: '', style: 'labelled' } }, 'USAGE', /Slack workspace/],
+    [{ style: { account: 'gone/slack', style: 'labelled' } }, 'NOT_FOUND', /gone\/slack/],
+    [{ style: { account: 'acme/slack', style: 'labelled' }, word: 'twin' } as never, 'USAGE', /one change at a time/],
+  ];
+  for (const [request, code, pattern] of cases) {
+    await assert.rejects(run(m, request), usage(code, pattern), JSON.stringify(request));
+  }
+  assert.equal((await labelOf(m)).slackStyles, undefined);
+});
+
+test('style: label style and comms_label `style` are the one change, and the report shows it on both', async () => {
+  const m = machine();
+  const { call, close } = await connect(m);
+  try {
+    const asked = await call(LABELLED);
+    assert.equal(asked.structuredContent?.approvalRequired, true, JSON.stringify(asked.structuredContent));
+    assert.match(String(asked.structuredContent?.preview), /APP tag/);
+    const pending = cli(m, ['label', 'style', 'acme/slack', 'labelled']);
+    assert.equal(pending.status, 10, pending.stderr);
+    assert.match(pending.stdout, /trades Slack’s own APP tag/);
+    const claimed = await call({ ...LABELLED, approvalId: asked.structuredContent?.approvalId });
+    assert.equal(claimed.structuredContent?.applied, true, JSON.stringify(claimed.structuredContent));
+    assert.deepEqual((await labelOf(m)).slackStyles, { [slack.id]: 'labelled' });
+
+    const shown = cli(m, ['label']);
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /acme\/slack \(Slack\)[\s\S]*style +labelled/);
+    const stray = await call({ style: { account: 'acme/slack', style: 'app', styel: 'x' } });
+    assert.equal(stray.isError, true, 'a misspelt key inside the style is refused, not dropped');
+
+    const back = cli(m, ['label', 'style', 'acme/slack', 'app', '--json']);
+    assert.equal(back.status, 0, back.stderr);
+    assert.equal(back.json().data.changed, true);
+    assert.equal((await labelOf(m)).slackStyles, undefined);
+    for (const args of [
+      ['label', 'style', 'acme/slack'],
+      ['label', 'style', 'acme/slack', 'app', 'extra'],
+    ]) {
+      const wrong = cli(m, args);
+      assert.notEqual(wrong.status, 0, args.join(' '));
+      assert.match(wrong.stderr, /label style <account> app\|labelled/);
+    }
+  } finally {
+    await close();
+  }
+});
+
 test('a me rule for an account whose change policy is confirm is approved at a terminal', async () => {
   const m = machine(undefined, {
     accounts: { 'acme/slack': { ...slack, changePolicy: 'confirm' }, 'acme/whatsapp': whatsapp },
