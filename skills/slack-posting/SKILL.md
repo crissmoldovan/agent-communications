@@ -77,7 +77,7 @@ message.** You do not choose the label, its name or its icon; nothing you pass c
 | First line | What the recipient sees |
 |---|---|
 | `Jo Example (agent) · posted by the app …` | the app's post, named after the person, with Slack's APP badge, and their agent emoji or photo |
-| `Jo Example · labelled "Jo Example (agent):" at the start of the message · <reason>` | the person's own post, its words and its notification both beginning `Jo Example (agent): ` — where the app cannot post: a DM, a group DM, their own DM, a room the app is not in, any post with files, a workspace with no app bot token yet (`slack-setup` says how to give it one) |
+| `Jo Example · labelled "Jo Example (agent):" at the start of the message · <reason>` | the person's own post, its words and its notification both beginning `Jo Example (agent): ` — where the app cannot post: a DM, a group DM, their own DM, a room the app is not in, any post with files, a workspace with no app bot token yet (`slack-setup` says how to give it one); and everywhere in a workspace whose style is `labelled`, where the reason is `you chose labelled posts for this workspace` |
 | `Sent as you, with no label: it will look as if you wrote it yourself` | the person's own post, unlabelled |
 
 **Pass `as: "me"` (`--as me`) only when the person said so for this message** — "send this one as me". Never on your
@@ -87,6 +87,15 @@ make sure the person sees that line before they say yes.
 
 The route is fixed at the preview. If the app's post is refused at send (the app was removed from the room), the post
 is refused — nothing goes out as the person instead. Prepare it again and show the new preview.
+
+**A workspace's style is the person's choice.** Slack puts its APP tag on every app post, and nobody can hide or rename
+it, so the person may choose labelled posts in place of the app for a workspace: the core's `comms_label` with
+`style: { account, style: "labelled" }` (CLI `agentcomms label style <workspace> labelled`). Then every post, reply and
+file you make there goes out as them, labelled, even in a channel the app could post in, and your reactions there are
+theirs, unlabelled. A message the app posted before is still the app's to edit or delete. Never choose it for them, or
+to get round anything. If they ask, explain the trade first: nobody can fake Slack's APP tag, but anyone can type words
+at the start of a message. Then let the preview ask them. `style: "app"` goes back at once, and `comms_label` with no
+change shows each workspace's style.
 
 ## Show the whole preview, and wait for a yes
 
@@ -246,7 +255,8 @@ A reaction notifies somebody and is attributed to them, so it goes through the s
 though, so there is no preview: say which emoji on which message, in one line, and wait for a yes.
 
 Under `chat`, `slack_react` (or `agent-slack react --workspace <name> --channel <id> --ts <ts> --emoji <name>`) then
-adds it, once. Where the app can post, the app reacts; elsewhere — a DM, a room the app is not in — the person does,
+adds it, once. Where the app can post, the app reacts; elsewhere — a DM, a room the app is not in, any room of a
+workspace whose style is `labelled` — the person does,
 and a reaction carries no words, so nothing on it says their agent added it: the result's `label.line` says so, and say
 it too. `as: "me"` follows the same rule as a post's.
 

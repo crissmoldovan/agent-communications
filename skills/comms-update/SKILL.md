@@ -136,6 +136,12 @@ messages, in this order, skipping any that does not apply:
 4. **Slack, posting as the app,** only if they want the APP badge. Until then, an agent's Slack messages go out as
    them, with the label at the start. Explain that the bot token stays on this machine, and that both ways need a new
    Slack app; then give one way's numbered steps, not both at once. The slack-setup skill has them.
+5. **Slack, labelled posts in place of the app,** only if they ask, or mind the APP tag. Slack puts its APP tag on
+   every app post, and nobody can hide or rename it. If they would rather their agent's messages in a workspace read
+   as theirs, labelled, offer `comms_label` with `style: { account, style: "labelled" }`. Every agent post, reply and
+   file there then goes out as them, beginning "Their Name (agent): ", even where the app could post; reactions go out
+   as them, unlabelled. Tell them the trade before they say yes: nobody can fake Slack's APP tag, but anyone can type
+   words at the start of a message. It shows a preview to approve, and `style: "app"` goes back at once.
 
 ## Without the MCP tools
 

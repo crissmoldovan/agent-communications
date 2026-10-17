@@ -274,6 +274,15 @@ others who installed the same app post as the same bot, and theirs are refused b
 the app's where the app can post, and yours elsewhere — and since a reaction carries no words, the preview says it
 goes unlabelled.
 
+**Labelled posts in place of the app, per workspace.** Slack adds its APP tag to every app post, and nobody can hide or
+rename it. If you would rather an agent's messages in a workspace read as yours, labelled, choose it with the core's
+`label style <workspace> labelled` (MCP `comms_label` with `style`), which you approve. From then on, every agent post,
+reply and file there goes out as you, its words and its notification beginning `Jo Example (agent): `, even in a
+channel the app could post in. The preview's first line ends `you chose labelled posts for this workspace`. Reactions
+are yours, unlabelled, as everywhere the app cannot post. A message the app posted before stays the app's to edit or
+delete. `label style <workspace> app` goes back at once, and `label` shows each workspace's style. Weigh the trade
+before choosing it: nobody can fake Slack's APP tag, but anyone can type words at the start of a message.
+
 **Your agent emoji.** The icon is your Slack photo until you set an emoji: make one from your photo with a small robot
 badge with the Slack CLI's `icon make` (MCP `slack_icon_make`), upload it at your workspace's emoji page, and record
 its name with the core's `label icon <workspace> :name:` (MCP `comms_label`), which you approve. Nothing is published outside Slack.
