@@ -2,7 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { displayUrl } from './mcp-clients.ts';
 import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
-import { type ProvenanceRelease, type ProvenanceVerdict, sha512Hex } from './update-provenance.ts';
+// Types only from update-provenance.ts: what it imports at run time — sigstore-js, lazily — stays out of every module
+// that reaches this one, a channel's bundle among them (WhatsApp's no-network test reads that graph).
+import type { ProvenanceRelease, ProvenanceVerdict } from './update-provenance.ts';
 import { PIN_WORDS } from './update-words.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -75,6 +77,16 @@ export function npmRegistry(env: NodeJS.ProcessEnv): ReleaseRegistry {
     const date = Date.parse(response.headers.get('date') ?? '');
     return { packument, ...(Number.isFinite(date) ? { servedAt: new Date(date) } : {}) };
   };
+}
+
+/** The SHA-512 in a subresource-integrity string, as hex; null when it holds none. */
+export function sha512Hex(integrity: string): string | null {
+  for (const part of integrity.trim().split(/\s+/)) {
+    if (!part.startsWith('sha512-')) continue;
+    const bytes = Buffer.from(part.slice('sha512-'.length).split('?')[0] ?? '', 'base64');
+    if (bytes.length === 64) return bytes.toString('hex');
+  }
+  return null;
 }
 
 /** The tarball integrity the registry gives for one version, or null when it gives none. */

@@ -63,7 +63,8 @@ import {
 } from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
-import { releaseVerifier, type VerifiedProvenance } from '../update-provenance.ts';
+// Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
+import type { VerifiedProvenance } from '../update-provenance.ts';
 import {
   BUILT_BY,
   type DecidingRelease,
@@ -145,9 +146,9 @@ export interface UpdateDeps {
   registry?: ReleaseRegistry | undefined;
   /**
    * Verifies a release's provenance before an update installs or switches to it (design 2026-10-16 U5 step 3, held to
-   * the same pins as the background run). Defaults to npm's attestations endpoint and sigstore-js, with Sigstore's
-   * trust root read through TUF — but only when neither `latestVersion` nor `registry` is a stand-in: a test hands in
-   * its own, or every release is refused. Nothing skips it.
+   * the same pins as the background run). Core's CLI and server hand in theirs (`stateReleaseVerifier`: npm's
+   * attestations endpoint and sigstore-js); a test hands in its own. Without one every release is refused: nothing
+   * installs unverified, and nothing skips it.
    */
   verifyRelease?: ReleaseVerifier | undefined;
   /** The clock a check or an update is recorded by in the daily check's file. */
@@ -1001,20 +1002,21 @@ function releasesOf(
 }
 
 /**
- * Where an update reads releases' documents and verifies them: the registry npm reads and npm's attestations, verified
- * with sigstore-js — unless a test handed in stand-ins, which then hands in its verifier too. Null where none was
- * handed in beside a stand-in: then every release is refused, and nothing reaches the network.
+ * Where an update reads releases' documents and verifies them: the registry npm reads, unless a test handed in a
+ * stand-in, and the verifier its caller handed in — core's CLI and server hand in one with npm's attestations and
+ * sigstore-js. Null where there is none: then every release is refused, and nothing reaches the network.
  */
 function releaseSources(
-  core: Pick<Core, 'paths'> | InstallContext['core'],
   env: NodeJS.ProcessEnv,
   deps: UpdateDeps,
-): { registry: ReleaseRegistry | null; verify: ReleaseVerifier | null } {
+): { registry: ReleaseRegistry | null; verify: ReleaseVerifier | null; why: string } {
   const standIn = deps.latestVersion !== undefined || deps.registry !== undefined;
   return {
     registry: deps.registry ?? (deps.latestVersion === undefined ? npmRegistry(env) : null),
-    verify:
-      deps.verifyRelease ?? (standIn ? null : releaseVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') })),
+    verify: deps.verifyRelease ?? null,
+    why: standIn
+      ? 'this update was handed a stand-in registry and no verifier'
+      : "nothing here can verify provenance: run the update from core's own command or server",
   };
 }
 
@@ -1044,11 +1046,9 @@ async function verifyReleases(
 ): Promise<Map<string, VerifiedProvenance>> {
   const verified = new Map<string, VerifiedProvenance>();
   if (wanted.size === 0) return verified;
-  const { registry, verify } = releaseSources(core, env, deps);
+  const { registry, verify, why } = releaseSources(env, deps);
   for (const [packageName, version] of [...wanted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    if (registry === null || verify === null) {
-      throw unverified(packageName, version, 'this update was handed a stand-in registry and no verifier', 'verifier');
-    }
+    if (registry === null || verify === null) throw unverified(packageName, version, why, 'verifier');
     let integrity: string | null;
     try {
       integrity = releaseIntegrity((await registry(packageName)).packument, version);
@@ -1082,7 +1082,7 @@ async function decidingSince(
   report: UpdateReport,
 ): Promise<DecidingRelease[]> {
   const latest = report.latest[CORE_PACKAGE];
-  const { registry, verify } = releaseSources(core, env, deps);
+  const { registry, verify } = releaseSources(env, deps);
   if (latest === undefined || registry === null) return [];
   try {
     return (await declaredSince(registry, verify, CORE_PACKAGE, oldestHere(report), latest)).deciding;
@@ -1546,7 +1546,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   // What each runtime holds is checked against what was verified — its own package, and every package of this suite
   // it depends on, which is verified now when it was not before the preview.
   const check = {
-    verify: releaseSources(context.core, context.env, deps).verify,
+    verify: releaseSources(context.env, deps).verify,
     known: new Map(
       [...planned.verified.values()].map((provenance) => [
         `${provenance.package}@${provenance.version}`,

@@ -25,6 +25,7 @@
  */
 
 import { join } from 'node:path';
+import { sha512Hex } from './update-release.ts';
 
 /** The pins: what a release's provenance has to say, field by field (plan, Global constraints). */
 export const PROVENANCE_PINS: Readonly<{
@@ -136,15 +137,7 @@ export function packageUrl(packageName: string, version: string): string {
   return `pkg:npm/${packageName.replace(/^@/, '%40')}@${version}`;
 }
 
-/** The SHA-512 in a subresource-integrity string, as hex; null when it holds none. */
-export function sha512Hex(integrity: string): string | null {
-  for (const part of integrity.trim().split(/\s+/)) {
-    if (!part.startsWith('sha512-')) continue;
-    const bytes = Buffer.from(part.slice('sha512-'.length).split('?')[0] ?? '', 'base64');
-    if (bytes.length === 64) return bytes.toString('hex');
-  }
-  return null;
-}
+export { sha512Hex } from './update-release.ts';
 
 // ── A certificate, read as far as the pins need ───────────────────────────────────────────────────────────────
 
