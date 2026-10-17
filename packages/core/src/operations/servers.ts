@@ -21,6 +21,7 @@ import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
+import { writeFileAtomic } from '../fs.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { launcherCli, launcherName, launcherPaths, readPointer } from '../launcher.ts';
 import {
@@ -237,6 +238,12 @@ export interface ServerInstallRequest {
 export type ServerInstallResult = InstallResult & {
   /** What the person has to do before the server's tools appear, or null when nothing was registered. */
   restart: string | null;
+  /**
+   * The provenance of the runtime this install fetched from npm, or found there for a release it verified: verified,
+   * or — a channel's own command installing the release it is running, which it cannot check — not, with `note`
+   * saying so and naming core's command that checks it (also among `warnings`). Absent when it fetched nothing.
+   */
+  provenance?: { package: string; version: string; verified: boolean; note?: string | undefined } | undefined;
 };
 
 export interface ServerInstallDeps {
@@ -253,9 +260,16 @@ export interface ServerInstallDeps {
    * Verifies the release a first install fetches from npm, with the pins and the refusal of the update by hand
    * (`verifyReleaseSet`; security review of 0.20.0). Core's CLI and server hand in theirs (`stateReleaseVerifier`), a
    * test its own. Without one — a channel's own process, which carries no Sigstore — an install that would fetch a
-   * runtime is refused, naming core's command, and nothing skips it.
+   * runtime is refused, naming core's command, and nothing skips it — but for the one release the command is running
+   * itself (`running`), which npx already fetched and which is running: that is installed as before, said in the
+   * preview and the result not to be verified, and recorded so in its receipt (owner's decision, 2026-10-17).
    */
   verifyRelease?: ReleaseVerifier | undefined;
+  /**
+   * The release this process is running, when it is a channel's own command: the only one it may install without
+   * verifying, and only with no verifier. Left out, the channel's own product (`own`) is it: the version it is.
+   */
+  running?: { packageName: string; version: string } | undefined;
 }
 
 /**
@@ -383,12 +397,24 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
   };
 }
 
+/**
+ * The install receipt a fetched runtime keeps in its folder: which release, whether its provenance was verified, and
+ * by whom it was installed — core, which verifies, or a channel's own command, which cannot (owner's decision,
+ * 2026-10-17). Doctor and a person can read it; nothing else depends on it.
+ */
+export const INSTALL_RECEIPT = '.agentcomms-install.json';
+
+/** A sentence's first letter in capitals: core's command, said after a full stop. */
+const capitalised = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
 /** What an install's plan found, for its apply to hold the install to: see `serverInstallChange`. */
 interface Planned {
   product: McpProduct;
   install: PlannedInstall;
   /** The release a first install fetches, verified before the preview; undefined when it fetches none. */
   verified: VerifiedProvenance | undefined;
+  /** A channel's own command fetching the release it is running, which it cannot verify (`running`). */
+  unverifiedOwn: boolean;
 }
 
 /**
@@ -443,29 +469,47 @@ export function serverInstallChange(
         ? "nothing here can verify provenance: run the install from core's own command or server"
         : 'this install was handed a verifier and no registry',
   });
-  /** Where a process that cannot verify — a channel's own, with no Sigstore — sends the person: core, which can. */
-  const verifyInCore = (): string => {
+  /**
+   * Core's own command for this same install, located — the one that verifies — said by `say`; `instead` where no
+   * command can be named.
+   */
+  const coreWords = (): string[] => {
     const words = ['mcp', 'install', '--server', request.channel, '--client', request.client];
     if (request.name !== undefined) words.push('--name', request.name);
     const pin = pinOf(request);
-    const own = pinOption(request.channel);
-    if (pin !== undefined && own !== undefined && own !== 'readOnly') words.push(`--${own}`, pin);
+    const option = pinOption(request.channel);
+    if (pin !== undefined && option !== undefined && option !== 'readOnly') words.push(`--${option}`, pin);
     if (request.readOnly) words.push('--read-only');
     if (request.force) words.push('--force');
-    const instead =
-      "Core verifies a release's provenance before it installs it: run core's `mcp install --server` in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.";
+    return words;
+  };
+  const inCore = (say: (command: string) => string, instead: string): string => {
     try {
-      return handoffSentence(
-        requireHandoffs(core, deps.platform).core(words),
-        (command) =>
-          `Core verifies a release's provenance before it installs it: run ${command} in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.`,
-        { instead },
-      );
+      return handoffSentence(requireHandoffs(core, deps.platform).core(coreWords()), say, { instead });
     } catch {
       // A core opened with no caller has no command to name: the words alone, never a bare guess.
       return instead;
     }
   };
+  /** Where a process that cannot verify — a channel's own, with no Sigstore — sends the person: core, which can. */
+  const verifyInCore = (): string =>
+    inCore(
+      (command) =>
+        `Core verifies a release's provenance before it installs it: run ${command} in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.`,
+      "Core verifies a release's provenance before it installs it: run core's `mcp install --server` in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.",
+    );
+  /** Where the release a channel's own command installs unverified is checked: core's command, located. */
+  const checkedInCore = (): string =>
+    inCore(
+      (command) => `core's ${command} checks it before it installs it`,
+      "core's `mcp install --server` checks it before it installs it",
+    );
+  /** The receipt a runtime this install fetched keeps beside it (`INSTALL_RECEIPT`). */
+  const writeReceipt = (runtime: string, packageName: string, version: string, verified: boolean, by: string) =>
+    writeFileAtomic(
+      join(runtime, INSTALL_RECEIPT),
+      `${JSON.stringify({ package: packageName, version, verified, by, at: new Date().toISOString() }, null, 2)}\n`,
+    );
   /*
    * The runtime a managed registration starts, held to what the plan verified, before the launcher is pointed or
    * anything is registered. A runtime to fetch is fetched here, with npm running no package's script, and must then
@@ -473,13 +517,26 @@ export function serverInstallChange(
    * that does not is removed, and nothing is registered on it. One the plan found on disk is used as it was found, and
    * one gone since is not fetched unverified.
    */
-  const verifiedRuntime = async (done: Planned): Promise<void> => {
+  const verifiedRuntime = async (done: Planned): Promise<ServerInstallResult['provenance']> => {
     const { dataDir } = core.paths;
     const { packageName, version } = done.product;
     const runtime = managedRuntimeDir(dataDir, packageName, version);
     const there = await reusableRuntime(dataDir, packageName, version);
     if (done.verified === undefined) {
-      if (there !== null) return;
+      if (there !== null) return undefined;
+      /*
+       * A channel's own command installing the release it is running (owner's decision, 2026-10-17): the same package
+       * at the same version npx fetched to run it, which this process cannot verify. Installed as before, and said
+       * and recorded not to be verified; core's command checks it.
+       */
+      if (done.unverifiedOwn) {
+        await installManagedRuntime(context, done.product, version).catch(async (error) => {
+          throw await remedyLocated(error, core);
+        });
+        await writeReceipt(runtime, packageName, version, false, `${label}’s own command`);
+        const note = `${packageName}@${version} was installed without its provenance verified: this command cannot check provenance, so it installed the release it is running itself. ${capitalised(checkedInCore())}.`;
+        return { package: packageName, version, verified: false, note };
+      }
       throw new CommsError(
         'CONFIG',
         `this registration changed between being planned and being applied: ${runtime} was on this machine when it was planned, and is not now, so it would be fetched from npm without being verified. So nothing was installed or registered`,
@@ -498,7 +555,10 @@ export function serverInstallChange(
       verify: sources().verify,
       known: new Map([[`${packageName}@${version}`, sha512]]),
     });
-    if (problem === null) return;
+    if (problem === null) {
+      if (there === null) await writeReceipt(runtime, packageName, version, true, 'core');
+      return { package: packageName, version, verified: true };
+    }
     if (there === null) await rm(runtime, { recursive: true, force: true }).catch(() => undefined);
     throw new CommsError(
       'BAD_DATA',
@@ -529,17 +589,27 @@ export function serverInstallChange(
         launcher === 'managed' &&
         (await reusableRuntime(core.paths.dataDir, product.packageName, version)) === null;
       const from = sources();
-      const verified = fetches
-        ? (
-            await verifyReleaseSet(
-              from,
-              new Map([[product.packageName, version]]),
-              'install',
-              from.registry === null || from.verify === null ? verifyInCore() : undefined,
-            )
-          ).get(product.packageName)
-        : undefined;
-      planned = { product, install: plannedInstall(preflight), verified };
+      // The release a channel's own command is running, which npx already fetched: the one it may install unverified.
+      const running =
+        deps.running ?? (own === undefined ? undefined : { packageName: own.packageName, version: own.version });
+      const unverifiedOwn =
+        fetches &&
+        deps.verifyRelease === undefined &&
+        running !== undefined &&
+        running.packageName === product.packageName &&
+        running.version === version;
+      const verified =
+        fetches && !unverifiedOwn
+          ? (
+              await verifyReleaseSet(
+                from,
+                new Map([[product.packageName, version]]),
+                'install',
+                from.registry === null || from.verify === null ? verifyInCore() : undefined,
+              )
+            ).get(product.packageName)
+          : undefined;
+      planned = { product, install: plannedInstall(preflight), verified, unverifiedOwn };
       const effects: string[] = [];
       if (target.writes) {
         // The pin and the switch the server is started with, in the channel's words: "pinned to the mailbox …".
@@ -595,9 +665,15 @@ export function serverInstallChange(
         const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
         effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
       }
-      // What it verified, as the update's preview says it: last, one sentence.
+      // What it verified, as the update's preview says it: last, one sentence. Or that it cannot, and where it would be.
       if (verified !== undefined) {
         effects.push(`${verified.package}@${verified.version} was verified before this preview: built by ${BUILT_BY}`);
+      } else if (unverifiedOwn) {
+        // Core's command by its words: located, with its four folders, it is longer than a preview's line shows. The
+        // result names it located.
+        effects.push(
+          `${product.packageName}@${version} will not be verified: this command cannot check provenance, so it installs the release it is running itself; core's \`${coreWords().join(' ')}\` checks it before it installs it`,
+        );
       }
       return {
         before: config,
@@ -612,7 +688,7 @@ export function serverInstallChange(
     apply: async () => {
       if (planned === undefined)
         throw new CommsError('UNEXPECTED', 'the registration was applied before it was planned');
-      if (request.print !== true && launcher === 'managed') await verifiedRuntime(planned);
+      const provenance = request.print !== true && launcher === 'managed' ? await verifiedRuntime(planned) : undefined;
       const installed = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
         async (error) => {
           throw await remedyLocated(error, core);
@@ -621,6 +697,9 @@ export function serverInstallChange(
       const result = request.print === true ? installed : await withManagedShim(context, planned.product, installed);
       return {
         ...result,
+        // Not verified is said where every surface prints an install's words, and recorded in the result as well.
+        ...(provenance?.note === undefined ? {} : { warnings: [...result.warnings, provenance.note] }),
+        ...(provenance === undefined ? {} : { provenance }),
         restart: result.applied
           ? `Restart ${request.client} to load "${result.name}": no MCP client loads a new server into a session that is already running.`
           : null,

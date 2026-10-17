@@ -54,17 +54,26 @@ tarball has been checked (nothing published here, nor anything it depends on, ne
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
 registered on, and its step says so.
 
-**A first install is verified the same way.** A managed `mcp install` — core's
-`agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — that fetches a release's runtime from npm, because it is
-not on this machine yet, verifies that release before the preview is made and again when the approval is claimed,
-with the same pins and the same `BAD_DATA` refusal, and nothing is prepared to approve when it does not verify. The
-preview ends with the same line: `@agentcomms/gmail@<version> was verified before this preview: …`. After npm has
-installed it, with `--ignore-scripts`, the runtime must hold the very tarball that verified, and every `@agentcomms`
-package in it — the core Gmail depends on — must verify too, or the runtime is removed, the launcher is not pointed at
-it, and nothing is registered. Only core carries Sigstore, so a channel's own `mcp install` (`agent-gmail mcp install --client <client>`,
-`npx -y @agentcomms/gmail mcp install --client <client>`) cannot verify: where it would fetch a runtime it refuses, naming core's command
-that does the same install. Where the runtime is already on this machine, or with `--launcher npx` or `--print`, which
-fetch nothing now, it registers as before.
+**A first install is verified the same way, when core makes it.** A managed `mcp install` by core —
+`agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — that fetches a release's
+runtime from npm, because it is not on this machine yet, verifies that release before the preview is made and again
+when the approval is claimed, with the same pins and the same `BAD_DATA` refusal, and nothing is prepared to approve
+when it does not verify. The preview ends with the same line: `@agentcomms/gmail@<version> was verified before this
+preview: …`. After npm has installed it, with `--ignore-scripts`, the runtime must hold the very tarball that verified,
+and every `@agentcomms` package in it — the core Gmail depends on — must verify too, or the runtime is removed, the
+launcher is not pointed at it, and nothing is registered.
+
+**A channel's own `mcp install` installs only its own release, unverified, and says so.** Only core carries Sigstore,
+so `agent-gmail mcp install --client <client>` or `npx -y @agentcomms/gmail mcp install --client <client>` cannot
+check provenance. It installs the release it is running itself — exactly that package and version, which npx already
+fetched to run it — as it always did, and its preview says `@agentcomms/gmail@<version> will not be verified: this
+command cannot check provenance`, naming core's `mcp install --server gmail --client <client>`, which checks it. Its result says
+the same in its warnings and in `provenance` (`verified: false`), naming core's command located, and the runtime's
+folder keeps a receipt, `.agentcomms-install.json`, with `verified: false`; one core installed says `verified: true`.
+Any other release it would fetch it refuses with `BAD_DATA`, naming core's command. With the runtime already on this
+machine, or with `--print`, it fetches nothing and registers as before. `--launcher npx` installs nothing either: the
+client fetches the package from npm each time it starts it, which nothing here checks, where the managed launcher's
+runtime was verified.
 
 Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
 same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign

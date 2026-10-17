@@ -16,8 +16,13 @@ import type { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherName, launcherPaths } from '../src/launcher.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
-import { findNpmCli, managedRuntimeDir } from '../src/mcp-install.ts';
-import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange } from '../src/operations/servers.ts';
+import { findNpmCli, type McpProduct, managedRuntimeDir } from '../src/mcp-install.ts';
+import {
+  INSTALL_RECEIPT,
+  type ServerInstallDeps,
+  type ServerInstallResult,
+  serverInstallChange,
+} from '../src/operations/servers.ts';
 import {
   ATTESTATIONS_BASE,
   type AttestationFetch,
@@ -183,15 +188,22 @@ function machine(registry: string) {
   const runtime = managedRuntimeDir(core.paths.dataDir, GMAIL, VERSION);
   const cursorConfig = join(home, '.cursor', 'mcp.json');
   const pointer = launcherPaths(core.paths.dataDir, launcherName(GMAIL)).pointer;
-  /** Gmail's server, registered with cursor as a first install: from chat, as comms_server_install runs it. */
-  const install = (deps: ServerInstallDeps, approvalId?: string): Promise<GatedOutcome<ServerInstallResult>> =>
+  /**
+   * Gmail's server, registered with cursor as a first install: from chat, as comms_server_install runs it — or, handed
+   * `own`, as Gmail's own `mcp install` runs it, with its product.
+   */
+  const install = (
+    deps: ServerInstallDeps,
+    approvalId?: string,
+    own?: McpProduct,
+  ): Promise<GatedOutcome<ServerInstallResult>> =>
     gatedChange(
       core,
       serverInstallChange(
         core,
         env,
         { channel: 'gmail', client: 'cursor', noVerify: true },
-        undefined,
+        own,
         // The registry npm reads, as core's CLI and server hand it in: here, the loopback one.
         { registry: npmRegistry(env), ...deps },
       ),
@@ -222,6 +234,17 @@ function refusedUnverified(packageName: string) {
   };
 }
 
+/** Gmail's own product, as `agent-gmail mcp install` hands it in: the release that command is. */
+const GMAIL_OWN: McpProduct = { ...serverFacts('gmail'), version: VERSION, moduleUrl: '' };
+
+/** What a fetched runtime's install receipt says. */
+const receiptOf = (runtime: string) =>
+  JSON.parse(readFileSync(join(runtime, INSTALL_RECEIPT), 'utf8')) as {
+    package: string;
+    version: string;
+    verified: boolean;
+  };
+
 /** Whether npm is beside this Node: without it nothing installs a runtime here, and nothing can be shown. */
 async function withNpm(): Promise<boolean> {
   try {
@@ -248,6 +271,12 @@ test('a first install verifies the release before anything is prepared: one that
     ] as const) {
       attest.set({ [GMAIL]: change });
       await assert.rejects(m.install({ verifyRelease: attest.verifyRelease }), refusedUnverified(GMAIL), why);
+      // Where a verifier is handed in, the release a command is running is verified as any other: no way past it.
+      await assert.rejects(
+        m.install({ verifyRelease: attest.verifyRelease }, undefined, GMAIL_OWN),
+        refusedUnverified(GMAIL),
+        `${why}, Gmail's own release`,
+      );
       assert.deepEqual(await m.core.approvals.list(), [], `${why}: something was prepared to approve`);
       assert.equal(served.tarballsFetched(), 0, `${why}: npm fetched the tarball`);
       await m.untouched(why);
@@ -257,7 +286,52 @@ test('a first install verifies the release before anything is prepared: one that
   }
 });
 
-test('with nothing here to verify it — a channel’s own process — a first install is refused, and the registry is not asked', async () => {
+test('a channel’s own command, which cannot verify, installs the release it is running: said unverified in the preview and the result, and recorded so', async () => {
+  if (!(await withNpm())) return;
+  const gmail = packed(GMAIL, 'gmail');
+  const served = await loopback([gmail]);
+  try {
+    const m = machine(served.url);
+    // No verifier, as in Gmail's own process, which carries no Sigstore: the release it would fetch is its own.
+    const asked = await m.install({}, undefined, GMAIL_OWN);
+    assert.equal(asked.status, 'approval-required');
+    const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
+    assert.ok(
+      prepared.preview.includes(
+        `${GMAIL}@${VERSION} will not be verified: this command cannot check provenance, so it installs the release it is running itself`,
+      ),
+      prepared.preview,
+    );
+    // Where it would be checked: core's own command, located.
+    assert.match(prepared.preview, /mcp install --server gmail --client cursor/);
+    assert.ok(!prepared.preview.includes('was verified before this preview'), 'it said it was verified');
+    assert.equal(served.tarballsFetched(), 0, 'preparing fetched a tarball');
+    await m.untouched('prepared');
+
+    const done = await m.install({}, prepared.approvalId, GMAIL_OWN);
+    assert.equal(done.status, 'applied');
+    const { result } = done as Extract<typeof done, { status: 'applied' }>;
+    assert.equal(result.applied, true);
+    assert.equal(result.provenance?.verified, false);
+    assert.equal(result.provenance?.package, GMAIL);
+    assert.equal(result.provenance?.version, VERSION);
+    const note = result.warnings.find((warning) => warning.includes('was installed without its provenance verified'));
+    assert.ok(note, `the result does not say it was not verified: ${JSON.stringify(result.warnings)}`);
+    assert.match(String(note), /this command cannot check provenance/);
+    assert.match(String(note), /mcp install --server gmail --client cursor/);
+    // The receipt beside the runtime says so, for doctor to show.
+    assert.deepEqual(
+      { ...receiptOf(m.runtime), at: undefined },
+      { package: GMAIL, version: VERSION, verified: false, at: undefined, by: 'Gmail’s own command' },
+    );
+    assert.ok(existsSync(m.cursorConfig), 'nothing was registered');
+    assert.ok(existsSync(m.pointer), 'the launcher was not pointed');
+  } finally {
+    await served.close();
+  }
+});
+
+test('with nothing here to verify it, any release but the command’s own is refused, and the registry is not asked', async () => {
   if (!(await withNpm())) return;
   const gmail = packed(GMAIL, 'gmail');
   const served = await loopback([gmail]);
@@ -268,13 +342,19 @@ test('with nothing here to verify it — a channel’s own process — a first i
       asked.push(name);
       throw new Error('asked');
     };
-    for (const deps of [{}, { registry }] as ServerInstallDeps[]) {
-      await assert.rejects(m.install(deps), (error: CommsError) => {
+    for (const [why, deps, own] of [
+      ['core’s operation with no verifier', {}, undefined],
+      ['a registry and no verifier', { registry }, undefined],
+      // Gmail's own command, asked to fetch another release than the one it is running.
+      ['another version', { running: { packageName: GMAIL, version: '0.0.1' } }, GMAIL_OWN],
+      ['another package running', { running: { packageName: CORE, version: VERSION } }, GMAIL_OWN],
+    ] as [string, ServerInstallDeps, McpProduct | undefined][]) {
+      await assert.rejects(m.install(deps, undefined, own), (error: CommsError) => {
         refusedUnverified(GMAIL)(error);
-        assert.match(error.message, /nothing here can verify provenance|no verifier/);
+        assert.match(error.message, /nothing here can verify provenance/, why);
         // Where it can be verified instead: core's own command, located, and its server's tool.
-        assert.match(String(error.hint), /mcp install --server gmail --client cursor/);
-        assert.match(String(error.hint), /comms_server_install/);
+        assert.match(String(error.hint), /mcp install --server gmail --client cursor/, why);
+        assert.match(String(error.hint), /comms_server_install/, why);
         return true;
       });
     }
@@ -323,6 +403,13 @@ test('a release that verifies is said so in the preview, verified again at the c
     assert.ok(existsSync(join(m.runtime, 'node_modules', ...GMAIL.split('/'), 'dist', 'cli.mjs')));
     assert.ok(existsSync(m.cursorConfig), 'nothing was registered');
     assert.ok(existsSync(m.pointer), 'the launcher was not pointed');
+    const { result } = done as Extract<typeof done, { status: 'applied' }>;
+    assert.equal(result.provenance?.verified, true);
+    assert.ok(!result.warnings.some((warning) => warning.includes('without its provenance verified')));
+    assert.deepEqual(
+      { ...receiptOf(m.runtime), at: undefined },
+      { package: GMAIL, version: VERSION, verified: true, at: undefined, by: 'core' },
+    );
   } finally {
     await served.close();
   }

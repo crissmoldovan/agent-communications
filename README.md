@@ -134,12 +134,15 @@ makes `cmd.exe` re-parse arguments and can turn metacharacters into commands. On
 or the labelled PowerShell `&` line the result provides.
 [Core MCP tool reference](docs/reference/core-mcp-tools.md).
 
-**A first install verifies what it fetches.** A managed `mcp install` that fetches a release's runtime from npm
-verifies its Sigstore provenance first, as an update does — before the preview and again at your yes — and registers
-it only once npm has installed exactly that tarball. Core carries the verifier: `comms_server_install`, and
-`npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal, do it for any channel. A
-channel's own `mcp install` cannot, so where it would fetch a runtime it refuses and names that core command; with the
-runtime already here it registers as before. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
+**Core's install verifies what it fetches.** A managed `mcp install` run by core — `comms_server_install`, or
+`npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal — verifies the Sigstore
+provenance of the release it fetches from npm, as an update does, before the preview and again at your yes, and
+registers it only once npm has installed exactly that tarball. A channel's own `mcp install`
+(`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
+running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
+verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the
+client fetches the package from npm each time it starts it, unverified, where the managed launcher's runtime was
+verified. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
 
 ### Or package by package
 

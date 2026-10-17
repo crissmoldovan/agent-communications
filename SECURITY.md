@@ -112,10 +112,13 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   (`--ignore-scripts`), so their code first runs when a server or command starts. A global package is verified before
   `npm install -g`, but npm keeps no lockfile for it, so what it installed is not checked afterwards; and an npx
   registration's client fetches its package from npm each time it starts, which only that client checks.
-- **A first install verifies what it fetches, from core only.** A managed `mcp install` that fetches a runtime holds
-  it to the same provenance as an update, through core's command or `comms_server_install`. A channel's own command
-  carries no Sigstore, so it refuses to fetch one and names core's command; a runtime already on the machine is used as
-  it is found, and `--launcher npx` registers a package its client fetches, as above.
+- **A first install is verified only when core makes it.** A managed `mcp install` through core's command or
+  `comms_server_install` holds the runtime it fetches to the same provenance as an update. A channel's own command
+  carries no Sigstore: it installs only the release it is running itself — the same package and version npx already
+  fetched to run it, so nothing new runs — says in its preview and its result that it was not verified, and records
+  `verified: false` in the runtime's `.agentcomms-install.json`; any other release it refuses, naming core's command.
+  A runtime already on the machine is used as it is found, and `--launcher npx` registers a package its client fetches
+  unverified each time it starts it, as above; the managed launcher's runtime, installed by core, is verified.
 - **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
   not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
   acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that
