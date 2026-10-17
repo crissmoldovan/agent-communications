@@ -126,8 +126,11 @@ test('a managed install registers the stable launcher, and an install of the nex
       ? { command: process.execPath, args: [launcher, ...words] }
       : { command: launcher, args: words };
   assert.deepEqual({ command: first.entry.command, args: first.entry.args }, expected);
+  // Every word of the entry as the client reads it, not its JSON text: there a Windows path's backslashes are doubled,
+  // and a path searched for as written is never found, so the check passed there without looking.
+  const written = cursorEntry(home);
   assert.ok(
-    !JSON.stringify(cursorEntry(home)).includes(join('runtime', '0.19.0-example')),
+    ![written.command, ...written.args].some((word) => word.includes(join('runtime', '0.19.0-example'))),
     'the client starts no versioned runtime',
   );
   assert.deepEqual(await readPointer(data, 'example'), {

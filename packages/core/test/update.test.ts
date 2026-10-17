@@ -1201,7 +1201,14 @@ test('a runtime that is not the verified tarball — installed now, or found on 
       startOf(managed(m, PACKAGES.gmail, OLD, ['--inbox', 'acme/gmail'])),
     );
     assert.equal(await pointedAt(m, PACKAGES.gmail), undefined);
-    assert.ok(readFileSync(config, 'utf8').includes(managedRuntimeEntry(m.dataDir, PACKAGES.gmail, OLD)));
+    // The client's file still starts the old runtime. Read as the JSON it is: in its text a Windows path's backslashes
+    // are doubled, so the path searched for as written never matched there.
+    assert.ok(
+      Object.values(cursorEntries(m)).some((entry) =>
+        [entry.command, ...entry.args].includes(managedRuntimeEntry(m.dataDir, PACKAGES.gmail, OLD)),
+      ),
+      readFileSync(config, 'utf8'),
+    );
   } finally {
     await close();
   }
