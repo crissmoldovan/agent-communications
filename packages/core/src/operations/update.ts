@@ -131,8 +131,8 @@ export interface UpdateDeps {
   /**
    * What the releases after `from` up to `version` declare — a decision any of them needs, and whether `version` is a
    * security fix (design 2026-10-16, U5, U7) — each counted only once verified, by `verifyRelease`. Defaults to
-   * `declaredSince` over `registry`, or the registry npm reads beside its own `latest`: a test that hands in a
-   * `latestVersion` hands in a `registry` or this too, or the facts are not read. Null: never read them.
+   * `declaredSince` over `registry`, or the registry npm reads — but only beside the registry's own `latest`: a test
+   * that hands in a `latestVersion` hands in this too, or the facts are not read. Null: never read them.
    */
   releaseFacts?:
     | ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration>)
@@ -1297,7 +1297,7 @@ export function updateChange(
       // verify refuses the whole update, and nothing is prepared to approve.
       const wanted = releasesOf(runtimes, pointers, steps, inspection.globals);
       const verified = await verifyReleases(core, env, deps, wanted);
-      // And the releases it takes this machine past: one that needs a decision is said in the preview, in its words.
+      // And the releases it takes this machine past: one that needs a decision is said in the preview, in fixed words.
       const deciding = wanted.size === 0 ? [] : await decidingSince(core, env, deps, inspection.report);
       planned = {
         report: inspection.report,
