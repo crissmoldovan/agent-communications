@@ -18,6 +18,7 @@ import {
   remedy,
   type SecretStore,
   shownText,
+  slackStyleOf,
   toCommsError,
 } from '@agentcomms/core';
 import { scopeMismatch } from '../auth/authorize.ts';
@@ -30,6 +31,7 @@ import { VERSION } from '../version.ts';
 import { appTokenRevokedOf } from './app-token.ts';
 import { type AgentAppProbe, probeAgentApp } from './bot-token.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
+import { labelSettingsOf } from './label.ts';
 import { type PendingRevocationResult, pendingRevocationResult, retryPendingRevocations } from './revocations.ts';
 import { openWorkspace, type SessionDeps } from './session.ts';
 import { botSecretRefFor, clientSecretRefOf, listWorkspaces, requireWorkspace } from './workspaces.ts';
@@ -511,7 +513,24 @@ export function doctor(input: DoctorInput): DoctorResult {
     if (mode === 'send') {
       const token = input.appTokens?.get(workspace.alias);
       const title = `Posting as the app from ${workspace.alias}`;
-      if (workspace.appUserId !== undefined && token === 'stored') {
+      /*
+       * The workspace's style (the owner's decision, 2026-10-17, S2): under `labelled`, every agent post goes out as the
+       * person, labelled, wherever the app could post, because they chose it. So the app's token changes nothing an
+       * agent posts, and there is nothing to do: a note, as a profile workspace's is, with no way to a bot token offered
+       * and no warning that the app has none. Under `app`, the default, the findings below are as they were.
+       */
+      const labelled = slackStyleOf(labelSettingsOf(input.config), workspace.accountId) === 'labelled';
+      if (labelled) {
+        checks.push({
+          id: 'app-identity',
+          title,
+          status: 'ok',
+          detail:
+            "you chose labelled posts for this workspace, so an agent's posts go out as you, labelled in their text, even where the app could post. The core's `label style` (comms_label with `style`) set back to app posts as the app where it can",
+          fix: null,
+          workspace: workspace.alias,
+        });
+      } else if (workspace.appUserId !== undefined && token === 'stored') {
         checks.push({
           id: 'app-identity',
           title,
@@ -693,10 +712,11 @@ export function doctor(input: DoctorInput): DoctorResult {
        * The stored token against the agent app the profile names now (CUE-493). The paste checks it against the agent
        * app the profile named then — and a token pasted before the organisation added its agent-app file was checked
        * against none. So doctor asks again, as the paste asks, and says when it is another app's: posts go out as
-       * that app, under the APP badge, not as the organisation's.
+       * that app, under the APP badge, not as the organisation's. Not under the `labelled` style, where no agent post
+       * goes out as any app: switched back to `app`, it is asked again.
        */
       const agent =
-        workspace.organisation === undefined
+        workspace.organisation === undefined || labelled
           ? undefined
           : organisationAgentApp(input.config, workspace.organisation, workspace.workspaceId);
       if (agent !== undefined && token === 'stored') {
@@ -955,6 +975,8 @@ export async function runDoctor(context: SlackContext, options: DoctorRun = {}):
       if (only !== undefined && view.alias !== only) continue;
       const account = lookupName(config, 'account', view.alias);
       if (!account || appTokens.get(view.alias) !== 'stored' || view.organisation === undefined) continue;
+      // Under the `labelled` style no agent post goes out as any app, and doctor reports nothing of it: Slack is not asked.
+      if (slackStyleOf(labelSettingsOf(config), view.accountId) === 'labelled') continue;
       const agent = organisationAgentApp(config, view.organisation, view.workspaceId);
       if (agent === undefined) continue;
       let stored: string | undefined;

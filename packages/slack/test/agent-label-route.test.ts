@@ -592,3 +592,78 @@ test('the style is bound: app chosen after a labelled preview refuses the labell
   );
   assert.deepEqual(posted(w), [], 'a post went out after its style changed');
 });
+
+// ── Doctor and the workspace's style ─────────────────────────────────────────────────────────────────────────────
+
+/** What doctor says of the app, and what it offers, in one string: no step of any way to a bot token may be in it. */
+const BOT_TOKEN_STEPS = [
+  /workspace bot/,
+  /workspace reauth/,
+  /with-client-secret|client secret/,
+  /manifest/,
+  /no app bot token/,
+  /Bot User OAuth Token/,
+  /admin/,
+];
+
+test('labelled: doctor says posts go out as the person, labelled, by its choice, and offers no way to a bot token', async (t) => {
+  const nonRotating = { refreshToken: undefined, refreshExpiresAt: undefined };
+  const worlds: { name: string; make: () => Promise<Labelled> }[] = [
+    { name: 'a PKCE app with no bot token', make: () => labelled(t, { bot: false }) },
+    { name: 'one whose tokens do not rotate', make: () => labelled(t, { bot: false, bundle: nonRotating }) },
+    {
+      name: 'one connected with its client secret',
+      make: async () => {
+        const w = await labelled(t, { bot: false });
+        await plant(w, { clientSecretRef: 'slack/client-secret/A0001' });
+        return w;
+      },
+    },
+    {
+      name: 'one whose bot token Slack revoked',
+      make: async () => {
+        const w = await labelled(t, { bot: false });
+        await plant(w, { appTokenRevoked: { at: '2026-10-16T09:00:00.000Z', slackError: 'token_revoked' } });
+        return w;
+      },
+    },
+    { name: 'one whose bot token is stored', make: () => labelled(t) },
+  ];
+  for (const { name, make } of worlds) {
+    const w = await make();
+    await chooseLabelled(w);
+    const check = await appIdentityCheck(w);
+    assert.equal(check?.status, 'ok', `${name}: ${check?.detail}`);
+    assert.equal(check?.fix, null, `${name}: offered something to do`);
+    assert.match(check?.detail ?? '', /you chose labelled posts for this workspace/, name);
+    assert.match(check?.detail ?? '', /as you, labelled/, name);
+    assert.doesNotMatch(check?.detail ?? '', /go out as the app/, name);
+    const said = `${check?.detail} ${check?.fix}`;
+    for (const step of [...BOT_TOKEN_STEPS, ...NEW_APP_STEPS]) assert.doesNotMatch(said, step, `${name}: ${said}`);
+    // One finding about the app, as under app.
+    const report = await runDoctor(w.harness.context({ platform: 'darwin' }), { offline: true });
+    assert.equal(report.checks.filter((one) => one.id === 'app-identity').length, 1, name);
+  }
+});
+
+test('app: doctor is as it was — chosen, unreadable or another workspace’s labelled, the same findings and steps', async (t) => {
+  for (const styles of [
+    (id: string) => ({ [id]: 'app' }),
+    (id: string) => ({ [id]: 'fancy' }),
+    (_id: string) => ({ acc_ZZZZZZZZZZZZZZZZ: 'labelled' }),
+  ]) {
+    const pkce = await labelled(t, { bot: false });
+    await setLabel(pkce.harness, { slackStyles: styles(pkce.accountId) });
+    const steps = await appIdentityCheck(pkce);
+    assert.equal(steps?.status, 'warn');
+    assert.match(steps?.detail ?? '', /no app bot token is stored for it/);
+    assert.doesNotMatch(steps?.detail ?? '', /you chose labelled/);
+    for (const step of NEW_APP_STEPS) assert.match(String(steps?.fix), step);
+
+    const stored = await labelled(t);
+    await setLabel(stored.harness, { slackStyles: styles(stored.accountId) });
+    const app = await appIdentityCheck(stored);
+    assert.equal(app?.status, 'ok');
+    assert.match(app?.detail ?? '', /go out as the app \(bot user U0BOT0001\)/);
+  }
+});

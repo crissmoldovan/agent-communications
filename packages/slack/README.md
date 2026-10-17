@@ -280,8 +280,9 @@ rename it. If you would rather an agent's messages in a workspace read as yours,
 reply and file there goes out as you, its words and its notification beginning `Jo Example (agent): `, even in a
 channel the app could post in. The preview's first line ends `you chose labelled posts for this workspace`. Reactions
 are yours, unlabelled, as everywhere the app cannot post. A message the app posted before stays the app's to edit or
-delete. `label style <workspace> app` goes back at once, and `label` shows each workspace's style. Weigh the trade
-before choosing it: nobody can fake Slack's APP tag, but anyone can type words at the start of a message.
+delete. `label style <workspace> app` goes back at once, and `label` shows each workspace's style. `doctor` says the
+workspace posts as you, labelled, by your choice, and offers no step to a bot token there. Weigh the trade before
+choosing it: nobody can fake Slack's APP tag, but anyone can type words at the start of a message.
 
 **Your agent emoji.** The icon is your Slack photo until you set an emoji: make one from your photo with a small robot
 badge with the Slack CLI's `icon make` (MCP `slack_icon_make`), upload it at your workspace's emoji page, and record

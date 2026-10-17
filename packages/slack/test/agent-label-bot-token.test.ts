@@ -422,3 +422,72 @@ test('a person’s own app is never checked against an organisation’s agent ap
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
   assert.equal(asked(w.fake, 'bots.info').length, 0);
 });
+
+test('labelled: doctor asks nothing about the agent app, and warns of no other app’s token; app asks again', async (t) => {
+  // A token of another app, pasted before the profile named its agent app: under app, doctor warns of it.
+  const w = await organisationWorld(t);
+  const pasted = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], { tty: true, type: OTHER_APP_PASTED });
+  assert.equal(pasted.code, EXIT_CODES.OK, said(pasted));
+  await w.harness.updateConfig((config) => {
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    apps.agent = { appId: 'A0AGENT0001', sha256: 'c'.repeat(64) };
+  });
+  const style = (value: 'app' | 'labelled') =>
+    w.harness.core.config.update((config) => ({ ...config, agentLabel: { slackStyles: { [w.accountId]: value } } }), {
+      consent: { kind: 'loosening-consent', paths: ['agentLabel.slackStyles'] },
+    });
+  const session = { fetch: w.fake.fetch };
+  const online = () =>
+    runDoctor(w.harness.context({ platform: 'darwin' }), {
+      probe: (input, init) => w.harness.probe(input, init),
+      session,
+    });
+
+  await style('labelled');
+  w.fake.requests.length = 0;
+  const report = await online();
+  assert.equal(
+    report.checks.find((check) => check.id === 'agent-app'),
+    undefined,
+    'an agent post goes out as no app here, so which app the token is was reported',
+  );
+  assert.equal(asked(w.fake, 'bots.info').length, 0, 'Slack was asked about an app nothing posts as');
+  const identity = report.checks.find((check) => check.id === 'app-identity' && check.workspace === 'rgc/slack');
+  assert.equal(identity?.status, 'ok');
+  assert.equal(identity?.fix, null);
+  assert.match(String(identity?.detail), /you chose labelled posts for this workspace/);
+  assert.doesNotMatch(`${identity?.detail} ${identity?.fix}`, /workspace bot|admin/);
+  // A profile naming its agent app, with no token stored: under labelled, no step to paste one either.
+  await (await w.harness.core.secrets('file')).delete(botSecretRefFor(w.accountId));
+  const none = (await online()).checks.find((check) => check.id === 'app-identity' && check.workspace === 'rgc/slack');
+  assert.equal(none?.status, 'ok');
+  assert.match(String(none?.detail), /you chose labelled posts for this workspace/);
+  assert.doesNotMatch(`${none?.detail} ${none?.fix}`, /workspace bot|admin|A0AGENT0001/);
+
+  // Back to app: the stored token is checked again, and another app's is warned of, as before.
+  const again = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], { tty: true, type: OTHER_APP_PASTED });
+  assert.notEqual(again.code, EXIT_CODES.OK, 'the paste now checks the agent app, and refuses another');
+  await w.harness.updateConfig((config) => {
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    delete apps.agent;
+  });
+  const repasted = await cli(w.harness, w.fake, ['workspace', 'bot', 'rgc/slack'], {
+    tty: true,
+    type: OTHER_APP_PASTED,
+  });
+  assert.equal(repasted.code, EXIT_CODES.OK, said(repasted));
+  await w.harness.updateConfig((config) => {
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    apps.agent = { appId: 'A0AGENT0001', sha256: 'c'.repeat(64) };
+  });
+  await style('app');
+  w.fake.requests.length = 0;
+  const app = await online();
+  const row = app.checks.find((check) => check.id === 'agent-app' && check.workspace === 'rgc/slack');
+  assert.equal(row?.status, 'warn', JSON.stringify(row));
+  assert.match(String(row?.fix), /workspace bot/);
+  assert.equal(asked(w.fake, 'bots.info').length, 1);
+});
