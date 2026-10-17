@@ -617,9 +617,8 @@ test('core’s install holds a runtime already on disk to the verified release b
       await ownInstall(m);
       const install = coreOnTop(m, attest.verifyRelease);
       const asked = await install();
-      assert.equal(asked.status, 'approval-required');
+      assert.equal(asked.status, 'approval-required', 'the release verifies, so the preview is made');
       const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
-      assert.ok(prepared.preview.includes(`${GMAIL}@${VERSION} was verified before this preview`), prepared.preview);
       await assert.rejects(install(prepared.approvalId), (error: CommsError) => {
         assert.equal(error.code, 'BAD_DATA', error.message);
         assert.match(error.message, /^nothing was registered: /);
@@ -636,7 +635,9 @@ test('core’s install holds a runtime already on disk to the verified release b
     }
   }
 
-  // The runtime on disk is the verified tarball: registered on, and its receipt now says verified.
+  // The runtime on disk is the verified tarball: registered on, and its receipt now says verified. Prepared by Gmail's
+  // own command, which cannot verify, and claimed by core's, which does: one change, in the same words from either
+  // (capabilities.json), with core's check at the claim.
   {
     const gmail = packed(GMAIL, 'gmail');
     const served = await loopback([gmail]);
@@ -645,10 +646,18 @@ test('core’s install holds a runtime already on disk to the verified release b
       const m = machine(served.url);
       await ownInstall(m);
       const fetched = served.tarballsFetched();
-      const install = coreOnTop(m, attest.verifyRelease);
-      const asked = await install();
+      const asked = await gatedChange(
+        m.core,
+        serverInstallChange(m.core, m.env, { channel: 'gmail', client: 'gemini', noVerify: true }, GMAIL_OWN, {
+          registry: npmRegistry(m.env),
+        }),
+        { surface: 'mcp', channel: 'core' },
+      );
+      assert.equal(asked.status, 'approval-required');
       const { prepared } = asked as Extract<typeof asked, { status: 'approval-required' }>;
-      const done = await install(prepared.approvalId);
+      const before = attest.asked.length;
+      const done = await coreOnTop(m, attest.verifyRelease)(prepared.approvalId);
+      assert.ok(attest.asked.length > before, 'core did not verify the runtime it registered on');
       assert.equal(done.status, 'applied');
       const { result } = done as Extract<typeof done, { status: 'applied' }>;
       assert.equal(result.provenance?.verified, true);

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { existsSync, symlinkSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -8,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { EXIT_CODES, launcherPaths, managedRuntimeDir, managedRuntimeEntry, readPointer } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { tarballOf } from '../../core/test/helpers/provenance-fixture.ts';
 import { run } from '../src/cli/program.ts';
 import { VERSION } from '../src/version.ts';
 import { assertNoBareCommand, locatedSlackLine } from './support/handoffs.ts';
@@ -104,8 +107,16 @@ async function machine(): Promise<{ harness: Harness; home: string; env: NodeJS.
  * `APPDATA` on Windows, where a client's config is found through it — unless they are given, so they are: the home is
  * the test's, and `PATH` holds only `ps`, which `prune` needs to see what is running and nothing else it could start.
  */
-async function coreServer(harness: Harness, env: NodeJS.ProcessEnv) {
-  const coreCli = join(dirname(fileURLToPath(import.meta.resolve('@agentcomms/core'))), 'cli.mjs');
+async function coreServer(harness: Harness, env: NodeJS.ProcessEnv, verifiedWith?: string) {
+  /*
+   * Core verifies the release whose runtime it registers on (re-review of 0.20.0, severity 4), and a server built from
+   * the package reads npm and Sigstore for it, which no test may reach. Handed a registry, it is core's own server with
+   * the test's verifier (`core/test/fixtures/verified-core-server.ts`), reading that registry.
+   */
+  const coreCli =
+    verifiedWith === undefined
+      ? join(dirname(fileURLToPath(import.meta.resolve('@agentcomms/core'))), 'cli.mjs')
+      : fileURLToPath(new URL('../../core/test/fixtures/verified-core-server.ts', import.meta.url));
   const bin = tempDir();
   const ps = ['/bin/ps', '/usr/bin/ps'].find((path) => existsSync(path));
   if (ps) symlinkSync(ps, join(bin, 'ps'));
@@ -115,13 +126,16 @@ async function coreServer(harness: Harness, env: NodeJS.ProcessEnv) {
     ...env,
     PATH: bin,
     AGENT_COMMS_DATA_DIR: harness.core.paths.dataDir,
+    ...(verifiedWith === undefined ? {} : { npm_config_registry: verifiedWith }),
   })) {
     if (value !== undefined) serverEnv[key] = value;
   }
   const client = new Client({ name: 'registration-test', version: '0' });
-  await client.connect(
-    new StdioClientTransport({ command: process.execPath, args: [coreCli, 'mcp'], env: serverEnv, stderr: 'ignore' }),
-  );
+  const args =
+    verifiedWith === undefined
+      ? [coreCli, 'mcp']
+      : ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', coreCli];
+  await client.connect(new StdioClientTransport({ command: process.execPath, args, env: serverEnv, stderr: 'ignore' }));
   return {
     call: async (name: string, args: Record<string, unknown>) =>
       (await client.callTool({ name, arguments: args })) as {
@@ -133,6 +147,29 @@ async function coreServer(harness: Harness, env: NodeJS.ProcessEnv) {
 }
 
 const body = (preview: string) => preview.split('\n').slice(1).join('\n');
+
+/**
+ * A registry on the loopback address naming this release of every package, with the tarball the test's verifier is
+ * shown signed (`tarballOf`): what core reads to verify the runtime it registers on.
+ */
+async function releaseRegistry(): Promise<{ url: string; close(): Promise<void> }> {
+  const server = createServer((request, response) => {
+    const name = decodeURIComponent(request.url ?? '').slice(1);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        'dist-tags': { latest: VERSION },
+        versions: { [VERSION]: { dist: { integrity: tarballOf(name, VERSION) } } },
+      }),
+    );
+  });
+  await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    close: () => new Promise<void>((closed) => server.close(() => closed())),
+  };
+}
 
 /** The four folder pins a registration is written with (CUE-403), in the order the installer writes them. */
 function pinWords(paths: { configDir: string; stateDir: string; dataDir: string; secretsDir: string }): string[] {
@@ -147,7 +184,8 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
   await mkdir(dirname(cursor), { recursive: true });
   const before = JSON.stringify({ mcpServers: { 'other-slack': { command: 'npx', args: ['-y', 'some-slack-mcp'] } } });
   await writeFile(cursor, before);
-  const server = await coreServer(harness, env);
+  const npm = await releaseRegistry();
+  const server = await coreServer(harness, env, npm.url);
   try {
     // ── Prepared in chat, claimed at the command line ──
     const fromChat = await server.call('comms_server_install', {
@@ -211,6 +249,16 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
       join(root, 'node_modules', '@agentcomms', 'slack', 'package.json'),
       JSON.stringify({ name: '@agentcomms/slack', version: VERSION }),
     );
+    // The lockfile npm writes, with the tarball the registry names: core holds this runtime to it at the claim.
+    await writeFile(
+      join(root, 'package-lock.json'),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          'node_modules/@agentcomms/slack': { version: VERSION, integrity: tarballOf('@agentcomms/slack', VERSION) },
+        },
+      }),
+    );
     const gemini = join(home, '.gemini', 'settings.json');
     const fromTerminal = pending(
       await cli(harness, ['mcp', 'install', '--client', 'gemini', '--no-verify', '--json'], env),
@@ -239,6 +287,7 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
     assert.equal((await readPointer(dataDir, 'slack'))?.current, root);
   } finally {
     await server.close();
+    await npm.close();
   }
 });
 

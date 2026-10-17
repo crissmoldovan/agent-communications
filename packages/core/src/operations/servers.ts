@@ -677,8 +677,14 @@ export function serverInstallChange(
         const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
         effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
       }
-      // What it verified, as the update's preview says it: last, one sentence. Or that it cannot, and where it would be.
-      if (verified !== undefined) {
+      /*
+       * What it verified for a release it fetches, as the update's preview says it: last, one sentence — or that it
+       * cannot, and where it would be. A runtime already on disk is verified and checked all the same (`checksDisk`),
+       * but adds no sentence: a channel's own `mcp install` and `comms_server_install` are one change, an approval one
+       * prepares claimed by the other (capabilities.json), so where both register on what is already here they say
+       * the same words; core refuses at the claim what it cannot verify.
+       */
+      if (verified !== undefined && fetches) {
         effects.push(`${verified.package}@${verified.version} was verified before this preview: built by ${BUILT_BY}`);
       } else if (unverifiedOwn) {
         // Core's command by its words: located, with its four folders, it is longer than a preview's line shows. The
