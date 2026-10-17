@@ -25,6 +25,13 @@ import {
 } from '../src/operations/update.ts';
 import { runBackgroundUpdate } from '../src/update-background.ts';
 import { readUpdateCheck } from '../src/update-state.ts';
+import {
+  attestationsEndpoint,
+  integrityOf,
+  packumentRegistry,
+  tarballOf,
+  testReleaseVerifier,
+} from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -94,8 +101,16 @@ function machine(): Machine {
   return { home, dataDir: core.paths.dataDir, env, core };
 }
 
-/** A Gmail runtime as the installer leaves one: its CLI a stand-in server that answers, or one that exits at once. */
-function makeRuntime(m: Machine, version: string, cli: 'server' | 'broken' = 'server'): string {
+/**
+ * A Gmail runtime as the installer leaves one: its CLI a stand-in server that answers, or one that exits at once, and
+ * npm's lockfile recording the tarball it installed — the one the stand-in registry serves, unless `tarball` says.
+ */
+function makeRuntime(
+  m: Machine,
+  version: string,
+  cli: 'server' | 'broken' = 'server',
+  tarball: string = tarballOf(GMAIL, version),
+): string {
   const root = managedRuntimeDir(m.dataDir, GMAIL, version);
   const entry = managedRuntimeEntry(m.dataDir, GMAIL, version);
   mkdirSync(dirname(entry), { recursive: true });
@@ -131,6 +146,10 @@ function makeRuntime(m: Machine, version: string, cli: 'server' | 'broken' = 'se
     }),
   );
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, dependencies: { [GMAIL]: version } }));
+  writeFileSync(
+    join(root, 'package-lock.json'),
+    JSON.stringify({ lockfileVersion: 3, packages: { [`node_modules/${GMAIL}`]: { version, integrity: tarball } } }),
+  );
   return root;
 }
 
@@ -182,10 +201,26 @@ interface Fakes extends UpdateDeps {
   runtimes: string[];
 }
 
-function fakes(m: Machine, latest: string, cli: 'server' | 'broken' = 'server'): Fakes {
+/** Every package of the suite, each at `latest`: what the stand-in registry serves. */
+const everyPackage = (latest: string): Record<string, string> =>
+  Object.fromEntries(
+    ['core', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp', 'events-daemon'].map((name) => [
+      `@agentcomms/${name}`,
+      latest,
+    ]),
+  );
+
+function fakes(
+  m: Machine,
+  latest: string,
+  cli: 'server' | 'broken' = 'server',
+  options: { tarball?: string; endpoint?: ReturnType<typeof attestationsEndpoint> } = {},
+): Fakes {
   const runtimes: string[] = [];
   return {
     runtimes,
+    registry: packumentRegistry(everyPackage(latest)).read,
+    verifyRelease: testReleaseVerifier(options.endpoint),
     latestVersion: async (packageName: string) => {
       if (packageName.startsWith('@agentcomms/')) return latest;
       throw new Error(`the registry answered 404 for ${packageName}`);
@@ -196,7 +231,7 @@ function fakes(m: Machine, latest: string, cli: 'server' | 'broken' = 'server'):
     },
     installRuntime: async (packageName: string, version: string) => {
       runtimes.push(`${packageName}@${version}`);
-      makeRuntime(m, version, cli);
+      makeRuntime(m, version, cli, options.tarball);
     },
   };
 }
@@ -258,6 +293,7 @@ test('after the move, an update installs the release and switches the launcher, 
       `installs ${GMAIL}@${LATEST} from npm into ${managedRuntimeDir(m.dataDir, GMAIL, LATEST)}`,
       `switches the Gmail stable launcher ${launcher} from ${OLD} to ${LATEST}; no client configuration is changed`,
       `cursor as "gmail" and vscode as "gmail" start it, and run ${LATEST} once restarted`,
+      `${GMAIL}@${LATEST} was verified before this preview: built by this repository's release workflow (.github/workflows/release.yml) at the tag of its version, on a GitHub-hosted runner, as its Sigstore provenance shows`,
     ]);
     assert.equal(first.summary, 'Update agent-communications to the latest release: 1 launcher, 1 runtime');
     assert.ok(!String(first.preview).includes('…'), 'no step is cut short in the preview');
@@ -384,6 +420,55 @@ test('a switch whose release does not start through the launcher is put back, an
     assert.match(String(pointer?.detail), new RegExp(`switched back to ${OLD.replaceAll('.', '\\.')}`));
     assert.deepEqual(await readPointer(m.dataDir, 'gmail'), { current: managedRuntimeDir(m.dataDir, GMAIL, OLD) });
     assert.equal(readFileSync(cursorConfig(m), 'utf8'), before);
+  } finally {
+    await close();
+  }
+});
+
+test('a launcher is never switched to a release that did not verify, nor to a runtime that is not the verified tarball', async () => {
+  // No attestation for the release: the update is refused before its preview, and nothing is installed or switched.
+  const m = machine();
+  makeRuntime(m, OLD);
+  await registerOnLauncher(m, OLD);
+  const pointer = await readPointer(m.dataDir, 'gmail');
+  const refused = fakes(m, LATEST, 'server', { endpoint: attestationsEndpoint({ [GMAIL]: 'missing' }) });
+  const tool = await connect(m, refused);
+  try {
+    const result = await tool.call('comms_update', {});
+    assert.equal(result.isError, true);
+    const error = (result.structuredContent as { error: { code: string; message: string } }).error;
+    assert.equal(error.code, 'BAD_DATA');
+    assert.match(
+      error.message,
+      new RegExp(`^nothing was installed or changed: ${GMAIL}@${LATEST} could not be verified`),
+    );
+    assert.deepEqual(refused.runtimes, []);
+    assert.deepEqual(await readPointer(m.dataDir, 'gmail'), pointer);
+  } finally {
+    await tool.close();
+  }
+
+  // Verified, and npm left another tarball: the runtime step fails, and the launcher is left as it was.
+  const n = machine();
+  makeRuntime(n, OLD);
+  await registerOnLauncher(n, OLD);
+  const before = await readPointer(n.dataDir, 'gmail');
+  const swapped = fakes(n, LATEST, 'server', { tarball: integrityOf('another tarball') });
+  const { ok, close } = await connect(n, swapped);
+  try {
+    const first = await ok('comms_update', {});
+    const done = await ok('comms_update', { approvalId: first.approvalId });
+    const result = done.result as unknown as UpdateResult;
+    assert.equal(result.status, 'failed');
+    const runtime = result.steps.find((step) => step.kind === 'runtime');
+    assert.equal(runtime?.outcome, 'failed');
+    const switched = result.steps.find((step) => step.kind === 'pointer');
+    assert.equal(switched?.outcome, 'skipped');
+    assert.match(
+      String(switched?.detail),
+      /is not the tarball whose provenance was verified, so the launcher was left/,
+    );
+    assert.deepEqual(await readPointer(n.dataDir, 'gmail'), before);
   } finally {
     await close();
   }

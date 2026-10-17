@@ -70,7 +70,7 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
-import { updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
 import {
@@ -93,6 +93,7 @@ import {
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
 import { exemptFromUpdateNotice, updateNoticeAtTerminal } from './update-gate.ts';
 import type { UpdateJobDeps } from './update-job.ts';
+import { stateReleaseVerifier } from './update-provenance.ts';
 import { VERSION } from './version.ts';
 
 /**
@@ -444,6 +445,8 @@ export async function main(
     updateJob?: UpdateJobDeps | undefined;
     /** What one background run reads and runs — registry, attestations, installer, self-check, clock — for a test. */
     updateBackground?: BackgroundDeps | undefined;
+    /** What `update` and `update --check` read and run — the registry, the verifier, the installers — for a test. */
+    update?: UpdateDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -506,7 +509,9 @@ export async function main(
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
   // given the notice it is part of — it is run before the notice, as the server is.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
-    return runCommand(output, () => runUpdateCheckChild(core, env, sub));
+    return runCommand(output, () =>
+      runUpdateCheckChild(core, env, sub, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
+    );
   }
 
   // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for
@@ -520,7 +525,7 @@ export async function main(
       running: VERSION,
       output,
       streams: defaultStreams,
-      ...terminalUpdateHooks(core, env),
+      ...terminalUpdateHooks(core, env, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
     });
   }
 
@@ -1004,15 +1009,21 @@ export async function main(
           if (values.approval !== undefined) {
             throw usage('--check only reads, so it takes no --approval; leave out --check to update');
           }
-          writeResult(await updateCheck(core, env), output, (report) => renderUpdateCheck(report, handoffs));
+          writeResult(await updateCheck(core, env, deps.update ?? coreUpdateDeps(core)), output, (report) =>
+            renderUpdateCheck(report, handoffs),
+          );
           return;
         }
         const words = ['update'];
         if (values['no-verify']) words.push('--no-verify');
-        const result = await gatedChangeAtTerminal(core, updateChange(core, env, { noVerify: values['no-verify'] }), {
-          ...approval,
-          rerun: words,
-        });
+        const result = await gatedChangeAtTerminal(
+          core,
+          updateChange(core, env, { noVerify: values['no-verify'] }, deps.update ?? coreUpdateDeps(core)),
+          {
+            ...approval,
+            rerun: words,
+          },
+        );
         // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
         softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
         writeResult(result, output, (r) => renderUpdate(r, output.color));
@@ -1371,6 +1382,11 @@ function renderRollback(result: UpdateRollbackResult): string {
     );
   }
   return lines.join('\n');
+}
+
+/** Core's update deps: its own verifier, since core carries sigstore-js; the rest the update's defaults. */
+function coreUpdateDeps(core: { paths: { stateDir: string } }): UpdateDeps {
+  return { verifyRelease: stateReleaseVerifier(core.paths.stateDir) };
 }
 
 /** A run that could not do its work is not a success to the job's log; one with nothing to do yet is. */

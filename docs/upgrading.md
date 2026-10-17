@@ -40,6 +40,20 @@ and calls again with it — `--approval <id>`, or `approvalId` — once you have
 those versions: a release published in between is a different change, and is refused. With nothing behind, it says
 so and prepares nothing.
 
+**Every release it would install is verified first**, before the preview is made and again when the approval is
+claimed, against the same pins as the background run (below): each runtime it installs, each launcher it switches, each
+registration it writes — a managed one's runtime, and an npx one's package, which its client fetches from npm — and
+each global package. The preview ends with one line a package: `@agentcomms/gmail@<version> was verified before this
+preview: built by this repository's release workflow …`. One release with no attestation, or one that names anything
+else, refuses the whole update with `BAD_DATA` — `nothing was installed or changed: <package>@<version> could not be
+verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
+No flag or setting skips it. A release it takes the machine past that says it needs a decision — 0.21.0, on the way
+from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words, with whether it verified: your yes to the preview
+is that decision, so read its release notes first. Runtimes and global packages are installed with `--ignore-scripts`: no package's install script runs before its
+tarball has been checked (nothing published here, nor anything it depends on, needs one). After installing, each runtime must hold the very tarball that was verified, as npm's
+lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
+registered on, and its step says so.
+
 Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
 same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign
 file unchanged. A symlinked bin directory works; if it is redirected while an operation is in progress, the mutation
@@ -80,7 +94,10 @@ The same one line also carries, by the same rules of level and pause:
 - **what the last background run left** — the release it installed and that a restart picks up, a release it refused
   because its provenance did not verify, a major release or one needing a decision that it left for you, the job an
   organisation turned off. It is said by the first server or command it applies to, and then cleared; "installed" is
-  said only by a process running a release before it.
+  said only by a process running a release before it. It is said in this package's own fixed sentences, naming a
+  release only by its plain `MAJOR.MINOR.PATCH` and a refusal only by the pin that failed: nothing the registry or an
+  attestation's certificate wrote — a needed decision's own words, the runner a certificate names — is ever repeated,
+  and a record in `update-check.json` holding any other text is said by its outcome's sentence instead.
 - **the offer of the background job**, on `auto` while it is not set up, where it could be: `comms_update` with
   `backgroundJob: "on"` (or the located `update --background-job on`) shows the job, when it runs and how to remove
   it, and sets nothing up without your yes.
@@ -144,7 +161,11 @@ answer at most, then goes on while the ask finishes beside it, so a slow registr
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
 `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. The check reads the latest release's own document too, for what its manifest declares. Where that process cannot be started, the command asks in its own process, as before, and ends
+`npm ls` behind it. The check reads core's full document too, for what its releases declare: a decision that any
+release since the oldest one here needs, and whether the latest is a security fix — each counted only once its
+provenance verifies. Core's own server and command verify it; a channel's server or command carries no Sigstore and
+counts neither, so on a machine where only a channel's server or command ran the day's check, a security fix is said
+as an ordinary release until core's next check. Where that process cannot be started, the command asks in its own process, as before, and ends
 once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
 of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
 the notice once any other server or command on the machine has found an update. The check is skipped entirely when
@@ -197,7 +218,10 @@ nothing unless all of this holds:
   for with `update --pause` holds it, but never for a security fix. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and
   `AGENT_COMMS_UPDATES=never` turn it off for that process.
 - **The release waits for nobody.** A major version, a release whose core manifest declares
-  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. A
+  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. Every
+  release since the oldest one a launcher here starts counts, not only the latest: if 0.21.0 needs a decision and
+  0.21.1 does not say so again, 0.21.1 waits for you too, and a major crossed by any launcher here waits. Each release
+  whose decision is acted on is verified first, as the latest is. A
   release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
   state directory).
 - **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest
@@ -210,12 +234,21 @@ nothing unless all of this holds:
   built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
   version with no attestation, or any other identity, is refused, and nothing at all is installed.
 
-Then it installs each package into a runtime of its own, checks that npm installed the tarball whose provenance was
-verified, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
+Core's latest release is verified first, before anything the registry says of it is acted on or made a notice — a
+security fix's shorter hold and its way past a pause, a needed decision, a major release, a downgrade. Until then the
+registry's word can only hold a release back: a pause holds one that does not say it is a security fix. A release that
+does not verify is only refused, and its notice says only that.
+
+Then it installs each package into a runtime of its own — npm told to run no package's install script — checks that
+npm installed the tarball whose provenance was verified, and that every other package of this suite in the runtime (the
+core Gmail depends on, say) is a tarball whose provenance verifies too, that its CLI says the release's version, and that its server answers MCP `initialize` with no account to
 reach — and only once every package has passed does it switch each stable launcher's pointer. A run that fails part-way
-switches nothing. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
+switches nothing: a switch that fails puts back the launchers already switched, and one that cannot be put back is
+named in the run's result and its audit line, still switched, and the notice says not every launcher was put back. It records one line in the audit log (`comms_audit_tail`), removes the runtimes older than each
 launcher's previous one that nothing uses, and leaves the next session a notice: `<version> is installed; restart …`,
-or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing.
+or why it was not. `--dry-run` says what it would do and why, with the provenance it verified, and changes nothing:
+it reads Sigstore's trust root into a temporary folder of its own and removes it, where a run keeps it in
+`sigstore` in the state directory.
 
 A background run and a person's update or rollback never overlap: each holds one lock for the machine,
 `.update.lock` in the state directory, while it installs, switches or prunes. A run that finds it held does nothing

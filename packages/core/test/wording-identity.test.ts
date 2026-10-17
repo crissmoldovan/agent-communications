@@ -13,6 +13,7 @@ import { resolveName } from '../src/names.ts';
 import { type ServerInstallRequest, serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
 import { updateChange } from '../src/operations/update.ts';
 import { VERSION } from '../src/version.ts';
+import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -314,6 +315,9 @@ async function collect(): Promise<Record<string, string>> {
     });
     const deps = {
       latestVersion: async () => LATEST,
+      // Every release it would install, verified first against the test's own trust root: nothing reaches npm.
+      registry: registryOf(() => LATEST),
+      verifyRelease: testReleaseVerifier(),
       globalPackages: async () => ({ '@agentcomms/core': OLD, '@agentcomms/slack': OLD }),
       installGlobal: async () => undefined,
       installRuntime: async () => undefined,

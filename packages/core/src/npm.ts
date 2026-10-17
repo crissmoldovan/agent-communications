@@ -96,43 +96,6 @@ export interface ReleaseDeclaration {
 }
 
 /**
- * What one release's manifest declares, read from the registry as `npmLatestVersion` reads it — the same registry, its
- * authentication and its timeout. The abbreviated document the latest version comes from carries none of a manifest's
- * own fields, so this is the release's own document: `<registry>/<package>/<version>`.
- */
-export async function npmReleaseDeclaration(
-  packageName: string,
-  version: string,
-  options: { env: NodeJS.ProcessEnv; fetch?: typeof fetch | undefined; timeoutMs?: number | undefined },
-): Promise<ReleaseDeclaration> {
-  const base = registryUrl(options.env);
-  const where = displayUrl(base) ?? 'the npm registry';
-  const timeoutMs = options.timeoutMs ?? REGISTRY_TIMEOUT_MS;
-  const url = new URL(`${packageName.replace('/', '%2f')}/${encodeURIComponent(version)}`, base);
-  const headers: Record<string, string> = { accept: 'application/json' };
-  if (url.username || url.password) {
-    const user = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
-    headers.authorization = `Basic ${Buffer.from(user).toString('base64')}`;
-    url.username = '';
-    url.password = '';
-  }
-  const response = await (options.fetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error(`${where} answered ${response.status}`);
-  }
-  const body = (await response.json()) as {
-    agentcommsRelease?: { security?: unknown; needsDecision?: unknown };
-  } | null;
-  const declared = body?.agentcommsRelease;
-  const needsDecision = declared?.needsDecision;
-  return {
-    security: declared?.security === true,
-    needsDecision: needsDecision === true || (typeof needsDecision === 'string' && needsDecision.trim() !== ''),
-  };
-}
-
-/**
  * A command's exit status and output, given up on after `timeoutMs`. npm starts programs of its own by name — scripts,
  * `node-gyp`, a shell — so on Windows it is told never to take one from its current folder.
  */
@@ -202,11 +165,14 @@ export async function npmGlobalPackages(
   return found;
 }
 
-/** `npm install -g <spec>`, through the npm beside this Node. Rejects with the end of what npm said when it fails. */
+/**
+ * `npm install -g <spec>`, through the npm beside this Node, running no package's install script: one would run as the
+ * person with nothing to check what npm installed against. Rejects with the end of what npm said when it fails.
+ */
 export async function npmInstallGlobal(env: NodeJS.ProcessEnv, spec: string): Promise<void> {
   const npmCli = await findNpmCli();
   const { code, stderr } = await capture(
-    [npmCli, 'install', '--global', '--no-audit', '--no-fund', '--no-update-notifier', spec],
+    [npmCli, 'install', '--global', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', spec],
     env,
     10 * 60_000,
   );

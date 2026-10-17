@@ -557,12 +557,16 @@ export async function installManagedRuntime(
     `${JSON.stringify({ name: `${product.binary}-runtime`, private: true }, null, 2)}\n`,
   );
   const npmCli = await findNpmCli();
+  // No package's script runs as it installs: one would run as the person before anything has checked that what npm
+  // installed is the tarball whose provenance was verified. Nothing this suite publishes, nor anything it depends on,
+  // needs one (test/install-scripts.test.ts holds that).
   await run(context.env, process.execPath, [
     npmCli,
     'install',
     '--prefix',
     root,
     '--save-exact',
+    '--ignore-scripts',
     '--no-audit',
     '--no-fund',
     `${product.packageName}@${version}`,

@@ -8,6 +8,7 @@ import { launcherPaths } from '../src/launcher.ts';
 import { updatePause } from '../src/operations/update-settings.ts';
 import { updateNoticeAtTerminal, updateToolNotice } from '../src/update-gate.ts';
 import { type BackgroundNotice, readUpdateCheck } from '../src/update-state.ts';
+import { BACKGROUND_WORDS } from '../src/update-words.ts';
 import { VERSION } from '../src/version.ts';
 import { coreInline } from './helpers/handoffs.ts';
 import { LATEST, type Machine, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
@@ -65,14 +66,11 @@ function coreLauncher(m: Machine): void {
 // ── What a background run left (U5 step 7) ───────────────────────────────────────────────────────────────────────
 
 test('a background run’s notice is the next session’s line, once, and then it is cleared: installed, refused, a skipped major', async () => {
+  // The sentences a run leaves (`update-words.ts`): the notice says one only as it is, word for word.
   for (const [outcome, version, text] of [
-    [
-      'installed',
-      NEXT_MINOR,
-      `${NEXT_MINOR} is installed; restart each MCP client that starts these servers to use it`,
-    ],
-    ['refused', NEXT_MINOR, `${NEXT_MINOR} was not installed: the provenance of @agentcomms/core did not verify`],
-    ['skipped', NEXT_MAJOR, `${NEXT_MAJOR} is a new major release: it is never installed in the background`],
+    ['installed', NEXT_MINOR, BACKGROUND_WORDS.installed(NEXT_MINOR)],
+    ['refused', NEXT_MINOR, BACKGROUND_WORDS.unverified(NEXT_MINOR, 'attestation')],
+    ['skipped', NEXT_MAJOR, BACKGROUND_WORDS.major(NEXT_MAJOR)],
   ] as const) {
     const m = machine();
     markJobSetUp(m);
@@ -89,7 +87,7 @@ test('a background run’s notice is the next session’s line, once, and then i
 });
 
 test('a background run’s notice waits for a pause, is never said where updates are off, and "installed" only to a process behind it', async () => {
-  const text = `${VERSION} is installed; restart each MCP client that starts these servers to use it`;
+  const text = BACKGROUND_WORDS.installed(VERSION);
   // A process already running what was installed: nothing to restart into, and the notice is left for one that is not.
   const current = machine();
   markJobSetUp(current);
@@ -97,7 +95,7 @@ test('a background run’s notice waits for a pause, is never said where updates
   assert.deepEqual(await serverTwice(current), [null, null]);
   assert.equal((await readUpdateCheck(current.stateDir)).backgroundNotice?.text, text, 'left for a process behind it');
 
-  const refused = `${NEXT_MINOR} was not installed: the provenance of @agentcomms/core did not verify`;
+  const refused = BACKGROUND_WORDS.unverified(NEXT_MINOR, 'attestation');
   const paused = machine();
   markJobSetUp(paused);
   await seed(paused, { latest: NEXT_MINOR, behind: true, backgroundNotice: left('refused', NEXT_MINOR, refused) });

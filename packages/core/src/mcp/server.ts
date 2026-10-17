@@ -39,6 +39,7 @@ import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
 import { updateToolNotice } from '../update-gate.ts';
 import type { UpdateJobDeps } from '../update-job.ts';
+import { stateReleaseVerifier } from '../update-provenance.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -142,7 +143,13 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
   // Opened as core itself, so every command this server hands a person is located from this installation.
   const core = options.core ?? openCore({ env, caller: CORE_CALLER });
   const platform = options.platform ?? process.platform;
-  const updateDeps: UpdateDeps = { ...options.update, platform };
+  // Core carries sigstore-js, so its checks count what a release declares once it is verified, and its updates verify
+  // every release they install (a test hands in its own).
+  const updateDeps: UpdateDeps = {
+    ...(options.update === undefined ? { verifyRelease: stateReleaseVerifier(core.paths.stateDir) } : {}),
+    ...options.update,
+    platform,
+  };
   const server = new McpServer(
     { name: 'agentcomms', version: VERSION },
     { instructions: await buildInstructions(core) },

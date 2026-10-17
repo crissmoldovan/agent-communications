@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { EXIT_CODES, managedRuntimeDir } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { tarballOf } from '../../core/test/helpers/provenance-fixture.ts';
 import { VERSION } from '../src/version.ts';
 import { assertNoBareCommand, resendInline } from './support/handoffs.ts';
 import { type Captured, type Harness, newHarness, tempDir } from './support/harness.ts';
@@ -77,9 +78,16 @@ const cli = (m: Machine, argv: string[]) => m.harness.cli(['--json', ...argv], {
 async function registry(): Promise<{ url: string; asked: string[]; close(): Promise<void> }> {
   const asked: string[] = [];
   const server = createServer((request, response) => {
-    asked.push(decodeURIComponent(request.url ?? ''));
+    const name = decodeURIComponent(request.url ?? '').slice(1);
+    asked.push(`/${name}`);
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ 'dist-tags': { latest: LATEST } }));
+    // The release's tarball integrity, the one the provenance fixture's attestations sign: what an update verifies.
+    response.end(
+      JSON.stringify({
+        'dist-tags': { latest: LATEST },
+        versions: { [LATEST]: { dist: { integrity: tarballOf(name, LATEST) } } },
+      }),
+    );
   });
   await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
   const { port } = server.address() as AddressInfo;
@@ -95,8 +103,12 @@ async function registry(): Promise<{ url: string; asked: string[]; close(): Prom
  * — over stdio, with this harness's configuration and home. Its environment is pinned whole, so nothing of the
  * machine running the tests reaches it: `PATH` holds only `ps`, which `prune` needs.
  */
-async function coreServer(m: Machine, extra: Record<string, string> = {}) {
-  const coreCli = join(dirname(fileURLToPath(import.meta.resolve('@agentcomms/core'))), 'cli.mjs');
+async function coreServer(m: Machine, extra: Record<string, string> = {}, verified = false) {
+  // An update verifies every release it registers, and a built server reads npm's attestations and Sigstore's root,
+  // which no test may reach: one that updates is core's own server, started with the test's verifier.
+  const coreCli = verified
+    ? fileURLToPath(new URL('../../core/test/fixtures/verified-core-server.ts', import.meta.url))
+    : join(dirname(fileURLToPath(import.meta.resolve('@agentcomms/core'))), 'cli.mjs');
   const bin = tempDir();
   const ps = ['/bin/ps', '/usr/bin/ps'].find((path) => existsSync(path));
   if (ps) symlinkSync(ps, join(bin, 'ps'));
@@ -112,7 +124,14 @@ async function coreServer(m: Machine, extra: Record<string, string> = {}) {
   }
   const client = new Client({ name: 'registration-test', version: '0' });
   await client.connect(
-    new StdioClientTransport({ command: process.execPath, args: [coreCli, 'mcp'], env: serverEnv, stderr: 'ignore' }),
+    new StdioClientTransport({
+      command: process.execPath,
+      args: verified
+        ? ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', coreCli]
+        : [coreCli, 'mcp'],
+      env: serverEnv,
+      stderr: 'ignore',
+    }),
   );
   return {
     call: async (name: string, args: Record<string, unknown>) =>
@@ -209,12 +228,18 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
       .map((item) => [item.channel, item.narrowing]);
     assert.deepEqual(behind, [['resend', ['--account', 'acme/resend']]]);
     assert.ok(npm.asked.includes('/@agentcomms/resend'), `the registry was asked about Resend: ${npm.asked}`);
-    const update = await server.call('comms_update', { noVerify: true });
-    assert.equal(update.isError, undefined, JSON.stringify(update.structuredContent));
-    const prepared = update.structuredContent as { approvalId: string; preview: string };
-    assert.match(prepared.preview, /pinned to the account acme\/resend, as now/);
-    const updated = await server.call('comms_update', { noVerify: true, approvalId: prepared.approvalId });
-    assert.equal(updated.isError, undefined, JSON.stringify(updated.structuredContent));
+    const updating = await coreServer(m, { npm_config_registry: npm.url, npm_config_prefix: prefix }, true);
+    try {
+      const update = await updating.call('comms_update', { noVerify: true });
+      assert.equal(update.isError, undefined, JSON.stringify(update.structuredContent));
+      const prepared = update.structuredContent as { approvalId: string; preview: string };
+      assert.match(prepared.preview, /pinned to the account acme\/resend, as now/);
+      assert.match(prepared.preview, new RegExp(`@agentcomms/resend@${LATEST.replaceAll('.', '\\.')} was verified`));
+      const updated = await updating.call('comms_update', { noVerify: true, approvalId: prepared.approvalId });
+      assert.equal(updated.isError, undefined, JSON.stringify(updated.structuredContent));
+    } finally {
+      await updating.close();
+    }
     assert.deepEqual((await cursorEntry(m))?.args, [
       '-y',
       `@agentcomms/resend@${LATEST}`,

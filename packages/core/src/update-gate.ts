@@ -26,6 +26,7 @@ import {
   within,
   withSecurityShown,
 } from './update-state.ts';
+import { backgroundNoticeLine } from './update-words.ts';
 import { isBehind, isVersion } from './versions.ts';
 
 /**
@@ -140,9 +141,9 @@ export interface NoticeDecision {
   moves: number;
   /**
    * The background job set up here that has not run in 48 hours: since when (`EffectiveUpdates.jobSilent`). Said with
-   * the notice, or alone, spaced as the notice is; null when the job works or there is none.
+   * the notice, or alone, spaced as the notice is; null, or absent, when the job works or there is none.
    */
-  jobSilent: string | null;
+  jobSilent?: string | null | undefined;
   /** `auto` with no background job, one that could be set up here: the notice offers it, naming its approval. */
   offerJob: boolean;
 }
@@ -203,7 +204,7 @@ async function decideNotice(
     if (decision === null) return null;
     const stamp = at.toISOString();
     // A line about this machine's updates spaces the next one; a background run's word alone is an event, said once.
-    const spaces = decision.notice !== null || decision.moves > 0 || decision.jobSilent !== null;
+    const spaces = decision.notice !== null || decision.moves > 0 || (decision.jobSilent ?? null) !== null;
     const written: UpdateCheckRecord = {
       ...record,
       ...(spaces ? { noticeAt: stamp } : {}),
@@ -318,7 +319,8 @@ const registrations = (count: number): string => (count === 1 ? 'one registratio
 export function serverDecisionLine(decision: NoticeDecision, env: NodeJS.ProcessEnv = {}): string {
   const { notice, background, moves } = decision;
   const parts: string[] = [];
-  if (background !== null) parts.push(background.text);
+  // The run's word in fixed sentences only: never the state file's text as it is (`update-words.ts`).
+  if (background !== null) parts.push(backgroundNoticeLine(background));
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(serverNoticeLine(notice, env));
   }
@@ -549,7 +551,8 @@ export function commandDecisionLine(
   const { notice, background, moves } = decision;
   const handoffs = requireHandoffs(core, platform);
   const parts: string[] = [];
-  if (background !== null) parts.push(background.text);
+  // The run's word in fixed sentences only: never the state file's text as it is (`update-words.ts`).
+  if (background !== null) parts.push(backgroundNoticeLine(background));
   if (notice !== null && !(background !== null && background.version === notice.latest)) {
     parts.push(commandNoticeLine(core, notice, channel, platform));
   }

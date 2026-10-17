@@ -18,7 +18,6 @@ import {
   restorePointer,
 } from './launcher.ts';
 import { withFileLock } from './lock.ts';
-import { displayUrl } from './mcp-clients.ts';
 import {
   type InstallContext,
   installManagedRuntime,
@@ -31,17 +30,30 @@ import {
   runningCommandLines,
   verifyEntry,
 } from './mcp-install.ts';
-import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 import { childEnvironment } from './system-programs.ts';
 import { backgroundJobAtRun, recordUpdateJobRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
 import { withUpdateLock } from './update-lock.ts';
 import {
+  type BundleVerifier,
   type ProvenanceDeps,
   type ProvenanceVerdict,
+  type SigstoreModules,
   sigstoreBundleVerifier,
   type VerifiedProvenance,
   verifyProvenance,
 } from './update-provenance.ts';
+import {
+  majorOf,
+  npmRegistry,
+  oldestVersion,
+  type RegistryAnswer,
+  type ReleaseRegistry,
+  type ReleaseVerifier,
+  releaseDeclaration,
+  releaseIntegrity,
+  releasesBetween,
+  runtimeIntegrityProblem,
+} from './update-release.ts';
 import {
   type BackgroundNotice,
   changeUpdateCheck,
@@ -51,6 +63,7 @@ import {
   type UpdateCheckRecord,
   updateCheckSwitchedOff,
 } from './update-state.ts';
+import { BACKGROUND_WORDS, type FailedWhat } from './update-words.ts';
 import { VERSION } from './version.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -108,20 +121,8 @@ export function updateSettingsReader(config: Config, record: UpdateCheckRecord, 
   };
 }
 
-/** What the run reads of a package's document on the registry: its tags, its versions' manifests, when each came out. */
-export interface Packument {
-  'dist-tags'?: Record<string, unknown> | undefined;
-  versions?: Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown } } | undefined> | undefined;
-  time?: Record<string, unknown> | undefined;
-}
-
-/** A package's document, and when the registry served it (its `Date`), when it said. */
-export interface RegistryAnswer {
-  packument: Packument;
-  servedAt?: Date | undefined;
-}
-
-export type ReleaseRegistry = (packageName: string) => Promise<RegistryAnswer>;
+export type { Packument, RegistryAnswer, ReleaseRegistry } from './update-release.ts';
+export { npmRegistry } from './update-release.ts';
 
 /** One package's check after installing: what was run, and how it went. */
 export type SelfCheck = (subject: {
@@ -144,6 +145,12 @@ export interface BackgroundDeps {
   /** For Track C's `backgroundJobAtRun`: its runner, so a test never removes a real job. */
   job?: UpdateJobDeps | undefined;
   platform?: NodeJS.Platform | undefined;
+  /** sigstore-js's modules, when no `provenance.verifyBundle` is handed in: for a test, its TUF reader stood in. */
+  loadSigstore?: (() => Promise<SigstoreModules>) | undefined;
+  /** How a pointer is switched and put back: for a test, one that cannot be put back. */
+  launchers?:
+    | { exchange?: typeof exchangePointer | undefined; restore?: typeof restorePointer | undefined }
+    | undefined;
 }
 
 export interface BackgroundRequest {
@@ -227,8 +234,6 @@ const HOUR_MS = 60 * 60 * 1000;
 export const UPDATE_HELD_FILE = 'update-held.json';
 
 const CORE: ServerId = 'core';
-const RESTART =
-  'restart each MCP client that starts these servers (in Claude Code, /mcp and then Reconnect) to use it: a server already running keeps the code it started with';
 
 // ── The releases a person rolled back from ───────────────────────────────────────────────────────────────────────
 
@@ -288,69 +293,6 @@ export async function holdRolledBack(
 
 // ── The registry ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * The registry npm itself reads, asked for a package's full document — the one that says when each version came out.
- * A mirror's address with a user and password in it means basic authentication, as `npmLatestVersion` sends it. It
- * fails rather than guesses, naming the registry by its host only.
- */
-export function npmRegistry(env: NodeJS.ProcessEnv): ReleaseRegistry {
-  return async (packageName) => {
-    const base = registryUrl(env);
-    const where = displayUrl(base) ?? 'the npm registry';
-    const url = new URL(packageName.replace('/', '%2f'), base);
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (url.username || url.password) {
-      const user = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
-      headers.authorization = `Basic ${Buffer.from(user).toString('base64')}`;
-      url.username = '';
-      url.password = '';
-    }
-    let response: Response;
-    try {
-      response = await fetch(url, { headers, signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
-    } catch {
-      throw new Error(`${where} could not be reached`);
-    }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`${where} answered ${response.status} for ${packageName}`);
-    }
-    let packument: Packument;
-    try {
-      packument = (await response.json()) as Packument;
-    } catch {
-      throw new Error(`${where} answered something that is not JSON for ${packageName}`);
-    }
-    const date = Date.parse(response.headers.get('date') ?? '');
-    return { packument, ...(Number.isFinite(date) ? { servedAt: new Date(date) } : {}) };
-  };
-}
-
-/** What a release's core manifest declares (U5): a security fix, and a decision it needs from the person. */
-function releaseFlags(manifest: { agentcommsRelease?: unknown } | undefined): {
-  security: boolean;
-  needsDecision: string | null;
-} {
-  const declared = manifest?.agentcommsRelease;
-  if (declared === undefined || declared === null) return { security: false, needsDecision: null };
-  // A declaration this release cannot read waits for the person: it may be the decision it cannot see.
-  if (typeof declared !== 'object' || Array.isArray(declared)) {
-    return { security: false, needsDecision: 'its release declaration cannot be read' };
-  }
-  const { security, needsDecision } = declared as Record<string, unknown>;
-  const decision =
-    needsDecision === undefined || needsDecision === null || needsDecision === false
-      ? null
-      : typeof needsDecision === 'string' && needsDecision.trim()
-        ? needsDecision.trim().slice(0, 200)
-        : 'its release says it needs one';
-  return { security: security === true, needsDecision: decision };
-}
-
-function majorOf(version: string): string {
-  return version.split('.')[0] ?? version;
-}
-
 // ── One run ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A package this machine starts through a stable launcher, and the release its pointer names. */
@@ -377,19 +319,6 @@ async function launchedPackages(dataDir: string): Promise<Launched[]> {
 
 function product(channel: ServerId, version: string): McpProduct {
   return { ...serverFacts(channel), version, moduleUrl: '' };
-}
-
-/** The integrity npm recorded for the package it installed into a runtime, from the runtime's own lockfile. */
-async function installedIntegrity(runtime: string, packageName: string): Promise<string | null> {
-  try {
-    const lock = JSON.parse(await readFile(join(runtime, 'package-lock.json'), 'utf8')) as {
-      packages?: Record<string, { integrity?: unknown } | undefined>;
-    };
-    const integrity = lock.packages?.[`node_modules/${packageName}`]?.integrity;
-    return typeof integrity === 'string' ? integrity : null;
-  } catch {
-    return null;
-  }
 }
 
 /** A command run to its end, its stdout read, given up on after `timeoutMs`. */
@@ -448,6 +377,19 @@ interface Run {
   deps: BackgroundDeps;
   dryRun: boolean;
   now: Date;
+  /**
+   * Where sigstore-js keeps Sigstore's trust root, read through TUF: `<state>/sigstore` for a run, and for a dry run a
+   * temporary folder of its own, removed when it ends — a dry run changes nothing.
+   */
+  cachePath: string;
+}
+
+/** The verifier a run checks bundles with: the one handed in, or sigstore-js's, its trust root kept in `cachePath`. */
+function bundleVerifier(run: Run): BundleVerifier {
+  return (
+    run.deps.provenance?.verifyBundle ??
+    sigstoreBundleVerifier({ cachePath: run.cachePath, load: run.deps.loadSigstore })
+  );
 }
 
 type Settled = Omit<BackgroundRunResult, 'dryRun' | 'pruned' | 'jobRemoved'> & {
@@ -527,8 +469,10 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   try {
     launched = await launchedPackages(core.paths.dataDir);
   } catch (error) {
-    const text = `No update was installed in the background: ${toCommsError(error).message}`;
-    return stop('failed', toCommsError(error).message, undefined, { text, outcome: 'failed' });
+    return stop('failed', toCommsError(error).message, undefined, {
+      text: BACKGROUND_WORDS.stopped(null),
+      outcome: 'failed',
+    });
   }
   if (launched.length === 0) {
     return stop('no-launchers', 'nothing here starts a stable launcher, so there is nothing a background run switches');
@@ -544,20 +488,51 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   } catch (error) {
     return stop('unavailable', `the registry could not be read: ${toCommsError(error).message}`, facts);
   }
+  // A release is named by its plain MAJOR.MINOR.PATCH — what npm publishes — or it is not one this runs: a
+  // prerelease is never installed, and build metadata is not part of a published version. Neither is repeated.
   const latest = coreAnswer.packument['dist-tags']?.latest;
-  if (!isVersion(latest)) return stop('unavailable', 'the registry names no latest release of the core', facts);
+  if (!isVersion(latest) || latest.includes('+')) {
+    return stop('unavailable', 'the registry names no latest release of the core', facts);
+  }
+  if (isPrerelease(latest))
+    return stop('up-to-date', "the registry's latest is a prerelease, which is never installed", facts);
   facts.latest = latest;
-  if (isPrerelease(latest)) return stop('up-to-date', `the registry's latest, ${latest}, is a prerelease`, facts);
 
   const behind = launched.filter((entry) => entry.version !== latest);
   const ahead = launched.filter((entry) => entry.version !== null && (compareVersions(entry.version, latest) ?? 0) > 0);
   if (behind.length === 0) return stop('up-to-date', `every stable launcher here starts ${latest}, the latest`, facts);
 
-  const flags = releaseFlags(coreAnswer.packument.versions?.[latest]);
+  // What the manifest says, unverified: only ever a reason to hold back — a pause holds a release that does not say it
+  // is a security fix — until core's release verifies below. Nothing else is acted on, or said, before then.
   const servedAt = [coreAnswer.servedAt];
   const clock = () => new Date(Math.min(run.now.getTime(), ...servedAt.flatMap((at) => (at ? [at.getTime()] : []))));
   const paused = settings.pausedUntil(clock());
-  if (paused !== undefined && clock() < paused && !flags.security) {
+  const pausedNow = paused !== undefined && clock() < paused;
+  if (pausedNow && !releaseDeclaration(coreAnswer.packument.versions?.[latest]).security) {
+    return stop(
+      'paused',
+      `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
+      facts,
+    );
+  }
+
+  // Core's release, verified before anything the registry says of it is acted on — a security fix, a needed decision,
+  // a major, a downgrade — or made a notice: one that does not verify is only refused.
+  const verifier = bundleVerifier(run);
+  const coreIntegrity = releaseIntegrity(coreAnswer.packument, latest);
+  if (coreIntegrity === null) return stop('held', `${corePackage}@${latest} is not on the registry yet`, facts);
+  const coreVerdict = await verifyProvenance(
+    { packageName: corePackage, version: latest, integrity: coreIntegrity },
+    { fetch: deps.provenance?.fetch, verifyBundle: verifier },
+  );
+  if (!coreVerdict.ok) {
+    return stop('refused', `the provenance of ${corePackage}@${latest} did not verify: ${coreVerdict.field}`, facts, {
+      text: BACKGROUND_WORDS.unverified(latest, coreVerdict.field),
+      outcome: 'refused',
+    });
+  }
+  const flags = releaseDeclaration(coreAnswer.packument.versions?.[latest]);
+  if (pausedNow && !flags.security) {
     return stop(
       'paused',
       `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
@@ -566,27 +541,65 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   }
 
   if ((compareVersions(latest, current) ?? 0) < 0 || ahead.length > 0) {
-    const text = `The registry names ${latest} as the latest release, older than ${current} here: nothing was changed in the background.`;
     return stop('skipped', `${latest} is older than what runs here: a downgrade is never automatic`, facts, {
-      text,
+      text: BACKGROUND_WORDS.downgrade(latest),
       outcome: 'skipped',
     });
   }
-  if (majorOf(latest) !== majorOf(current)) {
-    const text = `${latest} is a new major release: it is never installed in the background. Update when it suits you — comms_update shows each step first.`;
-    return stop('skipped', `${latest} is a major release after ${current}: it waits for the person`, facts, {
-      text,
+  // Every release since the oldest a launcher here starts is what this run takes the machine past: a major crossed by
+  // any of them, or a decision any of them needs, waits for the person — a later release that does not say so again
+  // does not end the wait.
+  const from = oldestVersion(behind.map((entry) => entry.version ?? current)) ?? current;
+  if (majorOf(latest) !== majorOf(from)) {
+    return stop('skipped', `${latest} is a major release after ${from}: it waits for the person`, facts, {
+      text: BACKGROUND_WORDS.major(latest),
       outcome: 'skipped',
     });
   }
-  if (flags.needsDecision !== null) {
-    const text = `${latest} needs a decision from you (${flags.needsDecision}), so it was not installed in the background. comms_update shows what it changes.`;
-    return stop('skipped', `${latest} needs a decision: ${flags.needsDecision}`, facts, { text, outcome: 'skipped' });
+  const versions = coreAnswer.packument.versions;
+  const deciding = [
+    ...new Set([
+      ...(flags.needsDecision ? [latest] : []),
+      ...releasesBetween(coreAnswer.packument, from, latest).filter(
+        (version) => releaseDeclaration(versions?.[version]).needsDecision,
+      ),
+    ]),
+  ];
+  // Each whose decision is acted on is verified first, as `latest` was; one that does not verify is only refused.
+  for (const version of deciding) {
+    if (version === latest) continue;
+    const integrity = releaseIntegrity(coreAnswer.packument, version);
+    const verdict: ProvenanceVerdict =
+      integrity === null
+        ? {
+            ok: false,
+            package: corePackage,
+            version,
+            field: 'subject',
+            reason: 'the registry gives no tarball integrity for it',
+          }
+        : await verifyProvenance(
+            { packageName: corePackage, version, integrity },
+            { fetch: deps.provenance?.fetch, verifyBundle: verifier },
+          );
+    if (!verdict.ok) {
+      return stop('refused', `the provenance of ${corePackage}@${version} did not verify: ${verdict.field}`, facts, {
+        text: BACKGROUND_WORDS.unverified(latest, verdict.field),
+        outcome: 'refused',
+      });
+    }
+  }
+  // What the decision is, the manifest's own words, is never said: the person reads it in the release notes.
+  if (deciding.length > 0) {
+    return stop('skipped', `${latest} needs a decision from the person (${deciding.join(', ')} says so)`, facts, {
+      text: BACKGROUND_WORDS.decision(latest),
+      outcome: 'skipped',
+    });
   }
 
   const held = await readHeldReleases(core.paths.stateDir);
   if (held === null) {
-    const text = `No update is installed in the background while ${core.paths.stateDir}/${UPDATE_HELD_FILE} cannot be read: it says which releases were rolled back. Delete it to hold none.`;
+    const text = BACKGROUND_WORDS.heldUnreadable;
     return stop(
       'held',
       `${UPDATE_HELD_FILE} cannot be read, so it is not known whether ${latest} was rolled back`,
@@ -666,10 +679,12 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     to: latest,
     runtime: managedRuntimeDir(core.paths.dataDir, entry.packageName, latest),
   }));
-  // Every package verified before any is installed: one refusal installs nothing at all.
-  const verifier =
-    deps.provenance?.verifyBundle ?? sigstoreBundleVerifier({ cachePath: join(core.paths.stateDir, 'sigstore') });
+  // Every package verified before any is installed: one refusal installs nothing at all. Core's was, above.
   for (const item of packages) {
+    if (item.package === corePackage) {
+      item.provenance = coreVerdict.provenance;
+      continue;
+    }
     const integrity = String(answers.get(item.package)?.packument.versions?.[latest]?.dist?.integrity);
     const verdict: ProvenanceVerdict = await verifyProvenance(
       { packageName: item.package, version: latest, integrity },
@@ -677,7 +692,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     );
     if (!verdict.ok) {
       item.detail = `provenance refused (${verdict.field}): ${verdict.reason}`;
-      const text = `${latest} was not installed: the provenance of ${item.package}@${latest} did not verify (${verdict.field}: ${verdict.reason}). Nothing was changed.`;
+      const text = BACKGROUND_WORDS.unverified(latest, verdict.field);
       return stop(
         'refused',
         `the provenance of ${item.package}@${latest} did not verify: ${verdict.field}`,
@@ -714,14 +729,14 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       return installManagedRuntime(context, product(channel, version), version);
     });
   const selfCheck = deps.selfCheck ?? offlineSelfCheck(env, dataDir, deps.platform);
-  const failed = (item: BackgroundPackage, detail: string): Settled => {
+  // The detail is the run's, for its result and the audit log; the notice says what went wrong in fixed words.
+  const failed = (item: BackgroundPackage, detail: string, what: FailedWhat): Settled => {
     item.detail = detail;
-    const text = `${latest} was not installed in the background: ${serverLabel(item.channel)}, ${detail}. Nothing was switched; the next run tries again.`;
     return {
       ...partial,
       outcome: 'failed',
-      reason: `${item.package}@${latest}: ${detail}`,
-      notice: text,
+      reason: `${item.package}@${latest} (${serverLabel(item.channel)}): ${detail}`,
+      notice: BACKGROUND_WORDS.failed(latest, what),
       noticeOutcome: 'failed',
     };
   };
@@ -734,6 +749,7 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
         return failed(
           item,
           `${item.runtime} is there unfinished and ${used === null ? 'the running processes cannot be listed' : 'a running process uses it'}, so it was not installed over`,
+          'inUse',
         );
       }
     }
@@ -742,19 +758,27 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
       item.installed = true;
     } catch (error) {
       item.installed = false;
-      return failed(item, `it could not be installed: ${toCommsError(error).message}`);
+      return failed(item, `it could not be installed: ${toCommsError(error).message}`, 'install');
     }
   }
+  // What npm installed is what was verified: each package's own tarball, and every package of this suite it depends on.
+  const known = new Map(
+    packages.flatMap((item) =>
+      item.provenance ? [[`${item.package}@${item.provenance.version}`, item.provenance.sha512] as const] : [],
+    ),
+  );
+  const verifier = bundleVerifier(run);
+  const verify: ReleaseVerifier = (release) =>
+    verifyProvenance(release, { fetch: deps.provenance?.fetch, verifyBundle: verifier });
   for (const item of packages) {
-    const integrity = await installedIntegrity(item.runtime, item.package);
     const attested = item.provenance?.sha512;
-    const hex = integrity?.startsWith('sha512-') ? Buffer.from(integrity.slice(7), 'base64').toString('hex') : null;
-    if (attested === undefined || hex !== attested) {
+    const problem =
+      attested === undefined
+        ? 'its provenance was not verified'
+        : await runtimeIntegrityProblem(item.runtime, item.package, attested, { verify, known });
+    if (problem !== null) {
       item.checked = false;
-      return failed(
-        item,
-        `what was installed is not the tarball whose provenance was verified (${integrity === null ? 'no integrity recorded' : 'another integrity'})`,
-      );
+      return failed(item, problem, 'tarball');
     }
     const checked = await selfCheck({
       channel: item.channel,
@@ -764,30 +788,42 @@ async function apply(run: Run, partial: Settled, packages: BackgroundPackage[]):
     });
     item.checked = checked.ok;
     item.detail = checked.detail;
-    if (!checked.ok) return failed(item, `its self-check failed: ${checked.detail}`);
+    if (!checked.ok) return failed(item, `its self-check failed: ${checked.detail}`, 'selfCheck');
   }
 
   // Every package verified and checked: now the pointers, all of them or none.
-  const done: { name: string; before: LauncherPointer | undefined; runtime: string }[] = [];
+  const exchange = deps.launchers?.exchange ?? exchangePointer;
+  const restore = deps.launchers?.restore ?? restorePointer;
+  const done: { item: BackgroundPackage; name: string; before: LauncherPointer | undefined; runtime: string }[] = [];
   for (const item of packages) {
     const name = launcherName(item.package);
     try {
-      const before = await exchangePointer(dataDir, name, item.runtime);
-      done.push({ name, before, runtime: item.runtime });
+      const before = await exchange(dataDir, name, item.runtime);
+      done.push({ item, name, before, runtime: item.runtime });
       item.switched = true;
     } catch (error) {
+      item.switched = false;
+      // Each one switched is put back — and one that cannot be is said to be still switched, as it is.
+      const left: string[] = [];
       for (const back of done.reverse()) {
-        await restorePointer(dataDir, back.name, back.before, back.runtime).catch(() => false);
+        const put = await restore(dataDir, back.name, back.before, back.runtime).catch(() => false);
+        back.item.switched = !put;
+        if (!put) left.push(back.name);
       }
-      for (const each of packages) each.switched = false;
-      return failed(
+      const why = toCommsError(error).message;
+      if (left.length === 0) {
+        return failed(item, `its launcher could not be switched (${why}), so every launcher was put back`, 'switch');
+      }
+      const result = failed(
         item,
-        `its launcher could not be switched (${toCommsError(error).message}), so every launcher was put back`,
+        `its launcher could not be switched (${why}), and ${left.length === 1 ? 'this launcher' : 'these launchers'} could not be put back: ${left.join(', ')} — ${left.length === 1 ? 'it starts' : 'they start'} ${latest} from ${left.length === 1 ? 'its' : 'their'} next start`,
+        'switch',
       );
+      return { ...result, notice: BACKGROUND_WORDS.partlySwitched(latest) };
     }
   }
   const pruned = await prune(run, latest);
-  const text = `${latest} is installed; ${RESTART}.`;
+  const text = BACKGROUND_WORDS.installed(latest);
   return {
     ...partial,
     outcome: 'installed',
@@ -881,21 +917,33 @@ export async function runBackgroundUpdate(
   request: BackgroundRequest = {},
   deps: BackgroundDeps = {},
 ): Promise<BackgroundRunResult> {
-  const run: Run = { core, env, deps, dryRun: request.dryRun === true, now: (deps.now ?? (() => new Date()))() };
+  const dryRun = request.dryRun === true;
+  const run: Run = {
+    core,
+    env,
+    deps,
+    dryRun,
+    now: (deps.now ?? (() => new Date()))(),
+    cachePath: dryRun ? await mkdtemp(join(tmpdir(), 'comms-sigstore-')) : join(core.paths.stateDir, 'sigstore'),
+  };
   const finish = (partial: Settled): BackgroundRunResult => {
     const { noticeOutcome: _left, ...rest } = partial;
     return { ...rest, dryRun: run.dryRun, pruned: partial.pruned ?? [], jobRemoved: partial.jobRemoved ?? false };
   };
   if (run.dryRun) {
-    const decided = await decide(run);
-    if (!('go' in decided)) return finish(decided);
-    const { latest } = decided.partial;
-    return finish({
-      ...decided.partial,
-      outcome: 'would-install',
-      reason: `${latest} would be installed: every package's provenance verified, and it is past its hold`,
-      notice: `${latest} is installed; ${RESTART}.`,
-    });
+    try {
+      const decided = await decide(run);
+      if (!('go' in decided)) return finish(decided);
+      const { latest } = decided.partial;
+      return finish({
+        ...decided.partial,
+        outcome: 'would-install',
+        reason: `${latest} would be installed: every package's provenance verified, and it is past its hold`,
+        notice: BACKGROUND_WORDS.installed(latest ?? ''),
+      });
+    } finally {
+      await rm(run.cachePath, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
   let partial: Settled;
   try {
@@ -913,10 +961,7 @@ export async function runBackgroundUpdate(
     partial =
       refused.code === 'LOCK_TIMEOUT'
         ? stop('busy', 'another background run, or a person’s update, is under way')
-        : stop('failed', refused.message, undefined, {
-            text: `No update was installed in the background: ${refused.message}`,
-            outcome: 'failed',
-          });
+        : stop('failed', refused.message, undefined, { text: BACKGROUND_WORDS.stopped(null), outcome: 'failed' });
   }
   const result = finish(partial);
   // Every run says it ran, one that found nothing to do included: a job that never runs silences no notice (U4, U7).

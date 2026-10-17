@@ -16,12 +16,16 @@
  *   subject: this package at this version, with the very SHA-512 the registry gives as its tarball's integrity, which
  *   is what npm then checks the tarball it downloads against.
  *
- * Anything missing or different is a refusal, with the field that failed. Provenance proves where a package was built,
+ * Anything missing or different is a refusal, with the field that failed, said in fixed words: never what the
+ * certificate, the statement or the endpoint held instead. Provenance proves where a package was built,
  * not that it is safe (§2): the hold before a background install is the other half.
  *
  * Nothing here installs or writes anything. The fetch and the verifier are injectable, so a test reads fixtures and no
  * test reaches npm or Sigstore.
  */
+
+import { join } from 'node:path';
+import { sha512Hex } from './update-release.ts';
 
 /** The pins: what a release's provenance has to say, field by field (plan, Global constraints). */
 export const PROVENANCE_PINS: Readonly<{
@@ -133,15 +137,7 @@ export function packageUrl(packageName: string, version: string): string {
   return `pkg:npm/${packageName.replace(/^@/, '%40')}@${version}`;
 }
 
-/** The SHA-512 in a subresource-integrity string, as hex; null when it holds none. */
-export function sha512Hex(integrity: string): string | null {
-  for (const part of integrity.trim().split(/\s+/)) {
-    if (!part.startsWith('sha512-')) continue;
-    const bytes = Buffer.from(part.slice('sha512-'.length).split('?')[0] ?? '', 'base64');
-    if (bytes.length === 64) return bytes.toString('hex');
-  }
-  return null;
-}
+export { sha512Hex } from './update-release.ts';
 
 // ── A certificate, read as far as the pins need ───────────────────────────────────────────────────────────────
 
@@ -233,7 +229,7 @@ export function readCertificate(der: Uint8Array): CertificateFacts {
         throw new Error('it has an extension this does not read');
       const oid = oidOf(der, id);
       // RFC 5280 §4.2: an extension appears once. Two that disagree must not be read as whichever comes first.
-      if (values.has(oid)) throw new Error(`it has the extension ${oid} twice`);
+      if (values.has(oid)) throw new Error('it has one extension twice');
       values.set(oid, value);
     }
   }
@@ -320,8 +316,9 @@ export async function verifyProvenance(
   let answer: { status: number; body: unknown };
   try {
     answer = await (deps.fetch ?? fetchAttestations)(url);
-  } catch (error) {
-    return refuse(release, 'attestation', `npm's attestations could not be read: ${message(error)}`);
+  } catch {
+    // What failed is not said: an error's words can carry what the far end answered.
+    return refuse(release, 'attestation', "npm's attestations could not be read");
   }
   if (answer.status === 404) {
     return refuse(
@@ -330,7 +327,13 @@ export async function verifyProvenance(
       `npm has no attestation for ${packageName}@${version}: it was published without provenance`,
     );
   }
-  if (answer.status !== 200) return refuse(release, 'attestation', `npm's attestations answered ${answer.status}`);
+  if (answer.status !== 200) {
+    return refuse(
+      release,
+      'attestation',
+      `npm's attestations answered ${Number.isInteger(answer.status) ? answer.status : 'otherwise'}`,
+    );
+  }
   const listed = record(answer.body)?.attestations;
   const provenance = Array.isArray(listed)
     ? listed.map(record).find((entry) => entry?.predicateType === SLSA_PROVENANCE_V1)
@@ -345,12 +348,14 @@ export async function verifyProvenance(
   let facts: CertificateFacts;
   try {
     facts = readCertificate(der);
-  } catch (error) {
-    return refuse(release, 'bundle', `its signing certificate cannot be read: ${message(error)}`);
+  } catch {
+    return refuse(release, 'bundle', 'its signing certificate cannot be read');
   }
+  // Each refusal says the pin, never what the certificate held instead: nothing in it is verified yet, and its text is
+  // not this package's to repeat (security review of 0.20.0, severity 6).
   const pins = PROVENANCE_PINS;
   if (facts.issuer !== pins.issuer) {
-    return refuse(release, 'issuer', `it was signed for the issuer ${shown(facts.issuer)}, not ${pins.issuer}`);
+    return refuse(release, 'issuer', `it was not signed for the issuer ${pins.issuer}`);
   }
   const identity = provenanceIdentity(version);
   const [only, ...others] = facts.names;
@@ -359,18 +364,18 @@ export async function verifyProvenance(
     return refuse(
       release,
       'identity',
-      `it was signed for ${shown(uri ?? (facts.names.join(', ') || null))}, not this repository's ${pins.workflow} at refs/tags/v${version}`,
+      `it was not signed for this repository's ${pins.workflow} at refs/tags/v${version}`,
     );
   }
   if (facts.runner !== pins.runner) {
-    return refuse(release, 'runner', `it was built on a ${shown(facts.runner)} runner, not a ${pins.runner} one`);
+    return refuse(release, 'runner', `it was not built on a ${pins.runner} runner`);
   }
   const repository = `https://github.com/${pins.repository}`;
   if (facts.sourceRepository !== repository) {
-    return refuse(release, 'repository', `it was built from ${shown(facts.sourceRepository)}, not ${repository}`);
+    return refuse(release, 'repository', `it was not built from ${repository}`);
   }
   if (facts.sourceRef !== `refs/tags/v${version}`) {
-    return refuse(release, 'ref', `it was built from ${shown(facts.sourceRef)}, not refs/tags/v${version}`);
+    return refuse(release, 'ref', `it was not built from refs/tags/v${version}`);
   }
 
   const wanted = sha512Hex(release.integrity);
@@ -402,17 +407,16 @@ export async function verifyProvenance(
   }
   const signed = record(ours[0]?.digest)?.sha512;
   if (signed !== wanted) {
-    return refuse(
-      release,
-      'subject',
-      `it signs the SHA-512 ${shown(typeof signed === 'string' ? signed : null)}, not the registry's tarball, ${wanted}`,
-    );
+    return refuse(release, 'subject', "what it signs is not the registry's tarball for it");
   }
 
   try {
     await (deps.verifyBundle ?? sigstoreBundleVerifier())(bundle, { issuer: pins.issuer, identity });
   } catch (error) {
-    return refuse(release, 'signature', `Sigstore did not verify it: ${message(error)}`);
+    // sigstore-js's own message can quote the certificate ("expected …, got …"): only its fixed code is said.
+    const code = (error as { code?: unknown } | null)?.code;
+    const named = typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,47}$/.test(code) ? ` (${code})` : '';
+    return refuse(release, 'signature', `Sigstore did not verify it${named}`);
   }
   return {
     ok: true,
@@ -430,12 +434,23 @@ export async function verifyProvenance(
   };
 }
 
-function shown(value: string | null): string {
-  return value === null ? 'nothing' : JSON.stringify(value.slice(0, 200));
+/**
+ * Core's own verifier, for its CLI's and its server's checks and updates: Sigstore's trust root read through TUF into
+ * `<state>/sigstore`. A channel's process has none: it carries no Sigstore.
+ */
+export function stateReleaseVerifier(stateDir: string): (release: ProvenanceRelease) => Promise<ProvenanceVerdict> {
+  return releaseVerifier({ cachePath: join(stateDir, 'sigstore') });
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/**
+ * The verifier an update is handed (`update-release.ts`, `ReleaseVerifier`): `verifyProvenance` with npm's endpoint and
+ * sigstore-js reading Sigstore's trust root through TUF into `cachePath` — or, for a test, its own fetch and verifier.
+ */
+export function releaseVerifier(
+  options: { cachePath?: string | undefined } & ProvenanceDeps = {},
+): (release: ProvenanceRelease) => Promise<ProvenanceVerdict> {
+  const verifyBundle = options.verifyBundle ?? sigstoreBundleVerifier({ cachePath: options.cachePath });
+  return (release) => verifyProvenance(release, { fetch: options.fetch, verifyBundle });
 }
 
 // ── sigstore-js ───────────────────────────────────────────────────────────────────────────────────────────────

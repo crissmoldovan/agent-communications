@@ -41,11 +41,15 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   one of their confirmed label rules said so. Also in scope: any way to get the label's word, name or Slack icon
   changed without an approval of that exact change, or to make the preview's first line state a different identity
   from the one that is sent.
-- **An update that installs what it should not** — any way to make the background update job (or `comms_update`)
-  install or switch to a package that was not built by this repository's `release.yml` from the tag of its own
-  version on a GitHub-hosted runner, as its Sigstore provenance proves; to skip the release hold, a major version's or
-  a needs-decision release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a
-  running server is using.
+- **An update that installs what it should not** — any way to make the background update job, `comms_update` or
+  `agentcomms update` install, register or switch to a package that was not built by this repository's `release.yml`
+  from the tag of its own version on a GitHub-hosted runner, as its Sigstore provenance proves, or to a runtime that
+  does not hold the tarball that was verified; to skip the release hold, a major version's or a needs-decision
+  release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a running server
+  is using.
+- **Registry text reaching an agent** — any way to make an update's notice, refusal, preview or background run result
+  repeat a string the npm registry or an unverified attestation wrote (a manifest's `needsDecision` words, a version's
+  prerelease or build words, a certificate's identity, ref or runner), instead of this project's fixed words.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
@@ -100,6 +104,19 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   a file in them makes plain (a Python installation, a virtual environment); a folder some program was told to load
   whole cannot be known from here, and saving into it is the person's choice, made when they answer the question.
   Under WSL, a file saved onto a Windows drive carries no internet mark.
+
+- **An update verifies this project's packages, not everyone's.** Every `@agentcomms` package an update installs or
+  switches to is held to its Sigstore provenance, and so is every `@agentcomms` package npm puts in a runtime beside
+  it. The packages of others that a runtime or a global package depends on are checked by npm alone, against the
+  integrity the registry gives: nothing pins who builds them. No package's install script runs as an update installs
+  (`--ignore-scripts`), so their code first runs when a server or command starts. A global package is verified before
+  `npm install -g`, but npm keeps no lockfile for it, so what it installed is not checked afterwards; and an npx
+  registration's client fetches its package from npm each time it starts, which only that client checks.
+- **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
+  not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
+  acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that
+  release's hold between 72 and 24 hours, or make it wait for the person — or not wait, where its own release said it
+  needs a decision. It cannot make anything but a release built by this repository's release workflow install.
 
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
 

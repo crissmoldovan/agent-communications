@@ -5,11 +5,12 @@ import { channelServer } from './channel-servers.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
-import { npmLatestVersion, npmReleaseDeclaration } from './npm.ts';
-import { type UpdateDeps, updateCheck } from './operations/update.ts';
+import { npmLatestVersion } from './npm.ts';
+import { releaseFactsReader, type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
 import { childEnvironment } from './system-programs.ts';
 import { TERMINAL_CHECK_WAIT_MS, type TerminalUpdateHooks } from './update-gate.ts';
+import type { ReleaseVerifier } from './update-release.ts';
 import {
   changeUpdateCheck,
   EMPTY_UPDATE_CHECK,
@@ -19,6 +20,7 @@ import {
   updateCheckEnabled,
   updateCheckUnderway,
 } from './update-state.ts';
+import { VERSION } from './version.ts';
 import { isPrerelease, isVersion } from './versions.ts';
 
 /**
@@ -144,7 +146,8 @@ async function ask(
     latest = await (deps.latestVersion ?? ((name: string) => npmLatestVersion(name, { env })))(CORE_PACKAGE);
     if (!isVersion(latest))
       throw new Error(
-        `the npm registry names ${JSON.stringify(String(latest)).slice(0, 60)} as the latest release, which is not a version`,
+        // What it named is not repeated: the registry's answer can be anything at all.
+        'the npm registry names something that is not a version as the latest release',
       );
   } catch (error) {
     await settle({ lastError: reason(error) });
@@ -155,32 +158,29 @@ async function ask(
     await settle({ latest, behind: null, current: null, lastError: null });
     return;
   }
-  // What the release declares — a security fix, a decision it needs (design 2026-10-16, U7) — read from the same
-  // registry the number came from, before anything here is read, so a machine that cannot be read still learns it. A
-  // test's stand-in registry hands in its own, or none is read.
-  const read =
-    deps.releaseFacts !== undefined
-      ? deps.releaseFacts
-      : deps.latestVersion === undefined
-        ? (name: string, version: string) => npmReleaseDeclaration(name, version, { env })
-        : null;
+  // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — read from
+  // the same registry the number came from, each counted only once verified, where this process can verify: core's
+  // hands in its verifier, a channel's has none. Read first for the releases since this one, so a machine that cannot
+  // be read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
+  // registry hands in its own, or none is read.
+  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps);
   const release =
     read === null
       ? null
-      : await read(CORE_PACKAGE, latest).then(
+      : await read(CORE_PACKAGE, latest, VERSION).then(
           (facts) => ({ version: latest, security: facts.security, needsDecision: facts.needsDecision }),
           () => null,
         );
   try {
-    // `comms_update`'s own check, handed the one number and the facts: it records what it finds, by this clock, and so
-    // ends the ask — under this ask's claim, so only while the claim is still its own.
+    // `comms_update`'s own check, handed the one number and the reader: it records what it finds, by this clock, and
+    // so ends the ask — under this ask's claim, so only while the claim is still its own.
     await updateCheck(
       core,
       env,
       {
         ...deps,
         latestVersion: async () => latest,
-        releaseFacts: release === null ? null : async () => release,
+        releaseFacts: read,
         now: options.now,
       },
       options.claimedAt,
@@ -339,7 +339,11 @@ export function updateCheckChildEnvironment(
 async function handUpdateCheckToChild(
   core: Core,
   env: NodeJS.ProcessEnv,
-  options: { now?: (() => Date) | undefined; entry?: UpdateCheckChildEntry | null | undefined },
+  options: {
+    now?: (() => Date) | undefined;
+    entry?: UpdateCheckChildEntry | null | undefined;
+    verifyRelease?: ReleaseVerifier | undefined;
+  },
 ): Promise<void> {
   const deadline = Date.now() + TERMINAL_CHECK_WAIT_MS;
   try {
@@ -350,7 +354,12 @@ async function handUpdateCheckToChild(
     if (claimedAt === null) return;
     const entry = options.entry === undefined ? updateCheckChildEntry() : options.entry;
     const started = entry !== null && (await startUpdateCheckChild(entry, claimedAt, core.paths, env, deadline));
-    if (!started) await askUnderClaim(core, env, claimedAt, { now: options.now });
+    if (!started) {
+      await askUnderClaim(core, env, claimedAt, {
+        now: options.now,
+        ...(options.verifyRelease ? { deps: { verifyRelease: options.verifyRelease } } : {}),
+      });
+    }
   } catch {
     // The check never stops anything, a command least of all.
   }
@@ -415,6 +424,8 @@ export async function runUpdateCheckChild(
   core: Core,
   env: NodeJS.ProcessEnv,
   claimedAt: string | undefined,
+  /** Core's own child verifies what a release declares before it counts; a channel's has nothing to verify with. */
+  options: { verifyRelease?: ReleaseVerifier | undefined } = {},
 ): Promise<void> {
   if (claimedAt === undefined || !Number.isFinite(Date.parse(claimedAt))) {
     throw new CommsError('USAGE', `${UPDATE_CHECK_CHILD_COMMAND} takes the time of the claim it asks under`, {
@@ -425,7 +436,14 @@ export async function runUpdateCheckChild(
     });
   }
   try {
-    if ((await readUpdateCheck(core.paths.stateDir)).checking === claimedAt) await askUnderClaim(core, env, claimedAt);
+    if ((await readUpdateCheck(core.paths.stateDir)).checking === claimedAt) {
+      await askUnderClaim(
+        core,
+        env,
+        claimedAt,
+        options.verifyRelease ? { deps: { verifyRelease: options.verifyRelease } } : {},
+      );
+    }
   } finally {
     settled();
   }
@@ -457,6 +475,11 @@ export function terminalUpdateHooks(
      * test, one that cannot be started, or null for none, and the check is asked in this process instead.
      */
     childEntry?: UpdateCheckChildEntry | null | undefined;
+    /**
+     * Verifies what a release declares before the check counts it: core's CLI hands in its own. A channel's has none,
+     * and what it reads of a release's manifest counts for nothing.
+     */
+    verifyRelease?: ReleaseVerifier | undefined;
   } = {},
 ): TerminalUpdateHooks {
   return {
@@ -466,7 +489,11 @@ export function terminalUpdateHooks(
         await checkForUpdates(core, env, { deps: options.deps, now: options.now });
         return;
       }
-      await handUpdateCheckToChild(core, env, { now: options.now, entry: options.childEntry });
+      await handUpdateCheckToChild(core, env, {
+        now: options.now,
+        entry: options.childEntry,
+        verifyRelease: options.verifyRelease,
+      });
     },
   };
 }
