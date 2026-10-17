@@ -1002,7 +1002,12 @@ test(
 
 // ── 8a, 8b: another product's command ────────────────────────────────────────────────────────────────────────────
 
-test('core hands over Gmail’s own command from a same-version registration, which runs from a fresh shell; Slack’s, run by npx, is not locatable and has no words to run (8a, 8b)', async () => {
+test('core hands over its own command to register Gmail or Slack again, which runs from a fresh shell on the printing store (8a, 8b)', async () => {
+  /*
+   * Doctor's repair for an entry from before the pins is core's own `mcp install --server <channel>` (re-review of
+   * 0.20.0, severity 3): a channel's own command registers the release it is, and the one found here may be the old
+   * one the entry still starts — and Slack, run only by npx, had no command of its own to name at all.
+   */
   const m = await machine();
   // Gmail registered as a checkout's built CLI, from before the pins; Slack only through npx.
   WRITES.mkdir(join(m.home, '.cursor'));
@@ -1018,38 +1023,39 @@ test('core hands over Gmail’s own command from a same-version registration, wh
   const checks = envelope(m.print(['doctor', '--json'])).data.checks;
   const gmail = checks.find((check) => check.name === 'gmail server');
   const slack = checks.find((check) => check.name === 'slack server');
-  const tail = ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--force'];
+  const tail = ['mcp', 'install', '--server', 'gmail', '--client', 'cursor', '--launcher', 'local', '--force'];
   const command = commandEndingWith(gmail.fix, tail);
   if (process.platform !== 'win32')
-    assertLocated(command, { entry: GMAIL, folders: m.folders, tail, printedWith: m.env });
+    assertLocated(command, { entry: CORE, folders: m.folders, tail, printedWith: m.env });
+  assert.ok(!gmail.fix.includes(GMAIL), `Gmail's own command: ${gmail.fix}`);
 
-  // No executable words for Slack: the product, the release it needs and why — never a bare name or an npx line.
-  assert.deepEqual(commandsIn(slack.fix), [], slack.fix);
-  assert.match(
-    slack.fix,
-    new RegExp(`Slack ${VERSION.replaceAll('.', '\\.')} \\(@agentcomms/slack\\) is not locatable here`),
-  );
-  assert.ok(!slack.fix.includes(process.execPath) && !/agent-slack|npx -y/.test(slack.fix), slack.fix);
+  // Slack's is core's too, with the launcher its entry has — never a bare name or an npx line.
+  const slackTail = ['mcp', 'install', '--server', 'slack', '--client', 'cursor', '--launcher', 'npx', '--force'];
+  const slackCommand = commandEndingWith(slack.fix, slackTail);
+  if (process.platform !== 'win32')
+    assertLocated(slackCommand, { entry: CORE, folders: m.folders, tail: slackTail, printedWith: m.env });
+  assert.ok(!/agent-slack|npx -y/.test(slack.fix), slack.fix);
   // Only the keychain probe of doctor itself was refused: no connection.
   assert.deepEqual(
     sealAttempts(m.sealLog).filter((attempt) => attempt.what !== 'keychain'),
     [],
   );
 
-  // Gmail's command, pasted: Gmail's own CLI, on the printing process's store.
+  // Gmail's repair, pasted: core's own CLI, on the printing process's store.
   const shell = shellUnder(m.root, 'shell');
   const check = (result, name) => {
     assert.equal(result.status, 10, `${name}: ${result.stdout}${result.stderr}`);
     const id = /approval (ap_[0-9A-Z]+)/.exec(`${result.stdout}${result.stderr}`)?.[1];
     assert.ok(id, `${name}: ${result.stdout}${result.stderr}`);
     assert.ok(existsSync(join(m.folders.stateDir, 'approvals', `${id}.json`)), `${name}: the printing store`);
-    // Gmail's own rerun, from Gmail's entry, on the same folders.
-    const rerun = commandEndingWith(result.stderr, [...tail, '--approval', id]);
+    // Core's own rerun, on the same folders: its words in the order core's `mcp install` gives them back.
+    const again = ['mcp', 'install', '--client', 'cursor', '--server', 'gmail', '--launcher', 'local', '--force'];
+    const rerun = commandEndingWith(result.stderr, [...again, '--approval', id]);
     if (process.platform !== 'win32')
       assertLocated(rerun, {
-        entry: GMAIL,
+        entry: CORE,
         folders: m.folders,
-        tail: [...tail, '--approval', id],
+        tail: [...again, '--approval', id],
         printedWith: shell.env,
       });
   };

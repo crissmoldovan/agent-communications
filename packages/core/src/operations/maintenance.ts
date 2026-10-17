@@ -728,7 +728,9 @@ function registerAgain(channel: ServerId, entry: ChannelRegistration, handoffs: 
   // registers the release that command is, and the one found here may be the old one an entry behind still starts.
   // The entry's name and pins are read from the client's file, which may hold anything: a located command shows them
   // as words to type where no Windows line is safe.
-  const handoff = handoffs.core(['mcp', 'install', '--server', channel, ...words.slice(2)]);
+  const handoff = handoffs.core(
+    channel === 'core' ? words : ['mcp', 'install', '--server', channel, ...words.slice(2)],
+  );
   return remedy(handoffSentence(handoff, (command) => `Register it again: ${command}.`));
 }
 

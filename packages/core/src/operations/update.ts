@@ -392,7 +392,9 @@ function installHandoff(item: RegistrationItem, handoffs: CliHandoffs): Handoff 
   const words = ['mcp', 'install', '--client', item.client];
   if (item.name !== facts.defaultServerName) words.push('--name', item.name);
   words.push(...item.narrowing, '--force');
-  return handoffs.core(['mcp', 'install', '--server', item.channel, ...words.slice(2)]);
+  return handoffs.core(
+    item.channel === 'core' ? words : ['mcp', 'install', '--server', item.channel, ...words.slice(2)],
+  );
 }
 
 /**
