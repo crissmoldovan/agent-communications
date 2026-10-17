@@ -178,7 +178,8 @@
         "request.name": null,
         "request.addRule.as": null,
         "request.removeRule.as": null,
-        "request.icon.emoji": null
+        "request.icon.emoji": null,
+        "request.style.style": null
       },
       "reason": "A new word changes how the label looks, so it is a change the person approves; the preview shows the phrase recipients will see."
     },
@@ -196,7 +197,8 @@
         "request.name": "Parity Person",
         "request.addRule.as": null,
         "request.removeRule.as": null,
-        "request.icon.emoji": null
+        "request.icon.emoji": null,
+        "request.style.style": null
       },
       "reason": "A new name changes how the label looks, so it is a change the person approves; `--clear` and `name: null` take it away the same way."
     },
@@ -215,7 +217,8 @@
         "request.addRule.account": "parity/slack",
         "request.addRule.as": "me",
         "request.removeRule.as": null,
-        "request.icon.emoji": null
+        "request.icon.emoji": null,
+        "request.style.style": null
       },
       "reason": "A rule `as: me` sends a kind of message unlabelled, so it is approved first; a rule `as: agent` labels more and applies at once."
     },
@@ -234,7 +237,8 @@
         "request.addRule.as": null,
         "request.removeRule.account": "parity/slack",
         "request.removeRule.as": "me",
-        "request.icon.emoji": null
+        "request.icon.emoji": null,
+        "request.style.style": null
       },
       "reason": "Removing an `agent` rule can leave a message unlabelled, so it is approved first; removing a `me` rule labels more and applies at once."
     },
@@ -253,9 +257,30 @@
         "request.addRule.as": null,
         "request.removeRule.as": null,
         "request.icon.account": "parity/slack",
-        "request.icon.emoji": ":parity:"
+        "request.icon.emoji": ":parity:",
+        "request.style.style": null
       },
       "reason": "The icon of the app's Slack posts changes how the label looks, so it is a change the person approves; `--clear` and `emoji: null` go back to the person's photo the same way."
+    },
+    {
+      "id": "core.label.style",
+      "package": "core",
+      "cli": "label style",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "labelled"],
+      "args": { "style": { "account": "parity/slack", "style": "labelled" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null,
+        "request.style.account": "parity/slack",
+        "request.style.style": "labelled"
+      },
+      "reason": "A Slack workspace's style `labelled` trades Slack's own APP tag, which no one can fake, for words in the message, so it is a change the person approves; `app`, the default, applies at once."
     },
     {
       "id": "core.channels",

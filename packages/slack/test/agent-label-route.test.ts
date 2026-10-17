@@ -89,7 +89,13 @@ async function setLabel(harness: Labelled['harness'], agentLabel: Record<string,
   await harness.core.config.update((config) => ({ ...config, agentLabel }), {
     consent: {
       kind: 'loosening-consent',
-      paths: ['agentLabel.rules', 'agentLabel.word', 'agentLabel.name', 'agentLabel.slackIcons'],
+      paths: [
+        'agentLabel.rules',
+        'agentLabel.word',
+        'agentLabel.name',
+        'agentLabel.slackIcons',
+        'agentLabel.slackStyles',
+      ],
     },
   });
 }
@@ -485,4 +491,104 @@ test("a rule that recorded this workspace's id applies, and one that recorded an
   assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'me');
   await setLabel(w.harness, { rules: [{ account: 'acme', accountId: 'acc_ZZZZZZZZZZZZZZZZ', as: 'me' }] });
   assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'agent');
+});
+
+// ── The workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────────
+
+/** This workspace's style set to `labelled`, as `label style` writes it once the person has said yes. */
+const chooseLabelled = (w: Labelled) => setLabel(w.harness, { slackStyles: { [w.accountId]: 'labelled' } });
+
+const LABELLED_LINE =
+  'Jo Example · labelled "Jo Example (agent):" at the start of the message · you chose labelled posts for this workspace';
+
+test('the default style is app: with none recorded, or one this release cannot read, the app posts', async (t) => {
+  const w = await labelled(t);
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app');
+  await setLabel(w.harness, { slackStyles: { [w.accountId]: 'fancy' } });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app', 'an unknown style was read as labelled');
+  // Another workspace's choice is not this one's.
+  await setLabel(w.harness, { slackStyles: { acc_ZZZZZZZZZZZZZZZZ: 'labelled' } });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app');
+});
+
+test('labelled: a public channel the app could post in goes as the person, labelled, naming the choice (S2, S7)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.identity, 'agent');
+  assert.equal(prepared.label?.route, 'fallback');
+  assert.equal(prepared.label?.phrase, 'Jo Example (agent)');
+  assert.equal(prepared.label?.icon, undefined, 'a post as the person carries no app icon');
+  assert.equal(prepared.label?.reason, FALLBACK_REASONS.labelled);
+  assert.equal(FALLBACK_REASONS.labelled, 'you chose labelled posts for this workspace');
+  // S7: the first line names the reason, as the preview renders it.
+  assert.equal(prepared.preview.postingAs, LABELLED_LINE);
+  const from = renderChannelPreview(prepared.preview).split('\n')[1] ?? '';
+  assert.match(from, /^From: +/);
+  assert.equal(from.replace(/^From: +/, ''), LABELLED_LINE);
+  assert.ok(
+    (prepared.preview.warnings ?? []).some((warning) =>
+      warning.includes('The app does not post it, because you chose labelled posts for this workspace.'),
+    ),
+    'the preview does not say why the app does not post it',
+  );
+  // A private room the app is in goes the same way, and nobody asked Slack whether the app is in it.
+  const inside = await prepare(w, { channel: 'G1' });
+  assert.equal(inside.label?.route, 'fallback');
+  assert.equal(inside.label?.reason, FALLBACK_REASONS.labelled);
+  assert.equal(w.fake.requests.filter((request) => request.method === 'conversations.members').length, 0);
+  // A DM too: the person's choice decides it before the room does.
+  assert.equal((await prepare(w, { channel: 'D1' })).label?.reason, FALLBACK_REASONS.labelled);
+  // A post with files keeps its own reason: no style lets the app post files in this release.
+  const docs = join(w.harness.home, 'docs');
+  mkdirSync(docs);
+  const path = join(docs, 'notes.txt');
+  writeFileSync(path, 'the notes\n');
+  const files = await prepare(w, { channel: 'C1', files: [realpathSync.native(path)] });
+  assert.equal(files.label?.route, 'fallback');
+  assert.equal(files.label?.reason, FALLBACK_REASONS.file);
+  assert.deepEqual(posted(w), [], 'preparing posted something');
+});
+
+test('labelled: a workspace with no bot token goes the same way, for the same reason', async (t) => {
+  const w = await labelled(t, { bot: false });
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.route, 'fallback');
+  assert.equal(prepared.label?.reason, FALLBACK_REASONS.labelled);
+});
+
+test('labelled: `as: "me"` is as it was — the person, unlabelled, its first line saying so (L3)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1', as: 'me' });
+  assert.equal(prepared.label?.identity, 'me');
+  assert.equal(prepared.label?.route, 'person');
+  assert.equal(prepared.preview.postingAs, UNLABELLED_PREVIEW_LINE);
+});
+
+test('the style is bound: labelled chosen after the preview refuses the app post (S2)', async (t) => {
+  await refusedAfter(t, 'C1', chooseLabelled);
+});
+
+test('the style is bound: app chosen after a labelled preview refuses the labelled post (S2)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.route, 'fallback');
+  // Back to app: a tightening, written at once.
+  await w.harness.core.config.update((config) => ({ ...config, agentLabel: {} }));
+  await assert.rejects(
+    sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: 'C1' },
+      w.slack,
+    ),
+    (error: CommsError) => {
+      assert.match(error.code, /APPROVAL_VOID|INTEGRITY|APPROVAL/);
+      return true;
+    },
+  );
+  assert.deepEqual(posted(w), [], 'a post went out after its style changed');
 });

@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { ACT_KINDS, AGENT_LABEL_WORDS } from '../agent-label.ts';
+import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
@@ -468,7 +468,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_label',
     {
       title: 'The agent label',
-      description: `Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of \`word\`, \`name\`, \`addRule\`, \`removeRule\`, \`icon\`. A new word, name or icon, a rule \`as: "me"\`, and removing an \`agent\` rule are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule \`as: "agent"\`, or removing a \`me\` rule, labels more and applies at once. Add a \`me\` rule only when the person asked for that.`,
+      description: `Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of \`word\`, \`name\`, \`addRule\`, \`removeRule\`, \`icon\`, \`style\`. A new word, name or icon, a rule \`as: "me"\`, removing an \`agent\` rule, and a Slack workspace's \`style\` set to \`labelled\` are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule \`as: "agent"\`, removing a \`me\` rule, or a style back to \`app\`, applies at once. Add a \`me\` rule, or choose \`labelled\`, only when the person asked for that.`,
       inputSchema: {
         word: z
           .string()
@@ -491,6 +491,17 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           })
           .optional()
           .describe('the icon of the agent’s Slack posts in one workspace'),
+        style: z
+          .strictObject({
+            account: z.string().describe('a Slack workspace, by its name'),
+            style: z
+              .enum(SLACK_STYLES as unknown as [string, ...string[]])
+              .describe(
+                '`app`, the default: the app posts where it can, with Slack’s APP tag, and the person, labelled, elsewhere. `labelled`: every agent message goes out as the person, labelled in its words, even where the app could post; reactions as the person, unlabelled',
+              ),
+          })
+          .optional()
+          .describe('how an agent’s messages look in one Slack workspace'),
         ...approvalArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -501,7 +512,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         return read(async () => {
           refuseUnclaimedApproval(args.approvalId, {
             message: 'with no change this only reports, so it takes no approvalId',
-            hint: 'Pass the change the approval was prepared for — `word`, `name`, `addRule`, `removeRule` or `icon` — with it.',
+            hint: 'Pass the change the approval was prepared for — `word`, `name`, `addRule`, `removeRule`, `icon` or `style` — with it.',
           });
           return labelReport(core);
         });

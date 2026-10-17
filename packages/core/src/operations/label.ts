@@ -10,10 +10,13 @@ import {
   DEFAULT_AGENT_LABEL_WORD,
   type IdentityQuery,
   isAgentLabelWord,
+  isSlackStyle,
   labelPhrase,
   type MessageIdentity,
   readAgentLabelSettings,
   resolveIdentity,
+  type SlackStyle,
+  slackStyleOf,
 } from '../agent-label.ts';
 import type { GatedChange } from '../change-flow.ts';
 import type { ChangeRequest, ChangeSurface } from '../changes.ts';
@@ -32,6 +35,10 @@ import { formerNameRefusal } from '../names.ts';
  * or that changes how the label looks — a `me` rule added, an `agent` rule removed, a new word, name or Slack icon — is
  * a loosening `classifyChange` lists, shown to the person with the phrase recipients will see, or the identity each
  * affected kind will now have, and applied only with their approval; a tightening applies at once.
+ *
+ * A Slack workspace's style (the owner's decision, 2026-10-17) is one more change of the same kind: `labelled` trades
+ * Slack's own APP tag for words in the message, so it waits; `app`, the default, applies at once. Like an icon, it is
+ * recorded by the account's id, so it follows a rename and never reaches another account.
  *
  * The settings are read as every channel reads them (`agentLabelOf`), so a value this release cannot read counts as the
  * stricter one; a change writes only the field it is about, and keeps every other key of `agentLabel` as it was.
@@ -93,6 +100,11 @@ export interface LabelAccountView {
   conversations: string[];
   /** Slack only: the icon of the app's posts — the agent emoji, or the person's Slack photo until one is set. */
   icon?: { emoji: string } | { photo: true };
+  /**
+   * Slack only: how an agent's messages look there — `app`, the default, as the app with Slack's APP tag where it can
+   * post; `labelled`, every one as the person, labelled in its words.
+   */
+  style?: SlackStyle;
   /** Why `kinds` is empty, or what limits it. */
   note?: string;
 }
@@ -129,9 +141,10 @@ export type LabelChangeRequest =
   | { name: string | null }
   | { addRule: LabelRuleInput }
   | { removeRule: LabelRuleInput }
-  | { icon: { account: string; emoji: string | null } };
+  | { icon: { account: string; emoji: string | null } }
+  | { style: { account: string; style: string } };
 
-export type LabelChangeKind = 'word' | 'name' | 'addRule' | 'removeRule' | 'icon';
+export type LabelChangeKind = 'word' | 'name' | 'addRule' | 'removeRule' | 'icon' | 'style';
 
 export const LABEL_CHANGE_KINDS: readonly LabelChangeKind[] = Object.freeze([
   'word',
@@ -139,6 +152,7 @@ export const LABEL_CHANGE_KINDS: readonly LabelChangeKind[] = Object.freeze([
   'addRule',
   'removeRule',
   'icon',
+  'style',
 ]);
 
 export interface LabelChangeResult extends LabelReport {
@@ -213,7 +227,8 @@ type CheckedChange =
   | { kind: 'name'; name: string | null }
   | { kind: 'addRule'; rule: AgentLabelRule }
   | { kind: 'removeRule'; rule: AgentLabelRule }
-  | { kind: 'icon'; account: string; emoji: string | null };
+  | { kind: 'icon'; account: string; emoji: string | null }
+  | { kind: 'style'; account: string; style: SlackStyle };
 
 const AUDIT_OPERATIONS: Readonly<Record<LabelChangeKind, string>> = {
   word: 'label.word',
@@ -221,6 +236,7 @@ const AUDIT_OPERATIONS: Readonly<Record<LabelChangeKind, string>> = {
   addRule: 'label.rule.add',
   removeRule: 'label.rule.remove',
   icon: 'label.icon',
+  style: 'label.style',
 };
 
 function auditReason(change: CheckedChange): string {
@@ -234,6 +250,8 @@ function auditReason(change: CheckedChange): string {
       return agentLabelRuleText(change.rule);
     case 'icon':
       return change.emoji ?? 'cleared';
+    case 'style':
+      return change.style;
   }
 }
 
@@ -245,7 +263,7 @@ function checkedRequest(request: LabelChangeRequest): CheckedChange {
     throw new CommsError(
       'USAGE',
       given.length === 0
-        ? 'name the change: a word, a name, a rule to add or remove, or a Slack icon'
+        ? 'name the change: a word, a name, a rule to add or remove, or a Slack icon or style'
         : `one change at a time: this asks for ${given.join(' and ')}`,
       { hint: 'Each change is shown, and approved when it loosens the label, on its own.' },
     );
@@ -266,6 +284,22 @@ function checkedRequest(request: LabelChangeRequest): CheckedChange {
         throw new CommsError('USAGE', 'name the Slack account the icon is for');
       }
       return { kind, account: icon.account, emoji: icon.emoji === null ? null : checkedEmoji(icon.emoji) };
+    }
+    case 'style': {
+      const style = values.style as { account?: unknown; style?: unknown } | null | undefined;
+      if (typeof style?.account !== 'string' || style.account === '') {
+        throw new CommsError('USAGE', 'name the Slack workspace the style is for');
+      }
+      if (!isSlackStyle(style.style)) {
+        throw new CommsError(
+          'USAGE',
+          `a Slack workspace's style is app or labelled${style.style === undefined ? '' : `, not ${JSON.stringify(style.style)}`}`,
+          {
+            hint: '`app`, the default: the app posts where it can, with Slack’s APP tag. `labelled`: every agent message goes out as the person, labelled in its words.',
+          },
+        );
+      }
+      return { kind, account: style.account, style: style.style };
     }
   }
 }
@@ -504,7 +538,44 @@ function planChange(config: Config, change: CheckedChange): Plan {
         }),
       };
     }
+    case 'style': {
+      const account = connectedAccount(config, change.account);
+      if (account.platform !== 'slack') {
+        throw new CommsError(
+          'USAGE',
+          `${account.alias} is not a Slack workspace: only an agent's Slack messages have a style`,
+        );
+      }
+      const styles = storedRecord(raw.slackStyles);
+      const held = Object.hasOwn(styles, account.id) ? styles[account.id] : undefined;
+      const { style } = change;
+      // `app` is the default, so it is kept as nothing at all; a value this release cannot read is written over.
+      const already = style === 'app' ? held === undefined || held === 'app' : held === 'labelled';
+      return {
+        changes: !already,
+        note: already ? `Its style is ${style} already. Nothing was changed.` : null,
+        target: targetOf(account),
+        summary:
+          style === 'labelled'
+            ? `Post every agent message in ${account.alias} as you, labelled in its words, in place of the app with Slack’s APP tag`
+            : `Post agent messages in ${account.alias} as the app, with Slack’s APP tag, where it can post, and as you, labelled, elsewhere`,
+        edit: withStored((label) => {
+          const next = storedRecord(label.slackStyles);
+          if (style === 'app') delete next[account.id];
+          else next[account.id] = style;
+          const { slackStyles: _styles, ...rest } = label;
+          return Object.keys(next).length > 0 ? { ...rest, slackStyles: next } : rest;
+        }),
+      };
+    }
   }
+}
+
+/** A record the stored `agentLabel` holds, as a copy a change may write to: empty when it holds none, or no record. */
+function storedRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
 }
 
 /** The account a rule or an icon is for: connected now, by its current name — a former one is refused with it. */
@@ -639,6 +710,7 @@ function reportOf(config: Config): LabelReport {
     ...(raw.rules !== undefined && settings.rules === undefined
       ? ['rules: one of them cannot be read, so no rule applies']
       : []),
+    ...unreadStyles(raw.slackStyles, accounts),
   ];
   return {
     word,
@@ -654,6 +726,20 @@ function reportOf(config: Config): LabelReport {
     accounts: accounts.map((account) => accountView(account, settings)),
     ignored,
   };
+}
+
+/** The stored Slack styles this release cannot read, each said with the style it counts as: `app`. */
+function unreadStyles(raw: unknown, accounts: readonly ConnectedAccount[]): string[] {
+  if (raw === undefined) return [];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return ['slackStyles: it cannot be read, so every Slack workspace’s style is app'];
+  }
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(([, style]) => !isSlackStyle(style))
+    .map(([id, style]) => {
+      const name = accounts.find((account) => account.id === id)?.alias ?? id;
+      return `slackStyles: ${name} has ${JSON.stringify(style)}, which is not app or labelled, so its style is app`;
+    });
 }
 
 function accountView(account: ConnectedAccount, settings: AgentLabelSettings): LabelAccountView {
@@ -678,7 +764,9 @@ function accountView(account: ConnectedAccount, settings: AgentLabelSettings): L
     conversations: (settings.rules ?? [])
       .filter((rule) => rule.account === account.alias && rule.conversation !== undefined)
       .map(agentLabelRuleText),
-    ...(account.platform === 'slack' ? { icon: emoji === undefined ? { photo: true as const } : { emoji } } : {}),
+    ...(account.platform === 'slack'
+      ? { icon: emoji === undefined ? { photo: true as const } : { emoji }, style: slackStyleOf(settings, account.id) }
+      : {}),
     ...(acts === undefined ? { note: 'It sends nothing through these tools, so nothing it does is labelled.' } : {}),
   };
 }
@@ -731,6 +819,19 @@ function effectsOf(before: Config, after: Config, change: CheckedChange): string
           ? `${where}: the app's posts will show your Slack photo as their icon`
           : `${where}: the app's posts will show ${change.emoji} as their icon, once it is uploaded to the workspace's emoji`,
       ];
+    }
+    case 'style': {
+      const account = connectedAccounts(after).find((entry) => entry.alias === change.account);
+      const where = account?.alias ?? change.account;
+      const word = now.word ?? DEFAULT_AGENT_LABEL_WORD;
+      return change.style === 'labelled'
+        ? [
+            `${where}: every post, reply and file an agent sends goes out as you, beginning "<your name in Slack> (${word}):" in its words and its notification — even where the app could post, with no APP tag`,
+            `${where}: reactions an agent adds are made as you, with no label: a reaction carries no words`,
+          ]
+        : [
+            `${where}: an agent's messages go out as the app, with Slack's APP tag, where it can post, and as you, labelled, elsewhere`,
+          ];
     }
   }
 }
