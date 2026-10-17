@@ -374,12 +374,8 @@ async function updateCheckLine(
                 ? 'auto (a daily check with a notice)'
                 : 'auto (a daily check with a notice: background updates are not set up)'
           : updates.level;
-  const latest =
-    record.latest === null
-      ? 'unknown'
-      : countedLatest(record) === null
-        ? `${record.latest} (a prerelease, not counted)`
-        : record.latest;
+  // Only ever a plain release (`readUpdateCheck`): the registry's text otherwise names none.
+  const latest = countedLatest(record) ?? 'unknown';
   const pause = pauseEnd(record, now);
   const security = securityRelease(record, VERSION);
   const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];

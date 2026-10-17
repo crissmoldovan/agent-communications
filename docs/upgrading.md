@@ -182,7 +182,9 @@ answer at most, then goes on while the ask finishes beside it, so a slow registr
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
 `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. The check reads core's full document too, for what its releases declare: a decision that any
+`npm ls` behind it. The registry's `latest` counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version
+with build metadata is the registry's own text, so the check records none, no notice, doctor row, `--check` or
+refusal says it, and `update` refuses it without repeating it. The check reads core's full document too, for what its releases declare: a decision that any
 release since the oldest one here needs, and whether the latest is a security fix — each counted only once its
 provenance verifies. Core's own server and command verify it; a channel's server or command carries no Sigstore and
 counts neither, so on a machine where only a channel's server or command ran the day's check, a security fix is said

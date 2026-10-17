@@ -479,11 +479,12 @@ test('a prerelease named latest is never noticed, in the file or from the regist
   } finally {
     await close();
   }
-  // Asked of the registry: recorded as it said, and not counted.
+  // Asked of the registry: not a plain release, so not recorded and not counted (re-review of 0.20.0, severity 6: a
+  // prerelease's words are the registry's text).
   const fresh = machine();
   const rc = registry('99.0.0-rc.1');
   const outcome = await checkForUpdates(fresh.core, fresh.env, { deps: deps(rc.latestVersion) });
-  assert.equal(outcome.record.latest, '99.0.0-rc.1');
+  assert.equal(outcome.record.latest, null);
   assert.equal(outcome.record.behind, null);
   assert.equal(await pendingUpdate({ core: fresh.core, env: fresh.env, running: VERSION, ...SERVER }), null);
   // And the release after it is: 99.0.0 is newer than anything this checkout is.

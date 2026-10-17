@@ -21,7 +21,7 @@ import {
   updateCheckUnderway,
 } from './update-state.ts';
 import { VERSION } from './version.ts';
-import { isPrerelease, isVersion } from './versions.ts';
+import { isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * The daily update check's checker: the half that asks the registry (design 2026-09-28 §1).
@@ -153,9 +153,16 @@ async function ask(
     await settle({ lastError: reason(error) });
     return;
   }
-  if (isPrerelease(latest)) {
-    // Recorded as the registry said it, and never counted: nobody is told of a release candidate.
-    await settle({ latest, behind: null, current: null, lastError: null });
+  if (!isPlainVersion(latest)) {
+    // Not a release: a prerelease's words or build metadata are the registry's text, so nothing of it is recorded or
+    // said, and nobody is told of it (re-review of 0.20.0, severity 6). The version is not repeated.
+    await settle({
+      latest: null,
+      behind: null,
+      current: null,
+      lastError:
+        'the npm registry names something that is not a plain release (MAJOR.MINOR.PATCH) as the latest: it is not counted',
+    });
     return;
   }
   // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — read from

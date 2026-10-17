@@ -54,7 +54,6 @@ import { nodeProgram } from '../node-program.ts';
 import {
   compareVersions,
   isBehind,
-  isPrerelease,
   isVersion,
   npmGlobalPackages,
   npmInstallGlobal,
@@ -81,6 +80,7 @@ import {
 import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
 import { shownRelease } from '../update-words.ts';
 import { VERSION } from '../version.ts';
+import { isPlainVersion } from '../versions.ts';
 import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
 
 /**
@@ -346,11 +346,15 @@ async function latestReleases(
     names.map(async (name) => {
       try {
         const version = await latestVersion(name);
-        if (!isVersion(version)) {
+        // A release only as a plain MAJOR.MINOR.PATCH, as the background run holds it: a prerelease or build metadata
+        // is the registry's text, and nothing installs one.
+        if (!isPlainVersion(version)) {
           return {
             name,
             // What it named is not repeated: the registry's answer can be anything at all.
-            problem: `the npm registry names something that is not a version as the latest release of ${name}`,
+            problem: isVersion(version)
+              ? `the npm registry names something that is not a plain release (MAJOR.MINOR.PATCH) as the latest release of ${name}`
+              : `the npm registry names something that is not a version as the latest release of ${name}`,
           };
         }
         return { name, version };
@@ -673,7 +677,7 @@ export async function updateCheck(
  */
 async function releaseOf(report: UpdateReport, env: NodeJS.ProcessEnv, deps: UpdateDeps): Promise<ReleaseFacts | null> {
   const latest = report.latest[CORE_PACKAGE];
-  if (latest === undefined || !isVersion(latest) || isPrerelease(latest)) return null;
+  if (latest === undefined || !isPlainVersion(latest)) return null;
   const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps);
   if (read === null) return null;
   try {

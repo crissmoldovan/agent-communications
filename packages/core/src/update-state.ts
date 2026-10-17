@@ -7,7 +7,7 @@ import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { withFileLock } from './lock.ts';
 import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
-import { isBehind, isPrerelease, isVersion } from './versions.ts';
+import { isBehind, isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * The daily update check, as every server and command reads it (design 2026-09-28, and 2026-10-16 for the notice that
@@ -148,7 +148,7 @@ const SHOWN_LIMIT = 32;
 function readSecurityShown(value: unknown): SecurityShown | null {
   if (typeof value !== 'object' || value === null) return null;
   const { version, approvals } = value as Record<string, unknown>;
-  if (!isVersion(version) || !Array.isArray(approvals)) return null;
+  if (!isPlainVersion(version) || !Array.isArray(approvals)) return null;
   const ids = approvals.filter((id): id is string => typeof id === 'string' && APPROVAL_ID_PATTERN.test(id));
   return { version, approvals: ids.slice(-SHOWN_LIMIT) };
 }
@@ -245,7 +245,8 @@ const isWords = (value: unknown): value is string[] =>
 function readRelease(value: unknown): ReleaseFacts | null {
   if (typeof value !== 'object' || value === null) return null;
   const { version, security, needsDecision } = value as Record<string, unknown>;
-  if (!isVersion(version)) return null;
+  // A release only by its plain version: any other text is the registry's, and names none.
+  if (!isPlainVersion(version)) return null;
   return { version, security: security === true, needsDecision: needsDecision === true };
 }
 
@@ -269,7 +270,8 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
   const held = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Record<string, unknown>;
   return {
     lastChecked: isTime(held.lastChecked) ? held.lastChecked : null,
-    latest: isVersion(held.latest) ? held.latest : null,
+    // The registry's `latest`, read only as a plain release: build metadata or a prerelease's words name none.
+    latest: isPlainVersion(held.latest) ? held.latest : null,
     behind: typeof held.behind === 'boolean' ? held.behind : null,
     current: readCurrent(held.current),
     lastError: typeof held.lastError === 'string' ? held.lastError.slice(0, 300) : null,
@@ -280,7 +282,7 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
     pausedAt: isTime(held.pausedAt) ? held.pausedAt : null,
     pausedUntil: isTime(held.pausedUntil) ? held.pausedUntil : null,
     release: readRelease(held.release),
-    securityAsked: isVersion(held.securityAsked) ? held.securityAsked : null,
+    securityAsked: isPlainVersion(held.securityAsked) ? held.securityAsked : null,
     securityShown: readSecurityShown(held.securityShown),
     backgroundNotice: readBackgroundNotice(held.backgroundNotice),
     moves: typeof held.moves === 'number' && Number.isInteger(held.moves) && held.moves >= 0 ? held.moves : null,
@@ -628,11 +630,11 @@ export function localStamp(at: Date): string {
 }
 
 /**
- * The latest release as the check counts it: a version, and not a prerelease — 0.8.0-rc.1 is never an update anybody
- * is told of. Null when the file names none.
+ * The latest release as the check counts it: a plain `MAJOR.MINOR.PATCH` — 0.8.0-rc.1 is never an update anybody is
+ * told of, and 0.8.1+anything is not a release at all. Null when the file names none.
  */
 export function countedLatest(record: UpdateCheckRecord): string | null {
-  return record.latest !== null && isVersion(record.latest) && !isPrerelease(record.latest) ? record.latest : null;
+  return isPlainVersion(record.latest) ? record.latest : null;
 }
 
 /** What a process is, for the verdict: a channel's server, which a client starts, or its command, which a person runs. */

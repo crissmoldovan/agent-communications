@@ -7,7 +7,7 @@ import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 // that reaches this one, a channel's bundle among them (WhatsApp's no-network test reads that graph).
 import type { ProvenanceRelease, ProvenanceVerdict, VerifiedProvenance } from './update-provenance.ts';
 import { PIN_WORDS } from './update-words.ts';
-import { compareVersions, isPrerelease, isVersion } from './versions.ts';
+import { compareVersions, isPlainVersion, isPrerelease, isVersion } from './versions.ts';
 
 /**
  * What an update reads of a release on the registry, and what it may say of it (design 2026-10-16 U5, U7, U9): the
@@ -197,8 +197,8 @@ export async function runtimeIntegrityProblem(
     if (!key.includes('node_modules/') || !name.startsWith(SUITE)) continue;
     const version = entry?.version;
     const recorded = entry?.integrity;
-    if (!isVersion(version) || typeof recorded !== 'string' || sha512Hex(recorded) === null) {
-      return `${name}, which ${packageName} in ${runtime} depends on, cannot be shown to be a verified tarball: its lockfile records no version or no SHA-512 integrity for it`;
+    if (!isPlainVersion(version) || typeof recorded !== 'string' || sha512Hex(recorded) === null) {
+      return `${name}, which ${packageName} in ${runtime} depends on, cannot be shown to be a verified tarball: its lockfile records no plain release version or no SHA-512 integrity for it`;
     }
     const hex = sha512Hex(recorded) as string;
     if (known.get(`${name}@${version}`) === hex) continue;
@@ -243,14 +243,17 @@ export function unverifiedRelease(
   hint?: string,
 ): CommsError {
   const which = act === 'update' ? 'An update installs' : 'An install fetches';
+  // A release named only by its plain version: anything else is the registry's text, and is not repeated.
+  const plain = isPlainVersion(version);
+  const named = plain ? `${packageName}@${version}` : `${packageName} at a version that is not a plain release`;
   return new CommsError(
     'BAD_DATA',
-    `nothing was installed or changed: ${packageName}@${version} could not be verified as built by this repository's release workflow — ${why}`,
+    `nothing was installed or changed: ${named} could not be verified as built by this repository's release workflow — ${why}`,
     {
       hint:
         hint ??
         `${which} only a release whose Sigstore provenance shows it was built by this repository's release workflow at the tag of its version, on a GitHub-hosted runner, and nothing skips that check. Nothing was prepared to approve. A release published minutes ago can be without its attestation for a while: try again later. If it still does not verify, do not install it some other way; report it as SECURITY.md says.`,
-      details: { package: packageName, version, pin },
+      details: { package: packageName, ...(plain ? { version } : {}), pin },
     },
   );
 }
@@ -272,6 +275,9 @@ export async function verifyReleaseSet(
   if (wanted.size === 0) return verified;
   const { registry, verify, why } = sources;
   for (const [packageName, version] of [...wanted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (!isPlainVersion(version)) {
+      throw unverifiedRelease(packageName, version, 'it is not a plain release (MAJOR.MINOR.PATCH)', 'version', act);
+    }
     if (registry === null || verify === null) {
       throw unverifiedRelease(packageName, version, why, 'verifier', act, noVerifierHint);
     }
