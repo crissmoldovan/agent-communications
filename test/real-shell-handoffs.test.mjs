@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
@@ -68,6 +69,15 @@ import { tempDir } from './helpers/temp-dir.mjs';
 const CORE = builtCli('core');
 const GMAIL = builtCli('gmail');
 const VERSION = JSON.parse(readFileSync(join(ROOT, 'packages', 'core', 'package.json'), 'utf8')).version;
+/**
+ * Core's CLI carrying the test's verifier (re-review of 0.20.0, severity 4): core verifies the release whose runtime it
+ * registers on, and a built CLI would ask npm and Sigstore, which no test may reach. Run with type stripping.
+ */
+const VERIFIED_CORE = [
+  '--experimental-strip-types',
+  '--disable-warning=ExperimentalWarning',
+  join(ROOT, 'packages', 'core', 'test', 'fixtures', 'verified-core-cli.ts'),
+];
 
 /** A client secret for the test profile: a made-up value, never a real credential. */
 const FAKE_SECRET = 'fake-cue403-client-secret-not-real';
@@ -826,6 +836,16 @@ function managedRuntime(dataDir) {
     join(root, 'node_modules', '@agentcomms', 'core'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
+  // The lockfile npm writes, with the integrity of the tarball the test's verifier was shown signed: core holds a
+  // runtime already on disk to it before it registers on it (`provenance-fixture.ts`'s `tarballOf`).
+  const integrity = `sha512-${createHash('sha512').update(`@agentcomms/core@${VERSION}`).digest('base64')}`;
+  WRITES.writeFile(
+    join(root, 'package-lock.json'),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { 'node_modules/@agentcomms/core': { version: VERSION, integrity } },
+    }),
+  );
 }
 
 /**
@@ -878,8 +898,13 @@ for (const launcher of ['managed', 'npx', 'local']) {
       fakeNpx(npxDir);
       m.env.PATH = [npxDir, m.nodeBin, strippedPath()].join(process.platform === 'win32' ? ';' : ':');
     }
+    // A managed install is core's, which verifies the runtime it registers on: through the CLI with the test's
+    // verifier, the same words and folders. Every other launcher, through the built CLI as before.
+    const installWords = ['mcp', 'install', '--client', 'cursor', '--launcher', launcher, '--no-verify', '--json'];
     const { id, hint } = held(
-      m.print(['mcp', 'install', '--client', 'cursor', '--launcher', launcher, '--no-verify', '--json']),
+      launcher === 'managed'
+        ? runNode([...VERIFIED_CORE, ...m.pinArgs, ...installWords], { env: m.env, cwd: m.cwd })
+        : m.print(installWords),
     );
     const install = commandEndingWith(hint, [
       'mcp',
@@ -892,7 +917,12 @@ for (const launcher of ['managed', 'npx', 'local']) {
       '--approval',
       id,
     ]);
-    assert.equal(runNode(argvOf(install).slice(1), m).status, 0);
+    const words = argvOf(install).slice(1);
+    // The approval run, as handed over: core's own command with the printing process's folders. For a managed
+    // install, the same words after core's CLI, through the CLI with the test's verifier.
+    const pinned = words.indexOf(PATH_OPTIONS.configDir);
+    assert.ok(pinned > 0 && /cli\.(?:mjs|ts)$/.test(words[pinned - 1]), `core's own CLI, then its pins: ${install}`);
+    assert.equal(runNode(launcher === 'managed' ? [...VERIFIED_CORE, ...words.slice(pinned)] : words, m).status, 0);
     const entry = JSON.parse(readFileSync(join(m.home, '.cursor', 'mcp.json'), 'utf8')).mcpServers.agentcomms;
     assert.deepEqual(pinsOf(entry.args), Object.fromEntries(FOUR_FOLDERS.map((key) => [key, m.folders[key]])));
     assert.ok(!entry.args.includes(PATH_OPTIONS.downloadsDir), 'downloads are a handoff’s, never a registration’s');
