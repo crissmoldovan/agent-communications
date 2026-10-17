@@ -41,11 +41,14 @@ import {
   verifyProvenance,
 } from './update-provenance.ts';
 import {
+  majorOf,
   npmRegistry,
+  oldestVersion,
   type RegistryAnswer,
   type ReleaseRegistry,
   releaseDeclaration,
   releaseIntegrity,
+  releasesBetween,
 } from './update-release.ts';
 import {
   type BackgroundNotice,
@@ -279,10 +282,6 @@ export async function holdRolledBack(
 }
 
 // ── The registry ────────────────────────────────────────────────────────────────────────────────────────────────
-
-function majorOf(version: string): string {
-  return version.split('.')[0] ?? version;
-}
 
 // ── One run ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -538,15 +537,52 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       outcome: 'skipped',
     });
   }
-  if (majorOf(latest) !== majorOf(current)) {
-    return stop('skipped', `${latest} is a major release after ${current}: it waits for the person`, facts, {
+  // Every release since the oldest a launcher here starts is what this run takes the machine past: a major crossed by
+  // any of them, or a decision any of them needs, waits for the person — a later release that does not say so again
+  // does not end the wait.
+  const from = oldestVersion(behind.map((entry) => entry.version ?? current)) ?? current;
+  if (majorOf(latest) !== majorOf(from)) {
+    return stop('skipped', `${latest} is a major release after ${from}: it waits for the person`, facts, {
       text: BACKGROUND_WORDS.major(latest),
       outcome: 'skipped',
     });
   }
+  const versions = coreAnswer.packument.versions;
+  const deciding = [
+    ...new Set([
+      ...(flags.needsDecision ? [latest] : []),
+      ...releasesBetween(coreAnswer.packument, from, latest).filter(
+        (version) => releaseDeclaration(versions?.[version]).needsDecision,
+      ),
+    ]),
+  ];
+  // Each whose decision is acted on is verified first, as `latest` was; one that does not verify is only refused.
+  for (const version of deciding) {
+    if (version === latest) continue;
+    const integrity = releaseIntegrity(coreAnswer.packument, version);
+    const verdict: ProvenanceVerdict =
+      integrity === null
+        ? {
+            ok: false,
+            package: corePackage,
+            version,
+            field: 'subject',
+            reason: 'the registry gives no tarball integrity for it',
+          }
+        : await verifyProvenance(
+            { packageName: corePackage, version, integrity },
+            { fetch: deps.provenance?.fetch, verifyBundle: verifier },
+          );
+    if (!verdict.ok) {
+      return stop('refused', `the provenance of ${corePackage}@${version} did not verify: ${verdict.field}`, facts, {
+        text: BACKGROUND_WORDS.unverified(latest, verdict.field),
+        outcome: 'refused',
+      });
+    }
+  }
   // What the decision is, the manifest's own words, is never said: the person reads it in the release notes.
-  if (flags.needsDecision) {
-    return stop('skipped', `${latest} needs a decision from the person`, facts, {
+  if (deciding.length > 0) {
+    return stop('skipped', `${latest} needs a decision from the person (${deciding.join(', ')} says so)`, facts, {
       text: BACKGROUND_WORDS.decision(latest),
       outcome: 'skipped',
     });

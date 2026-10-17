@@ -47,7 +47,9 @@ each global package. The preview ends with one line a package: `@agentcomms/gmai
 preview: built by this repository's release workflow …`. One release with no attestation, or one that names anything
 else, refuses the whole update with `BAD_DATA` — `nothing was installed or changed: <package>@<version> could not be
 verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
-No flag or setting skips it. After installing, each runtime must hold the very tarball that was verified, as npm's
+No flag or setting skips it. A release it takes the machine past that says it needs a decision — 0.21.0, on the way
+from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words, with whether it verified: your yes to the preview
+is that decision, so read its release notes first. After installing, each runtime must hold the very tarball that was verified, as npm's
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
 registered on, and its step says so.
 
@@ -150,7 +152,11 @@ answer at most, then goes on while the ask finishes beside it, so a slow registr
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
 `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. The check reads the latest release's own document too, for what its manifest declares. Where that process cannot be started, the command asks in its own process, as before, and ends
+`npm ls` behind it. The check reads core's full document too, for what its releases declare: a decision that any
+release since the oldest one here needs, and whether the latest is a security fix — each counted only once its
+provenance verifies. Core's own server and command verify it; a channel's server or command carries no Sigstore and
+counts neither, so on a machine where only a channel's server or command ran the day's check, a security fix is said
+as an ordinary release until core's next check. Where that process cannot be started, the command asks in its own process, as before, and ends
 once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
 of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
 the notice once any other server or command on the machine has found an update. The check is skipped entirely when
@@ -192,7 +198,10 @@ nothing unless all of this holds:
   for with `update --pause` holds it, but never for a security fix. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and
   `AGENT_COMMS_UPDATES=never` turn it off for that process.
 - **The release waits for nobody.** A major version, a release whose core manifest declares
-  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. A
+  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. Every
+  release since the oldest one a launcher here starts counts, not only the latest: if 0.21.0 needs a decision and
+  0.21.1 does not say so again, 0.21.1 waits for you too, and a major crossed by any launcher here waits. Each release
+  whose decision is acted on is verified first, as the latest is. A
   release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
   state directory).
 - **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest

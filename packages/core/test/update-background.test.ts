@@ -169,7 +169,10 @@ function registry(latest: string, releases: readonly Release[], servedAt?: Date)
   return { read, asked };
 }
 
-/** npm's attestations endpoint: a genuine bundle for every package and version, but where `change` says otherwise. */
+/**
+ * npm's attestations endpoint: a genuine bundle for every package and version, but where `change` says otherwise, by
+ * `package@version` or by `package`.
+ */
 function attestations(change: Record<string, Partial<ProvenanceShape> | 'missing'> = {}) {
   const asked: string[] = [];
   const fetch: AttestationFetch = async (url) => {
@@ -178,7 +181,7 @@ function attestations(change: Record<string, Partial<ProvenanceShape> | 'missing
     const at = spec.lastIndexOf('@');
     const packageName = spec.slice(0, at);
     const version = spec.slice(at + 1);
-    const shape = change[packageName];
+    const shape = change[`${packageName}@${version}`] ?? change[packageName];
     if (shape === 'missing') return { status: 404, body: { error: 'not found' } };
     const bundle = provenanceBundle({
       packageName,
@@ -346,7 +349,7 @@ test('each skip — a major version, a release that needs a decision, a downgrad
     [
       LATEST,
       { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: 'a new send default' } },
-      /needs a decision from the person$/,
+      /needs a decision from the person \(0\.20\.1 says so\)$/,
       /needs a decision from you — it, or a release before it, says so —/,
     ],
     [
@@ -370,6 +373,69 @@ test('each skip — a major version, a release that needs a decision, a downgrad
     assert.match(String(notice?.text), says);
     assert.equal((await audits(m))[0]?.outcome, 'refused');
   }
+});
+
+test('a needed decision is not skipped by a later release: every release since the one installed is read, and each that needs one verified', async () => {
+  // 0.20.1 needs a decision; 0.20.2, the latest, does not say so. 0.20.2 is not installed in the background.
+  const m = await launched();
+  const w = world(m, {
+    latest: NEXT,
+    releases: [
+      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: true } },
+      { version: NEXT, publishedAt: hoursAgo(100) },
+    ],
+  });
+  const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+  assert.equal(result.outcome, 'skipped', result.reason);
+  await untouched(m, result, w.installer.calls);
+  assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text, BACKGROUND_WORDS.decision(NEXT));
+  // The latest first, then the release whose decision is acted on: both verified.
+  assert.deepEqual(w.attestations.asked, [
+    `${ATTESTATIONS_BASE}@agentcomms%2fcore@${NEXT}`,
+    `${ATTESTATIONS_BASE}@agentcomms%2fcore@${LATEST}`,
+  ]);
+
+  // The release that needs a decision does not verify: still nothing is installed, and that is all that is said.
+  const n = await launched();
+  const v = world(n, {
+    latest: NEXT,
+    releases: [
+      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: true } },
+      { version: NEXT, publishedAt: hoursAgo(100) },
+    ],
+  });
+  const att = attestations({ [`${CORE_PACKAGE}@${LATEST}`]: 'missing' });
+  const refused = await runBackgroundUpdate(
+    n.core,
+    n.env,
+    {},
+    { ...v.deps, provenance: { ...v.deps.provenance, fetch: att.fetch } },
+  );
+  assert.equal(refused.outcome, 'refused', refused.reason);
+  await untouched(n, refused, v.installer.calls);
+
+  // A release before the one installed is no part of it: what 0.19.x declared was decided already.
+  const o = await launched();
+  const past = world(o, {
+    latest: LATEST,
+    releases: [
+      { version: '0.19.5', publishedAt: hoursAgo(900), declares: { needsDecision: true } },
+      { version: LATEST, publishedAt: hoursAgo(100) },
+    ],
+  });
+  assert.equal((await runBackgroundUpdate(o.core, o.env, {}, past.deps)).outcome, 'installed');
+});
+
+test('a major is counted from the oldest release a launcher here starts, not only from core', async () => {
+  // Core is at 1.0.0 and Gmail still at 0.20.0: 1.0.1 takes Gmail across a major, so it waits for the person.
+  const m = machine();
+  await launch(m, CORE_PACKAGE, ['1.0.0']);
+  await launch(m, GMAIL, [OLD]);
+  const w = world(m, { latest: '1.0.1', releases: [{ version: '1.0.1', publishedAt: hoursAgo(200) }] });
+  const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+  assert.equal(result.outcome, 'skipped', result.reason);
+  assert.deepEqual(w.installer.calls, []);
+  assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text, BACKGROUND_WORDS.major('1.0.1'));
 });
 
 test('the holds: 72 hours after publish, 24 for a security fix — counted from the last package to come out', async () => {

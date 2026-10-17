@@ -324,9 +324,14 @@ test('the claim and the ask are two steps: one claim a day, and the ask handed i
  */
 async function loopbackRegistry(latest: string, delayMs: number) {
   const requests: string[] = [];
+  /** Which document each request asked for: npm's abbreviated one (the `latest` tag), or the full one (manifests). */
+  const documents: string[] = [];
   const answered: string[] = [];
   const server: Server = createServer((request, response) => {
     requests.push(request.url ?? '');
+    documents.push(
+      String(request.headers.accept ?? '').startsWith('application/vnd.npm.install-v1+json') ? 'abbreviated' : 'full',
+    );
     setTimeout(() => {
       answered.push(request.url ?? '');
       response
@@ -339,6 +344,7 @@ async function loopbackRegistry(latest: string, delayMs: number) {
   return {
     url: `http://127.0.0.1:${port}/`,
     requests,
+    documents,
     answered,
     close: () =>
       new Promise<void>((resolve) => {
@@ -401,12 +407,10 @@ test('two processes that find the file a day old at the same moment ask the regi
     writeFileSync(go, '');
     const outcomes = await Promise.all([one.done, two.done]);
     assert.deepEqual(outcomes.map((outcome) => outcome.asked).sort(), [false, true], 'one of them asked');
-    // Once between them — and the release's own document, for what its manifest declares (design 2026-10-16, U7).
-    assert.deepEqual(
-      served.requests,
-      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
-      'the registry was asked once',
-    );
+    // Once between them — the latest, then core's full document, for what its releases declare (design 2026-10-16,
+    // U5, U7: every release since the one here, not only the latest's own).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore'], 'the registry was asked once');
+    assert.deepEqual(served.documents, ['abbreviated', 'full']);
     assert.equal((await readUpdateCheck(m.stateDir)).latest, LATEST);
   } finally {
     await served.close();
@@ -988,8 +992,9 @@ test('a registry slower than the terminal waits is still heard from: the check f
     const record = await readUpdateCheck(m.stateDir);
     assert.equal(record.lastError, null);
     assert.equal(record.checking, null, 'the claim was given up');
-    // The latest, then the release's own document, for what its manifest declares (design 2026-10-16, U7).
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0']);
+    // The latest, then core's full document, for what its releases declare (design 2026-10-16, U5, U7).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore']);
+    assert.deepEqual(served.documents, ['abbreviated', 'full']);
   } finally {
     await served.close();
   }
@@ -1047,22 +1052,15 @@ test("the day's first command ends when its own work does: a detached child fini
       'the child to record what the registry said, and give up the claim',
       30_000,
     );
-    // Once — the latest, and the release's own document, for what its manifest declares (design 2026-10-16, U7).
-    assert.deepEqual(
-      served.requests,
-      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
-      'the registry was asked once',
-    );
+    // Once — the latest, and core's full document, for what its releases declare (design 2026-10-16, U5, U7).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore'], 'the registry was asked once');
+    assert.deepEqual(served.documents, ['abbreviated', 'full']);
     assert.equal((await readUpdateCheck(m.stateDir)).lastError, null);
     // What the child found is the next command's notice, as a check in the command's own process would have been.
     const third = await command(env, ['channels', '--json']);
     assert.equal(third.code, 0, third.output);
     assert.match(third.output, /agent-communications 99\.0\.0 is out/);
-    assert.deepEqual(
-      served.requests,
-      ['/@agentcomms%2fcore', '/@agentcomms%2fcore/99.0.0'],
-      'the day was asked about again',
-    );
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore'], 'the day was asked about again');
   } finally {
     await served.close();
   }

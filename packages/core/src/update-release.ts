@@ -104,7 +104,8 @@ export function releaseDeclaration(manifest: { agentcommsRelease?: unknown } | u
 
 /**
  * Every release the registry lists after `from`, up to and including `to`, oldest first: what an update takes this
- * machine past. Prereleases are left out — no update installs one — and so is anything that is not a version.
+ * machine past. Prereleases are left out — no update installs one — and so is anything that is not a version, or that
+ * carries build metadata, which no published version does.
  */
 export function releasesBetween(packument: Packument, from: string, to: string): string[] {
   return Object.keys(packument.versions ?? {})
@@ -112,6 +113,7 @@ export function releasesBetween(packument: Packument, from: string, to: string):
       (version) =>
         isVersion(version) &&
         !isPrerelease(version) &&
+        !version.includes('+') &&
         (compareVersions(version, from) ?? 0) > 0 &&
         (compareVersions(version, to) ?? 1) <= 0,
     )
@@ -162,4 +164,57 @@ export async function runtimeIntegrityProblem(
   return sha512Hex(integrity) === sha512
     ? null
     : `what is in ${runtime} is not the tarball whose provenance was verified: its lockfile records another integrity for ${packageName}`;
+}
+
+/** A release since the one installed that says it needs a decision, and whether its provenance verified. */
+export interface DecidingRelease {
+  version: string;
+  verified: boolean;
+}
+
+/** What the releases an update takes this machine past declare, as far as each verified. */
+export interface DeclaredSince {
+  /** The latest says it is a security fix, and verified. */
+  security: boolean;
+  /** One of them says it needs a decision, and verified. */
+  needsDecision: boolean;
+  /** Every one that says it needs a decision, oldest first, each with whether it verified. */
+  deciding: DecidingRelease[];
+}
+
+/**
+ * What every release after `from`, up to `latest`, declares (design 2026-10-16 U5, U7; security review of 0.20.0,
+ * severity 6): a decision any of them needs — a later release that does not say so again does not end it — and whether
+ * `latest` is a security fix. Each declaration acted on is verified first, with `verify`; one that does not verify, or
+ * where nothing here can verify (`verify` null: a channel's process, which carries no Sigstore), counts for nothing.
+ * `from` null reads `latest` alone. Throws when the registry's document cannot be read.
+ */
+export async function declaredSince(
+  registry: ReleaseRegistry,
+  verify: ReleaseVerifier | null,
+  packageName: string,
+  from: string | null,
+  latest: string,
+): Promise<DeclaredSince> {
+  const { packument } = await registry(packageName);
+  const declared = (version: string) => releaseDeclaration(packument.versions?.[version]);
+  const range = from === null ? [] : releasesBetween(packument, from, latest);
+  const deciding = [...new Set([...range, latest])].filter((version) => declared(version).needsDecision);
+  const verified = new Map<string, boolean>();
+  const check = async (version: string): Promise<boolean> => {
+    const known = verified.get(version);
+    if (known !== undefined) return known;
+    const integrity = releaseIntegrity(packument, version);
+    const ok =
+      verify !== null && integrity !== null && (await verify({ packageName, version, integrity }).then((v) => v.ok));
+    verified.set(version, ok);
+    return ok;
+  };
+  const decisions: DecidingRelease[] = [];
+  for (const version of deciding) decisions.push({ version, verified: await check(version) });
+  return {
+    security: declared(latest).security && (await check(latest)),
+    needsDecision: decisions.some((decision) => decision.verified),
+    deciding: decisions,
+  };
 }

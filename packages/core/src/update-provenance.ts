@@ -24,6 +24,8 @@
  * test reaches npm or Sigstore.
  */
 
+import { join } from 'node:path';
+
 /** The pins: what a release's provenance has to say, field by field (plan, Global constraints). */
 export const PROVENANCE_PINS: Readonly<{
   issuer: string;
@@ -437,6 +439,14 @@ export async function verifyProvenance(
       ...firstLogEntry(bundle),
     },
   };
+}
+
+/**
+ * Core's own verifier, for its CLI's and its server's checks and updates: Sigstore's trust root read through TUF into
+ * `<state>/sigstore`. A channel's process has none: it carries no Sigstore.
+ */
+export function stateReleaseVerifier(stateDir: string): (release: ProvenanceRelease) => Promise<ProvenanceVerdict> {
+  return releaseVerifier({ cachePath: join(stateDir, 'sigstore') });
 }
 
 /**
