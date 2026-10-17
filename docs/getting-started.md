@@ -233,6 +233,46 @@ agent-slack channels --workspace acme/slack
 The port must be the same number in the manifest and in `workspace add`. The default `read` mode gets a token
 Slack itself will not let post. The `slack-setup` skill walks all of this, including moving a workspace to `send`.
 
+### An organisation's agent app, for administrators
+
+Members connected through an organisation's profile post as themselves, labelled "Name (agent)", because the
+organisation's shared send app has PKCE on and rotating tokens. To let their agents' posts appear as an app, the
+administrator sets up one bot-only **agent app** for the organisation. Nobody's existing connection changes, and a
+member who does nothing keeps the labelled posts.
+
+1. `agent-slack manifest --mode agent` prints the app: a bot user with the four posting scopes, no user scope, no
+   redirect, and token rotation off. Create it at <https://api.slack.com/apps> → **Create New App → From a manifest**,
+   with the organisation's name, such as "RGC agent".
+2. On **OAuth & Permissions**, press **Install to Workspace**, once.
+3. Share the **Bot User OAuth Token** (`xoxb-…`) with members privately, as a password. Never in the profile's
+   repository, and never in a chat with an agent.
+4. Name the app beside the profile, in `<profile>.agent-app.json` — for `rgc.agentcomms.json`,
+   `rgc.agentcomms.agent-app.json`:
+
+   ```json
+   { "agentcomms": "organisation-agent-app", "version": 1, "organisation": "rgc",
+     "slack": { "workspace": "T0123456789", "appId": "A0123456789" } }
+   ```
+
+   With it, `agent-slack workspace bot` refuses any other app's token, and `doctor` tells members to ask you for this
+   one. Members take it with `git pull` and `agentcomms org update rgc`, which asks before applying it. It is a separate
+   file because releases before 0.20.0 refuse a profile with any key they do not know; they never open this one, so a
+   member who has not updated keeps reading the profile.
+
+Each member then runs `agent-slack workspace bot rgc/slack` once, in their own terminal, and pastes the token.
+
+Weigh before sharing:
+
+- **One token for everyone.** Slack lets it post under any name, with the APP badge. These tools always name a post
+  after the member who approved it, but the token is not bound to anyone: share it only with members.
+- **When someone leaves**, revoke the token on **OAuth & Permissions**, install the app again for a new one, and share
+  that. In between, the first act a member's agent makes with the old token is refused, and nothing goes out under
+  another identity; the old token is then removed from their machine, so their agent's posts go out as them, labelled,
+  and `doctor` says when it was revoked, until they paste the new one.
+- **Slack's free plan holds at most 10 apps per workspace**, and the agent app is one of them.
+
+The [Slack README](../packages/slack/README.md#an-organisations-agent-app) has the details.
+
 - [Sending and approvals](sending.md) — the gate in detail, and what it does not cover
 - [CLI reference](reference/cli.md) — every command · [Slack](reference/slack-cli.md)
 - [MCP tool reference](reference/mcp-tools.md) — every tool · [Slack](reference/slack-mcp-tools.md)

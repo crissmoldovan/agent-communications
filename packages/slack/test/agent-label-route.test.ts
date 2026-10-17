@@ -11,6 +11,7 @@ import { prepareDraftPost, sendPost } from '../src/operations/post.ts';
 import { botSecretRefFor } from '../src/operations/workspaces.ts';
 import { type SlackWorld, startFakeSlack, type WorldRoom } from './support/fake-slack.ts';
 import { newHarness } from './support/harness.ts';
+import { newOrganisationHarness } from './support/organisation.ts';
 
 /**
  * Who a post appears to come from, decided at prepare and bound (design 2026-10-15 L3, S2, S4, S7).
@@ -88,7 +89,13 @@ async function setLabel(harness: Labelled['harness'], agentLabel: Record<string,
   await harness.core.config.update((config) => ({ ...config, agentLabel }), {
     consent: {
       kind: 'loosening-consent',
-      paths: ['agentLabel.rules', 'agentLabel.word', 'agentLabel.name', 'agentLabel.slackIcons'],
+      paths: [
+        'agentLabel.rules',
+        'agentLabel.word',
+        'agentLabel.name',
+        'agentLabel.slackIcons',
+        'agentLabel.slackStyles',
+      ],
     },
   });
 }
@@ -268,6 +275,70 @@ test("a workspace connected through an organisation's app gets a note that names
   }
 });
 
+/**
+ * Doctor's finding for a member connected through RGC's profile (CUE-493): the profile may name the organisation's agent
+ * app, and the member may have pasted its bot token.
+ */
+async function organisationAppIdentity(options: { agentApp?: string; pasted?: boolean } = {}) {
+  const harness = await newOrganisationHarness({ port: 51234 });
+  await harness.addWorkspace({
+    alias: 'rgc/slack',
+    workspaceId: 'TRGC0001',
+    mode: 'send',
+    identity: 'agent',
+    // A pasted agent app token does not rotate: no refresh token, and an expiry nothing reaches.
+    ...(options.pasted
+      ? {
+          bot: {
+            userId: 'U0BOT0001',
+            bundle: {
+              refreshToken: undefined,
+              refreshExpiresAt: undefined,
+              accessExpiresAt: '9999-12-31T23:59:59.999Z',
+            },
+          },
+        }
+      : {}),
+  });
+  await harness.updateConfig((config) => {
+    const held = config.accounts['rgc/slack'];
+    assert.ok(held);
+    Object.assign(held, { organisation: 'rgc', profileApp: 'send' });
+    const apps = config.organisations?.rgc?.slack?.apps;
+    assert.ok(apps);
+    if (options.agentApp !== undefined) apps.agent = { appId: options.agentApp, sha256: 'c'.repeat(64) };
+  });
+  const report = await runDoctor(harness.context({ platform: 'darwin' }), { offline: true });
+  return report.checks.find((one) => one.id === 'app-identity');
+}
+
+test('with the profile naming its agent app and no token here, doctor says to ask the admin for it, then workspace bot', async () => {
+  const check = await organisationAppIdentity({ agentApp: 'A0AGENT0001' });
+  assert.equal(check?.status, 'warn', 'something the member can do, so not a note');
+  const fix = String(check?.fix);
+  assert.match(fix, /ask your organisation's admin for the agent app's token/i);
+  assert.match(fix, / workspace bot rgc\/slack(`|\s|$)/);
+  assert.match(check?.detail ?? '', /A0AGENT0001/);
+  assert.match(check?.detail ?? '', /as you, labelled/);
+  // Neither way an organisation's shared app refuses: its client secret, or a new app of the member's own.
+  const said = `${check?.detail} ${fix}`;
+  assert.doesNotMatch(said, /with-client-secret|client secret/);
+  for (const step of NEW_APP_STEPS) assert.doesNotMatch(said, step);
+});
+
+test('without the field, a profile workspace keeps today’s note; with the token pasted, the usual ok', async () => {
+  const none = await organisationAppIdentity();
+  assert.equal(none?.status, 'ok');
+  assert.equal(none?.fix, null);
+  assert.match(none?.detail ?? '', /organisation’s shared app/);
+  assert.doesNotMatch(`${none?.detail}`, /workspace bot/);
+
+  const pasted = await organisationAppIdentity({ agentApp: 'A0AGENT0001', pasted: true });
+  assert.equal(pasted?.status, 'ok');
+  assert.equal(pasted?.fix, null);
+  assert.match(pasted?.detail ?? '', /go out as the app \(bot user U0BOT0001\)/);
+});
+
 test('doctor checks the bot token is stored, not only that a bot user is recorded', async (t) => {
   const w = await labelled(t);
   await (await w.harness.core.secrets('file')).delete(botSecretRefFor(w.accountId));
@@ -420,4 +491,179 @@ test("a rule that recorded this workspace's id applies, and one that recorded an
   assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'me');
   await setLabel(w.harness, { rules: [{ account: 'acme', accountId: 'acc_ZZZZZZZZZZZZZZZZ', as: 'me' }] });
   assert.equal((await prepare(w, { channel: 'C1' })).label?.identity, 'agent');
+});
+
+// ── The workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────────
+
+/** This workspace's style set to `labelled`, as `label style` writes it once the person has said yes. */
+const chooseLabelled = (w: Labelled) => setLabel(w.harness, { slackStyles: { [w.accountId]: 'labelled' } });
+
+const LABELLED_LINE =
+  'Jo Example · labelled "Jo Example (agent):" at the start of the message · you chose labelled posts for this workspace';
+
+test('the default style is app: with none recorded, or one this release cannot read, the app posts', async (t) => {
+  const w = await labelled(t);
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app');
+  await setLabel(w.harness, { slackStyles: { [w.accountId]: 'fancy' } });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app', 'an unknown style was read as labelled');
+  // Another workspace's choice is not this one's.
+  await setLabel(w.harness, { slackStyles: { acc_ZZZZZZZZZZZZZZZZ: 'labelled' } });
+  assert.equal((await prepare(w, { channel: 'C1' })).label?.route, 'app');
+});
+
+test('labelled: a public channel the app could post in goes as the person, labelled, naming the choice (S2, S7)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.identity, 'agent');
+  assert.equal(prepared.label?.route, 'fallback');
+  assert.equal(prepared.label?.phrase, 'Jo Example (agent)');
+  assert.equal(prepared.label?.icon, undefined, 'a post as the person carries no app icon');
+  assert.equal(prepared.label?.reason, FALLBACK_REASONS.labelled);
+  assert.equal(FALLBACK_REASONS.labelled, 'you chose labelled posts for this workspace');
+  // S7: the first line names the reason, as the preview renders it.
+  assert.equal(prepared.preview.postingAs, LABELLED_LINE);
+  const from = renderChannelPreview(prepared.preview).split('\n')[1] ?? '';
+  assert.match(from, /^From: +/);
+  assert.equal(from.replace(/^From: +/, ''), LABELLED_LINE);
+  assert.ok(
+    (prepared.preview.warnings ?? []).some((warning) =>
+      warning.includes('The app does not post it, because you chose labelled posts for this workspace.'),
+    ),
+    'the preview does not say why the app does not post it',
+  );
+  // A private room the app is in goes the same way, and nobody asked Slack whether the app is in it.
+  const inside = await prepare(w, { channel: 'G1' });
+  assert.equal(inside.label?.route, 'fallback');
+  assert.equal(inside.label?.reason, FALLBACK_REASONS.labelled);
+  assert.equal(w.fake.requests.filter((request) => request.method === 'conversations.members').length, 0);
+  // A DM too: the person's choice decides it before the room does.
+  assert.equal((await prepare(w, { channel: 'D1' })).label?.reason, FALLBACK_REASONS.labelled);
+  // A post with files keeps its own reason: no style lets the app post files in this release.
+  const docs = join(w.harness.home, 'docs');
+  mkdirSync(docs);
+  const path = join(docs, 'notes.txt');
+  writeFileSync(path, 'the notes\n');
+  const files = await prepare(w, { channel: 'C1', files: [realpathSync.native(path)] });
+  assert.equal(files.label?.route, 'fallback');
+  assert.equal(files.label?.reason, FALLBACK_REASONS.file);
+  assert.deepEqual(posted(w), [], 'preparing posted something');
+});
+
+test('labelled: a workspace with no bot token goes the same way, for the same reason', async (t) => {
+  const w = await labelled(t, { bot: false });
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.route, 'fallback');
+  assert.equal(prepared.label?.reason, FALLBACK_REASONS.labelled);
+});
+
+test('labelled: `as: "me"` is as it was — the person, unlabelled, its first line saying so (L3)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1', as: 'me' });
+  assert.equal(prepared.label?.identity, 'me');
+  assert.equal(prepared.label?.route, 'person');
+  assert.equal(prepared.preview.postingAs, UNLABELLED_PREVIEW_LINE);
+});
+
+test('the style is bound: labelled chosen after the preview refuses the app post (S2)', async (t) => {
+  await refusedAfter(t, 'C1', chooseLabelled);
+});
+
+test('the style is bound: app chosen after a labelled preview refuses the labelled post (S2)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const prepared = await prepare(w, { channel: 'C1' });
+  assert.equal(prepared.label?.route, 'fallback');
+  // Back to app: a tightening, written at once.
+  await w.harness.core.config.update((config) => ({ ...config, agentLabel: {} }));
+  await assert.rejects(
+    sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: 'C1' },
+      w.slack,
+    ),
+    (error: CommsError) => {
+      assert.match(error.code, /APPROVAL_VOID|INTEGRITY|APPROVAL/);
+      return true;
+    },
+  );
+  assert.deepEqual(posted(w), [], 'a post went out after its style changed');
+});
+
+// ── Doctor and the workspace's style ─────────────────────────────────────────────────────────────────────────────
+
+/** What doctor says of the app, and what it offers, in one string: no step of any way to a bot token may be in it. */
+const BOT_TOKEN_STEPS = [
+  /workspace bot/,
+  /workspace reauth/,
+  /with-client-secret|client secret/,
+  /manifest/,
+  /no app bot token/,
+  /Bot User OAuth Token/,
+  /admin/,
+];
+
+test('labelled: doctor says posts go out as the person, labelled, by its choice, and offers no way to a bot token', async (t) => {
+  const nonRotating = { refreshToken: undefined, refreshExpiresAt: undefined };
+  const worlds: { name: string; make: () => Promise<Labelled> }[] = [
+    { name: 'a PKCE app with no bot token', make: () => labelled(t, { bot: false }) },
+    { name: 'one whose tokens do not rotate', make: () => labelled(t, { bot: false, bundle: nonRotating }) },
+    {
+      name: 'one connected with its client secret',
+      make: async () => {
+        const w = await labelled(t, { bot: false });
+        await plant(w, { clientSecretRef: 'slack/client-secret/A0001' });
+        return w;
+      },
+    },
+    {
+      name: 'one whose bot token Slack revoked',
+      make: async () => {
+        const w = await labelled(t, { bot: false });
+        await plant(w, { appTokenRevoked: { at: '2026-10-16T09:00:00.000Z', slackError: 'token_revoked' } });
+        return w;
+      },
+    },
+    { name: 'one whose bot token is stored', make: () => labelled(t) },
+  ];
+  for (const { name, make } of worlds) {
+    const w = await make();
+    await chooseLabelled(w);
+    const check = await appIdentityCheck(w);
+    assert.equal(check?.status, 'ok', `${name}: ${check?.detail}`);
+    assert.equal(check?.fix, null, `${name}: offered something to do`);
+    assert.match(check?.detail ?? '', /you chose labelled posts for this workspace/, name);
+    assert.match(check?.detail ?? '', /as you, labelled/, name);
+    assert.doesNotMatch(check?.detail ?? '', /go out as the app/, name);
+    const said = `${check?.detail} ${check?.fix}`;
+    for (const step of [...BOT_TOKEN_STEPS, ...NEW_APP_STEPS]) assert.doesNotMatch(said, step, `${name}: ${said}`);
+    // One finding about the app, as under app.
+    const report = await runDoctor(w.harness.context({ platform: 'darwin' }), { offline: true });
+    assert.equal(report.checks.filter((one) => one.id === 'app-identity').length, 1, name);
+  }
+});
+
+test('app: doctor is as it was — chosen, unreadable or another workspace’s labelled, the same findings and steps', async (t) => {
+  for (const styles of [
+    (id: string) => ({ [id]: 'app' }),
+    (id: string) => ({ [id]: 'fancy' }),
+    (_id: string) => ({ acc_ZZZZZZZZZZZZZZZZ: 'labelled' }),
+  ]) {
+    const pkce = await labelled(t, { bot: false });
+    await setLabel(pkce.harness, { slackStyles: styles(pkce.accountId) });
+    const steps = await appIdentityCheck(pkce);
+    assert.equal(steps?.status, 'warn');
+    assert.match(steps?.detail ?? '', /no app bot token is stored for it/);
+    assert.doesNotMatch(steps?.detail ?? '', /you chose labelled/);
+    for (const step of NEW_APP_STEPS) assert.match(String(steps?.fix), step);
+
+    const stored = await labelled(t);
+    await setLabel(stored.harness, { slackStyles: styles(stored.accountId) });
+    const app = await appIdentityCheck(stored);
+    assert.equal(app?.status, 'ok');
+    assert.match(app?.detail ?? '', /go out as the app \(bot user U0BOT0001\)/);
+  }
 });

@@ -194,6 +194,11 @@ const RULES: Readonly<Record<string, MethodRule>> = {
     requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
   },
   'users.info': { kind: 'read', requiredScopes: ['users:read'] },
+  /*
+   * Which app a bot belongs to (CUE-493): `workspace bot` asks it, with the member's own token, before keeping a pasted
+   * bot token for a workspace whose organisation names its agent app — so another app's token is refused by name.
+   */
+  'bots.info': { kind: 'read', requiredScopes: ['users:read'] },
   'users.list': { kind: 'read', requiredScopes: ['users:read'] },
   /*
    * `search.messages` is a user-token method and has no bot equivalent, which is one of the reasons this package

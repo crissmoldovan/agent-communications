@@ -30,6 +30,7 @@ import { chooseSecretStore, clientSecretRef, gmailClientRow, writeSecretWithRest
 import {
   accountsOfOrganisation,
   activeGeneration,
+  capsText,
   type GenerationState,
   generationState,
   mailboxesOn,
@@ -143,7 +144,7 @@ export interface OrganisationView {
     workspace: string;
     workspaceName: string;
     redirectPort: number;
-    apps: { read: SlackAppView | null; send: SlackAppView | null };
+    apps: { read: SlackAppView | null; send: SlackAppView | null; agent: AgentAppView | null };
   } | null;
   /** Accounts connected through this organisation's apps. */
   accounts: string[];
@@ -154,6 +155,11 @@ export interface OrganisationView {
 export interface SlackAppView {
   clientId: string;
   appId: string | null;
+}
+
+/** The organisation's agent app, by its id: members paste its bot token with Slack's `workspace bot` (CUE-493). */
+export interface AgentAppView {
+  appId: string;
 }
 
 export interface OrgChangeResult {
@@ -322,6 +328,11 @@ function changedWhileRunning(): CommsError {
  */
 function sourceLine(file: ProfileFile): string {
   return `reads it from ${shownPath(file.path)} (path SHA-256 ${pathDigest(file.path)}), profile SHA-256 ${file.sha256}`;
+}
+
+/** Where the update caps were read from, bound as the profile's source is: its path, and both digests. */
+function capsSourceLine(caps: NonNullable<ProfileFile['updates']>): string {
+  return `read from ${shownPath(caps.path)} (path SHA-256 ${pathDigest(caps.path)}), updates SHA-256 ${caps.sha256}`;
 }
 
 const PROFILE_SHA = /, profile SHA-256 ([0-9a-f]{64})$/;
@@ -746,6 +757,8 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
   const rs = previous?.slack;
   const provenance = accountsOfOrganisation(config, organisation);
   let slack: OrganisationRecord['slack'];
+  let agentChange: string | null = null;
+  let agentRepair: string | null = null;
   if (ps) {
     if (input.mode === 'add') {
       /*
@@ -775,7 +788,27 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
       );
     }
     slack = { ...(rs ?? {}), ...slackRecordFrom(ps, rs) };
+    // The agent app, from the file beside the profile (CUE-493): recorded beside the other two, never one of them.
+    if (file.agentApp) slack.apps.agent = { appId: file.agentApp.appId, sha256: file.agentApp.sha256 };
     if (input.mode === 'update') {
+      /*
+       * Its own file and its own SHA-256, so its own judgement: another file — a new one, a changed one, one gone — is
+       * a change of what the organisation says, and approved first, even with the profile's bytes unchanged; the same
+       * file with the record saying otherwise is drift, put back at once. Said after the profile's own drift is
+       * sorted below, which would otherwise count every line as a repair whenever the profile's bytes are the same.
+       */
+      const agentWas = rs?.apps.agent;
+      const agentNow = file.agentApp;
+      const appText = (app: { appId: string } | undefined) => (app ? `app id ${recorded(app.appId)}` : 'none');
+      if ((agentWas?.sha256 ?? null) !== (agentNow?.sha256 ?? null)) {
+        agentChange = `Slack agent app: ${appText(agentWas)} → ${appText(agentNow)}${
+          agentNow
+            ? `, read from ${shownPath(agentNow.path)} (path SHA-256 ${pathDigest(agentNow.path)}), agent app SHA-256 ${agentNow.sha256}`
+            : ''
+        }`;
+      } else if (agentWas && agentNow && agentWas.appId !== agentNow.appId) {
+        agentRepair = `the agent app recorded for ${organisation} was changed here, to ${recorded(agentWas.appId)}; it is ${agentNow.appId} again, as its file says`;
+      }
       if (!rs) {
         changes.push(
           `Slack: none → workspace ${ps.workspace} (${shownText(ps.workspaceName, 80)}), signing in on port ${ps.redirectPort}`,
@@ -863,6 +896,29 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
      */
     repairs.unshift(...changes.splice(0));
   }
+  /*
+   * The update caps, from the file beside the profile (design 2026-10-16, U8): their own file and their own SHA-256,
+   * so their own judgement. Another file — a new one, a changed one, one gone — is a change of what the organisation
+   * says, approved first even with the profile's bytes unchanged; the same file with the record saying otherwise is
+   * drift, put back at once. Judged after the profile's drift is sorted above, which would otherwise count it a repair.
+   */
+  const capsWere = previous?.updates;
+  const capsNow = file.updates;
+  let capsChanged = false;
+  if (input.mode === 'update') {
+    if ((capsWere?.sha256 ?? null) !== (capsNow?.sha256 ?? null)) {
+      capsChanged = true;
+      changes.push(
+        `updates: ${capsText(capsWere)} → ${capsText(capsNow)}${capsNow ? `, ${capsSourceLine(capsNow)}` : ''}`,
+      );
+    } else if (capsWere && capsNow && capsText(capsWere) !== capsText(capsNow)) {
+      repairs.push(
+        `the update caps recorded for ${organisation} were changed here, to ${capsText(capsWere)}; they are ${capsText(capsNow)} again, as their file says`,
+      );
+    }
+  }
+  if (agentChange) changes.push(agentChange);
+  if (agentRepair) repairs.push(agentRepair);
   if (turningOn && input.mode === 'update') {
     changes.push(`for other addresses: off → on — ${organisation}'s client may also serve your mailboxes outside it`);
   }
@@ -885,6 +941,13 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
   else delete next.gmail;
   if (slack) next.slack = slack;
   else delete next.slack;
+  if (capsNow) {
+    next.updates = {
+      ...(capsNow.max === undefined ? {} : { max: capsNow.max }),
+      ...(capsNow.background === undefined ? {} : { background: capsNow.background }),
+      sha256: capsNow.sha256,
+    };
+  } else delete next.updates;
 
   return {
     organisation,
@@ -896,7 +959,8 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     immediate,
     repairs,
     reports,
-    needsApproval: input.mode === 'add' || input.sourceGiven || shaChanged || turningOn,
+    needsApproval:
+      input.mode === 'add' || input.sourceGiven || shaChanged || turningOn || capsChanged || agentChange !== null,
     gmail,
   };
 }
@@ -1139,12 +1203,28 @@ function previewLines(mode: 'add' | 'update', plan: ProfilePlan, file: ProfileFi
             : `no Slack ${role} app`,
         );
       }
+      // Only when the organisation names one, so a profile without it is previewed exactly as before.
+      const agent = file.agentApp;
+      if (agent) {
+        lines.push(
+          `Slack agent app: app id ${agent.appId}, read from ${shownPath(agent.path)} (path SHA-256 ${pathDigest(agent.path)}), agent app SHA-256 ${agent.sha256}`,
+        );
+      }
     } else lines.push('no Slack apps');
     lines.push(
       plan.next.forOtherAddresses
         ? `for other addresses: on — ${plan.organisation}'s client may also serve your mailboxes outside it`
         : `for other addresses: off — ${plan.organisation}'s client serves only its own addresses`,
     );
+    // Only when the organisation names caps, so a profile without them is previewed exactly as before.
+    const caps = file.updates;
+    if (caps) {
+      const what = [
+        ...(caps.max === undefined ? [] : [`caps how this machine updates at ${caps.max}`]),
+        ...(caps.background === false ? ['turns off background updates on this machine'] : []),
+      ];
+      if (what.length > 0) lines.push(`${what.join(', and ')}, ${capsSourceLine(caps)}`);
+    }
   }
   lines.push(...plan.changes, ...plan.immediate, ...plan.repairs.map((repair) => `repairs: ${repair}`));
   if (plan.secret && store)
@@ -1591,7 +1671,11 @@ export function viewOf(config: Config, organisation: string, handoffs: CliHandof
           workspace: shownText(record.slack.workspace, 40),
           workspaceName: shownText(record.slack.workspaceName, 80),
           redirectPort: record.slack.redirectPort,
-          apps: { read: app('read'), send: app('send') },
+          apps: {
+            read: app('read'),
+            send: app('send'),
+            agent: record.slack.apps.agent ? { appId: shownText(record.slack.apps.agent.appId, 64) } : null,
+          },
         }
       : null,
     accounts: accountsOfOrganisation(config, organisation),

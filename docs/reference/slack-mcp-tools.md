@@ -87,14 +87,14 @@ Check everything that has to work — each workspace’s stored credential and s
 
 ### `slack_manifest`
 
-The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.
+The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. With `mode: "agent"`, an organisation's bot-only agent app instead: no user scope, no redirect, token rotation off, and an administrator's steps — create it, install it once, share its bot token privately, and each member pastes it with `workspace bot` at their own terminal (never in the chat) — with no port, workspace or `pkce`. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.
 
 *read-only*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `workspace` | string | no | a workspace already connected, as `organisation/slack` |
-| `mode` | `read` \\| `send` | no | `read` when left out |
+| `mode` | `read` \\| `send` \\| `agent` | no | `read` when left out; `agent` for an organisation's bot-only agent app |
 | `port` | integer | no | the loopback port its redirect uses; left out, a connected workspace’s own, or a free one for a new app |
 | `pkce` | boolean | no | `false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out |
 

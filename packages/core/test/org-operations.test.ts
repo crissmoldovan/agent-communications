@@ -2438,3 +2438,232 @@ test("a profile names Slack's commands only as this machine's registrations find
   assert.ok(registered.includes(`move to the other app with ${mode}, or remove with ${removeIt}`), registered);
   assertNoBareCommand(registered);
 });
+
+// ── The organisation's agent app (CUE-493) ───────────────────────────────────────────────────────────────────────
+
+/** The agent app's file beside the profile, as the organisation's repository carries it: none when `appId` is null. */
+function writeAgentApp(m: Machine, appId: string | null, name = 'acme.agentcomms.agent-app.json'): string {
+  const path = join(m.files, name);
+  if (appId === null) {
+    rmSync(path, { force: true });
+    return path;
+  }
+  const document = {
+    agentcomms: 'organisation-agent-app',
+    version: 1,
+    organisation: 'acme',
+    slack: { workspace: 'TACME0001', appId },
+  };
+  writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+  return path;
+}
+
+test('org add with an agent app file binds it in the preview, by its SHA-256, and records the app', async () => {
+  const m = machine();
+  writeProfile(m, profile());
+  const agentPath = writeAgentApp(m, 'A0AGENT0001');
+  const first = await gatedChange(m.core, orgAddChange(m.core, { file: 'acme.agentcomms.json' }, options(m)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  assert.equal(first.status, 'approval-required');
+  const { effects } = (first as { prepared: PreparedChange }).prepared;
+  const line = effects.find((effect) => effect.startsWith('Slack agent app:'));
+  assert.ok(line, `the preview names the agent app:\n${effects.join('\n')}`);
+  assert.match(line, /app id A0AGENT0001/);
+  assert.ok(line.includes(shownPath(agentPath)), line);
+  assert.match(line, /SHA-256 [0-9a-f]{64}$/);
+
+  await add(m);
+  const agent = (await record(m))?.slack?.apps.agent;
+  assert.equal(agent?.appId, 'A0AGENT0001');
+  assert.match(agent?.sha256 ?? '', /^[0-9a-f]{64}$/);
+  // The other two apps exactly as before: the agent app sits beside them.
+  assert.deepEqual((await record(m))?.slack?.apps.read, { clientId: '1111.2222' });
+  const shown = await orgShow(m.core, 'acme', 'darwin');
+  assert.deepEqual(shown.slack?.apps.agent, { appId: 'A0AGENT0001' });
+});
+
+test('an agent app file changed between the preview and the claim voids the approval, and nothing is written', async () => {
+  const m = machine();
+  writeProfile(m, profile());
+  writeAgentApp(m, 'A0AGENT0001');
+  const first = await gatedChange(m.core, orgAddChange(m.core, { file: 'acme.agentcomms.json' }, options(m)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  assert.equal(first.status, 'approval-required');
+  const { approvalId } = (first as { prepared: PreparedChange }).prepared;
+  writeAgentApp(m, 'A0OTHERAPP1');
+  await assert.rejects(
+    gatedChange(m.core, orgAddChange(m.core, { file: 'acme.agentcomms.json', approvalId }, options(m)), {
+      channel: 'core',
+      surface: 'mcp',
+      approvalId,
+    }),
+    (error: unknown) => error instanceof CommsError,
+  );
+  assert.equal((await config(m)).organisations, undefined);
+});
+
+test('naming, changing or dropping the agent app with the profile’s bytes unchanged is approved first; nothing else is', async () => {
+  const m = machine();
+  writeProfile(m, profile());
+  await add(m);
+  assert.equal((await record(m))?.slack?.apps.agent, undefined, 'a profile with no agent app file records none');
+
+  // The organisation adds the agent app's file; its profile is the same bytes.
+  writeAgentApp(m, 'A0AGENT0001');
+  const named = await update(m);
+  assert.ok(named.prepared, 'naming an agent app is approved first');
+  assert.match(named.prepared?.preview ?? '', /Slack agent app: none → app id A0AGENT0001/);
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0001');
+
+  // Read again, nothing changed: applied at once, and nothing to write.
+  const again = await update(m);
+  assert.equal(again.prepared, null);
+  assert.equal(again.result.changed, false, JSON.stringify(again.result.applied));
+
+  writeAgentApp(m, 'A0AGENT0002');
+  const changed = await update(m);
+  assert.match(changed.prepared?.preview ?? '', /Slack agent app: app id A0AGENT0001 → app id A0AGENT0002/);
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0002');
+
+  writeAgentApp(m, null);
+  const dropped = await update(m);
+  assert.match(dropped.prepared?.preview ?? '', /Slack agent app: app id A0AGENT0002 → none/);
+  assert.equal((await record(m))?.slack?.apps.agent, undefined);
+});
+
+test('a recorded agent app edited by hand is put back at once, from the same file', async () => {
+  const m = machine();
+  writeProfile(m, profile());
+  writeAgentApp(m, 'A0AGENT0001');
+  await add(m);
+  await edit(m, (raw) => {
+    const agent = raw.organisations?.acme?.slack?.apps.agent;
+    if (agent) agent.appId = 'A0EDITED001';
+  });
+  const repaired = await update(m);
+  assert.equal(repaired.prepared, null, 'putting back what was approved asks nobody');
+  assert.ok(
+    repaired.result.applied.some((line) => /agent app/.test(line)),
+    JSON.stringify(repaired.result.applied),
+  );
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0001');
+});
+
+// ── Both files beside the profile: the update caps and the agent app (design 2026-10-16 U8, CUE-493) ────────────────
+
+/** The update caps' file beside the profile: none when `caps` is null. */
+function writeCaps(m: Machine, caps: Record<string, unknown> | null): string {
+  const path = join(m.files, 'acme.agentcomms.updates.json');
+  if (caps === null) {
+    rmSync(path, { force: true });
+    return path;
+  }
+  writeFileSync(path, `${JSON.stringify({ organisation: 'acme', ...caps }, null, 2)}\n`);
+  return path;
+}
+
+test('a profile with both files beside it reads each, binds each by its own SHA-256, and the add records both', async () => {
+  const m = machine();
+  const profilePath = writeProfile(m, profile());
+  const agentPath = writeAgentApp(m, 'A0AGENT0001');
+  const capsPath = writeCaps(m, { max: 'never' });
+  const read = await readProfileFile(profilePath);
+  assert.equal(read.agentApp?.appId, 'A0AGENT0001');
+  assert.equal(read.updates?.max, 'never');
+  assert.deepEqual([read.agentApp?.path, read.updates?.path], [agentPath, capsPath]);
+  assert.equal(
+    new Set([read.sha256, read.agentApp?.sha256, read.updates?.sha256]).size,
+    3,
+    'three files, three hashes',
+  );
+
+  const first = await gatedChange(m.core, orgAddChange(m.core, { file: 'acme.agentcomms.json' }, options(m)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  assert.equal(first.status, 'approval-required');
+  const { preview } = (first as { prepared: PreparedChange }).prepared;
+  assert.match(preview, /Slack agent app: app id A0AGENT0001/);
+  assert.match(preview, /caps how this machine updates at never/);
+  await add(m);
+  const acme = await record(m);
+  assert.equal(acme?.slack?.apps.agent?.appId, 'A0AGENT0001');
+  assert.equal(acme?.updates?.max, 'never');
+  assert.equal(acme?.slack?.apps.agent?.sha256, read.agentApp?.sha256);
+  assert.equal(acme?.updates?.sha256, read.updates?.sha256);
+});
+
+test('changing one file beside the profile is approved first and leaves the other as recorded; both hand-edited are put back at once', async () => {
+  const m = machine();
+  writeProfile(m, profile());
+  writeAgentApp(m, 'A0AGENT0001');
+  writeCaps(m, { max: 'never' });
+  await add(m);
+
+  writeCaps(m, { max: 'every-14-days' });
+  const caps = await update(m);
+  assert.ok(caps.prepared, 'a changed caps file is approved first');
+  assert.match(caps.prepared?.preview ?? '', /updates: at most never → at most every-14-days/);
+  assert.doesNotMatch(caps.prepared?.preview ?? '', /Slack agent app: app id A0AGENT0001 →/);
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0001');
+  assert.equal((await record(m))?.updates?.max, 'every-14-days');
+
+  writeAgentApp(m, 'A0AGENT0002');
+  const agent = await update(m);
+  assert.ok(agent.prepared, 'a changed agent app file is approved first');
+  assert.match(agent.prepared?.preview ?? '', /Slack agent app: app id A0AGENT0001 → app id A0AGENT0002/);
+  assert.doesNotMatch(agent.prepared?.preview ?? '', /updates: /);
+  assert.equal((await record(m))?.updates?.max, 'every-14-days');
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0002');
+
+  await edit(m, (raw) => {
+    const acme = raw.organisations?.acme;
+    if (acme?.slack?.apps.agent) acme.slack.apps.agent.appId = 'A0EDITED001';
+    if (acme?.updates) acme.updates.max = 'never';
+  });
+  const repaired = await update(m);
+  assert.equal(repaired.prepared, null, 'putting back what was approved asks nobody');
+  const applied = repaired.result.applied.join('\n');
+  assert.match(applied, /agent app/);
+  assert.match(applied, /update caps/);
+  assert.equal((await record(m))?.slack?.apps.agent?.appId, 'A0AGENT0002');
+  assert.equal((await record(m))?.updates?.max, 'every-14-days');
+});
+
+test('a refusal in one file beside the profile names that file, never the other', async () => {
+  const m = machine();
+  const profilePath = writeProfile(m, profile());
+  const agentPath = writeAgentApp(m, 'A0AGENT0001');
+  const capsPath = writeCaps(m, { max: 'auto' });
+  await assert.rejects(readProfileFile(profilePath), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'BAD_DATA');
+    assert.ok(error.message.includes(`the updates file ${shownPath(capsPath)}`), error.message);
+    assert.ok(!error.message.includes(shownPath(agentPath)), error.message);
+    return true;
+  });
+  writeCaps(m, { max: 'never' });
+  writeFileSync(agentPath, '{"agentcomms":');
+  await assert.rejects(readProfileFile(profilePath), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'BAD_DATA');
+    assert.ok(error.message.includes(`the agent app file ${shownPath(agentPath)}`), error.message);
+    assert.match(error.message, /not valid JSON/);
+    assert.ok(!error.message.includes(shownPath(capsPath)), error.message);
+    return true;
+  });
+  // Bytes that are not UTF-8, in either file, are refused naming that file.
+  writeAgentApp(m, 'A0AGENT0001');
+  writeFileSync(capsPath, Buffer.from([0x7b, 0xff, 0xfe, 0x7d]));
+  await assert.rejects(readProfileFile(profilePath), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'BAD_DATA');
+    assert.ok(error.message.includes(`the updates file ${shownPath(capsPath)}`), error.message);
+    assert.match(error.message, /not UTF-8 text/);
+    return true;
+  });
+});

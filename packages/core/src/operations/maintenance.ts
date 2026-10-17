@@ -4,7 +4,7 @@ import { integrityRefusal, kindOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
 import { revokeChange } from '../changes.ts';
-import { type Channel, isChannel, type ServerId, serverFacts } from '../channel-servers.ts';
+import { type Channel, type ServerId, serverFacts } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
 import { stripInvisible } from '../chars.ts';
 import { inlineCommand } from '../cli-runtime.ts';
@@ -14,21 +14,24 @@ import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { isGroupOrWorldAccessible } from '../fs.ts';
 import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requireHandoffs } from '../handoffs.ts';
+import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
-import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
+import { organisationDrift, organisationsOf, orphanMarkedRows, shownPath, shownText } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
+import { inspectUpdateJob, type UpdateJobDeps, updateJobContext, updateJobHealth } from '../update-job.ts';
 import {
   countedLatest,
+  effectiveUpdates,
+  localStamp,
+  pauseEnd,
   readUpdateCheck,
-  UPDATE_CHECK_ENV,
-  updateCheckEnabled,
-  updateSnoozed,
+  securityRelease,
   updateVerdict,
 } from '../update-state.ts';
 import { VERSION } from '../version.ts';
@@ -75,6 +78,15 @@ export interface DoctorOptions {
   keyring?: KeyringModule | null | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
   platform?: NodeJS.Platform | undefined;
+  /** For a test: the runner the background update job's scheduler is asked through, so none is real. */
+  updateJob?: UpdateJobDeps | undefined;
+  /**
+   * False when an organisation profile here says `updates.background: false` (design 2026-10-16 U8). Left out, read
+   * from the configuration's organisations, as the notice reads them (`effectiveUpdates`); a test hands it in.
+   */
+  background?: boolean | undefined;
+  /** For a test: the clock whether the background job has run lately is read on. */
+  now?: (() => Date) | undefined;
 }
 
 /**
@@ -269,7 +281,8 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     ok: true,
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
-  checks.push(await updateCheckLine(core, env, handoffs));
+  checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
+  checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
 }
@@ -332,36 +345,66 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
 }
 
 /**
- * The daily update check, in one line (design 2026-09-28 §4): on or off — and what turned it off — when the registry
- * was last asked, the latest release it named, and the release running here. Never a failure: an update that is out
- * is something to look at, with the two ways on, and the rest is information.
+ * How this machine updates, in one line (design 2026-09-28 §4, 2026-10-16 U2 and U3): the level — and what set it — when
+ * the registry was last asked, the latest release it named, the release running here, and a pause with when it ends.
+ * Never a failure: an update that is out is something to look at, with the way on, and the rest is information.
  */
-async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: CliHandoffs): Promise<DoctorCheck> {
-  const enabled = await updateCheckEnabled(core, env);
+async function updateCheckLine(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  now: Date,
+): Promise<DoctorCheck> {
+  const updates = await effectiveUpdates(core, env, now);
   const record = await readUpdateCheck(core.paths.stateDir);
-  const now = new Date();
-  const off = enabled.on
-    ? 'on'
-    : `off (${enabled.by === 'setting' ? 'set off with update --auto off' : enabled.by === 'CI' ? 'CI is set' : `${UPDATE_CHECK_ENV} is set`})`;
-  const latest =
-    record.latest === null
-      ? 'unknown'
-      : countedLatest(record) === null
-        ? `${record.latest} (a prerelease, not counted)`
-        : record.latest;
-  const snoozed = updateSnoozed(record, now);
-  const parts = [off, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
-  if (snoozed && record.snoozedUntil !== null) parts.push(`put off until ${record.snoozedUntil}`);
+  // Where a cap or a profile's `background: false` comes from (design 2026-10-16, U8): the organisation and its file.
+  const fromProfile = (where: { organisation: string; source: string }) =>
+    `${shownText(where.organisation, 40)}’s profile, ${shownPath(where.source)}`;
+  const level =
+    updates.by !== 'setting'
+      ? `never (${updates.by === 'CI' ? 'CI is set' : `${updates.by} is set`})`
+      : updates.cap
+        ? `${updates.level} (capped by ${fromProfile(updates.cap)})`
+        : updates.level === 'auto' && !updates.background
+          ? updates.backgroundOff
+            ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
+            : updates.jobSilent
+              ? `auto (a daily check with a notice: background updates have not run since ${localStamp(new Date(updates.jobSilent.since))})`
+              : updates.unreadableConfig
+                ? 'auto (a daily check with a notice)'
+                : 'auto (a daily check with a notice: background updates are not set up)'
+          : updates.level;
+  // Only ever a plain release (`readUpdateCheck`): the registry's text otherwise names none.
+  const latest = countedLatest(record) ?? 'unknown';
+  const pause = pauseEnd(record, now);
+  const security = securityRelease(record, VERSION);
+  const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
+  // An unreadable configuration lifts no cap (U8, failing closed): say what stands in for it.
+  const unreadable = updates.unreadableConfig;
+  if (unreadable !== undefined) {
+    parts.push(
+      unreadable.read > 0
+        ? `config.json could not be read, so the caps of the organisation files still readable hold, and nothing installs in the background (${unreadable.reason})`
+        : `config.json could not be read, and no organisation’s caps could be read in its place, so the default holds and nothing installs in the background (${unreadable.reason})`,
+    );
+  }
+  if (updates.backgroundOff && !(updates.level === 'auto' && !updates.cap)) {
+    parts.push(`background updates off by ${shownText(updates.backgroundOff.organisation, 40)}’s profile`);
+  }
+  if (security !== null) parts.push(`${security} fixes a security problem`);
+  if (pause !== null) parts.push(`paused until ${localStamp(pause)}`);
   if (record.lastError !== null) parts.push(`the last check got no answer: ${record.lastError}`);
-  // The core's server and its command, each as its own stop reads it: installed only when both would start `latest`.
+  // The core's server and its command, each as its own notice reads it: installed only when both would start `latest`.
   const verdict = (surface: 'server' | 'command') =>
-    enabled.on && !snoozed ? updateVerdict(record, VERSION, { channel: 'core', surface }) : null;
+    updates.level !== 'never' || security !== null
+      ? updateVerdict(record, VERSION, { channel: 'core', surface })
+      : null;
   const [asServer, asCommand] = [verdict('server'), verdict('command')];
   const pending = asServer ?? asCommand;
   return {
     name: 'update check',
     ok: true,
-    ...(pending ? { warn: true as const } : {}),
+    ...(pending || unreadable ? { warn: true as const } : {}),
     detail: parts.join(' · '),
     ...(pending === null
       ? {}
@@ -371,13 +414,144 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
               ? `${pending.latest} is installed on this machine: restart the MCP clients, and run commands from it.`
               : handoffSentence(handoffs.core(['update']), (update) =>
                   handoffSentence(
-                    handoffs.core(['update', '--later']),
-                    (later) => `Run ${update} (comms_update from a chat), or ${later} to put it off until tomorrow.`,
+                    handoffs.core(['update', '--pause']),
+                    (later) =>
+                      `Run ${update} (comms_update from a chat) when it suits you, or ${later} to hold the notice for a week.`,
                   ),
                 ),
           ),
         }),
   };
+}
+
+/**
+ * The background update job (design 2026-10-16 U4): installed, missing, foreign or stale, each with what fixes it — and
+ * nothing at all on a machine that never set one up, so every other doctor reads as it always did.
+ *
+ * Read from its files on macOS and Linux, so the doctor starts no program there. On Windows the scheduler is asked
+ * only when this installation recorded a job; a task another installation registered with no record here is not
+ * looked for. A job that cannot be read is something to look at, never a failure: the machine works without it.
+ */
+async function updateJobLines(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  platform: NodeJS.Platform,
+  options: DoctorOptions,
+): Promise<DoctorCheck[]> {
+  const name = 'background update job';
+  const context = updateJobContext(core, env, { platform, deps: options.updateJob });
+  let seen: Awaited<ReturnType<typeof inspectUpdateJob>>;
+  try {
+    seen = await inspectUpdateJob(context, { query: 'when-recorded' });
+  } catch (error) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  const on = handoffs.core(['update', '--background-job', 'on']);
+  const off = handoffs.core(['update', '--background-job', 'off']);
+  const since =
+    seen.marker === null
+      ? ''
+      : ` (set up ${seen.marker.installedAt}${seen.marker.lastRun ? `, last ran ${seen.marker.lastRun}` : ''})`;
+  const background = options.background ?? (await effectiveUpdates(core, env)).backgroundOff === undefined;
+  // A profile that came after the job (Review focus 5): the job's next run removes it, and this says so before then.
+  if (!background && (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `an organisation profile turns background updates off here: ${seen.where} is still set up${since}, and its next run removes it`,
+        fix: remedy(handoffSentence(off, (command) => `Remove it now with ${command}.`)),
+      },
+    ];
+  }
+  switch (seen.state) {
+    case 'not-set-up':
+      return [];
+    case 'installed': {
+      const health = await updateJobHealth(core.paths.stateDir, (options.now ?? (() => new Date()))());
+      // Installed as it should be, and silent: switched off in Login Items, a timer that never fires (U4, U7).
+      if (health !== null && !health.working) {
+        return [
+          {
+            name,
+            ok: true,
+            warn: true,
+            detail: `installed, and has not run since ${health.since}${health.marker.lastRun ? '' : ', when it was set up'}: ${seen.where} runs ${context.launcher} update --background, and nothing has run it in 48 hours, so every notice and the security line are given as though there were no job`,
+            fix: remedy(
+              handoffSentence(
+                on,
+                (again) =>
+                  `${silentWhere(platform)} If it is there and allowed, set it up again with ${again}, and run the doctor tomorrow.`,
+              ),
+            ),
+          },
+        ];
+      }
+      return [
+        { name, ok: true, detail: `installed: ${seen.where} runs ${context.launcher} update --background${since}` },
+      ];
+    }
+    case 'missing':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `missing: set up${since}, and ${seen.where} is gone, so nothing installs in the background`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (forget) => `Set it up again with ${again}, or forget it with ${forget}.`),
+            ),
+          ),
+        },
+      ];
+    case 'foreign':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `foreign: ${seen.where} is not this installation's — ${seen.reason}`,
+          fix: remedy(
+            'This installation leaves it alone. If it is not wanted, remove it with the installation that set it up, or by hand.',
+          ),
+        },
+      ];
+    case 'stale':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `stale: ${seen.where} is this installation's, but ${seen.reason}${since}`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (remove) => `Write it again with ${again}, or remove it with ${remove}.`),
+            ),
+          ),
+        },
+      ];
+  }
+}
+
+/** Where a person looks for a background job that does not run, in words: each platform's own place. */
+function silentWhere(platform: NodeJS.Platform): string {
+  if (platform === 'darwin') {
+    return 'Check Login Items (System Settings → General → Login Items): macOS lists the job there, and it runs only while allowed.';
+  }
+  if (platform === 'linux') {
+    return 'Check that the agentcomms-update timer is enabled for your user, and that your user’s systemd instance runs.';
+  }
+  return 'Check the agentcomms-update task in Task Scheduler: that it is enabled, and what its last run result was.';
 }
 
 /**
@@ -431,11 +605,21 @@ async function registrationChecks(
       null,
     );
     if (latestRuntime !== null && managedShimsSupported({ platform })) {
-      const expectedEntry = managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version);
-      // A shim names this Node as a command does, so one naming the file a link resolves to is stale (CUE-492).
+      /*
+       * A shim starts the stable launcher once there is one (design 2026-10-16, U6), so one naming a runtime is stale;
+       * before it, the newest runtime, with this Node as a command names it — a shim naming the file a link resolves to
+       * is stale too (CUE-492).
+       */
+      const name = launcherName(channel.package);
+      const expected = (await launcherExists(core.paths.dataDir, name))
+        ? { expectedEntry: launcherPaths(core.paths.dataDir, name).launcher }
+        : {
+            expectedEntry: managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version),
+            expectedNode: nodeProgram(env),
+          };
       const shim = await inspectManagedShim(
         { env, dataDir: core.paths.dataDir, platform },
-        { binary: channel.binary, expectedEntry, expectedNode: nodeProgram(env) },
+        { binary: channel.binary, ...expected },
       );
       if (shim.status !== 'current') {
         checks.push({
@@ -540,11 +724,13 @@ function registerAgain(channel: ServerId, entry: ChannelRegistration, handoffs: 
   words.push(...entry.narrowing);
   if (entry.launcher === 'npx' || entry.launcher === 'local') words.push('--launcher', entry.launcher);
   words.push('--force');
+  // Core's own command, located, for every server (re-review of 0.20.0, severity 3): a channel's own `mcp install`
+  // registers the release that command is, and the one found here may be the old one an entry behind still starts.
   // The entry's name and pins are read from the client's file, which may hold anything: a located command shows them
-  // as words to type where no Windows line is safe, and a product not locatable here says so instead.
-  const handoff = isChannel(channel)
-    ? handoffs.of(channel, words)
-    : handoffs.core(['mcp', 'install', '--server', channel, ...words.slice(2)]);
+  // as words to type where no Windows line is safe.
+  const handoff = handoffs.core(
+    channel === 'core' ? words : ['mcp', 'install', '--server', channel, ...words.slice(2)],
+  );
   return remedy(handoffSentence(handoff, (command) => `Register it again: ${command}.`));
 }
 

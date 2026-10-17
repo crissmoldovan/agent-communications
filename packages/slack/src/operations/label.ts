@@ -10,6 +10,7 @@ import {
   type MessageIdentity,
   neutralise,
   resolveIdentity,
+  slackStyleOf,
   truncateDisplay,
   UNLABELLED_PREVIEW_LINE,
 } from '@agentcomms/core';
@@ -29,7 +30,8 @@ export const SLACK_USERNAME_LIMIT = 80;
 
 /**
  * How an act reaches Slack (S2): the app's bot token posting as the app, the person's token with the label in the
- * message (S3), or the person's token as before this release, unlabelled.
+ * message (S3), or the person's token as before this release, unlabelled. A workspace whose style is `labelled` (the
+ * owner's decision, 2026-10-17) takes the second for every `agent` act, even where the app could post.
  */
 export type SlackRoute = 'app' | 'fallback' | 'person';
 
@@ -58,6 +60,14 @@ export interface SlackLabel {
 export interface AppIdentity {
   readonly userId: string;
   readonly call: () => Promise<SlackCall>;
+  /**
+   * Forgets the bot token after Slack refused the token itself (CUE-493, `app-token.ts`): deleted, the bot user taken
+   * off the account, and why recorded, so the next prepare takes the fallback — only while the token stored is the one
+   * the refused call carried. `kept` when another was pasted since, and left as it is.
+   */
+  readonly forget?: ((slackError: string) => Promise<'forgotten' | 'kept' | undefined>) | undefined;
+  /** The organisation whose profile connected the account, when one did: whose admin holds the agent app's token. */
+  readonly organisation?: string | undefined;
 }
 
 /** What a gate needs to decide a label: whose rules, which settings, and the app when this account has one. */
@@ -88,6 +98,7 @@ export const FALLBACK_REASONS = {
   file: 'a post with files goes out as you in this release',
   edit: 'an edit of a message you posted is made as you',
   tokenUnreadable: "the app's token could not be read on this machine",
+  labelled: 'you chose labelled posts for this workspace',
 } as const;
 
 /** The reason a workspace with no app takes the fallback: one signed in before this release, or connected to read. */
@@ -95,6 +106,15 @@ export function noAppReason(mode: string | undefined): string {
   return mode === 'send'
     ? "this workspace's app has no bot token on this machine yet"
     : 'this workspace is connected to read';
+}
+
+/**
+ * The reason a workspace whose app's bot token Slack refused takes the fallback (CUE-493): the token was forgotten when
+ * an act made with it came back `token_revoked`, `invalid_auth` or `account_inactive`, and none has been pasted since.
+ * A fixed string, as every reason is: it is bound.
+ */
+export function revokedAppReason(): string {
+  return "this workspace's app token was revoked, and no new one is on this machine yet";
 }
 
 /** A request for one act's identity, as the message carries it (L3 step 1). */
@@ -206,17 +226,26 @@ async function botIsMember(call: SlackCall, channel: string, botUserId: string):
  * Who posts an `agent` act (S2): the app in a public channel not shared with another organisation, and in a private or
  * shared one whose members include its bot user; the person, labelled, everywhere else — a DM, a group DM, the person's
  * own DM, a room the app is not in or whose membership could not be settled, and every file.
+ *
+ * In a workspace whose style is `labelled` (the owner's decision, 2026-10-17), the person, labelled, wherever the room:
+ * decided before it is read, so nothing asks Slack whether the app could have posted. A file and an edit keep their own
+ * reasons, since what they are fixes their route whatever the style: the app posts no files in this release, and an
+ * edit is made by whoever posted the message (S5).
  */
 async function routeOf(
   call: SlackCall,
   postingAs: string,
   label: LabelDeps,
   request: LabelRequest,
+  room: () => Promise<Channel | undefined>,
 ): Promise<{ route: 'app' | 'fallback'; reason?: string }> {
   const fallback = (reason: string) => ({ route: 'fallback' as const, reason });
   if (request.kind === 'file') return fallback(FALLBACK_REASONS.file);
+  if (request.kind !== 'edit' && slackStyleOf(label.settings, label.accountId) === 'labelled') {
+    return fallback(FALLBACK_REASONS.labelled);
+  }
   if (label.app === undefined) return fallback(label.noApp ?? noAppReason('send'));
-  const channel = request.channel;
+  const channel = await room();
   if (channel === undefined) return fallback(FALLBACK_REASONS.unread);
   if (channel.isIm) return fallback(channel.withUserId === postingAs ? FALLBACK_REASONS.self : FALLBACK_REASONS.im);
   if (channel.isMpim) return fallback(FALLBACK_REASONS.mpim);
@@ -258,7 +287,7 @@ export async function decideLabel(
     slack: { channel: request.channelId, dmWith: channel?.withUserId },
   });
   if (decision.identity === 'me') return { identity: 'me', source: decision.source, route: 'person' };
-  const { route, reason } = await routeOf(deps.call, deps.postingAs, label, { ...request, channel: await room() });
+  const { route, reason } = await routeOf(deps.call, deps.postingAs, label, request, room);
   if (request.kind === 'reaction') {
     return route === 'app'
       ? await withApp({ identity: 'agent', source: decision.source, route, botUserId: label.app?.userId }, label)

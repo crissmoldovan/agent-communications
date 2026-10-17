@@ -22,7 +22,6 @@ Scripts should read these rather than parse output.
 | `0` | it worked |
 | `1` | unexpected failure |
 | `10` | a post or a change was refused or needs approval, or a sign-in is still waiting |
-| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -65,7 +64,7 @@ agent-slack manifest [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
+| `--mode <mode>` | how much access to ask Slack for; `agent` for an organisation's bot-only agent app, whose token members paste (choices: "read", "send", "agent", default: "read") | — |
 | `--port <port>` | the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app | — |
 | `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
 | `--with-client-secret` | the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app | — |

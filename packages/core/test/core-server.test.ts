@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import { type Core, openCore } from '../src/core.ts';
 import { CommsError, ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { CORE_CALLER, handoffText, isCommand } from '../src/handoffs.ts';
 import { newApprovalId } from '../src/ids.ts';
+import { launcherPaths, readPointer } from '../src/launcher.ts';
 import { managedShimPath, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { type McpProduct, managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
@@ -28,7 +29,7 @@ import type { SecretStore } from '../src/secrets.ts';
 import { sendEpochOf } from '../src/send-epoch.ts';
 import { VERSION } from '../src/version.ts';
 import { v1SendRecord, writeV1Record } from './fixtures/approval-v1-0.13.0.ts';
-import { pinArgs, registration, writeManaged } from './fixtures/cli-command/trees.ts';
+import { pinArgs, writeManaged } from './fixtures/cli-command/trees.ts';
 import { assertNoBareCommand, coreCommand, coreHandoffs, coreInline, locatedCoreLine } from './helpers/handoffs.ts';
 import {
   assertExpectWrapped,
@@ -37,6 +38,7 @@ import {
   HOSTILE_EXPECT,
   HOSTILE_FILE_NAME,
 } from './helpers/hostile-approval.ts';
+import { registryOf, tarballOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -625,13 +627,24 @@ test('the doctor: a channel with accounts that no client starts is something to 
         ok: true,
         warn: true,
         detail: `registered with cursor as "gmail" in ${cursor}, but its suite path pins are incomplete (missing --config-dir, --state-dir, --data-dir, --secrets-dir), so it finds its folders from whatever environment cursor starts it with`,
+        // Core's own command, located (re-review of 0.20.0, severity 3): Gmail's own registers the release it is.
         fix: `Register it again: ${inlineCommand(
-          coreHandoffs(m.core.paths, 'darwin')
-            .withRegistrations([registration({ command: process.execPath, args: [entry, 'mcp'] })])
-            .of('gmail', ['mcp', 'install', '--client', 'cursor', '--force']) as PrintedCommand,
+          coreHandoffs(m.core.paths, 'darwin').core([
+            'mcp',
+            'install',
+            '--server',
+            'gmail',
+            '--client',
+            'cursor',
+            '--force',
+          ]) as PrintedCommand,
         )}.`,
       },
     ],
+  );
+  assert.ok(
+    !String(unpinned.checks.find((check) => check.name === 'gmail server')?.fix).includes(realpathSync(entry)),
+    "the repair runs Gmail's own command, which registers its own release",
   );
   assert.equal(unpinned.report.ok, true, 'an entry that starts is not a failure');
   assert.equal(readFileSync(cursor, 'utf8'), legacy);
@@ -690,8 +703,21 @@ test('the doctor fails a registration whose runtime has gone, and says what regi
       ok: false,
       // One row for the entry, naming both of its problems: the one command repairs them both.
       detail: `registered with claude-code as "slack" in ${claude}, but ${gone} is no longer there, so claude-code cannot start it; its suite path pins are incomplete (missing --config-dir, --state-dir, --data-dir, --secrets-dir) too`,
-      // The one registration of Slack is the broken one, so Slack's own command is not locatable here: it says that.
-      fix: `Slack ${VERSION} (@agentcomms/slack) is not locatable here: none of the 1 registration of it is ${VERSION} in a file this can check (1 whose package cannot be found or read). Install or update it through your usual route, then try again.`,
+      // Core's own command registers it again (re-review of 0.20.0, severity 3): it is there whether or not Slack's
+      // own command is, and registers core's release, not the one an entry behind still starts.
+      fix: `Register it again: ${inlineCommand(
+        coreHandoffs(m.core.paths, 'darwin').core([
+          'mcp',
+          'install',
+          '--server',
+          'slack',
+          '--client',
+          'claude-code',
+          '--workspace',
+          'acme/slack',
+          '--force',
+        ]) as PrintedCommand,
+      )}.`,
     },
   ]);
   assert.equal(report.ok, false, 'a server a client cannot start is a failure');
@@ -771,7 +797,8 @@ test('a Windows managed-install plan does not claim that it will write a CLI shi
     m.env,
     { channel: 'core', client: 'cursor', noVerify: true },
     undefined,
-    { platform: 'win32' },
+    // A first install verifies the release it fetches: against the test's own trust root, so nothing reaches npm.
+    { platform: 'win32', registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier() },
   ).plan(config);
 
   assert.doesNotMatch(
@@ -821,10 +848,13 @@ test('the doctor gives the name of an entry to register again as one word, quote
     'acme/slack',
     '--force',
   ];
-  const repair = coreHandoffs(m.core.paths, 'darwin')
-    .withRegistrations([registration(working)])
-    .of('slack', words);
+  // Core's own command, located: Slack's own would register the release it is (re-review of 0.20.0, severity 3).
+  const repair = coreHandoffs(m.core.paths, 'darwin').core(['mcp', 'install', '--server', 'slack', ...words.slice(2)]);
   assert.ok(isCommand(repair) && repair.line?.includes(" --name 'slack acme' "), JSON.stringify(repair));
+  assert.ok(
+    !String(repair.line).includes(realpathSync(String(working.args[0]))),
+    "the repair runs Slack's own command",
+  );
   assert.equal(
     checks.find((check) => check.name === 'slack server' && check.ok === false)?.fix,
     `Register it again: ${inlineCommand(repair)}.`,
@@ -852,7 +882,7 @@ test('the doctor shows a repair with a name Windows cannot print as its words, n
   const fix = String(report.checks.find((check) => check.name === 'slack server' && check.ok === false)?.fix);
   assert.ok(
     fix.endsWith(
-      `"mcp","install","--client","claude-code","--name","\\u0024x&whoami&","--workspace","acme/slack","--force"]\` (the command's words, written as JSON: one of them cannot be quoted the same way for cmd.exe and for PowerShell, so type the command yourself, with that word quoted for the shell you use).`,
+      `"mcp","install","--server","slack","--client","claude-code","--name","\\u0024x&whoami&","--workspace","acme/slack","--force"]\` (the command's words, written as JSON: one of them cannot be quoted the same way for cmd.exe and for PowerShell, so type the command yourself, with that word quoted for the shell you use).`,
     ),
     fix,
   );
@@ -1355,7 +1385,9 @@ test('printing an entry registers nothing, and so asks nobody', async () => {
     assert.equal(result.applied, false);
     assert.equal(result.restart, null);
     assert.match(String(result.snippet), /"slack"/);
-    assert.match(String(result.snippet), new RegExp(`runtime[/\\\\]+${VERSION.replaceAll('.', '\\.')}-slack`));
+    // It starts Slack's stable launcher, never a versioned runtime (design 2026-10-16, U6).
+    assert.match(String(result.snippet), /launch[/\\\\]+slack"/);
+    assert.doesNotMatch(String(result.snippet), /runtime[/\\\\]/);
     assert.deepEqual(await m.core.approvals.list(), []);
   } finally {
     await close();
@@ -1800,6 +1832,15 @@ function eventsRuntime(m: Machine, version: string): string {
   writeFileSync(entry, '');
   writeFileSync(join(dirname(entry), '..', 'package.json'), JSON.stringify({ ...published, version }));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: version } }));
+  // The lockfile npm writes, with the integrity of the tarball the stand-in registry serves and the test's root signs:
+  // core holds a runtime already on disk to the release it verified (re-review of 0.20.0, severity 4).
+  writeFileSync(
+    join(dir, 'package-lock.json'),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { [`node_modules/${packageName}`]: { version, integrity: tarballOf(packageName, version) } },
+    }),
+  );
   return dir;
 }
 
@@ -1811,7 +1852,10 @@ test(
   async () => {
     const m = machine();
     eventsRuntime(m, VERSION);
-    const { ok, close } = await connect(m);
+    // Core verifies the release whose runtime it registers on, against the test's own trust root: nothing reaches npm.
+    const { ok, close } = await connect(m, {
+      update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier() },
+    });
     try {
       const args = { channel: 'events', client: 'cursor', noVerify: true };
       const path = join(m.home, '.local', 'bin', 'agent-events');
@@ -1831,11 +1875,15 @@ test(
       assert.equal(result.shimFailure, undefined, 'the locator reads the service declaration, so the shim is written');
       assert.equal(result.shim?.status, 'created', 'the managed events install creates its CLI shim');
       assert.equal(result.shim?.path, path, 'named for the binary the service declares');
+      // It starts the service's stable launcher, as the registration does, and that starts the events runtime's CLI.
       assert.ok(
-        readFileSync(path, 'utf8').includes(
-          managedRuntimeEntry(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION),
-        ),
-        "and it starts the events runtime's own CLI",
+        readFileSync(path, 'utf8').includes(launcherPaths(m.core.paths.dataDir, 'events-daemon').launcher),
+        'and it starts the stable launcher',
+      );
+      assert.equal(
+        (await readPointer(m.core.paths.dataDir, 'events-daemon'))?.current,
+        managedRuntimeDir(m.core.paths.dataDir, '@agentcomms/events-daemon', VERSION),
+        "which starts the events runtime's own CLI",
       );
 
       const printed = await ok('comms_server_install', { ...args, print: true });

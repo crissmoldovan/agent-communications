@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { beginChangeApproval, claimChange, prepareChange } from '../src/changes.ts';
+import { serverFacts } from '../src/channel-servers.ts';
 import { type Config, parseConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -13,6 +14,7 @@ import { resolveName } from '../src/names.ts';
 import { type ServerInstallRequest, serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
 import { updateChange } from '../src/operations/update.ts';
 import { VERSION } from '../src/version.ts';
+import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -156,12 +158,18 @@ const refusalAsync = async (fn: () => unknown): Promise<string> => {
 };
 
 // The golden intentionally includes the new owned-shim sentence for POSIX managed installs; Windows offers no shim.
+// A first install verifies the release it fetches, against the test's own trust root: nothing reaches npm.
 const posixServerInstallChange = (
   core: Core,
   env: NodeJS.ProcessEnv,
   request: ServerInstallRequest,
   own?: Parameters<typeof serverInstallChange>[3],
-) => serverInstallChange(core, env, request, own, { platform: 'darwin' });
+) =>
+  serverInstallChange(core, env, request, own, {
+    platform: 'darwin',
+    registry: registryOf(() => VERSION),
+    verifyRelease: testReleaseVerifier(),
+  });
 
 /** Every sentence this test holds still, by a key that says where it came from. */
 async function collect(): Promise<Record<string, string>> {
@@ -202,6 +210,19 @@ async function collect(): Promise<Record<string, string>> {
     runtime(m, '@agentcomms/slack', VERSION);
     const reused = await posixServerInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack' }).plan(config);
     out['install slack reused runtime: effects'] = normalise(m, (reused.effects ?? []).join('\n'));
+    // A channel's own command, which cannot verify, installing the release it is running: said not to be verified
+    // (owner's decision, 2026-10-17).
+    const ownRelease = await serverInstallChange(
+      m.core,
+      m.env,
+      { client: 'cursor', channel: 'gmail' },
+      { ...serverFacts('gmail'), version: VERSION, moduleUrl: '' },
+      { platform: 'darwin' },
+    ).plan(config);
+    out['install gmail own release, nothing to verify it: effects'] = normalise(
+      m,
+      (ownRelease.effects ?? []).join('\n'),
+    );
   }
   {
     // Replacing an entry keeps its pins, and says so.
@@ -314,6 +335,9 @@ async function collect(): Promise<Record<string, string>> {
     });
     const deps = {
       latestVersion: async () => LATEST,
+      // Every release it would install, verified first against the test's own trust root: nothing reaches npm.
+      registry: registryOf(() => LATEST),
+      verifyRelease: testReleaseVerifier(),
       globalPackages: async () => ({ '@agentcomms/core': OLD, '@agentcomms/slack': OLD }),
       installGlobal: async () => undefined,
       installRuntime: async () => undefined,

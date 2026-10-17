@@ -1,10 +1,12 @@
-import { effectiveAccountSendPolicy, sendEpochOf } from '@agentcomms/core';
+import { effectiveAccountSendPolicy, securityNotice, sendEpochOf } from '@agentcomms/core';
 import type { SlackCall } from '../api/call.ts';
 import { closedPermit, type WritePermit } from '../api/guard.ts';
 import type { SlackContext } from '../context.ts';
+import { VERSION } from '../version.ts';
 import { appPostRecordFor } from './app-posts.ts';
+import { appTokenRevokedOf, forgetAppToken } from './app-token.ts';
 import { attachPolicyOf } from './drafts.ts';
-import { labelSettingsOf, noAppReason } from './label.ts';
+import { labelSettingsOf, noAppReason, revokedAppReason } from './label.ts';
 import type { PostDeps, PrepareDeps } from './send.ts';
 import { openApp, openWorkspace, type SessionDeps } from './session.ts';
 import { botUserIdOf, requireWorkspace } from './workspaces.ts';
@@ -55,13 +57,19 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     sendPacing: context.sendPacing,
     // This account's own record of its app's posts (design 2026-10-15 S5).
     appPosts: appPostRecordFor(context.core.paths.stateDir, account.id),
+    // A security fix this machine does not install on its own, asked about once in a preview (design 2026-10-16, U7).
+    securityNotice: (act, approvalId) =>
+      securityNotice({ core: context.core, env: context.env, running: VERSION, act, approvalId }),
     // Who each act appears to come from (design 2026-10-15): the person's settings, and this account's app if it has one.
     label: {
       account: name,
       accountId: account.id,
       settings: labelSettingsOf(config),
       ...(botUserId === undefined
-        ? { noApp: noAppReason(mode) }
+        ? {
+            // A token Slack refused and nothing replaced since says so (CUE-493); otherwise, why there is none.
+            noApp: mode === 'send' && appTokenRevokedOf(account) !== undefined ? revokedAppReason() : noAppReason(mode),
+          }
         : {
             app: {
               userId: botUserId,
@@ -69,6 +77,13 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
                 app ??= openApp(context, name, account, deps);
                 return app;
               },
+              // Only the token the refused call carried: the call this gate opened, and nothing stored since.
+              forget: async (slackError: string) => {
+                const refused = await app?.catch(() => undefined);
+                if (refused === undefined) return 'kept' as const;
+                return forgetAppToken(context, account.id, slackError, refused.token);
+              },
+              ...(account.organisation === undefined ? {} : { organisation: account.organisation }),
             },
           }),
     },

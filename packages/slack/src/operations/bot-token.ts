@@ -1,11 +1,12 @@
-import { CommsError, findById, handoffSentence } from '@agentcomms/core';
+import { CommsError, findById, handoffSentence, organisationAgentApp, toCommsError } from '@agentcomms/core';
+import { callSlack } from '../api/call.ts';
 import { closedPermit, guardSlackRequests } from '../api/guard.ts';
 import { SLACK_ORIGIN } from '../api/methods.ts';
 import { displaySlackFailureText } from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle } from '../auth/bundle.ts';
 import type { SlackContext } from '../context.ts';
 import { BOT_SCOPES } from '../manifest.ts';
-import type { SessionDeps } from './session.ts';
+import { openWorkspace, type SessionDeps } from './session.ts';
 import { botSecretRefFor, requireWorkspace, type SlackAccount } from './workspaces.ts';
 
 /**
@@ -19,6 +20,11 @@ import { botSecretRefFor, requireWorkspace, type SlackAccount } from './workspac
  * Nothing is kept until Slack has said what the token is: a bot token, for this workspace's team, with exactly the four
  * posting scopes the send manifest declares. And not one that rotates: a token copied from the page of an app whose
  * tokens rotate stops working within twelve hours, and nothing here could renew it.
+ *
+ * And, for a workspace connected through an organisation's profile that names its agent app (CUE-493), that app's: the
+ * organisation's bot-only app, whose one token its administrator shares and each member pastes here. `bots.info`, asked
+ * with the member's own token, says which app the pasted token's bot belongs to, and another app's is refused by name.
+ * A profile that names none is checked as before.
  */
 
 export interface StoredBotToken {
@@ -112,6 +118,124 @@ async function askSlack(token: string, deps: SessionDeps): Promise<{ body: AuthT
   return { body, scopes };
 }
 
+interface BotsInfo {
+  readonly bot?: { readonly app_id?: unknown; readonly name?: unknown };
+}
+
+/**
+ * Which app a bot belongs to: `bots.info` about it, asked with the member's own user token (`users:read`), never with
+ * the bot's. Refused, as `app-unknown`, when Slack cannot say or names no app: the answer is the reason to ask.
+ */
+async function appOfBot(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  botId: string,
+  deps: SessionDeps,
+): Promise<{ appId: string; name: unknown }> {
+  let answer: BotsInfo;
+  try {
+    const session = await openWorkspace(context, alias, deps);
+    answer = (await callSlack(session.call, 'bots.info', { bot: botId })) as BotsInfo;
+  } catch (error) {
+    const failure = toCommsError(error);
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'Slack could not say which app that token belongs to, so nothing was kept',
+      {
+        hint: `${organisation}'s profile names its agent app, so the token is kept only once Slack says it is that app's. ${displaySlackFailureText(failure.message)}. Try again in a moment.`,
+        details: { reason: 'app-unknown' },
+      },
+    );
+  }
+  const appId = typeof answer.bot?.app_id === 'string' ? answer.bot.app_id : '';
+  if (appId === '') {
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'Slack did not say which app that token belongs to, so nothing was kept',
+      {
+        hint: `${organisation}'s profile names its agent app, so the token is kept only once Slack says it is that app's. Try again in a moment.`,
+        details: { reason: 'app-unknown' },
+      },
+    );
+  }
+  return { appId, name: answer.bot?.name };
+}
+
+/**
+ * Refuses a bot token that is not the organisation's agent app's: `bots.info` about the bot `auth.test` named, asked
+ * with the member's own user token (`users:read`), never with the pasted one, and its `app_id` compared exactly. An
+ * answer that names no app — or none could be had — keeps nothing: the check is the reason to ask.
+ */
+async function requireAgentApp(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  botId: string,
+  expected: string,
+  deps: SessionDeps,
+): Promise<void> {
+  const ask = 'Ask your organisation’s admin for the agent app’s "Bot User OAuth Token", and paste that one.';
+  const { appId, name } = await appOfBot(context, alias, organisation, botId, deps);
+  if (appId === expected) return;
+  const shownId = displaySlackFailureText(appId);
+  const shownName = displaySlackFailureText(name);
+  throw new CommsError(
+    'CONFIG',
+    `that token is the app ${shownId}${shownName ? ` ("${shownName}")` : ''}'s, not ${organisation}'s agent app, ${displaySlackFailureText(expected)}`,
+    {
+      hint: `Nothing was kept. ${ask}`,
+      details: { reason: 'another-app', appId: shownId, expected: displaySlackFailureText(expected) },
+    },
+  );
+}
+
+/** What `doctor` learns of a stored bot token against the agent app the profile names now (`probeAgentApp`). */
+export type AgentAppProbe =
+  | { readonly kind: 'match'; readonly appId: string }
+  | { readonly kind: 'other'; readonly appId: string; readonly name: string }
+  | { readonly kind: 'unknown'; readonly why: string };
+
+/**
+ * Whether a stored bot token is the organisation's agent app's, asked as the paste asks (`storeBotToken`): `auth.test`
+ * with the stored token, for its bot, and `bots.info` about that bot with the member's own user token. For `doctor`,
+ * which re-checks a token pasted before the profile named its agent app — the paste checked it against nothing then.
+ * Never throws, and never puts the token in what it says: every failure is `unknown`, which is not a pass.
+ */
+export async function probeAgentApp(
+  context: SlackContext,
+  alias: string,
+  organisation: string,
+  stored: string,
+  expected: string,
+  deps: SessionDeps = {},
+): Promise<AgentAppProbe> {
+  try {
+    const { body } = await askSlack(stored, deps);
+    if (body.ok !== true) {
+      return {
+        kind: 'unknown',
+        why: `Slack refused the stored token: ${displaySlackFailureText(body.error) || 'no reason given'}`,
+      };
+    }
+    if (typeof body.bot_id !== 'string' || body.bot_id === '') {
+      return { kind: 'unknown', why: 'Slack says the stored token is not a bot token' };
+    }
+    let app: { appId: string; name: unknown };
+    try {
+      app = await appOfBot(context, alias, organisation, body.bot_id, deps);
+    } catch {
+      return { kind: 'unknown', why: 'Slack could not say which app the stored token belongs to' };
+    }
+    const { appId, name } = app;
+    return appId === expected
+      ? { kind: 'match', appId: displaySlackFailureText(appId) }
+      : { kind: 'other', appId: displaySlackFailureText(appId), name: displaySlackFailureText(name) };
+  } catch (error) {
+    return { kind: 'unknown', why: displaySlackFailureText(toCommsError(error).message) };
+  }
+}
+
 /**
  * Checks a pasted bot token with Slack and keeps it for the workspace, under `slack/bot-token/<accountId>`, with
  * `auth.test`'s `user_id` as the account's `botUserId`. Never prints it, and never keeps one Slack has not vouched for.
@@ -163,6 +287,11 @@ export async function storeBotToken(
       hint: 'Nothing was kept. Try again in a moment.',
     });
   }
+  // Whose app, when the organisation says whose it should be: before the scopes, as the more basic of the two.
+  if (account.organisation !== undefined) {
+    const named = organisationAgentApp(config, account.organisation, account.workspace);
+    if (named !== undefined) await requireAgentApp(context, name, account.organisation, body.bot_id, named.appId, deps);
+  }
   const wanted = [...BOT_SCOPES].sort();
   if (scopes === undefined || scopes.join(',') !== wanted.join(',')) {
     const held = scopes?.map((scope) => displaySlackFailureText(scope)).join(', ') || 'no scope Slack named';
@@ -192,7 +321,9 @@ export async function storeBotToken(
           hint: 'Look at the workspace, and paste the token again if it should still have one.',
         });
       }
-      const next: SlackAccount = { ...held.account, botUserId };
+      // A token pasted again replaces one Slack refused: the record of that refusal goes with it (CUE-493).
+      const { appTokenRevoked: _replaced, ...kept } = held.account as SlackAccount & { appTokenRevoked?: unknown };
+      const next: SlackAccount = { ...kept, botUserId };
       return { ...current, accounts: { ...current.accounts, [held.alias]: next } };
     });
   } catch (error) {

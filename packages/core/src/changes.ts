@@ -522,11 +522,13 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'defaults.downloadsDir': 'downloads folder',
   'defaults.confirm.elicitationClients': 'clients trusted to ask for a send approval',
   'defaults.updateCheck': 'daily update check',
+  'defaults.updates': 'how this machine updates',
   'secrets.store': 'where credentials are kept',
   'agentLabel.word': 'the word after your name in the agent label',
   'agentLabel.name': 'the name in the agent label',
   'agentLabel.rules': 'who each kind of message appears to come from',
   'agentLabel.slackIcons': 'the icon of the agent’s Slack posts',
+  'agentLabel.slackStyles': 'how the agent’s Slack messages look',
 };
 
 /**
@@ -568,7 +570,14 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
     case 'defaults.confirm.elicitationClients':
       return 'these clients may ask you to approve a send in their own window';
     case 'defaults.updateCheck':
-      return 'nothing on this machine will ask npm for a newer release, or stop until one is installed';
+      return 'a release before 0.20 on this machine will no longer ask npm for a newer release';
+    case 'defaults.updates':
+      // What stops happening (design 2026-10-16, U2): a word this release cannot judge counts as updating least.
+      return after === 'every-14-days'
+        ? 'this machine will ask npm for a newer release at most once every 14 days, say one is out at most once every 14 days, and install nothing in the background'
+        : after === 'never'
+          ? 'nothing on this machine will ask npm for a newer release, say one is out, or install one'
+          : 'this release cannot tell how that level updates, so it counts as updating least';
     case 'secrets.store':
       return 'credentials will move out of the system keychain into files on this disk';
     case 'agentLabel.word':
@@ -581,6 +590,9 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
       return 'what a rule sends as `me` goes out as you, with no label: it will look as if you wrote it yourself';
     case 'agentLabel.slackIcons':
       return 'the app’s Slack posts will show this icon beside your name';
+    case 'agentLabel.slackStyles':
+      // Only app → labelled waits (the owner's decision, 2026-10-17): back to app tightens, and is never described here.
+      return 'every agent message there goes out as you, labelled in its words, even where the app could post: it trades Slack’s own APP tag, which no one can fake, for words in the message';
     default:
       return '';
   }

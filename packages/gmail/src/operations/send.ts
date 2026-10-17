@@ -23,6 +23,7 @@ import {
   type SendPolicy,
   type StoredApproval,
   sameExpectation,
+  securityNotice,
   sendEpochOf,
   stricterPolicy,
   type TaintAggregate,
@@ -56,6 +57,7 @@ import {
 } from '../domain/untrusted-fields.ts';
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
+import { VERSION } from '../version.ts';
 import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
 import { type UnsentSection, unsentSection } from './unsent.ts';
@@ -684,6 +686,8 @@ function previewFor(options: {
   flags?: readonly string[] | undefined;
   /** The From line this prepare rewrote, as it was (G2): said on the line after the identity. */
   rewrittenFrom?: string | undefined;
+  /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
+  security?: string | null | undefined;
 }): string {
   const { analysis, facts, record, alias } = options;
   // Every way the draft writes a recipient carries that recipient's note: the note is this package's words alone.
@@ -741,9 +745,10 @@ function previewFor(options: {
         ? 'Policy: confirm — this send needs approval outside the chat before it can go.'
         : 'Policy: chat — send only after the user approves this exact preview.',
   };
-  // First, who it appears to come from — read from the From line the approval binds, so the terminal's approval says
-  // what the prepare said (L3); then, when this prepare rewrote that line, what it was.
-  const lines = [identityLine(identityOfFrom(analysis.from))];
+  // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
+  // appears to come from — read from the From line the approval binds, so the terminal's approval says what the
+  // prepare said (L3); then, when this prepare rewrote that line, what it was.
+  const lines = [...(options.security ? [options.security] : []), identityLine(identityOfFrom(analysis.from))];
   if (options.rewrittenFrom !== undefined) {
     lines.push(
       `The From line was rewritten for this send, its header alone: it was ${truncateDisplay(options.rewrittenFrom, 120)}`,
@@ -904,6 +909,14 @@ export async function prepareSend(
     reason: flags.length > 0 ? `escalated: ${flags.join(', ')}` : `policy ${effectivePolicy}`,
   });
 
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = await securityNotice({
+    core: context.core,
+    env: context.env,
+    running: VERSION,
+    act: 'send',
+    approvalId: record.approvalId,
+  });
   return {
     approvalId: record.approvalId,
     inbox: alias,
@@ -916,6 +929,7 @@ export async function prepareSend(
       effectivePolicy,
       flags,
       rewrittenFrom: fitted.rewrittenFrom,
+      security,
     }),
     identity: fitted.identity,
     fromRewritten: fitted.rewrittenFrom !== undefined,

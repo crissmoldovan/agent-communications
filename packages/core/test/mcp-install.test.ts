@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -18,6 +19,7 @@ import { CHANNEL_SERVERS, serverFacts } from '../src/channel-servers.ts';
 import { locateCliCommand } from '../src/cli-command.ts';
 import { ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { handoffSentence } from '../src/handoffs.ts';
+import { launcherPaths, readPointer } from '../src/launcher.ts';
 import { managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { knownClientConfigs } from '../src/mcp-clients.ts';
 import {
@@ -84,17 +86,27 @@ function registrationPins(context: InstallContext): string[] {
   return ['--config-dir', configDir, '--state-dir', stateDir, '--data-dir', dataDir, '--secrets-dir', secretsDir];
 }
 
+/**
+ * A managed entry as the installer writes it (design 2026-10-16, U6): the product's stable launcher with `words` —
+ * the program on POSIX, Node's first word on Windows — never a versioned runtime.
+ */
+function launcherEntry(dataDir: string, name: string, node: string, words: readonly string[]) {
+  const { launcher } = launcherPaths(dataDir, name);
+  return process.platform === 'win32'
+    ? { command: node, args: [launcher, ...words] }
+    : { command: launcher, args: [...words] };
+}
+
 test('managed and local entries pin all four suite roots before mcp, without a downloads pin or config env', async () => {
   const data = tempDir();
   const home = tempDir();
   const installing = context(data, home);
   const product = pinnedProduct();
   const managed = await mcpInstall(installing, product, { client: 'json', apply: false, noVerify: true });
-  assert.deepEqual(managed.entry.args, [
-    managedRuntimeEntry(data, product.packageName, product.version),
-    ...registrationPins(installing),
-    'mcp',
-  ]);
+  assert.deepEqual(
+    { command: managed.entry.command, args: managed.entry.args },
+    launcherEntry(data, 'example', process.execPath, [...registrationPins(installing), 'mcp']),
+  );
   assert.equal(managed.entry.env.AGENT_COMMS_CONFIG_DIR, undefined);
   assert.ok(!managed.entry.args.includes('--downloads-dir'));
 
@@ -218,8 +230,14 @@ test('--print builds the managed entry without installing anything', async () =>
     narrowingOf: () => ({}),
   };
   const result = await mcpInstall(context(data, home), product, { client: 'json', apply: false });
-  assert.equal(result.entry.args[0], managedRuntimeEntry(data, product.packageName, '0.0.1'));
-  // Only the record of what was handed out, which `prune` reads: no runtime.
+  assert.deepEqual(
+    { command: result.entry.command, args: result.entry.args },
+    launcherEntry(data, 'no-such-package-for-tests', process.execPath, [
+      ...registrationPins(context(data, home)),
+      'mcp',
+    ]),
+  );
+  // Only the record of what was handed out, which `prune` reads: no runtime, and no launcher or pointer either.
   assert.deepEqual(readdirSync(data), [basename(handedOutRuntimesPath(data))], 'nothing was installed');
   assert.equal(result.verified, false);
   assert.match(result.verifyDetail ?? '', /--print installs nothing/);
@@ -284,15 +302,18 @@ test('a managed events install writes its agent-events shim from the service dec
   assert.equal(result.shimFailure, undefined, 'the locator reads the service declaration, so the shim can be written');
   assert.equal(result.shim?.status, 'created', 'the events service gets its CLI shim');
   assert.equal(result.shim?.path, join(home, '.local', 'bin', 'agent-events'), 'named for the binary it declares');
-  assert.match(
-    readFileSync(result.shim?.path ?? '', 'utf8'),
-    new RegExp(managedRuntimeEntry(data, product.packageName, product.version).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-    'and it starts the CLI of the events runtime the entry starts',
+  // It starts the events service's stable launcher, as the entry does, and that starts the events runtime.
+  const { launcher } = launcherPaths(data, 'events-daemon');
+  assert.equal(readFileSync(result.shim?.path ?? '', 'utf8').split('\n')[2], `exec '${launcher}' "$@"`);
+  assert.equal(
+    (await readPointer(data, 'events-daemon'))?.current,
+    managedRuntimeDir(data, product.packageName, product.version),
+    'and the launcher starts the CLI of the events runtime this install put in place',
   );
 });
 
 test(
-  'a managed shim executes exactly the program and entry resolved by the CLI locator',
+  'a managed shim starts the stable launcher, which executes exactly the program and entry the CLI locator resolves',
   process.platform === 'win32'
     ? { skip: 'WINDOWS_SKIP: this test creates a POSIX PATH executable and shell shim' }
     : {},
@@ -321,6 +342,11 @@ test(
       }),
     );
 
+    writeFileSync(
+      join(packageDir, 'dist', 'cli.mjs'),
+      'process.stdout.write("ran " + process.argv.slice(2).join(" "));\n',
+    );
+
     const result = await withManagedShim(
       installing,
       product,
@@ -341,16 +367,25 @@ test(
     assert.equal(located.ok, true, 'the managed runtime locates its own declared CLI');
     if (!located.ok) return;
     const quote = (word: string) => `'${word.replaceAll("'", `'"'"'`)}'`;
+    const { launcher } = launcherPaths(data, 'example');
     const execLine = readFileSync(result.shim?.path ?? '', 'utf8').split('\n')[2];
-    assert.equal(
-      execLine,
-      `exec ${located.command.words.map(quote).join(' ')} "$@"`,
-      'the shim content uses the locator result rather than the PATH-visible Node from the MCP registration',
+    assert.equal(execLine, `exec ${quote(launcher)} "$@"`, 'the shim starts the launcher the registration starts');
+    const [program, cli] = located.command.words;
+    assert.match(
+      readFileSync(launcher, 'utf8'),
+      new RegExp(`^node=${quote(program ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      'the launcher runs the locator’s program, not the PATH-visible Node stand-in',
     );
     assert.notEqual(
-      located.command.words[0],
-      result.entry.command,
-      'the fixture proves the registration Node and the locator program are different',
+      program,
+      pathNode,
+      'the fixture proves the PATH-visible node and the locator program are different',
+    );
+    assert.equal(realpathSync(entry), cli, 'and the CLI the locator checked is the one the launcher starts');
+    assert.equal(
+      spawnSync(result.shim?.path ?? '', ['a', 'b c'], { encoding: 'utf8' }).stdout,
+      'ran a b c',
+      'run, the shim starts that CLI with that program and the words it was given — the stand-in would print nothing',
     );
   },
 );
@@ -381,15 +416,19 @@ test(
       product,
       await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
     );
-    assert.equal(result.entry.command, link, 'the registration names the link PATH finds, as it always has');
+    // The registration and the shim both start the stable launcher, and the launcher names the link PATH finds.
+    const { launcher } = launcherPaths(data, 'example');
+    assert.equal(result.entry.command, launcher, 'the registration starts the launcher');
     const source = readFileSync(result.shim?.path ?? '', 'utf8');
-    const entry = realpathSync(managedRuntimeEntry(data, product.packageName, product.version));
     assert.equal(
       source.split('\n')[2],
-      `exec '${link}' '${entry}' "$@"`,
-      'the shim execs the same link the registration starts, with the checked runtime entry',
+      `exec '${launcher}' "$@"`,
+      'the shim starts the launcher the registration does',
     );
+    const started = readFileSync(launcher, 'utf8');
+    assert.match(started, new RegExp(`^node='${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`, 'm'));
     assert.ok(!source.includes(real), `the shim never names the file the link resolves to: ${source}`);
+    assert.ok(!started.includes(real), `nor does the launcher: ${started}`);
   },
 );
 
@@ -446,7 +485,7 @@ test('a shim failure after registration is reported as partial success with repa
   );
   assert.match(
     readFileSync(join(home, '.cursor', 'mcp.json'), 'utf8'),
-    /agentcomms/,
+    /launch[\\/]+example/,
     'the result reflects that the client config was already written',
   );
 
@@ -713,7 +752,11 @@ test('prune keeps a runtime it printed an entry for, because where that entry we
   };
   // `--client json` prints; the entry is pasted wherever the person keeps it, which no scan reaches.
   const printed = await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
-  assert.equal(printed.entry.args[0], managedRuntimeEntry(data, SLACK.packageName, '0.0.1'));
+  assert.deepEqual(
+    { command: printed.entry.command, args: printed.entry.args },
+    launcherEntry(data, 'slack', process.execPath, [...registrationPins(context(data, home)), 'mcp']),
+    'what is printed starts the launcher; the runtime it was printed for is kept by the record',
+  );
 
   const result = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
   assert.deepEqual(result.removed, []);
@@ -779,8 +822,23 @@ test(
     };
     const installed = await mcpInstall(installing, slack, { client: 'claude-code', noVerify: true });
     assert.equal(installed.method, 'cli');
-    assert.match(readFileSync(config, 'utf8'), /0\.0\.1-slack/, 'the stand-in wrote the entry where it was told');
+    assert.match(readFileSync(config, 'utf8'), /launch[\\/]+slack/, 'the stand-in wrote the entry where it was told');
+    // That entry starts the stable launcher, which starts the runtime: kept, whichever configs this shell reads.
+    const launched = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+    assert.deepEqual(launched.removed, []);
+    assert.equal(launched.kept.find((item) => item.version === '0.0.1')?.reason, 'the stable launcher starts it');
 
+    // An entry from a release before the launcher names its runtime by path, and no launcher points there: the config
+    // the install recorded is read for it all the same.
+    writeFileSync(
+      config,
+      JSON.stringify({
+        mcpServers: {
+          slack: { command: 'node', args: [managedRuntimeEntry(data, SLACK.packageName, '0.0.1'), 'mcp'] },
+        },
+      }),
+    );
+    rmSync(launcherPaths(data, 'slack').pointer);
     const kept = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
     assert.deepEqual(kept.removed, [], 'a runtime the work account still starts was removed');
     const reason = kept.kept.find((item) => item.version === '0.0.1')?.reason ?? '';

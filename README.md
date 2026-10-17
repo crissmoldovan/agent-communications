@@ -107,15 +107,15 @@ the channel servers and the local events service (`comms_server_install`), bring
 policy (`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent
 screen, and a server it registers appears only once the client is restarted.
 
-**It keeps itself up to date.** Once a day the machine asks npm whether a newer release is out; when one is, every
-server and command stops first — "Hang on a minute, there's an update. Let's update first." — and your agent asks
-whether to update now (`comms_update`) or not until tomorrow (`comms_update` with `later`, which you approve). A
-command at a terminal asks you there; anywhere else the stop names this installation's own `update` and
-`update --later` commands, to run exactly as given (with core installed globally, `agentcomms update` and
-`agentcomms update --later` are the same). A server this machine does not register itself — the Claude Code plugin's,
-the Gemini extension's — is updated where it was installed. `agentcomms update --auto off` turns the check off for one
-machine; `CI`, and `AGENT_COMMS_UPDATE_CHECK=off`, skip it. [Upgrading](docs/upgrading.md#the-daily-check) has the
-details.
+**It keeps itself up to date, and never stops you for it.** Once a day the machine asks npm whether a newer release is
+out; when one is, a server's first result says so in one line, and a command once a day on stderr, and every tool and
+command carries on. On `auto`, the default, one yes sets up a background job that installs a release whose provenance
+verifies, three days after it is out — `comms_update` with `backgroundJob: "on"`, or
+`agentcomms update --background-job on`; it takes effect when each client restarts. Choose `every-14-days` or `never`
+with `agentcomms update --level`, pause the notices for 1, 7 or 14 days with `--pause`, or update by hand with
+`comms_update`. A server this machine does not register itself — the Claude Code plugin's, the Gemini extension's —
+is updated where it was installed. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
+[Upgrading](docs/upgrading.md#the-daily-check) has the details.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
 `chat` change policy your yes in the conversation approves it; under `confirm` you run, in your own terminal, the
@@ -133,6 +133,17 @@ how to add it to the current shell and does not edit a profile. Windows shims ar
 makes `cmd.exe` re-parse arguments and can turn metacharacters into commands. On Windows, use the full-path command
 or the labelled PowerShell `&` line the result provides.
 [Core MCP tool reference](docs/reference/core-mcp-tools.md).
+
+**Core's install verifies what it fetches.** A managed `mcp install` run by core — `comms_server_install`, or
+`npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal — verifies the Sigstore
+provenance of the release it fetches from npm, as an update does, before the preview and again at your yes, and
+registers it only once npm has installed exactly that tarball; a runtime already on the machine it registers on only
+once that runtime is shown to be that tarball. A channel's own `mcp install`
+(`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
+running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
+verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the
+client fetches the package from npm each time it starts it, unverified, where the managed launcher's runtime was
+verified. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
 
 ### Or package by package
 
@@ -373,7 +384,7 @@ cannot drift from what the software does.
 |---|---|
 | [`agentcomms-events`](skills/agentcomms-events/SKILL.md) | Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions. |
 | [`comms-onboarding`](skills/comms-onboarding/SKILL.md) | Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. Symptoms: 'set up my email and Slack', 'install agent-communications', 'connect Gmail and Slack to Claude', 'onboard me', 'set this up on my other computer'. Not for one account's settings once it works — gmail-setup and slack-setup do those. |
-| [`comms-update`](skills/comms-update/SKILL.md) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a tool answering 'Hang on a minute, there's an update. Let's update first.' (UPDATE_REQUIRED), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings. |
+| [`comms-update`](skills/comms-update/SKILL.md) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings. |
 | [`gmail-attachments`](skills/gmail-attachments/SKILL.md) | Find files people sent, save them where the person says — Downloads, the current folder, or a folder they name — and attach a local file to a draft. Symptoms: 'find the invoice Sam sent', 'download the attachments from that thread', 'save those PDFs', 'attach the contract to that draft', 'why won't it attach that file'. Not for writing or sending the message — gmail-compose writes drafts and gmail-send sends them. |
 | [`gmail-compose`](skills/gmail-compose/SKILL.md) | Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send. Symptoms: 'draft a reply to Sam', 'write back to that email', 'forward this to accounts', 'make that draft shorter'. Not for sending — gmail-send does that. |
 | [`gmail-contacts`](skills/gmail-contacts/SKILL.md) | Find somebody's address and who they are, across saved contacts, people written to before, and past mail — showing every candidate with where it came from so the user chooses. Symptoms: 'what's X's email', 'do we have an address for her', 'which of these two Sams is it', 'when did I last hear from him'. Not for writing to them — gmail-compose does that. |

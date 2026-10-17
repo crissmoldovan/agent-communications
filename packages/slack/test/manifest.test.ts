@@ -4,9 +4,11 @@ import { FILE_DOWNLOAD, methodRule, scopesFor, writeMethods } from '../src/api/m
 import {
   BOT_SCOPES,
   botScopesForMode,
+  buildAgentManifest,
   buildManifest,
   NEVER_REQUESTED,
   READ_SCOPES,
+  renderAgentManifest,
   renderManifest,
   scopesForMode,
 } from '../src/manifest.ts';
@@ -176,4 +178,39 @@ test('scopes are only ever issued for a mode that exists', () => {
   // The type allows two values; the type is erased at runtime, and a cast upstream can deliver anything.
   assert.throws(() => scopesForMode('raed' as never), /neither "read" nor "send"/);
   assert.throws(() => scopesForMode(undefined as never), /neither "read" nor "send"/);
+});
+
+// ── The organisation's agent app (CUE-493) ─────────────────────────────────────────────────────────────────────────
+
+test('the agent app is a bot and nothing else: the four posting scopes, no user scope, no redirect, no rotation', () => {
+  /*
+   * One app per organisation, installed once by its administrator, whose bot token each member pastes with
+   * `workspace bot`. Nobody signs in through it — so no user scope and no redirect — and nothing here could renew a
+   * pasted token, so its rotation is off: `workspace bot` refuses a token that rotates.
+   */
+  const manifest = buildAgentManifest();
+  assert.deepEqual(manifest.oauth_config.scopes, { bot: [...BOT_SCOPES].sort() });
+  assert.equal('user' in manifest.oauth_config.scopes, false, 'the agent app asks for a user scope');
+  assert.equal('redirect_urls' in manifest.oauth_config, false, 'the agent app has a redirect');
+  assert.equal('pkce_enabled' in manifest.oauth_config, false, 'the agent app has nothing to sign in with');
+  assert.ok(manifest.features.bot_user, 'the agent app has no bot user');
+  assert.equal(manifest.features.bot_user.always_online, false);
+  assert.deepEqual(manifest.settings, {
+    org_deploy_enabled: false,
+    socket_mode_enabled: false,
+    token_rotation_enabled: false,
+  });
+  for (const scope of NEVER_REQUESTED) {
+    assert.equal(JSON.stringify(manifest).includes(`"${scope}"`), false, `the agent app asks for ${scope}`);
+  }
+  // Its own name, which the administrator changes to the organisation's: never one of this suite's commands.
+  assert.ok(manifest.display_information.name.length <= 35, 'Slack names an app in at most 35 characters');
+  assert.doesNotMatch(manifest.display_information.name, /agent-slack|agentcomms/);
+  assert.ok(manifest.display_information.description.length <= 140, 'Slack describes an app in at most 140');
+});
+
+test('the agent manifest a person pastes is valid JSON, and round-trips', () => {
+  const text = renderAgentManifest();
+  assert.equal(text.endsWith('\n'), true);
+  assert.deepEqual(JSON.parse(text), buildAgentManifest());
 });

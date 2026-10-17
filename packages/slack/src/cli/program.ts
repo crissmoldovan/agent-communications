@@ -1,7 +1,6 @@
 import {
   agentMarker,
   answerDownloadAtTerminal,
-  approvalsOf,
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
@@ -9,10 +8,9 @@ import {
   cliHandoffs,
   colorEnabled,
   commandPathOf,
-  DOWNLOAD_CLAIM,
   downloadAtTerminal,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChangeAtTerminal,
   handoffSentence,
@@ -39,7 +37,7 @@ import {
   serverPruneChange,
   terminalUpdateHooks,
   UPDATE_CHECK_CHILD_COMMAND,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   waitForApproval,
   wholeNumber,
   writeError,
@@ -53,7 +51,7 @@ import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
-import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
+import { type InstallMode, parseMode, renderAgentManifest, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
@@ -110,6 +108,7 @@ import { askHidden, readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
   renderAgentIcon,
+  renderAgentManifestHelp,
   renderAppCreated,
   renderAppUpdated,
   renderAppUpdateNeeded,
@@ -256,8 +255,7 @@ Getting started — run these with this CLI:
   read <channel> --workspace acme/slack
 
 Exit codes: 0 ok · 1 unexpected · 10 a post or a change was refused or needs approval, or a
-sign-in is still waiting · 11 an update is out: update first, or put it off, with the commands
-it names · 64 usage · 65 bad data · 66 not found · 69 provider or secret store unavailable · 75
+sign-in is still waiting · 64 usage · 65 bad data · 66 not found · 69 provider or secret store unavailable · 75
 temporary (retry later) · 77 sign-in or permission needed · 78 configuration problem.`,
     )
     .exitOverride();
@@ -312,46 +310,26 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   let softExit: number | null = null;
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
-    // `sign-in-listen` too: it is the listener a sign-in started, not a command anybody types, and stopping it would
-    // break the sign-in the person is in the middle of. So is the update check a command handed on (#48).
-    if (exemptFromUpdateGate(path, ['sign-in-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
+    // `sign-in-listen` too: it is the listener a sign-in started, not a command anybody types, and a line on its
+    // stderr would say nothing to anybody. So is the update check a command handed on (#48).
+    if (exemptFromUpdateNotice(path, ['sign-in-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-slack',
-          channel: 'slack',
-          running: VERSION,
-          output: output(),
-          noInput: false,
-          streams,
-          approvals: approvalsOf(command),
-          // A download's `--choice` is the question the person just answered: held to that kind, as the tool's is.
-          // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-          approvalClaim:
-            path.join(' ') === 'files download'
-              ? DOWNLOAD_CLAIM
-              : path.join(' ') === 'approval wait'
-                ? { lookup: true }
-                : undefined,
-          ...terminalUpdateHooks(core, env, { channel: 'slack', output: output(), streams }),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'slack',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+      ...terminalUpdateHooks(core, env),
+    });
   });
 
   const act =
@@ -359,10 +337,6 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       const interrupted = new AbortController();
       let foreground: { flowId: string; settled: Promise<unknown> } | undefined;
       const context = new SlackContext({
@@ -451,7 +425,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('manifest')
     .description('the Slack app to create, as a manifest you can paste')
-    .addOption(modeOption())
+    .addOption(
+      new Option(
+        '--mode <mode>',
+        "how much access to ask Slack for; `agent` for an organisation's bot-only agent app, whose token members paste",
+      )
+        .choices(['read', 'send', 'agent'])
+        .default('read'),
+    )
     .option(
       '--port <port>',
       'the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app',
@@ -465,7 +446,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
         const result = await manifestFor(context, {
-          mode: String(flags.mode) as InstallMode,
+          mode: String(flags.mode),
           port: flags.port,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
           ...(flags.withClientSecret === true ? { pkce: false } : {}),
@@ -474,6 +455,9 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           result,
           output(),
           (data) => {
+            // The organisation's agent app: its own steps, and its own manifest, with no port in either.
+            if (data.mode === 'agent')
+              return `${renderAgentManifestHelp(data, options.color)}\n\n${renderAgentManifest()}`;
             const pkce = data.manifest.oauth_config.pkce_enabled;
             // The PKCE app's text is this command's own, as it was; the client-secret app's is the operation's steps.
             const help = pkce
@@ -1012,6 +996,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           offline: flags.offline === true,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
           probe: deps.probe,
+          session: { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);

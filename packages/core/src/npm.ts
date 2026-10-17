@@ -87,6 +87,14 @@ export async function npmLatestVersion(
   return latest;
 }
 
+/** What a release's manifest declares under `agentcommsRelease` (design 2026-10-16, U5, U7). */
+export interface ReleaseDeclaration {
+  /** `agentcommsRelease.security: true`: the release fixes a security problem. */
+  security: boolean;
+  /** `agentcommsRelease.needsDecision`: a migration, or a changed safety default, that waits for the person. */
+  needsDecision: boolean;
+}
+
 /**
  * A command's exit status and output, given up on after `timeoutMs`. npm starts programs of its own by name — scripts,
  * `node-gyp`, a shell — so on Windows it is told never to take one from its current folder.
@@ -157,11 +165,14 @@ export async function npmGlobalPackages(
   return found;
 }
 
-/** `npm install -g <spec>`, through the npm beside this Node. Rejects with the end of what npm said when it fails. */
+/**
+ * `npm install -g <spec>`, through the npm beside this Node, running no package's install script: one would run as the
+ * person with nothing to check what npm installed against. Rejects with the end of what npm said when it fails.
+ */
 export async function npmInstallGlobal(env: NodeJS.ProcessEnv, spec: string): Promise<void> {
   const npmCli = await findNpmCli();
   const { code, stderr } = await capture(
-    [npmCli, 'install', '--global', '--no-audit', '--no-fund', '--no-update-notifier', spec],
+    [npmCli, 'install', '--global', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', spec],
     env,
     10 * 60_000,
   );

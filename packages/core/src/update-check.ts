@@ -1,18 +1,16 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
-import { gatedChangeAtTerminal } from './change-flow.ts';
 import { channelServer } from './channel-servers.ts';
-import { type OutputOptions, type Streams, writeResult } from './cli-runtime.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
 import { npmLatestVersion } from './npm.ts';
-import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
+import { releaseFactsReader, type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
-import { renderUpdate } from './render.ts';
 import { childEnvironment } from './system-programs.ts';
 import { TERMINAL_CHECK_WAIT_MS, type TerminalUpdateHooks } from './update-gate.ts';
+import type { ReleaseVerifier } from './update-release.ts';
 import {
   changeUpdateCheck,
   EMPTY_UPDATE_CHECK,
@@ -22,7 +20,8 @@ import {
   updateCheckEnabled,
   updateCheckUnderway,
 } from './update-state.ts';
-import { isPrerelease, isVersion } from './versions.ts';
+import { VERSION } from './version.ts';
+import { isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * The daily update check's checker: the half that asks the registry (design 2026-09-28 §1).
@@ -37,7 +36,7 @@ import { isPrerelease, isVersion } from './versions.ts';
  * `lastChecked` is written when the ask is over, so an ask cut short — a command the person interrupted, a server
  * whose client closed it — does not use up the day: its claim runs out (`UPDATE_CHECK_LEASE_MS`) and the next process
  * asks. An ask that fails — offline, a registry that does not answer — is recorded as the day's ask, keeps the last
- * result, and stops nothing. It never throws.
+ * result, and changes nothing else. It never throws.
  *
  * Nothing here gives up on the registry sooner than the registry's own timeout: a command at a terminal stops
  * *waiting* after about three seconds and goes on, and the check carries on beside it — in a detached child of its
@@ -61,7 +60,7 @@ export interface UpdateCheckOutcome {
   record: UpdateCheckRecord;
 }
 
-/** The check, when it is on and due: once in 24 hours per machine, recorded in `update-check.json`. */
+/** The check, when it is on and due — once a day on `auto`, once in 14 days on `every-14-days` — per machine. */
 export async function checkForUpdates(
   core: Core,
   env: NodeJS.ProcessEnv,
@@ -69,8 +68,9 @@ export async function checkForUpdates(
 ): Promise<UpdateCheckOutcome> {
   const stateDir = core.paths.stateDir;
   try {
-    if (!(await updateCheckEnabled(core, env)).on) return { asked: false, record: await readUpdateCheck(stateDir) };
-    const claimedAt = await claimUpdateCheck(core, options);
+    const enabled = await updateCheckEnabled(core, env);
+    if (!enabled.on) return { asked: false, record: await readUpdateCheck(stateDir) };
+    const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return { asked: false, record: await readUpdateCheck(stateDir) };
     await askUnderClaim(core, env, claimedAt, options);
     return { asked: true, record: await readUpdateCheck(stateDir) };
@@ -92,12 +92,15 @@ export async function checkForUpdates(
  */
 export async function claimUpdateCheck(
   core: Core,
-  options: { now?: (() => Date) | undefined } = {},
+  options: { now?: (() => Date) | undefined; intervalMs?: number | undefined } = {},
 ): Promise<string | null> {
   const now = options.now ?? (() => new Date());
+  // Due by the machine's level: a day on `auto`, 14 days on `every-14-days` (design 2026-10-16, U2).
+  const enabled = options.intervalMs === undefined ? await updateCheckEnabled(core, {}).catch(() => null) : null;
+  const intervalMs = options.intervalMs ?? (enabled?.on ? enabled.intervalMs : undefined);
   const claim = await changeUpdateCheck<string>(core.paths.stateDir, (record) => {
     const claimedAt = now();
-    if (!updateCheckDue(record, claimedAt) || updateCheckUnderway(record, claimedAt)) return null;
+    if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
     const checking = claimedAt.toISOString();
     return { record: { ...record, checking }, result: checking };
   }).catch(() => null);
@@ -143,24 +146,55 @@ async function ask(
     latest = await (deps.latestVersion ?? ((name: string) => npmLatestVersion(name, { env })))(CORE_PACKAGE);
     if (!isVersion(latest))
       throw new Error(
-        `the npm registry names ${JSON.stringify(String(latest)).slice(0, 60)} as the latest release, which is not a version`,
+        // What it named is not repeated: the registry's answer can be anything at all.
+        'the npm registry names something that is not a version as the latest release',
       );
   } catch (error) {
     await settle({ lastError: reason(error) });
     return;
   }
-  if (isPrerelease(latest)) {
-    // Recorded as the registry said it, and never counted: nobody is stopped for a release candidate.
-    await settle({ latest, behind: null, current: null, lastError: null });
+  if (!isPlainVersion(latest)) {
+    // Not a release: a prerelease's words or build metadata are the registry's text, so nothing of it is recorded or
+    // said, and nobody is told of it (re-review of 0.20.0, severity 6). The version is not repeated.
+    await settle({
+      latest: null,
+      behind: null,
+      current: null,
+      lastError:
+        'the npm registry names something that is not a plain release (MAJOR.MINOR.PATCH) as the latest: it is not counted',
+    });
     return;
   }
+  // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — read from
+  // the same registry the number came from, each counted only once verified, where this process can verify: core's
+  // hands in its verifier, a channel's has none. Read first for the releases since this one, so a machine that cannot
+  // be read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
+  // registry hands in its own, or none is read.
+  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps);
+  const release =
+    read === null
+      ? null
+      : await read(CORE_PACKAGE, latest, VERSION).then(
+          (facts) => ({ version: latest, security: facts.security, needsDecision: facts.needsDecision }),
+          () => null,
+        );
   try {
-    // `comms_update`'s own check, handed the one number: it records what it finds, by this clock, and so ends the ask
-    // — under this ask's claim, so only while the claim is still its own.
-    await updateCheck(core, env, { ...deps, latestVersion: async () => latest, now: options.now }, options.claimedAt);
+    // `comms_update`'s own check, handed the one number and the reader: it records what it finds, by this clock, and
+    // so ends the ask — under this ask's claim, so only while the claim is still its own.
+    await updateCheck(
+      core,
+      env,
+      {
+        ...deps,
+        latestVersion: async () => latest,
+        releaseFacts: read,
+        now: options.now,
+      },
+      options.claimedAt,
+    );
   } catch (error) {
     // The registry answered, and something here could not be read: what is known is recorded, and the rest is not.
-    await settle({ latest, behind: null, current: null, lastError: reason(error) });
+    await settle({ latest, behind: null, current: null, lastError: reason(error), release });
   }
 }
 
@@ -169,7 +203,7 @@ async function ask(
 /**
  * The hidden command every CLI that asks the registry answers to — `agentcomms`, `agent-gmail`, `agent-slack`,
  * `agent-resend` — with the claim's time after it: the ask a command handed on (`terminalUpdateHooks`). Not in any
- * help, never stopped by the update gate, and nothing a person or an agent runs.
+ * help, never given the update notice, and nothing a person or an agent runs.
  */
 export const UPDATE_CHECK_CHILD_COMMAND = 'update-check-child';
 
@@ -297,10 +331,10 @@ export function updateCheckChildEnvironment(
 /**
  * The day's check at a terminal, handed on (#48). The command claims the check itself, as it always has, so only one
  * process asks — then starts this CLI again, detached, with the hidden command and the claim's time, and waits up to
- * the gate's three seconds for it to say the ask is over. After that it lets go of the child, which carries on alone,
+ * the notice's three seconds for it to say the ask is over. After that it lets go of the child, which carries on alone,
  * and the command's process ends when the command does: before, it lived until the ask was over — the registry's ten
  * seconds, then `npm ls`'s minute — and a `$(…)`, a pipe or an agent's shell waited with it. A fast answer is written
- * before the wait ends, and the gate reads the file after it, so it still stops the day's first command.
+ * before the wait ends, and the notice reads the file after it, so the day's first command still says so.
  *
  * The child holds none of the command's output — stdin, stdout and stderr ignored, only the IPC channel for its one
  * message — or whatever reads that output would wait for the child as it waited for the check. Detached, so a
@@ -312,17 +346,27 @@ export function updateCheckChildEnvironment(
 async function handUpdateCheckToChild(
   core: Core,
   env: NodeJS.ProcessEnv,
-  options: { now?: (() => Date) | undefined; entry?: UpdateCheckChildEntry | null | undefined },
+  options: {
+    now?: (() => Date) | undefined;
+    entry?: UpdateCheckChildEntry | null | undefined;
+    verifyRelease?: ReleaseVerifier | undefined;
+  },
 ): Promise<void> {
   const deadline = Date.now() + TERMINAL_CHECK_WAIT_MS;
   try {
-    // Switched off — `CI`, the switch, the machine's setting — nothing is claimed, and no child is started.
-    if (!(await updateCheckEnabled(core, env)).on) return;
-    const claimedAt = await claimUpdateCheck(core, { now: options.now });
+    // Switched off — `CI`, a switch, the level `never` — nothing is claimed, and no child is started.
+    const enabled = await updateCheckEnabled(core, env);
+    if (!enabled.on) return;
+    const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return;
     const entry = options.entry === undefined ? updateCheckChildEntry() : options.entry;
     const started = entry !== null && (await startUpdateCheckChild(entry, claimedAt, core.paths, env, deadline));
-    if (!started) await askUnderClaim(core, env, claimedAt, { now: options.now });
+    if (!started) {
+      await askUnderClaim(core, env, claimedAt, {
+        now: options.now,
+        ...(options.verifyRelease ? { deps: { verifyRelease: options.verifyRelease } } : {}),
+      });
+    }
   } catch {
     // The check never stops anything, a command least of all.
   }
@@ -387,6 +431,8 @@ export async function runUpdateCheckChild(
   core: Core,
   env: NodeJS.ProcessEnv,
   claimedAt: string | undefined,
+  /** Core's own child verifies what a release declares before it counts; a channel's has nothing to verify with. */
+  options: { verifyRelease?: ReleaseVerifier | undefined } = {},
 ): Promise<void> {
   if (claimedAt === undefined || !Number.isFinite(Date.parse(claimedAt))) {
     throw new CommsError('USAGE', `${UPDATE_CHECK_CHILD_COMMAND} takes the time of the claim it asks under`, {
@@ -397,7 +443,14 @@ export async function runUpdateCheckChild(
     });
   }
   try {
-    if ((await readUpdateCheck(core.paths.stateDir)).checking === claimedAt) await askUnderClaim(core, env, claimedAt);
+    if ((await readUpdateCheck(core.paths.stateDir)).checking === claimedAt) {
+      await askUnderClaim(
+        core,
+        env,
+        claimedAt,
+        options.verifyRelease ? { deps: { verifyRelease: options.verifyRelease } } : {},
+      );
+    }
   } finally {
     settled();
   }
@@ -413,19 +466,14 @@ function settled(): void {
 }
 
 /**
- * What a command at a terminal hands the update gate (`updateGateAtTerminal`): the check, and the update itself for
- * the person's "now" — its own preview and yes.
+ * What a command at a terminal hands the update notice (`updateNoticeAtTerminal`): the check.
  *
- * Every command but WhatsApp's is given these. WhatsApp's is given neither, and reads the file as it is.
+ * Every command but WhatsApp's is given it. WhatsApp's is given none, and reads the file as it is.
  */
 export function terminalUpdateHooks(
   core: Core,
   env: NodeJS.ProcessEnv,
   options: {
-    /** The command's channel, `gmail`, `core`: recorded on the update's approval when a person says "now". */
-    channel: string;
-    output: OutputOptions;
-    streams: Streams;
     /** Stand-ins for the registry and `npm ls`, for a test: the check is then asked in this process. */
     deps?: UpdateDeps | undefined;
     now?: (() => Date) | undefined;
@@ -434,7 +482,12 @@ export function terminalUpdateHooks(
      * test, one that cannot be started, or null for none, and the check is asked in this process instead.
      */
     childEntry?: UpdateCheckChildEntry | null | undefined;
-  },
+    /**
+     * Verifies what a release declares before the check counts it: core's CLI hands in its own. A channel's has none,
+     * and what it reads of a release's manifest counts for nothing.
+     */
+    verifyRelease?: ReleaseVerifier | undefined;
+  } = {},
 ): TerminalUpdateHooks {
   return {
     check: async () => {
@@ -443,22 +496,11 @@ export function terminalUpdateHooks(
         await checkForUpdates(core, env, { deps: options.deps, now: options.now });
         return;
       }
-      await handUpdateCheckToChild(core, env, { now: options.now, entry: options.childEntry });
-    },
-    update: async () => {
-      const result = await gatedChangeAtTerminal(core, updateChange(core, env, {}, options.deps), {
-        channel: options.channel,
-        env,
-        output: options.output,
-        rerun: ['update'],
-        rerunOn: 'core',
-        streams: options.streams,
+      await handUpdateCheckToChild(core, env, {
+        now: options.now,
+        entry: options.childEntry,
+        verifyRelease: options.verifyRelease,
       });
-      writeResult(result, options.output, (r) => renderUpdate(r, options.output.color), options.streams);
-      if (!result.ok) return 'failed';
-      // Every step worked and nothing was left for a person. Anything short of that — nothing it could do, or
-      // something left behind — is not "Updated": the gate says so, and the command still does not run.
-      return result.status === 'updated' && result.manual.length === 0 ? 'updated' : 'short';
     },
   };
 }

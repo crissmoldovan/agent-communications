@@ -353,3 +353,101 @@ test('a rule naming a person decides a reaction in a DM with them, a Grid person
   assert.equal(done.label, undefined, 'the rule for W0042 did not decide the reaction in the DM with them');
   assert.equal(calls(w, 'reactions.add')[0]?.authorization, USER);
 });
+
+// ── The workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────────
+
+/** This workspace's style set to `labelled`, as `label style` writes it once the person has said yes. */
+async function chooseLabelled(w: Labelled): Promise<void> {
+  await w.harness.core.config.update(
+    (config) => ({ ...config, agentLabel: { slackStyles: { [w.accountId]: 'labelled' } } }),
+    { consent: { kind: 'loosening-consent', paths: ['agentLabel.slackStyles'] } },
+  );
+}
+
+const LABELLED_REASON = 'you chose labelled posts for this workspace';
+
+test('labelled: a post in a public channel the app could post in goes with the person’s token, labelled as S3 says', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const { prepared } = await post(w, 'C1');
+  assert.equal(prepared.label?.route, 'fallback');
+  assert.equal(prepared.label?.reason, LABELLED_REASON);
+  const [sent, ...more] = calls(w, 'chat.postMessage');
+  assert.equal(more.length, 0);
+  assert.equal(sent?.authorization, USER, 'a labelled post went with the bot token');
+  assert.equal(sent?.params.has('username'), false);
+  assert.equal(sent?.params.has('icon_url'), false);
+  assert.equal(sent?.params.has('icon_emoji'), false);
+  const words = `${fallbackTextPrefix(PHRASE)}shipping in ten minutes`;
+  assert.equal(sent?.params.get('text'), words);
+  assert.deepEqual(JSON.parse(sent?.params.get('blocks') ?? '[]'), [
+    { type: 'section', text: { type: 'mrkdwn', text: words } },
+  ]);
+  assert.equal(w.world.messages[0]?.via, 'user');
+  // The bot token was never opened.
+  assert.equal(
+    w.fake.requests.some((request) => request.authorization === BOT),
+    false,
+  );
+});
+
+test('labelled: the post reads back as one message, with no mismatch and the label at its top (S3)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  await post(w, 'C1');
+  const { call } = await openWorkspace(w.context, 'acme', w.slack);
+  const [row, ...more] = (await readChannel(call, 'acme', 'C1')).rows;
+  assert.equal(more.length, 0);
+  assert.equal(row?.message.mismatch, false, 'a labelled post reads back as a mismatch');
+  assert.equal(row?.message.unrenderable, false);
+  assert.match(row?.message.enveloped ?? '', /Jo Example \(agent\): shipping in ten minutes/);
+});
+
+test('labelled: a reaction where the app could post is the person’s, unlabelled, and its preview says so (S6)', async (t) => {
+  const w = await labelled(t);
+  await chooseLabelled(w);
+  const done = await react(
+    w.context,
+    'acme',
+    { channel: 'C1', ts: '1700000000.000100', name: 'eyes' },
+    undefined,
+    w.slack,
+  );
+  assert.equal(calls(w, 'reactions.add')[0]?.authorization, USER, 'a labelled workspace’s reaction was the app’s');
+  assert.equal(w.world.reactions[0]?.via, 'user');
+  assert.equal(done.label?.identity, 'agent');
+  assert.equal(done.label?.route, 'person');
+  assert.equal(done.label?.reason, `a reaction carries no words to label, and ${LABELLED_REASON}`);
+  assert.match(done.label?.line ?? '', /^as you, with no label: a reaction carries no words/);
+
+  // Under `confirm`, the screen a person approves it at says the same.
+  const confirm = await labelled(t, { sendPolicy: 'confirm' });
+  await chooseLabelled(confirm);
+  let approvalId = '';
+  await assert.rejects(
+    react(confirm.context, 'acme', { channel: 'C1', ts: '1700000000.000100', name: 'eyes' }, undefined, confirm.slack),
+    (error: CommsError) => {
+      approvalId = String(error.details?.approvalId ?? '');
+      return error.code === 'APPROVAL_PENDING';
+    },
+  );
+  const screen = await beginApproval(confirm.context, approvalId, confirm.slack);
+  assert.match(screen.preview, /From: as you, with no label/);
+});
+
+test('labelled: an app message posted before the switch is still edited by the app, which posted it (S5)', async (t) => {
+  const w = await labelled(t);
+  const { posted } = await post(w, 'C1', 'shiping');
+  const ts = 'ts' in posted && posted.ts ? posted.ts : '';
+  await chooseLabelled(w);
+  await edit(w, ts, 'shipping');
+  const [updated] = calls(w, 'chat.update');
+  assert.equal(updated?.authorization, BOT, 'only the token that posted can change a message');
+  assert.equal(updated?.params.get('text'), 'shipping');
+  // A message the person posted is edited as the person, labelled, for the reason an edit always had.
+  const typedTs = typed(w, 'C1', '1700000000.000200');
+  const prepared = await edit(w, typedTs, 'shipping soon');
+  assert.equal(calls(w, 'chat.update')[1]?.authorization, USER);
+  assert.equal(calls(w, 'chat.update')[1]?.params.get('text'), `${fallbackTextPrefix(PHRASE)}shipping soon`);
+  assert.match(prepared.preview.postingAs, /an edit of a message you posted is made as you$/);
+});

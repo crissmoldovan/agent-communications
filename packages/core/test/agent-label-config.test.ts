@@ -188,6 +188,54 @@ test('L5: ConfigStore.update refuses a `me` rule added without consent, and take
   assert.deepEqual(agentLabelOf(await configs.load()).rules, [RULES[1], RULES[0]]);
 });
 
+test('Slack style (2026-10-17): app to labelled loosens, and its preview says what it trades', () => {
+  const before = config({});
+  const after = withLabel(before, { slackStyles: { [account.id]: 'labelled' } });
+  const { loosened, changes } = classifyChange(before, after);
+  assert.deepEqual(loosened, ['agentLabel.slackStyles']);
+  assert.deepEqual(changes, [
+    { path: 'agentLabel.slackStyles', before: { [account.id]: 'app' }, after: { [account.id]: 'labelled' } },
+  ]);
+  const preview = renderChangePreview({
+    approvalId: 'ap_00000000000000000000000000',
+    requiredPolicy: 'chat',
+    change: { summary: 'test', target: null, loosened: changes, settings: changedSettings(before, after), effects: [] },
+  });
+  assert.match(preview, /how the agent’s Slack messages look: acc_A{16} app → acc_A{16} labelled/);
+  assert.match(preview, /trades Slack’s own APP tag, which no one can fake, for words in the message/);
+  // A style this release cannot read is app, so labelled from it loosens just the same.
+  assert.deepEqual(classifyChange(config({ slackStyles: { [account.id]: 'fancy' } }), after).loosened, [
+    'agentLabel.slackStyles',
+  ]);
+});
+
+test('Slack style: labelled to app is a tightening, and the approval of a change still binds it', async () => {
+  const labelledBefore = config({ slackStyles: { [account.id]: 'labelled' } });
+  const back = withLabel(labelledBefore, {});
+  assert.deepEqual(classifyChange(labelledBefore, back).loosened, []);
+  assert.deepEqual(
+    changedSettings(labelledBefore, back).filter((setting) => setting.path.startsWith('agentLabel.')),
+    [{ path: 'agentLabel.slackStyles', before: { [account.id]: 'labelled' }, after: null }],
+  );
+  // The store: labelled waits for consent, and app is written at once.
+  const { store: configs, file } = store({});
+  await assert.rejects(
+    configs.update((c) => withLabel(c, { slackStyles: { [account.id]: 'labelled' } })),
+    (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      assert.equal(error.code, 'LOOSENING_REFUSED');
+      assert.match(error.message, /agentLabel\.slackStyles/);
+      return true;
+    },
+  );
+  await configs.update((c) => withLabel(c, { slackStyles: { [account.id]: 'labelled' } }), {
+    consent: { kind: 'loosening-consent', paths: ['agentLabel.slackStyles'] },
+  });
+  assert.deepEqual(agentLabelOf(await configs.load()).slackStyles, { [account.id]: 'labelled' });
+  await configs.update((c) => withLabel(c, {}));
+  assert.deepEqual((JSON.parse(readFileSync(file, 'utf8')) as { agentLabel?: unknown }).agentLabel, {});
+});
+
 test('Review focus 2: a rule naming an account that was renamed or removed is kept, and matches nothing', async () => {
   const { store: configs, file } = store({ rules: [RULES[0]] });
   // Renamed: the rule still names the old name, which no account has now.

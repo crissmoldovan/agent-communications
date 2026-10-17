@@ -1,105 +1,171 @@
 import type { GatedChange } from '../change-flow.ts';
-import { type Config, type UpdateCheckSetting, updateCheckSetting } from '../config.ts';
+import { type Config, isUpdateLevel, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
-import { changeUpdateCheck, countedLatest, localStamp, nextLocalMidnight, readUpdateCheck } from '../update-state.ts';
+import { removeUpdateJob, type UpdateJobDeps, updateJobContext, updateJobRemovalEffect } from '../update-job.ts';
+import {
+  changeUpdateCheck,
+  DEFAULT_PAUSE_DAYS,
+  organisationCaps,
+  PAUSE_DAYS,
+  pauseEnd,
+  securityRelease,
+} from '../update-state.ts';
+import { VERSION } from '../version.ts';
 
 /**
- * The daily update check's two settings, from a terminal (`agentcomms update --later`, `--auto on|off`) or a chat
- * (`comms_update` with `later` or `auto`): "not now", and the check itself on or off (design 2026-09-28 §2, §4).
+ * How this machine updates, from a terminal (`agentcomms update --level`, `--pause [days]`, `--resume`) or a chat
+ * (`comms_update` with `level`, `pause` or `resume`) — design 2026-10-16, U2 and U3.
  *
- * Both are changes a person approves, through the one flow every change goes through. "Not now" is the person's
- * decision, not the agent's: were it a free switch, an agent could clear the stop without asking and the stop would
- * do nothing. It is an effect — it writes the state file, not the configuration — so the approval binds its sentence,
- * the release and the midnight included. Turning the check off is a loosening of `defaults.updateCheck`, which
- * `ConfigStore.update` refuses without the person's consent; turning it on tightens, and applies at once.
+ * The level is a setting in `config.json`, changed through the one flow every change goes through: a level that
+ * updates less is a loosening `ConfigStore.update` refuses without the person's consent, and moving back applies at
+ * once. The pause is a plain answer with no approval: nothing is stopped any more, so a pause clears nothing, and it
+ * writes only the state file. Neither reads the registry: they are the reader's, so WhatsApp's command could offer
+ * them with no network code.
  *
- * Neither reads the registry: they are the reader's, so WhatsApp's command can offer "later" with no network code.
+ * They replace 0.18's "not now" (`later`), which put off a stop until midnight with an approval of its own, and `auto
+ * on|off`, which only switched the daily check.
  */
 
-export interface UpdateLaterResult {
-  /** When the stop comes back: the local midnight after the person said not now. Null when there was nothing to do. */
-  snoozedUntil: string | null;
-  /** The release put off, as the last check named it; null when no check has named one. */
-  latest: string | null;
-  /** False when it was already put off until then, and nothing was written. */
-  changed: boolean;
-}
-
-/**
- * "Not now": no server or command on this machine stops for the update until the next local midnight.
- *
- * `plan` reads the file on both calls, so a claim made after midnight — a different midnight in the sentence — or
- * for a newer release is a different change, and refused.
- */
-export function updateLaterChange(
-  core: Core,
-  options: { now?: (() => Date) | undefined } = {},
-): GatedChange<UpdateLaterResult> {
-  const now = options.now ?? (() => new Date());
-  let planned: { until: Date; latest: string | null; changed: boolean } | null = null;
-  return {
-    plan: async (config: Config) => {
-      const record = await readUpdateCheck(core.paths.stateDir);
-      const until = nextLocalMidnight(now());
-      const latest = countedLatest(record);
-      const changed = record.snoozedUntil === null || Date.parse(record.snoozedUntil) < until.getTime();
-      planned = { until, latest, changed };
-      const what = latest === null ? 'the daily update check' : `the update to ${latest}`;
-      return {
-        before: config,
-        after: config,
-        effects: changed
-          ? [
-              `puts off ${what} until midnight, local time (${localStamp(until)}): until then no server or command on this machine stops for it, and the first request after asks again`,
-            ]
-          : [],
-        summary:
-          latest === null
-            ? 'Skip the daily update check until tomorrow'
-            : `Skip the update to ${latest} until tomorrow`,
-      };
-    },
-    apply: async () => {
-      if (planned === null) throw new CommsError('UNEXPECTED', 'not now was applied before it was planned');
-      const { until, latest, changed } = planned;
-      if (changed) {
-        await changeUpdateCheck(core.paths.stateDir, (record) => ({
-          record: { ...record, snoozedUntil: until.toISOString() },
-        }));
-      }
-      const record = await readUpdateCheck(core.paths.stateDir);
-      return { snoozedUntil: record.snoozedUntil, latest, changed };
-    },
-  };
-}
-
-export interface UpdateAutoResult {
-  /** The machine's setting now. */
-  updateCheck: UpdateCheckSetting;
+export interface UpdateLevelResult {
+  /** The level this machine is set to now. */
+  level: UpdateLevel;
   /** False when it already was, and nothing was written. */
   changed: boolean;
+  /**
+   * An organisation profile's cap below that level (design 2026-10-16, U8): the level in force, and whose. A member
+   * can never update past it; the level set takes over if the cap is lifted.
+   */
+  cappedAt?: { level: UpdateLevel; organisation: string } | undefined;
 }
 
-/** The daily update check on or off for this machine, in `config.json`: off is a loosening, on applies at once. */
-export function updateAutoChange(core: Core, setting: UpdateCheckSetting): GatedChange<UpdateAutoResult> {
-  if (setting !== 'on' && setting !== 'off') {
-    throw new CommsError('USAGE', `"${String(setting)}" is not a setting of the daily update check; use on or off`);
-  }
-  const set = (config: Config): Config => ({ ...config, defaults: { ...config.defaults, updateCheck: setting } });
+/** The cap below `level` the configuration's organisations name, as a result says it; absent when there is none. */
+function cappedAt(config: Config, level: UpdateLevel): UpdateLevelResult['cappedAt'] {
+  const { cap } = organisationCaps(config);
+  const rank = (each: UpdateLevel) => UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(each);
+  return cap !== undefined && rank(cap.level) < rank(level)
+    ? { level: cap.level, organisation: cap.organisation }
+    : undefined;
+}
+
+/** `level` as the setting, and 0.18's switch beside it, so a release before 0.20 sharing the file reads the same. */
+function withLevel(config: Config, level: UpdateLevel): Config {
   return {
-    plan: (config: Config) => ({
-      before: config,
-      after: updateCheckSetting(config) === setting ? config : set(config),
-      summary:
-        setting === 'off'
-          ? 'Turn off the daily update check on this machine'
-          : 'Turn on the daily update check on this machine',
-    }),
+    ...config,
+    defaults: { ...config.defaults, updates: level, updateCheck: level === 'never' ? 'off' : 'on' },
+  };
+}
+
+const LEVEL_WORDS: Readonly<Record<UpdateLevel, string>> = {
+  auto: 'check daily, and install in the background once that is set up',
+  'every-14-days': 'check at most once every 14 days, and install only with your yes',
+  never: 'never check: update only by hand',
+};
+
+/**
+ * The machine's level: a level that updates less is a loosening, approved first; one that updates more is at once.
+ *
+ * At `every-14-days` and `never` nothing installs in the background, so moving to either also takes the background
+ * update job away (design 2026-10-16 U4, "Removing it"), and its preview says so. The job is unloaded and deleted
+ * before the level is written, so a refusal to write leaves the machine doing less, never more. `env` is where the
+ * job's home is read from; `job` is a test's runner and user.
+ */
+export function updateLevelChange(
+  core: Core,
+  level: string,
+  options: {
+    env?: NodeJS.ProcessEnv | undefined;
+    platform?: NodeJS.Platform | undefined;
+    job?: UpdateJobDeps | undefined;
+  } = {},
+): GatedChange<UpdateLevelResult> {
+  if (!isUpdateLevel(level)) {
+    throw new CommsError('USAGE', `"${String(level).slice(0, 40)}" is not a level; use ${UPDATE_LEVELS.join(', ')}`, {
+      hint: `auto checks daily; every-14-days at most once every 14 days; never asks npm nothing.`,
+    });
+  }
+  const job = () =>
+    updateJobContext(core, options.env ?? process.env, { platform: options.platform, deps: options.job });
+  let removesJob = false;
+  return {
+    plan: async (config: Config) => {
+      const same =
+        config.defaults.updates === level &&
+        config.defaults.updateCheck === withLevel(config, level).defaults.updateCheck;
+      const effect = level === 'auto' ? null : await updateJobRemovalEffect(job());
+      removesJob = effect !== null;
+      return {
+        before: config,
+        after: same ? config : withLevel(config, level),
+        ...(effect === null ? {} : { effects: [effect] }),
+        summary: `Update this machine: ${level} — ${LEVEL_WORDS[level]}`,
+      };
+    },
     apply: async (consent, request) => {
-      if (request.after === request.before) return { updateCheck: setting, changed: false };
-      await core.config.update(set, consent ? { consent } : {});
-      return { updateCheck: setting, changed: true };
+      const capped = cappedAt(request.before, level);
+      const said = capped === undefined ? {} : { cappedAt: capped };
+      if (removesJob) await removeUpdateJob(job());
+      if (request.after === request.before) {
+        return { level: updateLevelOf(request.before), changed: removesJob, ...said };
+      }
+      await core.config.update((config) => withLevel(config, level), consent ? { consent } : {});
+      return { level, changed: true, ...said };
     },
   };
+}
+
+export interface UpdatePauseResult {
+  /** How long it was asked for. */
+  days: number;
+  /** When it ends: at most 14 days from now. */
+  pausedUntil: string;
+  /** A security fix waiting now, which a pause never holds; null when there is none. */
+  security: string | null;
+}
+
+/**
+ * Holds notices — and, once Track D's background run exists, background installs — for the whole machine, for 1, 7
+ * or 14 days: 7 when no length is given. A new pause replaces the one before. A security fix is never held.
+ */
+export async function updatePause(
+  core: Core,
+  options: { days?: number | undefined; now?: (() => Date) | undefined } = {},
+): Promise<UpdatePauseResult> {
+  const days = options.days ?? DEFAULT_PAUSE_DAYS;
+  if (!PAUSE_DAYS.includes(days)) {
+    throw new CommsError(
+      'USAGE',
+      `a pause is ${PAUSE_DAYS.join(', ').replace(/, (\d+)$/, ' or $1')} days, not ${String(days)}`,
+      {
+        hint: `Pause for 1, 7 or 14 days; 7 when no length is given.`,
+      },
+    );
+  }
+  const now = (options.now ?? (() => new Date()))();
+  const until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  const { record } = await changeUpdateCheck(core.paths.stateDir, (current) => ({
+    record: { ...current, pausedAt: now.toISOString(), pausedUntil: until, snoozedUntil: until },
+  }));
+  return { days, pausedUntil: until, security: securityRelease(record, VERSION) };
+}
+
+export interface UpdateResumeResult {
+  /** False when no pause held, and nothing was changed. */
+  resumed: boolean;
+}
+
+/** Ends a pause at once. */
+export async function updateResume(
+  core: Core,
+  options: { now?: (() => Date) | undefined } = {},
+): Promise<UpdateResumeResult> {
+  const now = (options.now ?? (() => new Date()))();
+  const { result } = await changeUpdateCheck<boolean>(core.paths.stateDir, (current) => {
+    if (current.pausedAt === null && current.pausedUntil === null) return null;
+    const held = pauseEnd(current, now) !== null;
+    // The mirror an earlier release reads goes with it, when it was the pause's.
+    const snoozedUntil = current.snoozedUntil === current.pausedUntil ? null : current.snoozedUntil;
+    return { record: { ...current, pausedAt: null, pausedUntil: null, snoozedUntil }, result: held };
+  });
+  return { resumed: result === true };
 }

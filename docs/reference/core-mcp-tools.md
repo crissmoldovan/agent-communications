@@ -136,7 +136,7 @@ Report or change which local files may be attached to a draft, an email or a pos
 
 ### `comms_label`
 
-Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of `word`, `name`, `addRule`, `removeRule`, `icon`. A new word, name or icon, a rule `as: "me"`, and removing an `agent` rule are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule `as: "agent"`, or removing a `me` rule, labels more and applies at once. Add a `me` rule only when the person asked for that.
+Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of `word`, `name`, `addRule`, `removeRule`, `icon`, `style`. A new word, name or icon, a rule `as: "me"`, removing an `agent` rule, and a Slack workspace's `style` set to `labelled` are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule `as: "agent"`, removing a `me` rule, or a style back to `app`, applies at once. Add a `me` rule, or choose `labelled`, only when the person asked for that.
 
 *writes*
 
@@ -147,6 +147,7 @@ Report or change how what an agent sends is labelled: the person's name and a wo
 | `addRule` | object | no | who a kind of message appears to come from, on one account |
 | `removeRule` | object | no | a rule to take away, as it is listed |
 | `icon` | object | no | the icon of the agent’s Slack posts in one workspace |
+| `style` | object | no | how an agent’s messages look in one Slack workspace |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_orgs_list`
@@ -243,7 +244,7 @@ Remove a declared server’s managed runtimes that no client config names, no pr
 
 ### `comms_update`
 
-Bring this machine to the latest published release. `check: true` reads the npm registry and this machine and returns what is behind — `{ latest, behind, upToDate, unpinned, unreadable }` — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of core, Gmail, Resend, Slack or WhatsApp registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune.
+Bring this machine to the latest published release. `check: true` reads the npm registry and this machine and returns what is behind — `{ latest, behind, upToDate, unpinned, moves, unreadable }`, `moves` being the registrations the next update moves onto the stable launcher — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of core, Gmail, Resend, Slack or WhatsApp registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. `rollback: true` switches every stable launcher back to the release before, also a change the person approves.
 
 *writes*
 
@@ -251,8 +252,11 @@ Bring this machine to the latest published release. `check: true` reads the npm 
 |---|---|---|---|
 | `check` | boolean | no | only report what is behind and what is up to date; change nothing |
 | `noVerify` | boolean | no | do not start each registered server to check that it answers |
-| `later` | boolean | no | not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId |
-| `auto` | `on` \\| `off` | no | turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once |
+| `level` | `auto` \\| `every-14-days` \\| `never` | no | how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once |
+| `pause` | any | no | hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held |
+| `resume` | boolean | no | end a pause at once |
+| `backgroundJob` | `on` \\| `off` | no | set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once |
+| `rollback` | boolean | no | switch every stable launcher back to the release it started before its last switch, editing no client configuration. A change the person approves: the first call returns its preview and an approvalId |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_names_migrate`

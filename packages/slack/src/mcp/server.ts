@@ -4,7 +4,6 @@ import {
   CommsError,
   changeToolResult,
   checkForUpdates,
-  DOWNLOAD_CLAIM,
   type GatedChange,
   gatedChange,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
@@ -12,7 +11,7 @@ import {
   retiredOutHint,
   strictToolArguments,
   toCommsError,
-  updateToolGate,
+  updateToolNotice,
   waitCallOptions,
   waitForApproval,
 } from '@agentcomms/core';
@@ -23,7 +22,7 @@ import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/
 import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
-import { INSTALL_MODES } from '../manifest.ts';
+import { INSTALL_MODES, MANIFEST_MODES } from '../manifest.ts';
 import {
   CHANGE_POLICIES,
   connectWorkspace,
@@ -250,22 +249,18 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
 
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
   // in the envelope above — before its handler runs. See `strictToolArguments`.
-  // Then the daily update check's stop (design 2026-09-28): an update that is out stops every tool but this server's
-  // doctor, and the check itself runs in the background, never delaying a call. A download carrying the id of the
-  // question the person just answered goes past it, as a claimed approval does; the answer alone does not.
+  // Then the update notice (design 2026-10-16, U1): nothing is refused for being behind; the first result of this
+  // process that finds a newer release carries one line beside it, and the check runs in the background.
   // `out` is refused with what replaced it: the person chooses where a download is saved now.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-slack',
       channel: 'slack',
       running: VERSION,
       exempt: ['slack_doctor'],
-      // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-      approvals: { slack_file_download: DOWNLOAD_CLAIM, slack_approval_wait: { lookup: true } },
       refresh: () => checkForUpdates(context.core, context.env),
     }),
     { slack_file_download: { out: retiredOutHint('mcp') } },
@@ -458,6 +453,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             offline: args.offline === true,
             workspace: await resolveOptional(args.workspace),
             probe,
+            session: slackDeps,
           }),
         );
       } catch (error) {
@@ -471,10 +467,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'The Slack app manifest',
       description:
-        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
+        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. With `mode: "agent"`, an organisation\'s bot-only agent app instead: no user scope, no redirect, token rotation off, and an administrator\'s steps — create it, install it once, share its bot token privately, and each member pastes it with `workspace bot` at their own terminal (never in the chat) — with no port, workspace or `pkce`. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
       inputSchema: {
         workspace: z.string().optional().describe('a workspace already connected, as `organisation/slack`'),
-        mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
+        mode: oneOfWords(MANIFEST_MODES)
+          .optional()
+          .describe("`read` when left out; `agent` for an organisation's bot-only agent app"),
         port: z
           .number()
           .int()

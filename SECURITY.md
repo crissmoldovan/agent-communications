@@ -41,6 +41,15 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   one of their confirmed label rules said so. Also in scope: any way to get the label's word, name or Slack icon
   changed without an approval of that exact change, or to make the preview's first line state a different identity
   from the one that is sent.
+- **An update that installs what it should not** — any way to make the background update job, `comms_update` or
+  `agentcomms update` install, register or switch to a package that was not built by this repository's `release.yml`
+  from the tag of its own version on a GitHub-hosted runner, as its Sigstore provenance proves, or to a runtime that
+  does not hold the tarball that was verified; to skip the release hold, a major version's or a needs-decision
+  release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a running server
+  is using.
+- **Registry text reaching an agent** — any way to make an update's notice, refusal, preview or background run result
+  repeat a string the npm registry or an unverified attestation wrote (a manifest's `needsDecision` words, a version's
+  prerelease or build words, a certificate's identity, ref or runner), instead of this project's fixed words.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
@@ -95,6 +104,29 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   a file in them makes plain (a Python installation, a virtual environment); a folder some program was told to load
   whole cannot be known from here, and saving into it is the person's choice, made when they answer the question.
   Under WSL, a file saved onto a Windows drive carries no internet mark.
+
+- **An update verifies this project's packages, not everyone's.** Every `@agentcomms` package an update installs or
+  switches to is held to its Sigstore provenance, and so is every `@agentcomms` package npm puts in a runtime beside
+  it. The packages of others that a runtime or a global package depends on are checked by npm alone, against the
+  integrity the registry gives: nothing pins who builds them. No package's install script runs as an update installs
+  (`--ignore-scripts`), so their code first runs when a server or command starts. A global package is verified before
+  `npm install -g`, but npm keeps no lockfile for it, so what it installed is not checked afterwards; and an npx
+  registration's client fetches its package from npm each time it starts, which only that client checks.
+- **A first install is verified only when core makes it.** A managed `mcp install` through core's command or
+  `comms_server_install` holds the runtime it fetches to the same provenance as an update. A channel's own command
+  carries no Sigstore: it installs only the release it is running itself — the same package and version npx already
+  fetched to run it, so nothing new runs — says in its preview and its result that it was not verified, and records
+  `verified: false` in the runtime's `.agentcomms-install.json`; any other release it refuses, naming core's command.
+  Core holds a runtime already on the machine to the same: its release is verified and its lockfile must show the
+  attested tarball for every `@agentcomms` package, or core registers nothing on it and says how to fetch a verified
+  one; one that passes has its receipt marked `verified: true`. A channel's own command uses a runtime already there as
+  it finds it, and `--launcher npx` registers a package its client fetches unverified each time it starts it, as
+  above; the managed launcher's runtime, installed or checked by core, is verified.
+- **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
+  not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
+  acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that
+  release's hold between 72 and 24 hours, or make it wait for the person — or not wait, where its own release said it
+  needs a decision. It cannot make anything but a release built by this repository's release workflow install.
 
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
 

@@ -42,6 +42,7 @@ import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/f
 import { mentionedUserIds, previewOf, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
 import type { AppPostRecord } from './app-posts.ts';
+import { appTokenRefusal } from './app-token.ts';
 import { requireConversation } from './destination.ts';
 import {
   appNameOf,
@@ -196,6 +197,13 @@ export interface PrepareDeps {
   readonly label?: LabelDeps | undefined;
   /** This account's own record of what its app posted (S5): written after an app post, read before an app edit. */
   readonly appPosts?: AppPostRecord | undefined;
+  /**
+   * The line a post preview opens with when a security fix is out and this machine does not install it on its own
+   * (design 2026-10-16, U7): core's `securityNotice`, asked until the person answers a post that carried it — given the
+   * post's approval, whose yes is the answer. `gateDepsFor` always sets it; a gate built by hand
+   * without it shows none. Display only — never in the digest.
+   */
+  readonly securityNotice?: ((act: 'post', approvalId: string) => Promise<string | null>) | undefined;
 }
 
 /** The channel, and how many people are in it — or why that could not be established. */
@@ -652,10 +660,13 @@ export async function preparePost(
     ...(deps.surface ? { surface: deps.surface } : {}),
   });
 
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = (await deps.securityNotice?.('post', record.approvalId)) ?? null;
   return {
     approvalId: record.approvalId,
     draftId: draft.draftId,
     preview: {
+      ...(security === null ? {} : { security }),
       ...preview,
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describePolicy(stricterPolicy(deps.policy, requiredPolicy)),
@@ -1065,8 +1076,11 @@ async function postClassified(
     );
     if (!attempted.ok) {
       const { error } = attempted;
-      if (certainlyRefused(error, 'chat.postMessage'))
-        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, error);
+      if (certainlyRefused(error, 'chat.postMessage')) {
+        // The app's token refused by Slack is forgotten here, and the refusal says so (CUE-493): never a second post.
+        const refused = sent.via === 'app' ? await appTokenRefusal(deps, 'post', error) : error;
+        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, refused);
+      }
       throw await recordMaybePosted(deps, approvalId, claimed, where, error, 'it was posted');
     }
     const response: SlackResponse = attempted.value;
@@ -2206,7 +2220,8 @@ export async function reactPrepared(
         );
       }
       if (error instanceof CommsError && certainlyRefused(error, method)) {
-        throw await recordReactionRefused(deps, approvalId, claim, options, error);
+        const refused = label?.route === 'app' ? await appTokenRefusal(deps, 'reaction', error) : error;
+        throw await recordReactionRefused(deps, approvalId, claim, options, refused as CommsError);
       }
       throw await recordReactionUnknown(deps, approvalId, claim.claimed, options, error);
     }

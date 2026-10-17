@@ -1,6 +1,5 @@
 import {
   agentMarker,
-  approvalsOf,
   approveAndWaitSentence,
   approveChangeAtTerminal,
   CommsError,
@@ -9,7 +8,7 @@ import {
   colorEnabled,
   commandPathOf,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChangeAtTerminal,
   type Handoff,
@@ -28,7 +27,7 @@ import {
   type SupportedClient,
   serverInstallChange,
   serverPruneChange,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
@@ -116,8 +115,7 @@ Getting started — a person runs these with this CLI, in a terminal:
 
 Nothing here connects to WhatsApp or any other server, and nothing here can send. Needs Node 22.16 or newer.
 
-Exit codes: 0 ok · 1 unexpected · 10 only a person may do that, or a change needs approval · 11 an update
-is out: update first, or put it off (the stop names both commands) · 64 usage
+Exit codes: 0 ok · 1 unexpected · 10 only a person may do that, or a change needs approval · 64 usage
 · 65 bad data (a store whose layout changed) · 66 not found · 69 unavailable · 75 temporary (retry;
 a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 configuration problem.`,
     )
@@ -171,38 +169,25 @@ a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 con
   let softExit: number | null = null;
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
-   * WhatsApp's has no network code: it reads the file as the machine's other servers and commands left it, and its
-   * "now" says what to run rather than fetching the update itself.
-   *
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
+   * WhatsApp's has no network code: it reads the file as the machine's other servers and commands left it.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
-    if (exemptFromUpdateGate(path, ['status'])) return;
+    // `status` is its doctor, which says what is behind in its own words.
+    if (exemptFromUpdateNotice(path, ['status'])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-whatsapp',
-          channel: 'whatsapp',
-          running: VERSION,
-          output: output(),
-          noInput: false,
-          streams,
-          approvals: approvalsOf(command),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'whatsapp',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+    });
   });
 
   const act =
@@ -210,10 +195,6 @@ a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 con
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       exitCode = await runCommand(
         output(),
         async () => {

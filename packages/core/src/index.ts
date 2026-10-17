@@ -101,6 +101,7 @@ export * from './internet-mark.ts';
 export * from './jail.ts';
 export * from './keys.ts';
 export * from './known-folders.ts';
+export * from './launcher.ts';
 export * from './ledger.ts';
 export * from './lock.ts';
 export * from './mcp-clients.ts';
@@ -139,23 +140,29 @@ export {
 } from './operations/servers.ts';
 export { type UpdateDeps, updateChange } from './operations/update.ts';
 export {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
 /*
  * Organisation profiles (design 2026-10-02): what a channel needs to read the record — whether a client row is an
  * organisation's, and the generations of its client. The core writes the record; nothing else does.
  */
 export {
+  AGENT_APP_KIND,
+  type AgentAppFile,
   activeGeneration,
+  agentAppPathFor,
   GENERATION_LIMIT,
   type GenerationState,
   generationState,
   learnProfileSlackAppId,
   managingOrganisation,
   type OrganisationProfile,
+  organisationAgentApp,
   organisationProfileSchema,
   organisationsOf,
   PROFILE_ORGANISATION_MAX,
@@ -175,6 +182,8 @@ export * from './output.ts';
 export * from './paths.ts';
 export * from './plans.ts';
 export * from './reconcile.ts';
+// What a registration pins, its stable launcher's pointer included: the channels' doctors read it as core does.
+export { registrationVersion } from './registrations.ts';
 export * from './render.ts';
 export * from './sanitize.ts';
 export * from './save-deny.ts';

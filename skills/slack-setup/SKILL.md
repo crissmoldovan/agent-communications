@@ -2,7 +2,7 @@
 name: slack-setup
 description: "Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. Symptoms: 'connect my Slack', 'set up agent-slack', 'why can't it post', 'move this workspace to send mode', 'agent-slack doctor says something is wrong'. Not for reading or posting once it works — slack-reading and slack-posting do those."
 license: MIT
-compatibility: "@agentcomms/slack@0.19.0"
+compatibility: "@agentcomms/slack@0.20.0"
 metadata:
   group: communications
   lifecycle: release
@@ -298,9 +298,15 @@ scopes. So a `send` workspace is in one of three states; `doctor`'s "Posting as 
 
 1. **No bot token.** The state after the ordinary sign-in, and of every workspace connected before this release. It
    works as it is: posts go out as the person, labelled. Do nothing unless the person wants posts to appear as the app.
-   A workspace connected through an organisation profile stays here: posting as the app is not available through an
-   organisation's shared app yet. `doctor` says so as a note and names no command, because state 2 refuses its
-   rotating tokens and state 3 refuses a profile account.
+   A workspace connected through an organisation profile stays here unless its organisation has an **agent app**: a
+   bot-only app its administrator made from `agent-slack manifest --mode agent` (`slack_manifest` with
+   `mode: "agent"`), installed once, whose bot token the administrator shares privately. The member then pastes it
+   with `agent-slack workspace bot <name>` in their own terminal, as in state 2 — their own connection is untouched.
+   When the profile names the agent app, `doctor` says to ask the organisation's admin for its token and then run
+   `workspace bot`, and `workspace bot` refuses any other app's token. Without it, `doctor` keeps a note and names no
+   command, because state 2 refuses the shared app's rotating tokens and state 3 refuses a profile account. Never ask
+   for the token in the chat. When the admin revokes the token, the first act made with the old one is refused and the
+   token is removed, so posts go out as the person, labelled, and `doctor` says when — until the new one is pasted.
 2. **Pasted once.** The app's manifest must be the `send` one (it declares the bot user and its four scopes); the
    person presses **Install to Workspace** on the app's **OAuth & Permissions** page, copies the **Bot User OAuth
    Token** (`xoxb-…`), and runs `agent-slack workspace bot <name>` **in their own terminal**, which asks for it without

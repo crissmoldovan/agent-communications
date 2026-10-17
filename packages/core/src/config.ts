@@ -50,8 +50,20 @@ export type SendPolicy = 'chat' | 'confirm' | 'never';
  * way to change it, and that passes no gate at all.
  */
 export type ChangePolicy = 'chat' | 'confirm';
-/** Whether this machine checks for a newer release once a day, and stops until it is updated or put off. */
+/** 0.18's switch for the daily update check: what `defaults.updates` reads from until a level is set. */
 export type UpdateCheckSetting = 'on' | 'off';
+
+/**
+ * How this machine updates (design 2026-10-16, U2), from the most updating to the least: `auto` — the default — checks
+ * daily and installs in the background once its job is set up; `every-14-days` checks at most once every 14 days and
+ * installs only with the person's yes; `never` asks the registry nothing.
+ */
+export const UPDATE_LEVELS = ['auto', 'every-14-days', 'never'] as const;
+export type UpdateLevel = (typeof UPDATE_LEVELS)[number];
+
+export function isUpdateLevel(value: unknown): value is UpdateLevel {
+  return typeof value === 'string' && (UPDATE_LEVELS as readonly string[]).includes(value);
+}
 export type StoreKind = 'keychain' | 'file';
 
 export interface ClientConfig {
@@ -123,6 +135,16 @@ export interface Defaults {
    * it is what keeps a machine from quietly falling behind a release — so it is approved like one; on applies at once.
    */
   updateCheck?: UpdateCheckSetting | undefined;
+  /**
+   * How this machine updates (design 2026-10-16, U2): `auto`, `every-14-days` or `never`. Absent reads from
+   * `updateCheck` — `on` as `auto`, `off` as `never` — and both absent as `auto`. A word this release does not know
+   * reads as `auto`, and the file stays readable: a later release may add a level.
+   *
+   * Moving to a level that updates less is a loosening, approved like one; moving back applies at once. Every write of
+   * a level writes `updateCheck` beside it, `off` for `never` and `on` otherwise, so a release before 0.20 sharing the
+   * file checks, or does not, as the person chose.
+   */
+  updates?: string | undefined;
 }
 
 /**
@@ -299,6 +321,27 @@ export interface OrganisationSlackApp {
 }
 
 /**
+ * An organisation's update caps, as the file beside its profile names them (design 2026-10-16, U8), and the SHA-256 of
+ * that file, so `org update` can tell the organisation changing them from the record drifting. A `max` word this release
+ * does not know reads as `never`, the strictest it could mean: caps only ever tighten.
+ */
+export interface OrganisationUpdates {
+  max?: string | undefined;
+  background?: boolean | undefined;
+  sha256: string;
+}
+
+/**
+ * The organisation's bot-only agent app, as its profile's agent-app file names it (CUE-493): the app's id, and the
+ * SHA-256 of that file, so `org update` can tell the organisation changing it from the record drifting. No client id:
+ * nobody signs in through it — its administrator installs it once and its members paste its bot token.
+ */
+export interface OrganisationAgentApp {
+  appId: string;
+  sha256: string;
+}
+
+/**
  * What this machine records of one organisation profile: never its bytes and never its secret — where it was read
  * from, the SHA-256 of what was read and when, the generations of its Google client, and its Slack apps.
  */
@@ -318,9 +361,15 @@ export interface OrganisationRecord {
         workspace: string;
         workspaceName: string;
         redirectPort: number;
-        apps: { read?: OrganisationSlackApp | undefined; send?: OrganisationSlackApp | undefined };
+        apps: {
+          read?: OrganisationSlackApp | undefined;
+          send?: OrganisationSlackApp | undefined;
+          agent?: OrganisationAgentApp | undefined;
+        };
       }
     | undefined;
+  /** The organisation's update caps, from the file beside its profile; absent when it names none. */
+  updates?: OrganisationUpdates | undefined;
 }
 
 export interface ConfigV2 extends ConfigBody {
@@ -517,6 +566,7 @@ const defaultsSchema = z.looseObject({
   timezone: z.string().default('system'),
   confirm: z.looseObject({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
   updateCheck: z.enum(['on', 'off']).optional(),
+  updates: z.string().min(1).optional(),
 });
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
@@ -595,6 +645,7 @@ const generationSchema = z.looseObject({
   addedAt: z.string(),
 });
 const slackAppRecordSchema = z.looseObject({ clientId: z.string().min(1), appId: z.string().min(1).optional() });
+const agentAppRecordSchema = z.looseObject({ appId: z.string().min(1), sha256: z.string().min(1) });
 const organisationRecordSchema = z.looseObject({
   label: z.string(),
   source: z.looseObject({ kind: z.string().min(1), path: z.string().min(1) }),
@@ -610,8 +661,17 @@ const organisationRecordSchema = z.looseObject({
       workspace: z.string().min(1),
       workspaceName: z.string(),
       redirectPort: z.number().int().min(1).max(65535),
-      apps: z.looseObject({ read: slackAppRecordSchema.optional(), send: slackAppRecordSchema.optional() }).default({}),
+      apps: z
+        .looseObject({
+          read: slackAppRecordSchema.optional(),
+          send: slackAppRecordSchema.optional(),
+          agent: agentAppRecordSchema.optional(),
+        })
+        .default({}),
     })
+    .optional(),
+  updates: z
+    .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
     .optional(),
 });
 
@@ -939,9 +999,31 @@ export function governingChangePolicy(
   return governing.includes('confirm') ? 'confirm' : 'chat';
 }
 
-/** Whether this machine's daily update check is on: `defaults.updateCheck`, absent reading as `on`. */
+/** 0.18's switch, as written: `defaults.updateCheck`, absent reading as `on`. */
 export function updateCheckSetting(config: Config): UpdateCheckSetting {
   return config.defaults.updateCheck ?? 'on';
+}
+
+/**
+ * The level this machine's configuration sets (design 2026-10-16, U2): `defaults.updates`, else 0.18's switch read as a
+ * level — `on` as `auto`, `off` as `never`. A word this release does not know reads as `auto`, the default.
+ */
+export function updateLevelOf(config: Config): UpdateLevel {
+  const set = config.defaults.updates;
+  if (set !== undefined) return isUpdateLevel(set) ? set : 'auto';
+  return updateCheckSetting(config) === 'off' ? 'never' : 'auto';
+}
+
+/**
+ * How much a level updates, for `classifyChange`: `auto` 2, `every-14-days` 1, `never` 0. A word this release does not
+ * know is judged as the most updating on the side it leaves and the least on the side it arrives on, as an account's
+ * mode is — an unknown word can cost a person a question, never skip one.
+ */
+function updateRank(config: Config, side: 'before' | 'after'): number {
+  const set = config.defaults.updates;
+  const level = set === undefined ? updateLevelOf(config) : isUpdateLevel(set) ? set : null;
+  if (level === null) return side === 'before' ? UPDATE_LEVELS.length - 1 : 0;
+  return UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
 }
 
 /**
@@ -1836,8 +1918,18 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     loosen('defaults.changePolicy', defaultChangePolicy(before), defaultChangePolicy(after));
   }
   if (b.riskEscalation && !a.riskEscalation) loosen('defaults.riskEscalation', b.riskEscalation, a.riskEscalation);
-  // Off stops the one thing that tells a person this machine has fallen behind a release: a person agrees to that.
-  if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+  // A level that updates less keeps this machine behind for longer, or for good: a person agrees to that (design
+  // 2026-10-16, U2). The words as written, so a preview names what was set — an unknown one too.
+  // A level left exactly as it was moved nothing, whatever its word.
+  const levelKept = b.updates !== undefined && b.updates === a.updates;
+  if (!levelKept && updateRank(after, 'after') < updateRank(before, 'before')) {
+    loosen(
+      'defaults.updates',
+      before.defaults.updates ?? updateLevelOf(before),
+      after.defaults.updates ?? updateLevelOf(after),
+    );
+  } else if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+    // 0.18's switch off beside a level that says otherwise: what a release before 0.20 reads on this machine.
     loosen('defaults.updateCheck', updateCheckSetting(before), updateCheckSetting(after));
   }
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
@@ -1909,16 +2001,20 @@ export function agentLabelRuleText(rule: AgentLabelRule): string {
   return `${rule.account}${where}${kinds}: ${rule.as}`;
 }
 
-/** A label setting's value as a loosening carries it: the rules in words, the icons as they are, the rest as text. */
+/**
+ * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles as they are, the
+ * rest as text.
+ */
 function labelSettingValue(loosening: AgentLabelLoosening, value: unknown): SettingValue | undefined {
   if (value === undefined || value === null) return undefined;
   if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
-  if (loosening.path === 'agentLabel.slackIcons') return { ...(value as Readonly<Record<string, string>>) };
+  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles')
+    return { ...(value as Readonly<Record<string, string>>) };
   return String(value);
 }
 
 /** The label settings a change can write, as the file holds them — raw, as `changedSettings` records every setting. */
-const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons'] as const;
+const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons', 'slackStyles'] as const;
 
 function storedAgentLabel(config: Config): Readonly<Record<string, unknown>> {
   const stored = config.agentLabel;

@@ -10,6 +10,8 @@ import {
   labelPhrase,
   readAgentLabelSettings,
   resolveIdentity,
+  SLACK_STYLES,
+  slackStyleOf,
 } from '../src/agent-label.ts';
 
 test('L2: the word list is fixed, in this order, with agent first', () => {
@@ -175,4 +177,56 @@ test('a rule that recorded its account id never applies to another account given
 
 test('setting the word agent when none is stored changes nothing a recipient sees, so it is no loosening', () => {
   assert.deepEqual(classifyAgentLabelChange(undefined, { word: 'agent' }), []);
+});
+
+// ── A Slack workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────
+
+test('Slack style: the styles are app and labelled, and a workspace with none recorded is app', () => {
+  assert.deepEqual([...SLACK_STYLES], ['app', 'labelled']);
+  assert.equal(slackStyleOf(undefined, 'acc_A'), 'app');
+  assert.equal(slackStyleOf(readAgentLabelSettings(undefined), 'acc_A'), 'app');
+  assert.equal(slackStyleOf(readAgentLabelSettings({ slackStyles: { acc_B: 'labelled' } }), 'acc_A'), 'app');
+});
+
+test('Slack style: a value this release cannot read is app, the stronger disclosure', () => {
+  const read = readAgentLabelSettings({ slackStyles: { acc_A: 'labelled', acc_B: 'app', acc_C: 'fancy', acc_D: 7 } });
+  assert.deepEqual(read.slackStyles, { acc_A: 'labelled', acc_B: 'app' });
+  assert.equal(slackStyleOf(read, 'acc_A'), 'labelled');
+  assert.equal(slackStyleOf(read, 'acc_B'), 'app');
+  assert.equal(slackStyleOf(read, 'acc_C'), 'app', 'an unknown style read as labelled');
+  assert.equal(slackStyleOf(read, 'acc_D'), 'app');
+  for (const raw of ['labelled', ['labelled'], null, 3]) {
+    assert.equal(readAgentLabelSettings({ slackStyles: raw }).slackStyles, undefined, JSON.stringify(raw));
+  }
+  // A key the object inherits is no workspace's.
+  assert.equal(slackStyleOf(read, 'constructor'), 'app');
+});
+
+test('Slack style: app to labelled loosens, labelled to app tightens (L5)', () => {
+  const paths = (before: AgentLabelSettings | undefined, after: AgentLabelSettings | undefined) =>
+    classifyAgentLabelChange(before, after).map((change) => change.path);
+  assert.deepEqual(paths(undefined, { slackStyles: { acc_A: 'labelled' } }), ['agentLabel.slackStyles']);
+  assert.deepEqual(paths({ slackStyles: { acc_A: 'app' } }, { slackStyles: { acc_A: 'labelled' } }), [
+    'agentLabel.slackStyles',
+  ]);
+  assert.deepEqual(paths({ slackStyles: { acc_A: 'labelled' } }, undefined), [], 'back to app applies at once');
+  assert.deepEqual(paths({ slackStyles: { acc_A: 'labelled' } }, { slackStyles: { acc_A: 'app' } }), []);
+  assert.deepEqual(paths(undefined, { slackStyles: { acc_A: 'app' } }), [], 'app written down is the default');
+  assert.deepEqual(paths({ slackStyles: { acc_A: 'labelled' } }, { slackStyles: { acc_A: 'labelled' } }), []);
+  assert.deepEqual(
+    paths({ slackStyles: { acc_A: 'labelled' } }, { slackStyles: { acc_B: 'labelled' } }),
+    ['agentLabel.slackStyles'],
+    'one workspace loosened beside another tightened still waits',
+  );
+  // What it moved between, workspace by workspace, as the preview shows it and the approval binds it.
+  assert.deepEqual(
+    classifyAgentLabelChange({ slackStyles: { acc_A: 'labelled' } }, { slackStyles: { acc_B: 'labelled' } }),
+    [
+      {
+        path: 'agentLabel.slackStyles',
+        was: { acc_A: 'labelled', acc_B: 'app' },
+        now: { acc_A: 'app', acc_B: 'labelled' },
+      },
+    ],
+  );
 });
