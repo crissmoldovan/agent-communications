@@ -39,6 +39,15 @@ const POINTER = '.current';
 const FALLBACK = '.fallback';
 const LOCK = '.lock';
 
+/**
+ * What a launcher hands the process it starts (re-review of 0.20.0, severity 6): its own name, so the process knows it
+ * was started through its package's stable launcher — the one the background job switches — and not by npx, a
+ * versioned or local registration, or a command from somewhere else. The update notice holds back only for such a
+ * process what the job will install (`update-gate.ts`), and only a run of `update --background` started through the
+ * core launcher, as the job starts it, records that the job ran (`update-background.ts`).
+ */
+export const LAUNCHER_ENV = 'AGENT_COMMS_LAUNCHER';
+
 /** A launcher's name: one plain word, never a path — the unscoped name of a server package. */
 const NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 /** A runtime's folder in `<data>/runtime`: no separator, nothing that starts with a dot. */
@@ -380,6 +389,8 @@ pointer=${posixWord(pointer)}
 record=${posixWord(record)}
 cli=${posixWord(cliWords(name).join('/'))}
 suffix=${posixWord(`-${name}`)}
+${LAUNCHER_ENV}=${posixWord(name)}
+export ${LAUNCHER_ENV}
 current=
 previous=
 if [ -f "$pointer" ] && [ -r "$pointer" ]; then
@@ -470,6 +481,7 @@ if (entry === null) {
   process.exit(78);
 }
 process.argv[1] = entry;
+process.env.${LAUNCHER_ENV} = ${json(name)};
 import(pathToFileURL(entry).href).catch((error) => {
   process.exitCode = 1;
   console.error(error);

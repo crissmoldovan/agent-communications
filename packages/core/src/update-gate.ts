@@ -1,9 +1,10 @@
 import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import type { OutputOptions, Streams } from './cli-runtime.ts';
 import type { Core } from './core.ts';
 import { handoffSentence, requireHandoffs } from './handoffs.ts';
-import { launcherPaths } from './launcher.ts';
+import { LAUNCHER_ENV, launcherName, launcherPaths, readPointer } from './launcher.ts';
 import { updateJobSupported } from './update-job.ts';
 import {
   type BackgroundNotice,
@@ -27,7 +28,7 @@ import {
   withSecurityShown,
 } from './update-state.ts';
 import { backgroundNoticeLine } from './update-words.ts';
-import { isBehind, isVersion } from './versions.ts';
+import { isBehind, isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * The update notice, where every server and every command meets it (design 2026-10-16, U1). It replaces the stop of
@@ -174,9 +175,10 @@ async function decideNotice(
   const startedBy = options.env[UPDATE_STARTED_BY_ENV]?.trim();
   const offerJob = updates.level === 'auto' && !updates.background && (await jobCanBeSetUp(options.core, updates));
   const spacing = spacingOf(updates, where.surface);
+  const reach = updates.background ? await jobReach(options.core, options.env, where.channel) : null;
   /** What the level and the spacing let this process say now, or null: decided once as read, then under the lock. */
   const due = (record: UpdateCheckRecord, at: Date): NoticeDecision | null => {
-    let notice = noticeOf(record, options.running, where, updates, at);
+    let notice = noticeOf(record, options.running, where, updates, at, reach);
     const last =
       where.surface === 'command' && updates.level !== 'every-14-days' ? record.commandNoticeAt : record.noticeAt;
     const spaced = spacing !== null && within(last, at, spacing);
@@ -247,6 +249,55 @@ async function jobCanBeSetUp(core: Core, updates: EffectiveUpdates): Promise<boo
   }
 }
 
+/**
+ * What the background job does for this process (re-review of 0.20.0, severity 6): null when it never updates it —
+ * a server registered with `--launcher npx`, a versioned or local registration, a command from a global install, npx's
+ * cache or a checkout — and otherwise the release its launcher starts now (`pointed`, a plain version, or null when it
+ * names none). A process reaches it only when its package's stable launcher, whose pointer the job switches, started
+ * it in this data directory (`LAUNCHER_ENV`).
+ */
+export interface JobReach {
+  pointed: string | null;
+}
+
+/** Whether the job reaches a process of `name`'s launcher (`JobReach`); null where it does not, or it cannot be read. */
+export async function jobReach(core: Core, env: NodeJS.ProcessEnv, name: string | undefined): Promise<JobReach | null> {
+  const launched = env[LAUNCHER_ENV]?.trim();
+  if (name === undefined || launched !== name) return null;
+  try {
+    const pointer = await readPointer(core.paths.dataDir, name);
+    if (pointer === undefined) return null;
+    const folder = basename(pointer.current);
+    const version = folder.endsWith(`-${name}`) ? folder.slice(0, -(name.length + 1)) : '';
+    return { pointed: isPlainVersion(version) ? version : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the job covers a security fix for this process: it reaches it (`jobReach`), it installs the fix on its own —
+ * not a new major, nor one needing a decision, which it leaves for the person — and its launcher does not start the
+ * fix yet, so the job installs it within a day. Once it does, the process still runs the release before: it is told.
+ */
+function coveredByJob(reach: JobReach | null, fix: string, record: UpdateCheckRecord, running: string): boolean {
+  if (reach === null) return false;
+  const from = reach.pointed ?? running;
+  if (!isVersion(from) || majorOf(fix) > majorOf(from) || record.release?.needsDecision === true) return false;
+  return !(reach.pointed !== null && !isBehind(reach.pointed, fix));
+}
+
+/** The launcher of the package `core` was opened for: the process's own, or undefined when it is none of ours. */
+function ownLauncher(core: Core): string | undefined {
+  const packageName = core.handoffs?.caller.packageName;
+  if (packageName === undefined) return undefined;
+  try {
+    return launcherName(packageName);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The notice the record makes for this process, before any spacing: see `decideNotice`. */
 function noticeOf(
   record: UpdateCheckRecord,
@@ -254,10 +305,14 @@ function noticeOf(
   where: UpdateSurface,
   updates: EffectiveUpdates,
   at: Date,
+  reach: JobReach | null,
 ): Notice | null {
   const pending = updateVerdict(record, running, where);
   if (pending === null) return null;
-  const security = updates.background ? false : securityRelease(record, running) !== null;
+  // The job's work counts only for a process it reaches: any other is told as on a machine with no job.
+  const background = updates.background && reach !== null;
+  const fix = securityRelease(record, running);
+  const security = fix !== null && !(background && coveredByJob(reach, fix, record, running));
   const pausedUntil = pauseEnd(record, at);
   const facts = record.release?.version === pending.latest ? record.release : null;
   // What waits for the person is said only where anything installs without them: on `auto` with its job, every
@@ -265,13 +320,13 @@ function noticeOf(
   const notice: Notice = {
     ...pending,
     security,
-    major: updates.background && isVersion(running) && majorOf(pending.latest) > majorOf(running),
-    needsDecision: updates.background && facts?.needsDecision === true,
+    major: background && isVersion(running) && majorOf(pending.latest) > majorOf(running),
+    needsDecision: background && facts?.needsDecision === true,
     pausedUntil,
   };
   if (security) return notice;
   if (updates.level === 'never' || pausedUntil !== null) return null;
-  if (updates.background && pending.kind !== 'restart' && !notice.major && !notice.needsDecision) return null;
+  if (background && pending.kind !== 'restart' && !notice.major && !notice.needsDecision) return null;
   return notice;
 }
 
@@ -378,15 +433,21 @@ export async function securityNotice(options: {
   act?: string | undefined;
   /** The approval the preview is for: the person's yes to it answers the line. Left out, nothing answers it. */
   approvalId?: string | undefined;
+  /** The preparing process's channel, whose launcher the job may switch; left out, the package core was opened for. */
+  channel?: string | undefined;
 }): Promise<string | null> {
   try {
     if (updateCheckSwitchedOff(options.env) !== null) return null;
     const updates = await effectiveUpdates(options.core, options.env);
-    // The background job installs a security fix within a day: nothing to ask (U7).
-    if (updates.background) return null;
+    // The background job installs a security fix within a day: nothing to ask (U7) — but only of a process it
+    // reaches, and only until its launcher starts the fix (re-review of 0.20.0, severity 6).
+    const reach = updates.background
+      ? await jobReach(options.core, options.env, options.channel ?? ownLauncher(options.core))
+      : null;
     const asked = (record: UpdateCheckRecord): string | null => {
       const version = securityRelease(record, options.running);
-      return version === null || record.securityAsked === version ? null : version;
+      if (version === null || coveredByJob(reach, version, record, options.running)) return null;
+      return record.securityAsked === version ? null : version;
     };
     // Nothing to ask, as nearly always: read, and no lock taken.
     const version = asked(await readUpdateCheck(options.core.paths.stateDir));

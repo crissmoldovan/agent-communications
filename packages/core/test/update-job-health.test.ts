@@ -16,7 +16,7 @@ import {
 } from '../src/update-job.ts';
 import { effectiveUpdates, localStamp } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { LATEST, type Machine, machine, seed } from './helpers/update-machine.ts';
+import { launchedThrough, type Machine, machine, seed } from './helpers/update-machine.ts';
 
 /*
  * A background job that never runs (design 2026-10-16 U4, U7; the 0.20.0 security review, severity 7). The marker
@@ -35,8 +35,13 @@ import { LATEST, type Machine, machine, seed } from './helpers/update-machine.ts
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date();
 const ago = (hours: number) => new Date(NOW.getTime() - hours * HOUR);
-const SECURITY = { version: LATEST, security: true, needsDecision: false };
-const LINE = `A security fix is out (${LATEST}): update first, or approve to send anyway`;
+const minorRelease = () => {
+  const [major, minor] = VERSION.split('.').map(Number) as [number, number];
+  return `${major}.${minor + 1}.0`;
+};
+// A minor release: one the job installs on its own, so a working job is what holds its line back.
+const SECURITY = { version: minorRelease(), security: true, needsDecision: false };
+const LINE = `A security fix is out (${minorRelease()}): update first, or approve to send anyway`;
 const SILENT = /background updates have not run since \d{4}-\d{2}-\d{2}; check Login Items \(macOS\) or run doctor/;
 
 /** The marker as the installer writes it, set up `installedHoursAgo`, with a `lastRun` when one is given. */
@@ -59,11 +64,6 @@ function launcherThere(m: Machine): void {
   mkdirSync(dirname(launcher), { recursive: true });
   writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
 }
-
-const minorRelease = () => {
-  const [major, minor] = VERSION.split('.').map(Number) as [number, number];
-  return `${major}.${minor + 1}.0`;
-};
 
 const serverNotice = (m: Machine) =>
   updateToolNotice({ core: m.core, env: m.env, channel: 'core', running: VERSION, exempt: [] })('comms_audit_tail');
@@ -124,27 +124,30 @@ test('a lastRun this release cannot read is none, and the rest of the marker rea
 
 test('a marker whose lastRun is stale gets the security line; a fresh one does not need it', async () => {
   const stale = machine();
-  await seed(stale, { latest: LATEST, behind: true, release: SECURITY });
+  await seed(stale, { latest: minorRelease(), behind: true, release: SECURITY });
   marker(stale, 24 * 10, 72);
   assert.equal((await effectiveUpdates(stale.core, stale.env)).background, false);
   assert.equal(await securityNotice({ core: stale.core, env: stale.env, running: VERSION }), LINE);
 
   const fresh = machine();
-  await seed(fresh, { latest: LATEST, behind: true, release: SECURITY });
+  await seed(fresh, { latest: minorRelease(), behind: true, release: SECURITY });
   marker(fresh, 24 * 10, 3);
   assert.equal((await effectiveUpdates(fresh.core, fresh.env)).background, true);
-  assert.equal(await securityNotice({ core: fresh.core, env: fresh.env, running: VERSION }), null);
+  // Held back for a process the job reaches: one started through the launcher it switches.
+  const launched = launchedThrough(fresh, 'core', VERSION);
+  assert.equal(await securityNotice({ core: fresh.core, env: launched, running: VERSION }), null);
 });
 
 test('a job set up under 48 hours ago counts until its first run is due; one set up longer ago that never ran does not', async () => {
   const waiting = machine();
-  await seed(waiting, { latest: LATEST, behind: true, release: SECURITY });
+  await seed(waiting, { latest: minorRelease(), behind: true, release: SECURITY });
   marker(waiting, 2);
   assert.equal((await effectiveUpdates(waiting.core, waiting.env)).background, true);
-  assert.equal(await securityNotice({ core: waiting.core, env: waiting.env, running: VERSION }), null);
+  const launched = launchedThrough(waiting, 'core', VERSION);
+  assert.equal(await securityNotice({ core: waiting.core, env: launched, running: VERSION }), null);
 
   const never = machine();
-  await seed(never, { latest: LATEST, behind: true, release: SECURITY });
+  await seed(never, { latest: minorRelease(), behind: true, release: SECURITY });
   marker(never, 72);
   const updates = await effectiveUpdates(never.core, never.env);
   assert.equal(updates.background, false);
@@ -167,11 +170,13 @@ test('a silent job: the full notice, the line saying since when, and the offer t
   const said = await commandNotice(m);
   assert.match(said, SILENT);
 
-  // The same release with the job working: nothing to say — it installs on its own.
+  // The same release with the job working, for a server started through the launcher it switches: nothing to say —
+  // it installs on its own.
   const working = machine();
   launcherThere(working);
   await seed(working, { latest: minorRelease(), behind: true });
   marker(working, 24 * 10, 2);
+  Object.assign(working.env, launchedThrough(working, 'core', VERSION));
   assert.equal(await serverNotice(working), null);
 });
 

@@ -181,6 +181,26 @@ export type BackgroundOutcome =
   | 'installed'
   | 'would-install';
 
+/**
+ * The outcomes that show the job works, and so are recorded as its `lastRun` (re-review of 0.20.0, severity 6): it
+ * reached the registry and decided — nothing to do, installed, held for its hours or a pause, left for the person, or
+ * refused as unverified, which its notice says. Not recorded:
+ * - `unavailable`: the registry could not be read. A job that can never reach it keeps nothing up to date, so after
+ *   48 hours of it the notices and the security line come back, and doctor says the job has not run;
+ * - `busy`: another run, or a person's update, held the machine's lock. One day so is nothing; a lock held for good —
+ *   a run that hung — would otherwise hide a job that does nothing, so it surfaces after 48 hours too;
+ * - `failed`, and `off` or `not-auto`, where the run did none of the job's work.
+ */
+export const JOB_WORKS: ReadonlySet<BackgroundOutcome> = new Set<BackgroundOutcome>([
+  'no-launchers',
+  'up-to-date',
+  'paused',
+  'held',
+  'skipped',
+  'refused',
+  'installed',
+]);
+
 /** One package of the release, and what the run did with it. */
 export interface BackgroundPackage {
   channel: ServerId;
@@ -964,8 +984,9 @@ export async function runBackgroundUpdate(
         : stop('failed', refused.message, undefined, { text: BACKGROUND_WORDS.stopped(null), outcome: 'failed' });
   }
   const result = finish(partial);
-  // Every run says it ran, one that found nothing to do included: a job that never runs silences no notice (U4, U7).
-  await recordUpdateJobRun(core.paths.stateDir, run.now).catch(() => undefined);
+  // A run that did the job's work says it ran, one that found nothing to do included: a job that never runs, or never
+  // gets that far, silences no notice (U4, U7; `JOB_WORKS`).
+  if (JOB_WORKS.has(result.outcome)) await recordUpdateJobRun(core.paths.stateDir, run.now).catch(() => undefined);
   await core.audit
     .append({
       inboxId: '',

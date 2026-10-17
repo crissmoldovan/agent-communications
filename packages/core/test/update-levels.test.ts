@@ -15,7 +15,17 @@ import { updateNoticeAtTerminal, updateToolNotice } from '../src/update-gate.ts'
 import { readUpdateJobMarker } from '../src/update-job.ts';
 import { effectiveUpdates, readUpdateCheck, updateJobInstalled } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { codeOf, connect, deps, LATEST, type Machine, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
+import {
+  codeOf,
+  connect,
+  deps,
+  LATEST,
+  launchedThrough,
+  type Machine,
+  machine,
+  markJobSetUp,
+  seed,
+} from './helpers/update-machine.ts';
 
 /*
  * The levels and the pause (design 2026-10-16, U2 and U3): `defaults.updates` is `auto` (the default), `every-14-days`
@@ -241,6 +251,8 @@ test('auto with its background job set up says only what needs the person: a res
   assert.equal(await updateJobInstalled(m.core), false, 'no job yet: auto is a daily check with a notice');
   markJobSetUp(m);
   assert.equal(await updateJobInstalled(m.core), true);
+  // A server started through the launcher the job switches: what the job does is for it (update-job-reach.test.ts).
+  Object.assign(m.env, launchedThrough(m, 'core', VERSION));
   const running = VERSION.split('.').map(Number) as [number, number, number];
   const minor = `${running[0]}.${running[1] + 1}.0`;
   const major = `${running[0] + 1}.0.0`;

@@ -9,7 +9,7 @@ import { VERSION } from '../src/version.ts';
 import { coreHandoffs } from './helpers/handoffs.ts';
 import { liveConfig } from './helpers/live-config.ts';
 import { tempDir } from './helpers/temp.ts';
-import { LATEST, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
+import { LATEST, launchedThrough, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
 
 /*
  * The security line (design 2026-10-16, U7): on `every-14-days`, `never`, and `auto` while its background job is not
@@ -138,8 +138,13 @@ test('nothing is said when no security release is waiting, when the job installs
       'auto, with its background job set up: it installs within a day',
       async () => {
         const m = machine();
-        await seed(m, { latest: LATEST, behind: true, release: SECURITY });
+        // A minor release the job installs on its own, for a process started through the launcher it switches: only
+        // such a process is the job's (re-review of 0.20.0, severity 6; update-job-reach.test.ts has the others).
+        const [major, minor] = VERSION.split('.').map(Number) as [number, number];
+        const fix = `${major}.${minor + 1}.0`;
+        await seed(m, { latest: fix, behind: true, release: { ...SECURITY, version: fix } });
         markJobSetUp(m);
+        Object.assign(m.env, launchedThrough(m, 'core', VERSION));
         return m;
       },
     ],

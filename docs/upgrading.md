@@ -152,7 +152,13 @@ however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` s
 **A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
 `every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up or
 has not run in 48 hours —
-whatever the pause or the 14-day spacing, and with when the pause ends. There, too, the next Gmail or Resend send
+whatever the pause or the 14-day spacing, and with when the pause ends. A job that works holds it back only for a
+server or command it updates — one started through its package's stable launcher, which hands it
+`AGENT_COMMS_LAUNCHER` — and only until that launcher starts the fix, a release the job installs on its own: not a
+new major, nor one needing a decision. A server registered with `--launcher npx`, a versioned or local registration,
+or a command from a global install or npx's cache is told as on a machine with no job, and so is every process once
+its launcher starts the fix, since it still runs the release before until it restarts. The same holds for every other
+notice: what the job installs is held back only from the processes it updates. There, too, the next Gmail or Resend send
 preview, or Slack post preview, opens with one line — `A security fix is out (0.20.1): update first, or approve to
 send anyway` (`… to post anyway` on Slack). It is asked in every preview until the person answers one: once a send or
 post whose preview carried it is approved, or sent, it counts as asked on the machine and is not shown again for that
@@ -216,8 +222,11 @@ names, with the launcher as its first argument; a task 0.20.0 registered with th
 "Background Items Added" once and lists the job under System Settings → General → Login Items, where it can be switched
 off.
 
-**A job that does not run is no job.** Every background run, one that finds nothing to do included, records when it
-ran (`lastRun` in `update-job.json`). The job counts as working only when it ran in the last 48 hours, or was set up
+**A job that does not run is no job.** Every background run that does the job's work — finds nothing to do, installs,
+holds a release for its hours or a pause, leaves one for you, or refuses one as unverified — records when it ran
+(`lastRun` in `update-job.json`). A run that could not read the registry (`unavailable`), found the machine's update
+lock held (`busy`) or failed records nothing: a job stuck so, offline for good or behind a lock a hung run keeps, is
+reported as not running once 48 hours have passed. The job counts as working only when it ran in the last 48 hours, or was set up
 less than 48 hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires
 or a task that cannot start keeps its file, and counts as none: every notice and the security line are given as though
 no job were set up, with the offer to set it up again, and one more line —

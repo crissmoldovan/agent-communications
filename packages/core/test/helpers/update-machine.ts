@@ -65,6 +65,18 @@ export function markJobSetUp(m: Machine): void {
   );
 }
 
+/**
+ * A process started through `name`'s stable launcher, as the launcher starts one (re-review of 0.20.0, severity 6): the
+ * launcher's pointer in this data directory, naming the runtime of `version`, and the environment the launcher hands
+ * the process it starts (`AGENT_COMMS_LAUNCHER`). The job reaches such a process: it switches that pointer.
+ */
+export function launchedThrough(m: Machine, name: string, version: string): Record<string, string> {
+  const launch = join(m.env.AGENT_COMMS_DATA_DIR ?? join(m.home, 'data'), 'launch');
+  mkdirSync(launch, { recursive: true });
+  writeFileSync(join(launch, `${name}.current`), `current=${version}-${name}\n`);
+  return { ...m.env, AGENT_COMMS_LAUNCHER: name };
+}
+
 /** The file as a check would have left it, asked at `at`, written under the check's own lock. */
 export async function seed(m: Machine, record: Partial<UpdateCheckRecord>, at: Date = new Date()): Promise<void> {
   mkdirSync(m.stateDir, { recursive: true });
