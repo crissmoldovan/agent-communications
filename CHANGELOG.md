@@ -29,9 +29,9 @@ then says what to do. It is still a note, with nothing for you to run.
 **A change you approve at your terminal says so.** Under the `chat` change policy, a command run at a terminal, such as
 `agentcomms update --background-job on` or `agentcomms label style <workspace> labelled`, printed a preview headed
 "approved by a yes in the chat", then asked you to type yes right there. The header now reads "approved by a yes typed
-here, at this terminal". This is the same in every CLI: core, Gmail, Slack, Resend, WhatsApp and events. A preview an
-agent shows you in a chat still says "a yes in the chat", and under `confirm` it still says "a code typed at a
-terminal".
+here, at this terminal". Every CLI that asks this way says so: core's, Gmail's, Slack's, Resend's and WhatsApp's (the
+events service's server is installed and pruned through core's). A preview an agent shows you in a chat still says
+"a yes in the chat", and under `confirm` it still says "a code typed at a terminal".
 
 **Commands printed for you keep working after an update.** Setting up the background job printed "To remove it:"
 followed by a command that started a versioned runtime, such as `…/runtime/0.20.0-core/…/cli.mjs`. The background job
