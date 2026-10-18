@@ -121,7 +121,7 @@ test('L5: removing an `agent` rule, and every change of word, name or Slack icon
       { word: 'agent', name: 'Jo Example', rules: [RULES[1]], slackIcons: { [account.id]: ':jo-agent:' } },
       'agentLabel.slackIcons',
       {},
-      { [account.id]: ':jo-agent:' },
+      { 'acme/slack': ':jo-agent:' },
     ],
   ];
   for (const [label, path, was, now] of cases) {
@@ -193,15 +193,22 @@ test('Slack style (2026-10-17): app to labelled loosens, and its preview says wh
   const after = withLabel(before, { slackStyles: { [account.id]: 'labelled' } });
   const { loosened, changes } = classifyChange(before, after);
   assert.deepEqual(loosened, ['agentLabel.slackStyles']);
+  // By the workspace's name, as the person knows it: its id is bound by the settings the change writes, not shown.
   assert.deepEqual(changes, [
-    { path: 'agentLabel.slackStyles', before: { [account.id]: 'app' }, after: { [account.id]: 'labelled' } },
+    { path: 'agentLabel.slackStyles', before: { 'acme/slack': 'app' }, after: { 'acme/slack': 'labelled' } },
   ]);
+  const settings = changedSettings(before, after);
+  assert.deepEqual(
+    settings.filter((setting) => setting.path === 'agentLabel.slackStyles'),
+    [{ path: 'agentLabel.slackStyles', before: null, after: { [account.id]: 'labelled' } }],
+  );
   const preview = renderChangePreview({
     approvalId: 'ap_00000000000000000000000000',
     requiredPolicy: 'chat',
-    change: { summary: 'test', target: null, loosened: changes, settings: changedSettings(before, after), effects: [] },
+    change: { summary: 'test', target: null, loosened: changes, settings, effects: [] },
   });
-  assert.match(preview, /how the agent’s Slack messages look: acc_A{16} app → acc_A{16} labelled/);
+  assert.match(preview, /how the agent’s Slack messages look in acme\/slack: app → labelled — /);
+  assert.doesNotMatch(preview, /acc_/, 'an account id is no name a person knows');
   assert.match(preview, /trades Slack’s own APP tag, which no one can fake, for words in the message/);
   // A style this release cannot read is app, so labelled from it loosens just the same.
   assert.deepEqual(classifyChange(config({ slackStyles: { [account.id]: 'fancy' } }), after).loosened, [

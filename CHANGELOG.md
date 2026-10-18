@@ -3,6 +3,15 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A label change's preview names your Slack workspace as you know it.** `agentcomms label style <workspace> labelled`
+(or `comms_label` with `style`) showed the workspace's internal id where its name belongs: "how the agent’s Slack
+messages look: acc_… app → acc_… labelled". It now reads "how the agent’s Slack messages look in cue/slack: app →
+labelled", and a Slack icon change reads the same way: "the icon of the agent’s Slack posts in cue/slack: your Slack
+photo → :jo-agent:". The word, name and rule previews already named accounts by name, and still do. The approval still
+binds the workspace's id, so it cannot be spent on another workspace connected later under the same name.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked

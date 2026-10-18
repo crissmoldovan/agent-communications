@@ -1986,7 +1986,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // message unlabelled, or that changes how the label looks, waits for the person. Its values are rendered as the
   // other settings' are, so the preview shows them and the approval binds them.
   for (const loosening of classifyAgentLabelChange(agentLabelOf(before), agentLabelOf(after))) {
-    loosen(loosening.path, labelSettingValue(loosening, loosening.was), labelSettingValue(loosening, loosening.now));
+    loosen(
+      loosening.path,
+      labelSettingValue(loosening, loosening.was, before),
+      labelSettingValue(loosening, loosening.now, after),
+    );
   }
   return { loosened: changes.map((change) => change.path), changes };
 }
@@ -2002,14 +2006,26 @@ export function agentLabelRuleText(rule: AgentLabelRule): string {
 }
 
 /**
- * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles as they are, the
- * rest as text.
+ * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles by the name of
+ * the workspace each is for, in `config` — the side the value was read from — and the rest as text.
+ *
+ * Icons and styles are stored by the account's id, so they follow a rename; a preview names the workspace as the person
+ * knows it, `acme/slack`, never its id, which they have never seen (0.21). The ids are still what an approval binds:
+ * `changedSettings` records the stored values as they are. An id that names no connected account — one removed since —
+ * has no other name, and keeps its id.
  */
-function labelSettingValue(loosening: AgentLabelLoosening, value: unknown): SettingValue | undefined {
+function labelSettingValue(loosening: AgentLabelLoosening, value: unknown, config: Config): SettingValue | undefined {
   if (value === undefined || value === null) return undefined;
   if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
-  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles')
-    return { ...(value as Readonly<Record<string, string>>) };
+  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles') {
+    const accounts = connectedAccounts(config);
+    return Object.fromEntries(
+      Object.entries(value as Readonly<Record<string, string>>).map(([id, entry]) => [
+        accounts.find((account) => account.id === id)?.alias ?? id,
+        entry,
+      ]),
+    );
+  }
   return String(value);
 }
 

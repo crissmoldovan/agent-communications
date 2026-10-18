@@ -610,6 +610,39 @@ function shown(value: SettingValue): string {
   return String(value);
 }
 
+/**
+ * The label settings kept for each Slack workspace, by its name (`labelSettingValue`), and what a workspace with none
+ * has: its style is `app`, and the app's posts show the person's photo.
+ */
+const PER_WORKSPACE: Readonly<Record<string, string>> = {
+  'agentLabel.slackStyles': 'app',
+  'agentLabel.slackIcons': 'your Slack photo',
+};
+
+function recordOf(value: SettingValue): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+/**
+ * A setting kept for each workspace, as the person reads it: each workspace it moves, by name, from → to —
+ * `in acme/slack: app → labelled` — and none it leaves as it was. Undefined for any other setting, or a value of
+ * another shape, which is shown as every other setting is.
+ */
+function perWorkspace(field: string, before: SettingValue, after: SettingValue): string | undefined {
+  const none = PER_WORKSPACE[field];
+  const [was, now] = [recordOf(before ?? {}), recordOf(after ?? {})];
+  if (none === undefined || was === undefined || now === undefined) return undefined;
+  const value = (record: Readonly<Record<string, unknown>>, name: string) =>
+    Object.hasOwn(record, name) ? String(record[name]) : none;
+  const moved = [...new Set([...Object.keys(was), ...Object.keys(now)])]
+    .filter((name) => value(was, name) !== value(now, name))
+    .sort();
+  if (moved.length === 0) return undefined;
+  return moved.map((name) => `in ${name}: ${value(was, name)} → ${value(now, name)}`).join(', and ');
+}
+
 /** One loosening as a line a person reads: what, from, to, and what that means. */
 function describeLoosening(loosening: Loosening): string {
   const scoped = /^(inboxes|accounts)\.([^.]+)\.(.+)$/.exec(loosening.path);
@@ -619,7 +652,12 @@ function describeLoosening(loosening: Loosening): string {
     ? `${scoped[2]} ${label}${loosening.id === undefined ? ' (connected by this change)' : ''}`
     : label;
   const words = meaning(field, loosening.after, scoped ? (scoped[1] as 'inboxes' | 'accounts') : undefined);
-  const line = `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}${words ? ` — ${words}` : ''}`;
+  const workspaces = scoped ? undefined : perWorkspace(field, loosening.before, loosening.after);
+  const moved =
+    workspaces === undefined
+      ? `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}`
+      : `${what} ${workspaces}`;
+  const line = `${moved}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.
   return truncateDisplay(line, 300);

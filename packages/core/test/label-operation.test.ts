@@ -365,6 +365,36 @@ test('icon: an emoji name between colons is recorded for a Slack account through
   assert.equal((await labelOf(m)).slackIcons, undefined);
 });
 
+test('every label change that waits names each account as the person knows it, never by its id', async () => {
+  const m = machine({
+    name: 'Jo Example',
+    rules: [{ account: 'acme/slack', accountId: slack.id, conversation: 'C0ACME', as: 'agent' }],
+    slackIcons: { [slack.id]: ':jo-agent:' },
+  });
+  const requests: LabelChangeRequest[] = [
+    { word: 'twin' },
+    { name: 'Jo' },
+    { name: null },
+    { addRule: { account: 'acme/slack', as: 'me' } },
+    { addRule: { account: 'acme/gmail', conversation: '@acme.test', as: 'me' } },
+    { removeRule: { account: 'acme/slack', conversation: 'C0ACME', as: 'agent' } },
+    { icon: { account: 'acme/slack', emoji: ':jo-bot:' } },
+    { icon: { account: 'acme/slack', emoji: null } },
+    { style: { account: 'acme/slack', style: 'labelled' } },
+  ];
+  for (const request of requests) {
+    const prepared = waiting(await run(m, request));
+    assert.doesNotMatch(prepared.preview, /\b(?:acc|ibx)_[A-Za-z0-9]/, JSON.stringify(request));
+    assert.doesNotMatch(prepared.preview, /\[object Object\]/, JSON.stringify(request));
+  }
+  const style = waiting(await run(m, { style: { account: 'acme/slack', style: 'labelled' } }));
+  assert.match(style.preview, /how the agent’s Slack messages look in acme\/slack: app → labelled — /);
+  const icon = waiting(await run(m, { icon: { account: 'acme/slack', emoji: ':jo-bot:' } }));
+  assert.match(icon.preview, /the icon of the agent’s Slack posts in acme\/slack: :jo-agent: → :jo-bot: — /);
+  const cleared = waiting(await run(m, { icon: { account: 'acme/slack', emoji: null } }));
+  assert.match(cleared.preview, /the icon of the agent’s Slack posts in acme\/slack: :jo-agent: → your Slack photo/);
+});
+
 // ── A Slack workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────
 
 const LABELLED = { style: { account: 'acme/slack', style: 'labelled' } } as const;
