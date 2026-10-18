@@ -84,7 +84,15 @@ export interface ChangeOptions {
 }
 
 /** What preparing a change needs: the options of every step, and the channel that prepares it. */
-export type PrepareChangeOptions = ChangeOptions & { channel: string };
+export type PrepareChangeOptions = ChangeOptions & {
+  channel: string;
+  /**
+   * The person reading this preview gives their yes here, at this terminal: a CLI asking a person at a terminal
+   * (`gatedChangeAtTerminal`). The preview's header says so under `chat`, where it otherwise says the yes is in the chat
+   * — as it is for an agent, which shows the preview to the person there. Only the words: the approval is the same.
+   */
+  askedHere?: boolean | undefined;
+};
 
 export interface PreparedChange {
   approvalId: string;
@@ -199,7 +207,7 @@ export async function prepareChange(
       summary,
       loosened: binding.loosened,
       effects: binding.effects,
-      preview: renderChangePreview({ ...record, change: binding }),
+      preview: renderChangePreview({ ...record, change: binding }, { askedHere: options.askedHere === true }),
       expiresAt: record.expiresAt,
       next: nextStep(record.approvalId, policy, core, options),
       approval: await core.approvals.approvalOf(record),
@@ -671,12 +679,21 @@ function describeLoosening(loosening: Loosening): string {
  * once as it was prepared (`doneAtOnce`). There it says what is true: those lines, listed apart, are done already, and
  * the rest is what waits for the approval. Decided by that field alone, never by the words of an effect, which can
  * carry text a person or a profile chose; every other preview's header is word for word what it was.
+ *
+ * It says how the change is approved: under `confirm`, a code typed at a terminal; under `chat`, a yes in the chat —
+ * or, `askedHere`, a yes typed here, at this terminal, where a CLI asks the person reading it at once.
  */
 export function renderChangePreview(
   record: Pick<ApprovalRecord, 'approvalId' | 'requiredPolicy'> & { change: ChangeBinding },
+  options: { askedHere?: boolean | undefined } = {},
 ): string {
   const { change } = record;
-  const how = changePolicyOf(record) === 'chat' ? 'a yes in the chat' : 'a code typed at a terminal';
+  const how =
+    changePolicyOf(record) === 'chat'
+      ? options.askedHere === true
+        ? 'a yes typed here, at this terminal'
+        : 'a yes in the chat'
+      : 'a code typed at a terminal';
   const target = change.target;
   const about =
     target === null
