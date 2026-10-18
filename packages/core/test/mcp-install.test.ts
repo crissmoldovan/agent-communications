@@ -370,10 +370,15 @@ test(
     const { launcher } = launcherPaths(data, 'example');
     const execLine = readFileSync(result.shim?.path ?? '', 'utf8').split('\n')[2];
     assert.equal(execLine, `exec ${quote(launcher)} "$@"`, 'the shim starts the launcher the registration starts');
-    const [program, cli] = located.command.words;
+    // From the runtime the launcher starts, the locator names the launcher itself (0.21): a command printed there
+    // outlives the runtime once an update prunes it.
+    assert.deepEqual(located.command.words, [launcher], 'the locator names the stable launcher, not the runtime');
+    assert.equal(located.basis.entryKind, 'launcher');
+    // The Node the locator names a runtime's own CLI with: this one, as no `node` on PATH is this very Node.
+    const program = process.execPath;
     assert.match(
       readFileSync(launcher, 'utf8'),
-      new RegExp(`^node=${quote(program ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      new RegExp(`^node=${quote(program).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
       'the launcher runs the locator’s program, not the PATH-visible Node stand-in',
     );
     assert.notEqual(
@@ -381,7 +386,12 @@ test(
       pathNode,
       'the fixture proves the PATH-visible node and the locator program are different',
     );
-    assert.equal(realpathSync(entry), cli, 'and the CLI the locator checked is the one the launcher starts');
+    const pointer = await readPointer(data, 'example');
+    assert.equal(
+      realpathSync(join(pointer?.current ?? '', 'node_modules', ...product.packageName.split('/'), 'dist', 'cli.mjs')),
+      realpathSync(entry),
+      'and the CLI the launcher starts is the runtime entry the locator checked',
+    );
     assert.equal(
       spawnSync(result.shim?.path ?? '', ['a', 'b c'], { encoding: 'utf8' }).stdout,
       'ran a b c',

@@ -613,7 +613,7 @@ function stableWayIn(
       GATE,
       platform === 'win32' ? [program, launcher, ...words] : [launcher, ...words],
       platform,
-      realpathSync(launcher),
+      realpathOfExisting(launcher) ?? launcher,
     );
     return { ok: true, command, entryKind: 'launcher' };
   }
@@ -625,7 +625,7 @@ function stableWayIn(
   if (shim === null) return built;
   return {
     ok: true,
-    command: new PrintedCommand(GATE, [shim, ...words], platform, realpathSync(shim)),
+    command: new PrintedCommand(GATE, [shim, ...words], platform, realpathOfExisting(shim) ?? shim),
     entryKind: 'shim',
   };
 }
