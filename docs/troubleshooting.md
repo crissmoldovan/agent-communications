@@ -217,7 +217,10 @@ does not break that guarantee so much as stand beside it.
 From 0.13.1, every command a result hands you to run — an `approve`, a change run again with `--approval`, a
 repair — names the Node and the file of the installation that printed it, with the suite folders that command uses
 pinned: `--config-dir`, `--state-dir`, `--data-dir` and `--secrets-dir`, and `--downloads-dir` for one that saves
-files. It runs as pasted, from any folder, with nothing of this suite on your `PATH`. Two cases say so themselves:
+files. It runs as pasted, from any folder, with nothing of this suite on your `PATH`. From 0.21, a command a managed
+install prints names its stable launcher, `<data dir>/launch/<product>`, rather than that release's runtime under
+`<data dir>/runtime/`, so it still runs after an update has moved on and pruned that runtime. Where there is no
+launcher yet, it names your managed CLI shim when that starts the same file. Two cases say so themselves:
 
 - **A PowerShell line, or words to type.** When the absolute Node path needs quotes — including the default
   `C:\Program Files` install — the command begins with PowerShell's `&`, quotes each word for PowerShell, and labels
