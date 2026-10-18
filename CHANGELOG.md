@@ -20,6 +20,12 @@ way; and a reaction is made as you, with no label, since a reaction carries no w
 reaction is now said to be the app's where it can post, and yours, with no label, elsewhere; posts, replies, files and
 edits read as before.
 
+**Slack doctor no longer says organisations cannot post as an app.** For a workspace connected through an
+organisation's profile that names no agent app, `agent-slack doctor` said posting as the app "is not available through
+an organisation’s shared app yet", which stopped being true in 0.20.0. It now says posts go out as you, labelled, and
+that posting as an app becomes possible once your organisation's admin adds an agent app to its profile; the check
+then says what to do. It is still a note, with nothing for you to run.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked
