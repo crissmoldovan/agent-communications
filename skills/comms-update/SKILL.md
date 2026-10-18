@@ -112,9 +112,10 @@ Say so, and stop until they have. From 0.14.0 this matters more: the first 0.14 
 prepares, approves or sends anything, or changes a send policy, moves the shared configuration to
 version 3, and a server still running 0.13 then fails every call it starts with "this release reads
 versions 1 and 2" until its client is restarted. Approvals a 0.13 server prepared and nobody used are
-retired then ("prepared by an earlier release; prepare it again"): prepare them again. After the restart, call `comms_server_prune` for `core`, `gmail`
-and `slack` (each shows what it will delete and asks); it keeps any version a running process still
-uses, so a window that was not restarted keeps its old one until it is.
+retired then ("prepared by an earlier release; prepare it again"): prepare them again. After the restart, call `comms_server_prune` with no
+`channel`: it goes through every managed server's old runtimes, lists them by server, and asks before it deletes any.
+It keeps any version a running process still uses, so a window that was not restarted keeps its old one until it
+is, and the runtimes each stable launcher starts or keeps for a rollback.
 
 ## 4. Then walk through what the new release asks of the person
 
@@ -150,7 +151,7 @@ messages, in this order, skipping any that does not apply:
 |---|---|
 | What is behind | `agentcomms update --check` |
 | Update | `agentcomms update` — at a terminal it shows the plan and asks `yes`; anywhere else it exits `10` with the preview and an approval id, then `agentcomms update --approval <id>` |
-| Clear out old versions | `agentcomms mcp prune`, `agent-gmail mcp prune`, `agent-slack mcp prune` |
+| Clear out old versions | `agentcomms mcp prune` — every managed server's, listed by server; `--server <name>` for one |
 | Not now | `agentcomms update --pause [1\|7\|14]` — no approval; `agentcomms update --resume` ends it |
 | How often it checks | `agentcomms update --level auto\|every-14-days\|never` — less often is approved like any change; more often is at once |
 

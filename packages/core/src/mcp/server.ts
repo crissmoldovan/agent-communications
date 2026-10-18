@@ -775,9 +775,12 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove unused runtimes',
       description:
-        'Remove a declared server’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
+        'Remove the managed runtimes that no client config names, no printed entry names, no process runs and no stable launcher starts or keeps for a rollback — what upgrades leave behind. With no `channel`, every managed server’s, listed by server; with one, only that server’s. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
       inputSchema: {
-        channel: z.enum(SERVERS as [string, ...string[]]).describe('whose runtimes'),
+        channel: z
+          .enum(SERVERS as [string, ...string[]])
+          .optional()
+          .describe('whose runtimes; left out, every managed server’s'),
         dryRun: z.boolean().optional().describe('only say what would be removed'),
         includePrinted: z
           .boolean()
@@ -793,7 +796,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       change(
         () =>
           serverPruneChange(core, env, {
-            channel: args.channel as (typeof SERVERS)[number],
+            channel: args.channel as (typeof SERVERS)[number] | undefined,
             dryRun: args.dryRun,
             includePrinted: args.includePrinted,
             processes: options.processes,

@@ -464,9 +464,20 @@
       "mcp": "comms_server_prune",
       "status": "both",
       "operation": "serverPruneChange",
+      "expect": { "request.channel": null },
+      "reason": "`agentcomms mcp prune` with no `--server` prunes every managed server's runtimes, listed by server; comms_server_prune with no `channel` is this command. Each passes no server to the shared prune operation, which takes every server the channel registry declares."
+    },
+    {
+      "id": "core.mcp.prune.core",
+      "package": "core",
+      "cli": "mcp prune",
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "operation": "serverPruneChange",
+      "argv": ["--server", "core"],
       "args": { "channel": "core" },
       "expect": { "request.channel": "core" },
-      "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
+      "reason": "`agentcomms mcp prune --server core` prunes the core's own runtimes; comms_server_prune with `channel: \"core\"` is this command."
     },
     {
       "id": "core.mcp.install.events",

@@ -54,6 +54,7 @@ import {
   preflightInstall,
   pruneManagedRuntimes,
   reusableRuntime,
+  runningCommandLines,
   type SupportedClient,
   whichExecutable,
 } from '../mcp-install.ts';
@@ -834,12 +835,33 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
 // ── Prune ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ServerPruneRequest {
-  /** The declared server id. Kept as `channel` for CLI–MCP compatibility with earlier releases. */
-  channel: ServerId;
+  /**
+   * The declared server id, kept as `channel` for CLI–MCP compatibility with earlier releases. Left out, every managed
+   * server the channel registry declares (`SERVERS`): `agentcomms mcp prune`, and `comms_server_prune` with no channel.
+   */
+  channel?: ServerId | undefined;
   dryRun?: boolean | undefined;
   includePrinted?: boolean | undefined;
   /** For a test: the command lines of the running processes, or null when they cannot be listed. */
   processes?: (() => Promise<readonly string[] | null>) | undefined;
+}
+
+/** One declared server's part of a prune that names no server: its own prune, and whose it is. */
+export interface ServerPruned extends PruneResult {
+  server: ServerId;
+  /** The server as a person knows it: "agentcomms (core)", "Gmail". */
+  label: string;
+}
+
+/**
+ * A prune of every managed server: each server's own prune, in the registry's order, and all of it together — every
+ * runtime removed and kept, each saying whose it is, and every shim — so it reads as one server's prune does.
+ * `refused` is set only when every server with a runtime to look at was stopped: then nothing at all was removed.
+ */
+export interface PruneAllResult extends PruneResult {
+  removed: { path: string; version: string; server: ServerId }[];
+  kept: { path: string; version: string; reason: string; server: ServerId }[];
+  servers: ServerPruned[];
 }
 
 /**
@@ -857,8 +879,9 @@ export function serverPruneChange(
   env: NodeJS.ProcessEnv,
   request: ServerPruneRequest,
   own?: Pick<McpProduct, 'packageName' | 'version'>,
-): GatedChange<PruneResult> {
-  if (!isServer(request.channel)) {
+): GatedChange<PruneResult | PruneAllResult> {
+  if (request.channel === undefined && own === undefined) return everyServerPruneChange(core, env, request);
+  if (request.channel === undefined || !isServer(request.channel)) {
     throw new CommsError('USAGE', `"${String(request.channel)}" is not a channel`, {
       hint: `One of: ${CHANNELS.join(', ')}.`,
     });
@@ -885,10 +908,7 @@ export function serverPruneChange(
       return {
         before: config,
         after: config,
-        effects: [
-          ...preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
-          ...preview.shims.removed.map((path) => `deletes the owned ${label} CLI shim at ${path}`),
-        ],
+        effects: pruneEffects(label, preview),
         summary: `Remove ${approved.length} unused ${label} runtime${approved.length === 1 ? '' : 's'}`,
       };
     },
@@ -898,6 +918,96 @@ export function serverPruneChange(
         dryRun: request.dryRun === true,
         ...(request.dryRun ? {} : { only: approved }),
       }),
+  };
+}
+
+/** What a removal of runtimes does, in the preview's words: each runtime, then each owned CLI shim. */
+function pruneEffects(label: string, preview: PruneResult): string[] {
+  return [
+    ...preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
+    ...preview.shims.removed.map((path) => `deletes the owned ${label} CLI shim at ${path}`),
+  ];
+}
+
+/**
+ * Every managed server's unused runtimes, as one change (0.21): what an update leaves behind is every server's, and
+ * `--server` for each was a step a person had to know to take. The servers are the channel registry's (`SERVERS`),
+ * channels and declared services alike, never a list written here; each is pruned exactly as `--server` prunes it —
+ * this release's runtime, one any client config or printed entry names, one a running process uses, and the runtime
+ * its stable launcher starts and the one it keeps for a rollback all stay, each said why.
+ *
+ * A dry run is free. Otherwise the plan is every server's dry run, shown grouped by server, and the approval is bound to
+ * exactly that list; the removal is then restricted to it, so nothing that became unused after it was shown goes. The
+ * running processes are listed once for each pass, not once a server.
+ */
+function everyServerPruneChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ServerPruneRequest,
+): GatedChange<PruneAllResult> {
+  const context: InstallContext = { env, core };
+  const servers = SERVERS.map((server) => ({
+    server,
+    label: serverLabel(server),
+    product: { packageName: serverFacts(server).packageName, version: VERSION },
+  }));
+  /** One listing of the running processes, shared by every server's prune in one pass. */
+  const listedOnce = (): (() => Promise<readonly string[] | null>) => {
+    let listing: Promise<readonly string[] | null> | undefined;
+    return () => {
+      listing ??= (request.processes ?? runningCommandLines)();
+      return listing;
+    };
+  };
+  const pruneEach = async (options: { dryRun: boolean; only?: readonly string[] }): Promise<ServerPruned[]> => {
+    const processes = listedOnce();
+    const parts: ServerPruned[] = [];
+    for (const { server, label, product } of servers) {
+      const result = await pruneManagedRuntimes(context, product, {
+        includePrinted: request.includePrinted === true,
+        processes,
+        ...options,
+      });
+      parts.push({ server, label, ...result });
+    }
+    return parts;
+  };
+  let approved: string[] = [];
+  return {
+    plan: async (config) => {
+      if (request.dryRun) {
+        return { before: config, after: config, summary: 'Show which runtimes of every managed server are unused' };
+      }
+      const previews = await pruneEach({ dryRun: true });
+      approved = previews.flatMap((part) => part.removed.map((item) => item.path));
+      const counts = previews
+        .filter((part) => part.removed.length > 0)
+        .map((part) => `${part.removed.length} ${part.label}`);
+      return {
+        before: config,
+        after: config,
+        effects: previews.flatMap((part) => pruneEffects(part.label, part)),
+        summary: `Remove ${approved.length} unused runtime${approved.length === 1 ? '' : 's'}${counts.length > 0 ? `: ${counts.join(', ')}` : ''}`,
+      };
+    },
+    apply: async () => {
+      const dryRun = request.dryRun === true;
+      const parts = await pruneEach(dryRun ? { dryRun } : { dryRun, only: approved });
+      const looked = parts.filter((part) => part.removed.length + part.kept.length > 0);
+      const refused = looked.length > 0 && looked.every((part) => part.refused !== undefined);
+      return {
+        runtimeDir: join(core.paths.dataDir, 'runtime'),
+        dryRun,
+        removed: parts.flatMap((part) => part.removed.map((item) => ({ ...item, server: part.server }))),
+        kept: parts.flatMap((part) => part.kept.map((item) => ({ ...item, server: part.server }))),
+        shims: {
+          removed: parts.flatMap((part) => part.shims.removed),
+          kept: parts.flatMap((part) => part.shims.kept),
+        },
+        ...(refused ? { refused: [...new Set(looked.map((part) => part.refused))].join('; ') } : {}),
+        servers: parts,
+      };
+    },
   };
 }
 

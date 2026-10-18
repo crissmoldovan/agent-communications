@@ -481,7 +481,14 @@ deleted keeps nothing. That record starts with 0.4.1: an entry an earlier releas
 `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is known only once it has been registered again, so do step 4 for every such
 account before running `prune`, or run it from a shell with that variable set. It does not read a workspace's own
 `.vscode/mcp.json` or `.cursor/mcp.json`, so if you registered a runtime there by hand, look at
-`mcp prune --dry-run` first. Run it after the clients are back:
+`mcp prune --dry-run` first. Run it after the clients are back. From 0.21, core's prune goes through every managed
+server's runtimes, listed by server:
+
+```bash
+npx -y @agentcomms/core@$V mcp prune
+```
+
+Before 0.21, core's prune removed only its own runtimes, so run each server's:
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune

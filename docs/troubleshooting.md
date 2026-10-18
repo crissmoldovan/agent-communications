@@ -343,7 +343,10 @@ registering it.
 Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
 directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
 `<version>-gmail/` and `<version>-slack/`, or plain `<version>/` for a Gmail runtime an earlier release installed.
-`mcp prune` deletes the old ones, and only those it can show are unused. It keeps this release's; any runtime an
+`mcp prune` deletes the old ones, and only those it can show are unused. From 0.21 core's `mcp prune` with no
+`--server` goes through every managed server's runtimes and lists them by server; `--server <name>`, or a channel's
+own `mcp prune`, keeps to one. It keeps this release's; the runtime each stable launcher starts, and the one it keeps
+to fall back and roll back to; any runtime an
 entry names in a client config it reads; any runtime it printed an entry for (`--client json`, `--print`, or a
 client whose CLI was not on `PATH`), because it cannot see where that entry was pasted; and any runtime a running
 process started from. The configs it reads are Claude Code's `.claude.json` (under `CLAUDE_CONFIG_DIR` when that
@@ -362,9 +365,9 @@ printed stays until you say that entry is gone: `mcp prune --include-printed` re
 anything a config it reads or a running process names. Run it once the clients have been restarted:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp prune --dry-run
-npx -y @agentcomms/gmail@latest mcp prune
-npx -y @agentcomms/slack@latest mcp prune
+npx -y @agentcomms/core@latest mcp prune --dry-run         # every managed server's, listed by server
+npx -y @agentcomms/core@latest mcp prune
+npx -y @agentcomms/core@latest mcp prune --server gmail    # only Gmail's
 ```
 
 A dry run changes nothing and asks nobody. Removing is a change you approve, as the list of runtimes it would delete —

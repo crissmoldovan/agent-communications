@@ -41,6 +41,14 @@ release. That covers "To remove it", an approval, a change to run again, an upda
 there is no launcher yet, it names your managed CLI shim if that starts the very same file, and otherwise the runtime,
 as before. A command printed from a checkout, an npx cache or a global install is unchanged.
 
+**`agentcomms mcp prune` clears out every server's old runtimes at once.** With no `--server`, it used to prune only
+core's own runtimes; Gmail's, Slack's and the events service's needed `--server <name>` each, though an update tells
+you to prune them all. It now goes through every managed server and lists each runtime it would remove, grouped by
+server, in one preview you approve. `--server <name>` still keeps it to one server, and `comms_server_prune` works the
+same way: with no `channel` it covers every server. What it keeps is unchanged: this release's runtime, any runtime a
+client config or a printed entry names or a running process uses, and the runtime each stable launcher starts plus
+the one it keeps to roll back to. After an update, the result now names this one prune, not one command per channel.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked

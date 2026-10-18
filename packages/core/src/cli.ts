@@ -172,7 +172,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 [--print] [--no-verify] [--approval <id>]
                                 register the core server, or another declared server, and prove it starts
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
-                                remove that server's managed runtimes that nothing uses
+                                remove the managed runtimes that nothing uses: every managed server's,
+                                listed by server, or with --server that one's
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
@@ -915,7 +916,8 @@ export async function main(
           const result = await gatedChangeAtTerminal(
             core,
             serverPruneChange(core, env, {
-              channel: values.server ?? 'core',
+              // No server named: every managed server's runtimes, as an update leaves them behind.
+              channel: values.server,
               dryRun: values['dry-run'],
               includePrinted: values['include-printed'],
             }),

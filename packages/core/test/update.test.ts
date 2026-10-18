@@ -1046,10 +1046,11 @@ test('update prepares one approval listing every step, writes nothing before it,
     assert.equal(entries.gmail?.env?.AGENT_COMMS_CONFIG_DIR, undefined);
 
     assert.match(String(result.next), /Restart cursor to load the new servers/);
-    assert.match(String(result.next), /comms_server_prune/);
-    // Core's own `mcp prune`, located; the others, registered here at another release, say they are not locatable.
+    // One prune for every server's old runtimes: comms_server_prune with no channel, or core's own `mcp prune`, located —
+    // never one command a channel, some of which are not locatable here.
+    assert.match(String(result.next), /comms_server_prune with no channel, which prunes every server’s/);
     locatedCoreLine(String(result.next), ['mcp', 'prune']);
-    assert.match(String(result.next), new RegExp(`Gmail ${VERSION} \\(@agentcomms/gmail\\) is not locatable here`));
+    assert.doesNotMatch(String(result.next), /not locatable here|--server/);
     assertNoBareCommand(String(result.next));
 
     // The approval was claimed, once, and is spent…

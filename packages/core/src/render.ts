@@ -4,6 +4,7 @@ import { paint } from './cli-runtime.ts';
 import { type CliHandoffs, handoffSentence } from './handoffs.ts';
 import type { InstallResult, PruneResult } from './mcp-install.ts';
 import type { DoctorReport } from './operations/maintenance.ts';
+import type { PruneAllResult } from './operations/servers.ts';
 import type { UpdateItem, UpdateReport, UpdateResult } from './operations/update.ts';
 
 /**
@@ -462,8 +463,25 @@ export function renderDoctor(report: DoctorReport): string {
     .join('\n');
 }
 
-/** What `mcp prune` removed and kept, and why each one it kept is still needed. */
-export function renderPrune(result: PruneResult, color: boolean): string {
+/**
+ * What `mcp prune` removed and kept, and why each one it kept is still needed. A prune of every managed server lists
+ * each server that had a runtime under its own name, in the registry's order.
+ */
+export function renderPrune(result: PruneResult | PruneAllResult, color: boolean): string {
+  if ('servers' in result) {
+    const groups = result.servers
+      .map((part) => ({ label: part.label, lines: pruneLines(part, color) }))
+      .filter((group) => group.lines.length > 0)
+      .map((group) => [`${group.label}:`, ...group.lines.map((line) => `  ${line}`)].join('\n'));
+    return groups.length > 0 ? groups.join('\n') : `No managed runtimes to remove in ${result.runtimeDir}.`;
+  }
+  const lines = pruneLines(result, color);
+  if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
+  return lines.join('\n');
+}
+
+/** One server's prune, a line a runtime or shim; none when it had nothing to look at. */
+function pruneLines(result: PruneResult, color: boolean): string[] {
   const lines: string[] = [];
   if (result.refused) lines.push(paint(color, 'yellow', `Nothing removed: ${result.refused}.`));
   const verb = result.dryRun ? 'Would remove' : 'Removed';
@@ -471,8 +489,7 @@ export function renderPrune(result: PruneResult, color: boolean): string {
   for (const path of result.shims.removed) lines.push(paint(color, 'green', `${verb} CLI shim: ${path}`));
   for (const path of result.shims.kept) lines.push(`Kept foreign CLI shim: ${path}`);
   for (const item of result.kept) lines.push(`Kept ${item.version} (${item.reason}): ${item.path}`);
-  if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
-  return lines.join('\n');
+  return lines;
 }
 
 // ── An update, as `agentcomms update` prints it — here so a channel's command can print one too ──────────────────
