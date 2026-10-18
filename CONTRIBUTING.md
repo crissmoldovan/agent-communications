@@ -156,7 +156,10 @@ Every command this suite prints for a person — an approval, a change run again
 this Node and a checked file of the installation that printed it, with its folders pinned, or says plainly that there
 is none here ([design](docs/superpowers/specs/2026-10-04-cli-path-shims-design.md), D1–D6). A bare `agent-gmail …` or
 `agentcomms …` is not on most people's PATH. So no package prints one, quotes a line itself, or builds a command from
-words it pasted together: it asks core's handoffs (`packages/core/src/handoffs.ts`).
+words it pasted together: it asks core's handoffs (`packages/core/src/handoffs.ts`). From a managed runtime the command
+names this installation's stable launcher (`<data>/launch/<name>`) when it starts that same release, else a managed
+CLI shim that starts that very file, so a command printed today still runs after the background job prunes the
+runtime it was printed from.
 
 **1. Give core your caller, once, where your package opens core.** `url` is a module of your own package — the nearest
 `package.json` above it must carry `packageName` — never core's, and never a wrapper's: Gmail's server-only package

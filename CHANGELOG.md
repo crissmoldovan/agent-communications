@@ -33,6 +33,14 @@ here, at this terminal". This is the same in every CLI: core, Gmail, Slack, Rese
 agent shows you in a chat still says "a yes in the chat", and under `confirm` it still says "a code typed at a
 terminal".
 
+**Commands printed for you keep working after an update.** Setting up the background job printed "To remove it:"
+followed by a command that started a versioned runtime, such as `…/runtime/0.20.0-core/…/cli.mjs`. The background job
+prunes old runtimes, so two releases later that command no longer existed. Every command a managed install prints now
+names your installation's stable launcher (`<data>/launch/core`, or the channel's own) when it starts that same
+release. That covers "To remove it", an approval, a change to run again, an update's next step and a doctor fix. Where
+there is no launcher yet, it names your managed CLI shim if that starts the very same file, and otherwise the runtime,
+as before. A command printed from a checkout, an npx cache or a global install is unchanged.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked

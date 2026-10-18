@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { normalizePathOptionWords } from './cli-runtime.ts';
 import { quoteCommand, quotedText } from './command-line.ts';
+import { launcherCanStartSync, launcherName, launcherPaths, readPointerSync } from './launcher.ts';
+import { managedShimStarting } from './managed-shims.ts';
 import type { RegisteredServer } from './mcp-clients.ts';
 import { nodeProgram } from './node-program.ts';
 import { isWithin, nearestPackage, readPackageManifest, realpathOfExisting, suiteCommandOf } from './package-roots.ts';
@@ -163,6 +165,9 @@ export interface NodeRuntime {
 
 export type CliDirection = 'own' | 'channel-to-core' | 'cross-product';
 
+/** What a located command starts: a source CLI, a manifest's bin, or a managed runtime's stable launcher or shim. */
+export type EntryKind = 'source' | 'bin' | 'launcher' | 'shim';
+
 /** What a located command was decided from, so that a test, and a person reading a report, can see why. */
 export interface CliCommandBasis {
   readonly direction: CliDirection;
@@ -179,8 +184,11 @@ export interface CliCommandBasis {
   readonly targetWorkspace: string | null;
   /** Both are workspace packages of one checkout: always so for `own`, where they are one package; never for another. */
   readonly sameCheckout: boolean;
-  /** `src/cli.ts`, or the manifest's bin. */
-  readonly entryKind: 'source' | 'bin';
+  /**
+   * `src/cli.ts`, or the manifest's bin; or, for a managed runtime of this installation, the stable way in that starts
+   * that same release (`stableWayIn`): its stable launcher, else its managed CLI shim.
+   */
+  readonly entryKind: EntryKind;
   /** For another product: the registration it was found by. Never its command or arguments, which can hold a token. */
   readonly registration?: RegistrationUsed | undefined;
 }
@@ -279,7 +287,7 @@ interface Found {
 
 /** What a found package came to: a command, or the step that stopped it. */
 type Built =
-  | { ok: true; command: PrintedCommand; entryKind: 'source' | 'bin' }
+  | { ok: true; command: PrintedCommand; entryKind: EntryKind }
   | { ok: false; reason: 'engine' | 'bin' | 'entry'; detail: string; nodeRange?: string };
 
 /**
@@ -350,7 +358,14 @@ export function locateCliCommand(
   } catch (error) {
     return fail('arguments', error instanceof Error ? error.message : String(error));
   }
-  const build = (found: Found) => buildCommand(target, found, words, runtime, callerSource, platform, program);
+  const build = (found: Found) =>
+    stableWayIn(buildCommand(target, found, words, runtime, callerSource, platform, program), found, target, {
+      paths: request.paths,
+      env: request.env,
+      words,
+      platform,
+      program,
+    });
   // What every located command was decided from; each direction adds its own.
   const located = (
     built: Built & { ok: true },
@@ -557,6 +572,88 @@ function buildCommand(
     : [];
   const command = new PrintedCommand(GATE, [program, ...flags, checked.path, ...words], platform, checked.path);
   return { ok: true, command, entryKind: found.source ? 'source' : 'bin' };
+}
+
+/**
+ * A managed runtime's command, as its stable way in (0.21). A command naming `<data>/runtime/0.20.0-core/…/cli.mjs`
+ * stops working once that runtime is pruned — and the background job prunes old runtimes after each update — so a
+ * command printed from a managed runtime of this installation names what stays put instead:
+ *
+ * - **its stable launcher**, `<data>/launch/<name>` (`launcherPaths`), when it is there and its pointer names a runtime
+ *   holding this package at exactly this release, whose CLI can start: the launcher, then the words, as a registration
+ *   starts it — on Windows, where the launcher is a script Node runs, this Node first;
+ * - else **its managed CLI shim**, where shims are offered, when this installation's receipt records one that is
+ *   unchanged and starts this very entry (`managedShimStarting`): a release before the launcher wrote such shims, and
+ *   an update rewrites them;
+ * - else the runtime's entry, as before.
+ *
+ * Only for a package inside `<data>/runtime` of the folders this command pins: a checkout, an npx cache, a global
+ * install or another data folder's runtime is named as it always was. Checked when the command is printed (D6), as the
+ * entry is: a launcher switched later runs what it is then switched to, as every registration that starts it does.
+ */
+function stableWayIn(
+  built: Built,
+  found: Found,
+  target: CliCommandTarget,
+  printing: {
+    readonly paths: Readonly<ResolvedPaths>;
+    readonly env: NodeJS.ProcessEnv | undefined;
+    readonly words: readonly string[];
+    readonly platform: NodeJS.Platform;
+    readonly program: string;
+  },
+): Built {
+  if (!built.ok || found.source) return built;
+  const { paths, words, platform, program } = printing;
+  const runtimes = realpathOfExisting(join(paths.dataDir, 'runtime'));
+  if (runtimes === null || !isWithin(runtimes, found.root) || resolve(runtimes) === resolve(found.root)) return built;
+  const launcher = stableLauncher(paths.dataDir, target.packageName, found.manifest.version, platform);
+  if (launcher !== null) {
+    const command = new PrintedCommand(
+      GATE,
+      platform === 'win32' ? [program, launcher, ...words] : [launcher, ...words],
+      platform,
+      realpathSync(launcher),
+    );
+    return { ok: true, command, entryKind: 'launcher' };
+  }
+  const shim = managedShimStarting(
+    { env: printing.env ?? process.env, dataDir: paths.dataDir, platform },
+    target.manifest.binary,
+    built.command.entry,
+  );
+  if (shim === null) return built;
+  return {
+    ok: true,
+    command: new PrintedCommand(GATE, [shim, ...words], platform, realpathSync(shim)),
+    entryKind: 'shim',
+  };
+}
+
+/**
+ * This installation's stable launcher for `packageName`, when it starts that package at exactly `version`: the file is
+ * there (executable, where it is a shell script), its pointer is one the launcher reads, and the runtime it names holds
+ * the package at that version with a CLI the launcher can start. Null otherwise — a pointer that cannot be read too.
+ */
+function stableLauncher(
+  dataDir: string,
+  packageName: string,
+  version: unknown,
+  platform: NodeJS.Platform,
+): string | null {
+  if (typeof version !== 'string') return null;
+  try {
+    const name = launcherName(packageName);
+    const { launcher } = launcherPaths(dataDir, name);
+    if (!statSync(launcher).isFile()) return null;
+    accessSync(launcher, platform === 'win32' ? constants.R_OK : constants.X_OK);
+    const pointer = readPointerSync(dataDir, name);
+    if (pointer === undefined || !launcherCanStartSync(pointer.current, name)) return null;
+    const started = readPackageManifest(join(pointer.current, 'node_modules', ...packageName.split('/')));
+    return started?.name === packageName && started.version === version ? launcher : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
