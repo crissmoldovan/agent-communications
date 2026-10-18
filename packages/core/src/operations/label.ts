@@ -685,6 +685,35 @@ function agentPhrase(settings: AgentLabelSettings, platform: string): string {
   return phrase === null ? own : `${own}, or ${phrase} where it has none`;
 }
 
+/**
+ * What an `agent` act of one kind looks like to the people who get it, as the channel's own route sends it.
+ *
+ * In a Slack workspace (design 2026-10-15 §3, S2 and S6; the owner's decision, 2026-10-17):
+ *
+ * - `labelled`: every post, reply, file and edit goes out as the person, its words beginning with the label — even where
+ *   the app could post — and a reaction is made as the person with no label, since it carries no words;
+ * - `app`, the default: a reaction is the app's where the app can post, and the person's, unlabelled, elsewhere. Posts,
+ *   replies, files and edits carry the phrase either way — as the app's name where it posts, at the start of the words
+ *   where it does not — and are said as everywhere else.
+ */
+function agentAppearance(settings: AgentLabelSettings, account: ConnectedAccount, kind: ActKind): string {
+  if (account.platform !== 'slack') return `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`;
+  if (slackStyleOf(settings, account.id) === 'labelled') {
+    if (kind === 'reaction') return `${AS_YOU}: a reaction carries no words`;
+    const word = settings.word ?? DEFAULT_AGENT_LABEL_WORD;
+    const phrase = settingPhrase(settings);
+    const named = phrase === null ? '' : `, or "${phrase}:" where Slack has no name for you`;
+    const own = `"<your name in Slack> (${word}):"`;
+    return kind === 'edit'
+      ? `as you, its new words beginning ${own}${named}`
+      : `as you, beginning ${own} in its words and its notification, with no APP tag${named}`;
+  }
+  if (kind === 'reaction') {
+    return `as the app where it can post, which shows it is your agent; elsewhere ${AS_YOU}: a reaction carries no words`;
+  }
+  return `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`;
+}
+
 function queryFor(account: ConnectedAccount, kind: ActKind, conversation?: string): IdentityQuery {
   const base = { account: account.alias, accountId: account.id, kind };
   if (conversation === undefined) return base;
@@ -751,7 +780,7 @@ function accountView(account: ConnectedAccount, settings: AgentLabelSettings): L
       identity: decided.identity,
       source: decided.source === 'rule' ? 'rule' : 'default',
       ...(decided.rule ? { rule: agentLabelRuleText(decided.rule) } : {}),
-      appearsAs: decided.identity === 'me' ? AS_YOU : `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`,
+      appearsAs: decided.identity === 'me' ? AS_YOU : agentAppearance(settings, account, kind),
     };
   });
   const emoji = settings.slackIcons?.[account.id];

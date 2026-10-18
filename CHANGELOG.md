@@ -12,6 +12,14 @@ labelled", and a Slack icon change reads the same way: "the icon of the agent’
 photo → :jo-agent:". The word, name and rule previews already named accounts by name, and still do. The approval still
 binds the workspace's id, so it cannot be spent on another workspace connected later under the same name.
 
+**`agentcomms label` says what a Slack workspace's style does to each kind of message.** For a workspace whose style
+is `labelled`, the report (and `comms_label` with no change) still said every kind went out "as your agent", even a
+reaction. It now says what the Slack route does there: a post, reply or file goes out as you, beginning
+"<your name in Slack> (agent):" in its words and its notification, with no APP tag; an edit's new words begin the same
+way; and a reaction is made as you, with no label, since a reaction carries no words. Under `app`, the default, a
+reaction is now said to be the app's where it can post, and yours, with no label, elsewhere; posts, replies, files and
+edits read as before.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked

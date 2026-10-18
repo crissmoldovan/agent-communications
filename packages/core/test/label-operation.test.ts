@@ -409,6 +409,36 @@ test('style: every Slack workspace is app until the person chooses otherwise, an
   assert.equal(report.accounts.find((account) => account.account === 'acme/whatsapp')?.style, undefined);
 });
 
+test('style: the report says what each kind of message looks like under the workspace’s style, as Slack’s route sends it', async () => {
+  const kinds = async (agentLabel: unknown) => {
+    const report = await labelReport(machine(agentLabel).core);
+    const workspace = report.accounts.find((account) => account.account === 'acme/slack');
+    return new Map(workspace?.kinds.map((kind) => [kind.kind, kind.appearsAs]));
+  };
+  // labelled: every post, reply, file and edit goes out as the person, its words beginning with the label; a reaction
+  // is made as the person, with no label — the fallback route, wherever the room.
+  const labelled = await kinds({ name: 'Jo Example', slackStyles: { [slack.id]: 'labelled' } });
+  for (const kind of ['post', 'reply', 'file', 'edit'] as const) {
+    const said = labelled.get(kind) ?? '';
+    assert.match(said, /^as you, .*beginning "<your name in Slack> \(agent\):"/, kind);
+    assert.match(said, /"Jo Example \(agent\):" where Slack has no name for you/, kind);
+    assert.doesNotMatch(said, /as your agent/, kind);
+  }
+  assert.match(labelled.get('post') ?? '', /in its words and its notification/);
+  assert.match(labelled.get('post') ?? '', /with no APP tag/);
+  assert.equal(labelled.get('reaction'), 'as you, with no label: a reaction carries no words');
+
+  // app, the default: a reaction is the app's where it can post, and the person's, unlabelled, elsewhere — never a
+  // phrase, which a reaction does not carry.
+  const app = await kinds({ name: 'Jo Example' });
+  assert.match(app.get('reaction') ?? '', /^as the app where it can post, .*; elsewhere as you, with no label/);
+  assert.doesNotMatch(app.get('reaction') ?? '', /\(agent\)/);
+  assert.match(app.get('post') ?? '', /^as your agent: <your name in Slack> \(agent\), or Jo Example \(agent\)/);
+  // A `me` rule still decides first, whatever the style.
+  const me = await kinds({ slackStyles: { [slack.id]: 'labelled' }, rules: [{ account: 'acme/slack', as: 'me' }] });
+  assert.ok([...me.values()].every((said) => said === 'as you, with no label'));
+});
+
 test('style: labelled waits for a yes, its preview naming what it trades; it is recorded by the account’s id', async () => {
   const m = machine({ name: 'Jo Example' });
   const prepared = waiting(await run(m, LABELLED));
