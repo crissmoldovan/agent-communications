@@ -11,7 +11,7 @@ import {
   type PrintedCommand,
 } from '../src/cli-command.ts';
 import { openCore } from '../src/core.ts';
-import { handoffText } from '../src/handoffs.ts';
+import { handoffText, isCommand } from '../src/handoffs.ts';
 import { launcherPaths, switchPointer, writeLauncher } from '../src/launcher.ts';
 import { managedShimPath, writeManagedShim } from '../src/managed-shims.ts';
 import { updateJobChange } from '../src/operations/update-job.ts';
@@ -240,11 +240,11 @@ test('the background job’s “To remove it” command, set up from a managed r
   assert.equal(second.status, 'applied');
   if (second.status !== 'applied') return;
   const remove = String(second.result.remove);
-  assert.equal(
-    remove,
-    handoffText(core.handoffs?.core(['update', '--background-job', 'off']) ?? assert.fail('core has handoffs')),
-  );
-  assert.ok(remove.startsWith(launcher), remove);
+  // The command the job was set up for, quoted for its platform: the launcher, then the folders and the words.
+  const off = core.handoffs?.on('darwin').core(['update', '--background-job', 'off']);
+  assert.ok(off !== undefined && isCommand(off), 'core locates its own command');
+  assert.equal(off.words[0], launcher);
+  assert.equal(remove, handoffText(off));
   assert.ok(remove.endsWith(' update --background-job off'), remove);
   assert.doesNotMatch(remove, new RegExp(`runtime[\\\\/]${VERSION.replaceAll('.', '\\.')}-core`));
 });

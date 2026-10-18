@@ -2153,21 +2153,27 @@ test('with no server named, prune covers every managed server, grouped by server
   }
 });
 
-test('`agentcomms mcp prune` with no server, from an agent, prints every server’s runtimes and waits for approval', async () => {
-  const m = machine();
-  const old = runtime(m, '@agentcomms/core', '0.0.1');
-  const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
-  const pending = cli(m, ['mcp', 'prune'], { CLAUDECODE: '1' });
-  assert.equal(pending.status, 10, pending.stderr);
-  assert.ok(pending.stdout.includes(`deletes the unused agentcomms (core) runtime 0.0.1 at ${old}`), pending.stdout);
-  assert.ok(pending.stdout.includes(`deletes the unused Gmail runtime 0.0.1 at ${gmail}`), pending.stdout);
-  assert.ok(existsSync(old) && existsSync(gmail));
-  // And the dry run, as a person reads it: each server under its own name.
-  const dry = cli(m, ['mcp', 'prune', '--dry-run']);
-  assert.equal(dry.status, 0, dry.stderr);
-  assert.match(dry.stdout, /^agentcomms \(core\):\n {2}Would remove 0\.0\.1: /m);
-  assert.match(dry.stdout, /^Gmail:\n {2}Would remove 0\.0\.1: /m);
-});
+test(
+  '`agentcomms mcp prune` with no server, from an agent, prints every server’s runtimes and waits for approval',
+  process.platform === 'win32'
+    ? { skip: 'WINDOWS_SKIP: with no `ps` to list what runs, prune shows nothing unused, so nothing waits' }
+    : {},
+  async () => {
+    const m = machine();
+    const old = runtime(m, '@agentcomms/core', '0.0.1');
+    const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
+    const pending = cli(m, ['mcp', 'prune'], { CLAUDECODE: '1' });
+    assert.equal(pending.status, 10, pending.stderr);
+    assert.ok(pending.stdout.includes(`deletes the unused agentcomms (core) runtime 0.0.1 at ${old}`), pending.stdout);
+    assert.ok(pending.stdout.includes(`deletes the unused Gmail runtime 0.0.1 at ${gmail}`), pending.stdout);
+    assert.ok(existsSync(old) && existsSync(gmail));
+    // And the dry run, as a person reads it: each server under its own name.
+    const dry = cli(m, ['mcp', 'prune', '--dry-run']);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /^agentcomms \(core\):\n {2}Would remove 0\.0\.1: /m);
+    assert.match(dry.stdout, /^Gmail:\n {2}Would remove 0\.0\.1: /m);
+  },
+);
 
 // ── Migrations ──────────────────────────────────────────────────────────────────────────────────────────────────
 
