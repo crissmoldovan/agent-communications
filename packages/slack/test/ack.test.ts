@@ -7,6 +7,7 @@ import { createDraft } from '../src/operations/drafts.ts';
 import { prepareDraftPost, react, sendDelete, sendEdit, sendPost } from '../src/operations/post.ts';
 import {
   acknowledge,
+  beforeMint,
   betweenMintAndClaim,
   children,
   ledger,
@@ -599,6 +600,23 @@ test('a place this standing approval does not name is refused', async (t) => {
     'place-not-covered',
     'elsewhere',
   );
+});
+
+test('a place narrowed away while Slack is read is refused at the mint, and nothing is counted', async (t) => {
+  for (const act of ['reaction', 'reply'] as const) {
+    const w = await world(t);
+    const s = await inEng(w, { places: [ENG, GRIDROOM] });
+    const ts = say(w, { channel: ENG });
+    // Every read found #eng covered; the person keeps only #grid before the mint.
+    beforeMint(w, async () => {
+      await w.core.approvals.narrowStanding(s.id, await accountId(w), { places: [GRIDROOM] });
+    });
+    const request = act === 'reaction' ? withEyes(s, ENG, ts) : withReply(s, ENG, ts);
+    assertRefused(await refused(acknowledge(w, request), act), 'place-not-covered', `${act} narrowed away`);
+    nothingSent(w, `${act} narrowed away`);
+    assert.equal((await ledger(w)).uses.length, 0, `${act}: a refused act was counted`);
+    assert.equal((await children(w)).length, 0, `${act}: a child was minted`);
+  }
 });
 
 test('50 or more members not approved so, an unreadable count, and an exact place grown to 50 are each refused', async (t) => {

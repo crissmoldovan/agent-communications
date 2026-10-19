@@ -633,6 +633,8 @@ export async function ack(
         thread: target.thread,
         textDigest: sha256Hex(typeof message.text === 'string' ? message.text : ''),
         edited: message.edited !== undefined && message.edited !== null,
+        // What the place was checked against: the mint refuses it if the record no longer covers it there.
+        places: inForce.places.kind,
       },
       child,
     });

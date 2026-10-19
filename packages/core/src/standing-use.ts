@@ -9,6 +9,7 @@ import {
   STANDING_DAY_MS,
   type StandingAct,
   type StandingContent,
+  type StandingPlaces,
   standingDays,
   standingLimitReached,
   standingRefused,
@@ -25,12 +26,13 @@ import type { AckUse } from './standing-ledger.ts';
  * 2. APPROVAL_PENDING until a person has approved it at a terminal;
  * 3. its narrowed expiry;
  * 4. the content: one it still holds, of the act's kind;
- * 5. the clock: never earlier than the account's last standing act, so moving it back frees nothing;
- * 6. the target: a message acknowledged once, under any standing approval;
- * 7. `perThread`, across every standing approval of the account;
- * 8. `perHour` and `perDay`, of this one;
- * 9. the `use` line written — the count spent — naming the child about to be minted;
- * 10. the child minted.
+ * 5. the place: one it still covers, as narrowed — a narrowing made while Slack was read refuses here;
+ * 6. the clock: never earlier than the account's last standing act, so moving it back frees nothing;
+ * 7. the target: a message acknowledged once, under any standing approval;
+ * 8. `perThread`, across every standing approval of the account;
+ * 9. `perHour` and `perDay`, of this one;
+ * 10. the `use` line written — the count spent — naming the child about to be minted;
+ * 11. the child minted.
  *
  * Nothing ever removes a `use` line: a count is never refunded, whatever is refused after it, however the act ends.
  */
@@ -43,7 +45,18 @@ export interface StandingUseRequest {
   act: StandingAct;
   /** The content's digest, as the standing approval names it: never its position. */
   contentDigest: string;
-  target: { channel: string; ts: string; thread: string; textDigest: string; edited: boolean };
+  /**
+   * The message, and where it is: `places` is the kind of place its reads were checked against — the exact channel, or
+   * a thread the person posted in — which the record must still cover under its lock.
+   */
+  target: {
+    channel: string;
+    ts: string;
+    thread: string;
+    textDigest: string;
+    edited: boolean;
+    places: StandingPlaces['kind'];
+  };
   child: { draftId: string; draftMessageId: string; contentDigest: string; expect: Expectation; riskFlags: string[] };
 }
 
@@ -75,6 +88,15 @@ function askInstead(core: Core): string {
   );
 }
 
+/**
+ * Whether `places`, as in force, still covers a use in `channel` whose reads were checked against `checked`: an exact
+ * place by its id, or `threads-i-am-in` — which the Slack reads alone can settle — only while the record is still that.
+ */
+export function useCovered(places: StandingPlaces, checked: StandingPlaces['kind'], channel: string): boolean {
+  if (places.kind !== checked) return false;
+  return places.kind === 'threads-i-am-in' || places.places.some((place) => place.id === channel);
+}
+
 /** The request's own shape, before any lock is taken: a programming error otherwise, and nothing counted. */
 function checkedRequest(request: StandingUseRequest): void {
   const filled = (value: unknown) => typeof value === 'string' && value !== '';
@@ -85,6 +107,7 @@ function checkedRequest(request: StandingUseRequest): void {
     !filled(target.channel) ||
     !filled(target.ts) ||
     !filled(target.thread) ||
+    (target.places !== 'exact' && target.places !== 'threads-i-am-in') ||
     !HEX64.test(target.textDigest) ||
     typeof target.edited !== 'boolean' ||
     !filled(child.draftId) ||
@@ -152,22 +175,26 @@ export async function mintStandingUse(
         (held) => held.digest === request.contentDigest && held.kind === request.act,
       );
       if (content === undefined) throw standingRefused('content-not-held', askInstead(core));
-      // 5. Never before the account's last act: a clock moved back frees nothing.
+      const { channel, ts, thread } = request.target;
+      // 5. A place it still covers, as in force now: narrowed while Slack was read, it is refused here, uncounted.
+      if (!useCovered(inForce.places, request.target.places, channel)) {
+        throw standingRefused('place-not-covered', askInstead(core));
+      }
+      // 6. Never before the account's last act: a clock moved back frees nothing.
       const newest = Math.max(Number.NEGATIVE_INFINITY, ...entries.map((entry) => Date.parse(entry.at)));
       if (time < newest) throw standingRefused('clock-behind', askInstead(core));
       // Only `use` lines count, all of them: an outcome — sent, failed, unknown — frees nothing.
       const used = entries.filter((entry): entry is AckUse => entry.kind === 'use');
-      const { channel, ts, thread } = request.target;
-      // 6. One message, acknowledged once, under any standing approval of the account.
+      // 7. One message, acknowledged once, under any standing approval of the account.
       if (used.some((entry) => entry.channel === channel && entry.ts === ts)) {
         throw standingRefused('already-acknowledged', askInstead(core));
       }
-      // 7. Per thread — or per message outside one — across every standing approval of the account.
+      // 8. Per thread — or per message outside one — across every standing approval of the account.
       const inThread = used.filter((entry) => entry.channel === channel && entry.thread === thread).length;
       if (inThread >= inForce.limits.perThread) {
         throw standingLimitReached('perThread', inForce.limits.perThread, null, askInstead(core));
       }
-      // 8. Per hour and per day, of this standing approval: each frees as its oldest use in the window leaves it.
+      // 9. Per hour and per day, of this standing approval: each frees as its oldest use in the window leaves it.
       const mine = used.filter((entry) => entry.standingId === record.approvalId).map((entry) => Date.parse(entry.at));
       for (const [limit, window] of [
         ['perHour', HOUR_MS],
@@ -179,7 +206,7 @@ export async function mintStandingUse(
           throw standingLimitReached(limit, inForce.limits[limit], freesAt, askInstead(core));
         }
       }
-      // 9. The count spent, before the child exists: written under both locks, and never removed.
+      // 10. The count spent, before the child exists: written under both locks, and never removed.
       const childId = newApprovalId();
       await append({
         kind: 'use',
@@ -194,7 +221,7 @@ export async function mintStandingUse(
         targetDigest: request.target.textDigest,
         edited: request.target.edited,
       });
-      // 10. The child, under the id its count names.
+      // 11. The child, under the id its count names.
       const child = await core.approvals.createStandingChild({
         approvalId: childId,
         standingId: record.approvalId,

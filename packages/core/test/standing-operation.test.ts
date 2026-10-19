@@ -135,7 +135,7 @@ function use(record: ApprovalRecord, ts: string, act: StandingAct = 'reaction', 
     inboxSub: 'U_ME',
     act,
     contentDigest: digestOf(record, act),
-    target: { channel: 'C0ROOM', ts, thread, textDigest: 'e'.repeat(64), edited: false },
+    target: { channel: 'C0ROOM', ts, thread, textDigest: 'e'.repeat(64), edited: false, places: 'exact' },
     child: {
       draftId: `reaction:C0ROOM:${ts}`,
       draftMessageId: 'd'.repeat(64),

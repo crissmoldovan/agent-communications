@@ -101,6 +101,23 @@ export async function children(w: StandingWorld): Promise<ApprovalRecord[]> {
 }
 
 /**
+ * Runs `between` once, after every Slack read an acknowledgement makes before its mint and before the mint takes its
+ * first lock: where a narrowing, a revoke or another tool could land while Slack is being read.
+ */
+export function beforeMint(w: StandingWorld, between: () => Promise<void>): void {
+  const acks = w.core.acks;
+  const withLock = acks.withLock.bind(acks);
+  let ran = false;
+  acks.withLock = (async (...args: Parameters<typeof withLock>) => {
+    if (!ran) {
+      ran = true;
+      await between();
+    }
+    return withLock(...args);
+  }) as typeof acks.withLock;
+}
+
+/**
  * Runs `between` once, the first time Slack is asked to read a thread or a channel after a standing child has been
  * minted and before it is claimed: the read `ack` makes again just before the act. Whatever `between` asks Slack is
  * answered as usual, and does not run it again.

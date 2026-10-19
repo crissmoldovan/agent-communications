@@ -53,7 +53,7 @@ Mail, top-level posts, edits, deletions, files and removing a reaction are never
 **Seeing and ending them: `agentcomms standing`, and `comms_standing`.** `agentcomms standing list` shows each one, its
 contents by digest, its uses today and its last 10 acts with links; `agentcomms standing narrow <id>` keeps less of
 one, `agentcomms standing revoke <id>` ends one, and `agentcomms standing off` ends every one — each at once, asking
-nobody. Tightening your change policy ends every one too — even when an older release's CLI or server tightened it,
+nobody, and an acknowledgement already reading Slack when you narrow one is refused before anything is counted. Tightening your change policy ends every one too — even when an older release's CLI or server tightened it,
 since each standing approval keeps the change policy it was approved under; a send policy of `never`, or removing the
 account, ends that account's; loosening again revives none. `agentcomms doctor` lists the active ones and when each ends.
 

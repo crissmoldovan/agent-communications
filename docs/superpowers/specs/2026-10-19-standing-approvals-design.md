@@ -436,3 +436,8 @@ word.
    loosening made before anything has looked at the record still revives it; nothing a 0.22 process does can be
    prevented by this release. The epoch stays the broader rule for this release's own writes: any tightening, of any
    account's policy or the default, ends every one. **(lead's call, after review)**
+2. **A narrowing stops a use already reading Slack** (S8, S9; core review C2). The mint is given the channel and
+   thread, and the kind of place its reads were checked against. Under the record's lock it requires the place to be
+   covered by what is in force there: an exact place by its id, and `threads-i-am-in` only while the record is still
+   `threads-i-am-in`. Otherwise `STANDING_REFUSED`, `place-not-covered`, before anything is counted. **(lead's call,
+   after review)**

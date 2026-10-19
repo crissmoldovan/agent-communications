@@ -58,8 +58,12 @@ function terminal() {
   return { stdin, stdout, stderr } as unknown as Streams;
 }
 
-/** A standing approval approved at a terminal, with these limits: `eyes` and one reply. */
-async function standing(core: Core, limits: Partial<StandingLimits> = {}): Promise<ApprovalRecord> {
+/** A standing approval approved at a terminal, with these limits: `eyes` and one reply, in #support or `places`. */
+async function standing(
+  core: Core,
+  limits: Partial<StandingLimits> = {},
+  places: ExactPlace[] = [ROOM],
+): Promise<ApprovalRecord> {
   const outcome = await prepareStanding(
     core,
     {
@@ -67,7 +71,7 @@ async function standing(core: Core, limits: Partial<StandingLimits> = {}): Promi
       accountId: ACME,
       inboxSub: 'U_ME',
       contents: { reactions: ['eyes'], replies: ['Got it, I will look'] },
-      places: { kind: 'exact', places: [ROOM] },
+      places: { kind: 'exact', places },
       limits,
     },
     { surface: 'cli', proposedBy: 'person' },
@@ -84,7 +88,15 @@ const digestOf = (record: ApprovalRecord, act: StandingAct) =>
 /** A use of `record` on message `ts` in thread `thread` of #support. */
 function use(
   record: ApprovalRecord,
-  target: { ts: string; thread?: string; act?: StandingAct; contentDigest?: string; childDigest?: string },
+  target: {
+    ts: string;
+    thread?: string;
+    act?: StandingAct;
+    contentDigest?: string;
+    childDigest?: string;
+    channel?: string;
+    places?: 'exact' | 'threads-i-am-in';
+  },
 ): StandingUseRequest {
   const act = target.act ?? 'reaction';
   return {
@@ -94,11 +106,12 @@ function use(
     act,
     contentDigest: target.contentDigest ?? digestOf(record, act),
     target: {
-      channel: 'C0ROOM',
+      channel: target.channel ?? 'C0ROOM',
       ts: target.ts,
       thread: target.thread ?? target.ts,
       textDigest: 'e'.repeat(64),
       edited: false,
+      places: target.places ?? 'exact',
     },
     child: {
       draftId: `reaction:C0ROOM:${target.ts}`,
@@ -148,6 +161,32 @@ test('a use is counted, the child minted after the count, and the child names it
     edited: false,
   });
   assert.equal(existsSync(join(core.paths.stateDir, 'standing', `${ACME}.jsonl`)), true);
+});
+
+test('a place narrowed away while Slack was read is refused at the mint, and nothing is counted', async () => {
+  const { core } = machine();
+  const LOBBY: ExactPlace = { ...ROOM, id: 'C0LOBBY', name: 'lobby' };
+  const record = await standing(core, {}, [ROOM, LOBBY]);
+  // The channel read and found covered; then, before the mint, the person keeps only #lobby.
+  await core.approvals.narrowStanding(record.approvalId, ACME, { places: ['C0LOBBY'] });
+  await assert.rejects(
+    mintStandingUse(core, use(record, { ts: '5.000100' })),
+    refusedWith('STANDING_REFUSED', { reason: 'place-not-covered' }),
+  );
+  // Read as threads-i-am-in, a record of exact places covers nothing.
+  await assert.rejects(
+    mintStandingUse(core, use(record, { ts: '5.000200', channel: 'C0LOBBY', places: 'threads-i-am-in' })),
+    refusedWith('STANDING_REFUSED', { reason: 'place-not-covered' }),
+  );
+  assert.deepEqual(await uses(core), [], 'a refused use was counted');
+  assert.deepEqual(
+    (await core.approvals.list()).map((stored) => asV2(stored)?.route).filter((route) => route === 'standing'),
+    [],
+    'a child was minted',
+  );
+  // The place it kept still goes.
+  await mintStandingUse(core, use(record, { ts: '5.000300', channel: 'C0LOBBY' }));
+  assert.equal((await uses(core)).length, 1);
 });
 
 test('each of per thread, per hour and per day is reached and refused with when it frees', async () => {
