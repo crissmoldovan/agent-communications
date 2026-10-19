@@ -30,6 +30,8 @@ import {
   MIXED,
   MPIM,
   mcp,
+  OUTSIDER,
+  PARTNERS,
   PRIVATE,
   recordOf,
   SAM,
@@ -809,6 +811,68 @@ test('another team_id, is_stranger or is_ext_shared refuses', async (t) => {
     assertRefused(await refused(acknowledge(w, withEyes(s, channel, ts)), what), 'external', what);
   }
   nothingSent(w, 'another organisation');
+});
+
+test('a guest in the place, or a guest or another team writing, is someone from another organisation', async (t) => {
+  const GUESTS = 'C0GUESTS';
+  const SOLO = 'C0SOLO';
+  const GUEST = 'U0GUEST';
+  const SINGLE = 'U0SINGLE';
+  const w = await world(t);
+  w.world.users[GUEST] = { display_name: 'Gus', is_restricted: true };
+  w.world.users[SINGLE] = { display_name: 'Sol', is_ultra_restricted: true };
+  w.world.rooms[GUESTS] = { name: 'guests', members: [SELF, SAM, GUEST, BOT] };
+  w.world.rooms[SOLO] = { name: 'solo', members: [SELF, SAM, SINGLE, BOT] };
+  // In the room: a multi-channel guest, or a single-channel one, under threads-i-am-in.
+  const anywhere = await standing(w, { reactions: ['eyes'], places: 'threads-i-am-in' });
+  for (const [room, what] of [
+    [GUESTS, 'a multi-channel guest'],
+    [SOLO, 'a single-channel guest'],
+  ] as const) {
+    const ts = say(w, { channel: room, thread_ts: myThread(w, room) });
+    assertRefused(await refused(acknowledge(w, withEyes(anywhere, room, ts)), what), 'external', what);
+  }
+  // Named exactly with nobody from outside, and a guest has joined since.
+  const exact = await inEng(w);
+  w.world.users[GUEST] = { display_name: 'Gus', is_restricted: true };
+  w.world.rooms[ENG]?.members.push(GUEST);
+  const joined = say(w, { channel: ENG });
+  assertRefused(
+    await refused(acknowledge(w, withEyes(exact, ENG, joined)), 'joined'),
+    'shared-state-changed',
+    'joined',
+  );
+
+  // A big room named exactly, whose members are not read one by one: who wrote it is read instead.
+  const big = await standing(w, { reactions: ['eyes'], places: [GENERAL] });
+  for (const [what, message] of [
+    ['a guest writing', { user: GUEST }],
+    ['a message from another team', { user_team: 'T0OTHER' }],
+    ['a message posted from another team', { source_team: 'T0OTHER' }],
+    ['a stranger writing', { user: 'U0STR' }],
+  ] as const) {
+    w.clock.now += 1_000;
+    const ts = say(w, { channel: GENERAL, ...message });
+    assertRefused(await refused(acknowledge(w, withEyes(big, GENERAL, ts)), what), 'external', what);
+  }
+  // A thread whose first message a guest wrote.
+  w.clock.now += 1_000;
+  const guestParent = say(w, { channel: GENERAL, user: GUEST, ago: 60_000 });
+  const reply = say(w, { channel: GENERAL, thread_ts: guestParent });
+  assertRefused(await refused(acknowledge(w, withEyes(big, GENERAL, reply)), 'parent'), 'external', 'a guest parent');
+  nothingSent(w, 'from outside');
+  assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
+  // A person from here, with this workspace's own team on the message, still goes.
+  w.clock.now += 1_000;
+  const ours = say(w, { channel: GENERAL, user: ANA, user_team: w.world.teamId, source_team: w.world.teamId });
+  assert.equal((await acknowledge(w, withEyes(big, GENERAL, ours))).act, 'reaction');
+});
+
+test('someone from another organisation writing is acknowledged only where the place was approved as shared', async (t) => {
+  const w = await world(t);
+  const shared = await standing(w, { reactions: ['eyes'], places: [PARTNERS] });
+  const ts = say(w, { channel: PARTNERS, user: OUTSIDER, user_team: 'T0OTHER' });
+  assert.equal((await acknowledge(w, withEyes(shared, PARTNERS, ts))).act, 'reaction');
 });
 
 test('a pending external share since creation refuses; is_org_shared alone does not', async (t) => {

@@ -519,3 +519,11 @@ word.
     sections, lists, quotes and preformatted runs holding text, links, emoji, mentions, dates and colours. Anything
     else, a block type unknown here included, is `interactive`; so is a legacy attachment with actions, a callback or
     blocks of its own outside the list, and a `blocks` that is not an array. **(lead's call, after review)**
+13. **A guest is from outside, and so is a message Slack marks as another team's** (S5; Slack review S2). A member
+    whom `users.info` calls `is_restricted` (a multi-channel guest) or `is_ultra_restricted` (a single-channel one)
+    counts as external, as `is_stranger` and another `team_id` do. And the message acknowledged, and its thread's
+    first message, are read for who wrote them: a guest, a stranger, a `team_id` not the workspace's (or none), or a
+    `user_team` or `source_team` on the message not the workspace's makes it external — found even in a big room,
+    whose members are not read one by one. An external author refuses, `external`, unless the place was named exactly
+    and approved as shared with another organisation. An Enterprise Grid's other workspaces read as other teams there:
+    refused, the safe way to be wrong. **(lead's call, after review)**

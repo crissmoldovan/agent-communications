@@ -495,12 +495,13 @@ agent-slack ack --workspace acme/slack --standing <id> --channel C024BE7LR --ts 
 
 `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in yourself in the last 14 days,
 where a message this product sent for you does not count. The preview shows each content in full with its digest,
-warning for an emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another
-organisation shares it; the limits (`--per-thread`, `--per-hour`, `--per-day`, and `--per-sender`: acts a day on any
-one person's messages, 3 by default, 10 at most); and the expiry. A place of 50 members
-or more, or one with someone from another organisation in it, is allowed only when named exactly, and one that has
-grown to 50 or changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and
-asks again; a replacement that only narrows applies at once.
+warning for an emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place
+with its member count and whether another organisation shares it; the limits (`--per-thread`, `--per-hour`,
+`--per-day`, and `--per-sender`: acts a day on any one person's messages, 3 by default, 10 at most); and the expiry. A
+place of 50 members or more, or one with someone from another organisation in it — a guest counts as one, and so does
+a message Slack marks as from another team — is allowed only when named exactly, and one that has grown to 50 or
+changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and asks again; a
+replacement that only narrows applies at once.
 
 Every act goes out as your agent: a reply in the thread, as the app or labelled `Jo Example (agent):`, even under a
 `me` rule; a reaction only as the app, and only where the app is a member, so never in a DM, a group DM, a room the

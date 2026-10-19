@@ -10,7 +10,7 @@ import { channelOf, personOf } from './people.ts';
  *
  * `isShared` is not used here (§3): it mixes another organisation's sharing with an Enterprise Grid's own. What counts
  * is the channel's `is_ext_shared` and `is_pending_ext_shared`, and each member: a `team_id` that is not this
- * workspace's, or `is_stranger`. An Enterprise Grid's `is_org_shared` is one organisation, and never counts.
+ * workspace's, `is_stranger`, or a guest. An Enterprise Grid's `is_org_shared` is one organisation, and never counts.
  *
  * Nothing unread is guessed. A count that cannot be read is `null`, and so is the count of a place whose members cannot
  * all be looked at one by one: every caller refuses a place it cannot count.
@@ -64,8 +64,10 @@ async function memberIds(call: SlackCall, channelId: string): Promise<string[] |
 }
 
 /**
- * Whether anyone in `ids` is from another organisation: a `team_id` that is not `ourTeamId`, none at all, or Slack's
- * `is_stranger`. `null` when anyone could not be looked up — whoever that is cannot be said to be from here.
+ * Whether anyone in `ids` is from outside: a `team_id` that is not `ourTeamId`, none at all, Slack's `is_stranger`, or a
+ * guest — `is_restricted` or `is_ultra_restricted` (the lead's call, after review), who is let into a channel without
+ * being a member of the organisation. `null` when anyone could not be looked up — whoever that is cannot be said to be
+ * from here.
  */
 async function anyoneExternal(call: SlackCall, ids: readonly string[], ourTeamId: string): Promise<boolean | null> {
   for (const id of ids) {
@@ -77,9 +79,14 @@ async function anyoneExternal(call: SlackCall, ids: readonly string[], ourTeamId
     }
     const person = personOf(raw);
     if (person.id !== id) return null;
-    if (person.isStranger || person.teamId !== ourTeamId) return true;
+    if (person.isStranger || person.teamId !== ourTeamId || isGuest(raw)) return true;
   }
   return false;
+}
+
+/** A guest of the workspace, by Slack's own flags: a multi-channel guest (`is_restricted`) or a single-channel one. */
+export function isGuest(raw: Raw): boolean {
+  return raw.is_restricted === true || raw.is_ultra_restricted === true;
 }
 
 /** A DM's person, as the preview names the DM: their display or real name, or `null` when it cannot be read. */

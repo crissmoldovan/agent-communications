@@ -19,11 +19,11 @@ of your contents; it never writes the words, and it cannot pick an old message, 
   --expires 7d` prepares one. `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in
   yourself in the last 14 days, where a message this product sent for you does not count. With no content, it holds
   `eyes` alone. The limits are once a thread, 10 an hour, 30 a day and 3 a day on any one person's messages by default
-  (3, 30, 100 and 10 at most, with `--per-sender` for the last), and it ends
-  7 days after you approve it, 30 at most.
+  (3, 30, 100 and 10 at most, with `--per-sender` for the last), and it ends 7 days after you approve it, 30 at most.
 - **Its preview shows everything you are agreeing to:** each content in full with its digest, and a warning for an
-  emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another organisation
-  shares it; the limits; and the expiry. One an agent prepared over MCP, with `slack_standing_add`, opens "An agent
+  emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its
+  member count and whether another organisation shares it — a guest counts as someone from another organisation; the
+  limits; and the expiry. One an agent prepared over MCP, with `slack_standing_add`, opens "An agent
   proposed these contents and places. Check each one."
 - **Only the code typed at a terminal approves it,** with `approve` as the result gives it, from either CLI — never a
   typed `yes`, a client's form or a yes in chat, whatever your change policy. `--replaces <id>` widens one, and asks

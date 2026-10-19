@@ -33,7 +33,7 @@ import { type GateDeps, gateDepsFor } from './gate.ts';
 import { AS_AGENT, botIsMember, decideLabel, REACTS_AS_APP, reactionLine } from './label.ts';
 import { requireMessageAt } from './message.ts';
 import { NameBook } from './people.ts';
-import { type PlaceFacts, readPlace } from './places.ts';
+import { isGuest, type PlaceFacts, readPlace } from './places.ts';
 import {
   expectationFor,
   type LabelView,
@@ -380,23 +380,47 @@ function interactive(message: Raw): boolean {
 const NOT_TYPED = ['bot_id', 'app_id', 'bot_profile', 'subtype'] as const;
 
 /**
+ * Whether Slack says a message came from another team: its `user_team` or `source_team`, where it sets one, not this
+ * workspace's (the lead's call, after review). An Enterprise Grid's other workspaces read as other teams too: refused
+ * where a person from outside would be, which is the safe way to be wrong.
+ */
+function fromAnotherTeam(message: Raw, workspaceId: string): boolean {
+  return (['user_team', 'source_team'] as const).some((field) => {
+    const team = message[field];
+    return team !== undefined && team !== workspaceId;
+  });
+}
+
+/**
  * From another human, by allow-list (S4): a `user` that is a person's id, not Slackbot, not this account; no `bot_id`,
  * `app_id`, `bot_profile` or `subtype` at all; not in this account's app-posts record; and not a bot or an app's user
- * by `users.info`. Whatever cannot be read is not a person.
+ * by `users.info`. Whatever cannot be read is not a person: `null`.
+ *
+ * And whether they are from outside (S5, the lead's call after review): `external` for a guest (`is_restricted`,
+ * `is_ultra_restricted`), a stranger, someone whose `team_id` is not this workspace's or who has none, or a message
+ * Slack marks as from another team — found here even where a place's members were not read one by one.
  */
-async function human(gate: GateDeps, channel: string, message: Raw): Promise<boolean> {
+async function human(gate: GateDeps, channel: string, message: Raw): Promise<'internal' | 'external' | null> {
   const user = message.user;
-  if (typeof user !== 'string' || !PERSON.test(user) || user === SLACKBOT || user === gate.postingAs) return false;
-  for (const field of NOT_TYPED) if (Object.hasOwn(message, field)) return false;
+  if (typeof user !== 'string' || !PERSON.test(user) || user === SLACKBOT || user === gate.postingAs) return null;
+  for (const field of NOT_TYPED) if (Object.hasOwn(message, field)) return null;
   const ts = str(message.ts);
-  if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
+  if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return null;
   let person: Raw;
   try {
     person = ((await callSlack(gate.call, 'users.info', { user })).user as Raw | undefined) ?? {};
   } catch {
-    return false;
+    return null;
   }
-  return person.id === user && person.is_bot !== true && person.is_app_user !== true && person.is_workflow_bot !== true;
+  const isPerson =
+    person.id === user && person.is_bot !== true && person.is_app_user !== true && person.is_workflow_bot !== true;
+  if (!isPerson) return null;
+  const outside =
+    isGuest(person) ||
+    person.is_stranger === true ||
+    person.team_id !== gate.workspaceId ||
+    fromAnotherTeam(message, gate.workspaceId);
+  return outside ? 'external' : 'internal';
 }
 
 /**
@@ -535,13 +559,13 @@ export async function ack(
     const target = await readTarget(context, gate.call, channel, ts);
     for (const message of [target.message, target.parent]) if (interactive(message)) throw refuse('interactive');
     // The message from another person; its thread's parent from another person too, or the person's own (S4).
-    if (!(await human(gate, channel, target.message))) throw refuse('not-human');
-    if (
-      target.parent !== target.message &&
-      !(await human(gate, channel, target.parent)) &&
-      !(await startedByPerson(context, gate, channel, target.parent))
-    ) {
-      throw refuse('not-human');
+    const author = await human(gate, channel, target.message);
+    if (author === null) throw refuse('not-human');
+    const authors = [author];
+    if (target.parent !== target.message) {
+      const parent = await human(gate, channel, target.parent);
+      if (parent !== null) authors.push(parent);
+      else if (!(await startedByPerson(context, gate, channel, target.parent))) throw refuse('not-human');
     }
     const arrived = msOf(ts);
     if (arrived < Date.parse(record.createdAt) || now - arrived > STANDING_FRESH_MS) throw refuse('not-fresh');
@@ -572,6 +596,13 @@ export async function ack(
       const { extShared, pendingExtShared, externalMembers } = facts.shared;
       if (extShared || pendingExtShared || externalMembers !== false) throw refuse('external');
     }
+    /*
+     * Who wrote the message and its thread's first message (the lead's call, after review): someone from outside — a
+     * guest, a stranger, another team — only where the person approved this place exactly as shared with another
+     * organisation. This holds where the members are not read one by one: a big room's guest is found here.
+     */
+    const sharedAsApproved = exact?.shared.extShared === true || exact?.shared.externalMembers === true;
+    if (authors.includes('external') && !sharedAsApproved) throw refuse('external');
 
     // Who it goes as (S7), and what spec 2's rules allow there (S9, T9) — then the child's fields, bound to both.
     let child: ChildFields;

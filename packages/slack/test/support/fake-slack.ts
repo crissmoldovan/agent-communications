@@ -166,6 +166,9 @@ export interface WorldUser {
   readonly team_id?: string;
   /** Slack's `is_stranger`: someone from another organisation this account shares a conversation with. */
   readonly is_stranger?: boolean;
+  /** A guest: Slack's `is_restricted` (a multi-channel guest) and `is_ultra_restricted` (a single-channel one). */
+  readonly is_restricted?: boolean;
+  readonly is_ultra_restricted?: boolean;
 }
 
 /** One conversation in a {@link SlackWorld}: what `conversations.info` says of it, and who is in it. */
@@ -206,6 +209,9 @@ export interface WorldMessage {
   readonly app_id?: string;
   /** `bot_message`, `thread_broadcast`, `channel_join` and the like: anything but a person's own message. */
   readonly subtype?: string;
+  /** The team of whoever wrote it, and the team it was posted from, as Slack sets them in a shared conversation. */
+  readonly user_team?: string;
+  readonly source_team?: string;
   /** Legacy attachments, which can carry buttons (`actions`) of their own. */
   readonly attachments?: unknown;
   readonly username?: string;
@@ -561,6 +567,8 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
         team_id: user.team_id ?? world.teamId,
         is_bot: user.is_bot === true,
         ...(user.is_stranger === true ? { is_stranger: true } : {}),
+        ...(user.is_restricted === true ? { is_restricted: true } : {}),
+        ...(user.is_ultra_restricted === true ? { is_ultra_restricted: true } : {}),
         profile: {
           display_name: user.display_name ?? '',
           real_name: user.real_name ?? '',
@@ -625,6 +633,8 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
       ...(message.bot_profile ? { bot_profile: message.bot_profile } : {}),
       ...(message.app_id ? { app_id: message.app_id } : {}),
       ...(message.subtype ? { subtype: message.subtype } : {}),
+      ...(message.user_team ? { user_team: message.user_team } : {}),
+      ...(message.source_team ? { source_team: message.source_team } : {}),
       ...(message.username ? { username: message.username } : {}),
       ...(message.edited ? { edited: message.edited } : {}),
     };
