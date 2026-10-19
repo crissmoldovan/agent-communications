@@ -169,8 +169,30 @@ function yamlScalar(lines, indent, field) {
   return yamlKey(value);
 }
 
+/**
+ * pnpm writes a resolved version followed by any number of peer suffixes, and nests them when a peer has peers of its
+ * own: `1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))`. Returns the version alone; anything but balanced,
+ * non-empty groups after it is refused.
+ */
+function withoutPeerSuffixes(value) {
+  const open = value.indexOf('(');
+  if (open === -1) return value;
+  let depth = 0;
+  let previous = '';
+  for (const character of value.slice(open)) {
+    if (character === '(') depth += 1;
+    else if (character === ')') {
+      if (previous === '(' || depth === 0) throw new RuntimeLockError('RUNTIME_LOCKFILE');
+      depth -= 1;
+    } else if (depth === 0) throw new RuntimeLockError('RUNTIME_LOCKFILE');
+    previous = character;
+  }
+  if (depth !== 0) throw new RuntimeLockError('RUNTIME_LOCKFILE');
+  return value.slice(0, open);
+}
+
 function packageReference(value) {
-  const matched = /^((?:@[^/]+\/)?[^@]+)@([^()]+)(?:\([^()]+\))*$/.exec(value);
+  const matched = /^((?:@[^/]+\/)?[^@]+)@([^()]+)$/.exec(withoutPeerSuffixes(value));
   if (matched === null || matched[1] === undefined || matched[2] === undefined) {
     throw new RuntimeLockError('RUNTIME_LOCKFILE');
   }
@@ -184,7 +206,7 @@ function lockfileDependencies(lines) {
     if (kindLines === undefined) continue;
     for (const [name, version] of yamlMappings(kindLines, 6)) {
       if (dependencies.has(name)) throw new RuntimeLockError('RUNTIME_LOCKFILE');
-      dependencies.set(name, version.replace(/\([^()]+\)$/, ''));
+      dependencies.set(name, withoutPeerSuffixes(version));
     }
   }
   return dependencies;

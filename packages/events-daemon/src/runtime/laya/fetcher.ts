@@ -43,7 +43,7 @@ export class LayaFetchError extends Error {
   readonly code: LayaFetchErrorCode;
 
   constructor(code: LayaFetchErrorCode) {
-    super(`Laya artifact fetch refused: ${code}`);
+    super(`Laya artifact download refused: ${code}`);
     this.name = 'LayaFetchError';
     this.code = code;
   }
@@ -511,7 +511,7 @@ export class LayaArtifactFetcher {
             cleanup();
             resolve(value);
           },
-          (error: unknown) => fail(error instanceof Error ? error : new Error('pinned fetch phase failed')),
+          (error: unknown) => fail(error instanceof Error ? error : new Error('pinned download phase failed')),
         );
     });
   }
