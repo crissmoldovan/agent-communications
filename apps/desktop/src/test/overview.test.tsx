@@ -80,6 +80,7 @@ describe('Overview', () => {
     expect(within(standing).getByText('example/slack')).toBeTruthy();
     expect(within(standing).getByText('C0EXAMPLE1')).toBeTruthy();
     expect(standing.querySelector('time[datetime="2026-10-26T09:00:00.000Z"]')).not.toBeNull();
+    expect(within(standing).getByText(/used 2 times today/)).toBeTruthy();
 
     // The events service.
     expect(within(region('Events')).getByText('Running')).toBeTruthy();
@@ -154,12 +155,69 @@ describe('Overview', () => {
   it('says plainly when nothing waits and no standing approval is active', async () => {
     const bridge = createFakeBridge(
       {},
-      { approvalsPending: [], standingList: [], eventsStatus: { owner: 'not-running' } },
+      { approvalsPending: [], standingList: { approvals: [] }, eventsStatus: { owner: 'not-running' } },
     );
     renderApp(bridge);
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(await within(region('Approvals waiting')).findByText('Nothing is waiting for you.')).toBeTruthy();
     expect(await within(region('Standing approvals')).findByText('No standing approval is active.')).toBeTruthy();
     expect(await within(region('Events')).findByText('Not running')).toBeTruthy();
+  });
+
+  it("reads standing list's approvals, and shows only the active ones", async () => {
+    const standing = (id: string, workspace: string, state: string, places: unknown, expiresAt: string | null) => ({
+      id,
+      workspace,
+      state,
+      contents: [{ kind: 'reaction', text: 'eyes', digest: 'a'.repeat(64) }],
+      places,
+      limits: { perThread: 1, perHour: 10, perDay: 30, expiresDays: 7 },
+      expiresAt,
+      usesToday: 0,
+    });
+    const bridge = createFakeBridge(
+      {},
+      {
+        standingList: {
+          approvals: [
+            standing(
+              'ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F',
+              'example/slack',
+              'active',
+              { kind: 'exact', places: [{ id: 'C0EXAMPLE1', name: 'general', members: 12 }] },
+              '2026-10-26T09:00:00.000Z',
+            ),
+            standing(
+              'ap_6T7V8W9X0Y1Z2A3B4C5D6E7F8G',
+              'other/slack',
+              'active',
+              { kind: 'threads-i-am-in' },
+              '2026-10-27T09:00:00.000Z',
+            ),
+            standing('ap_7V8W9X0Y1Z2A3B4C5D6E7F8G9H', 'waiting/slack', 'pending', { kind: 'threads-i-am-in' }, null),
+            standing('ap_8W9X0Y1Z2A3B4C5D6E7F8G9H0J', 'ended/slack', 'ended', { kind: 'threads-i-am-in' }, null),
+          ],
+        },
+      },
+    );
+    renderApp(bridge);
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    const block = region('Standing approvals');
+    expect(await within(block).findByText('example/slack')).toBeTruthy();
+    expect(within(block).getByText('C0EXAMPLE1')).toBeTruthy();
+    expect(within(block).getByText('other/slack')).toBeTruthy();
+    expect(within(block).getByText('threads I am in')).toBeTruthy();
+    // One that waits for its approval, and one that ended, are not active.
+    expect(within(block).queryByText('waiting/slack')).toBeNull();
+    expect(within(block).queryByText('ended/slack')).toBeNull();
+  });
+
+  it('says the standing approvals could not be read when the list is in no shape the CLI prints', async () => {
+    const bridge = createFakeBridge({}, { standingList: [{ id: 'ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F', active: true }] });
+    renderApp(bridge);
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    expect(
+      await within(region('Standing approvals')).findByText('The standing approvals could not be read.'),
+    ).toBeTruthy();
   });
 });

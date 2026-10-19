@@ -176,26 +176,41 @@ function ApprovalsWaiting() {
   );
 }
 
-/** The standing approvals that are active (spec 3), read once when the Overview opens. */
+/** Where a standing approval holds, in a few words: its conversations' ids, or the threads the account is in. */
+function placesWords(places: unknown): ReactNode {
+  if (!isRecord(places)) return null;
+  if (places.kind === 'threads-i-am-in') return <span className="text-fg-muted">threads I am in</span>;
+  if (places.kind !== 'exact' || !Array.isArray(places.places)) return null;
+  const ids = places.places.filter(isRecord).flatMap((place) => {
+    const id = textOf(place.id);
+    return id === null ? [] : [id];
+  });
+  return ids.length === 0 ? null : <span className="font-mono text-fg-muted">{ids.join(', ')}</span>;
+}
+
+/**
+ * The standing approvals that are active (spec 3), read once when the Overview opens. `standing list` prints
+ * `{ approvals: StandingView[] }`; one that waits for its approval, or has ended, is not active.
+ */
 function StandingRows() {
   const { result } = useCall<unknown>({ kind: 'standingList' });
   return (
     <Panel>
       <Rows value={result}>
         {(value) => {
-          if (!Array.isArray(value)) return <Row>The standing approvals could not be read.</Row>;
-          const active = value.filter(isRecord).filter((standing) => standing.active !== false);
+          if (!isRecord(value) || !Array.isArray(value.approvals)) {
+            return <Row>The standing approvals could not be read.</Row>;
+          }
+          const active = value.approvals.filter(isRecord).filter((standing) => standing.state === 'active');
           if (active.length === 0) return <Row>No standing approval is active.</Row>;
           return active.map((standing, index) => {
-            const places = Array.isArray(standing.places)
-              ? standing.places.filter((place): place is string => typeof place === 'string')
-              : [];
+            const places = placesWords(standing.places);
             const expiresAt = textOf(standing.expiresAt);
             const uses = typeof standing.usesToday === 'number' ? standing.usesToday : null;
             return (
               <Row key={textOf(standing.id) ?? index}>
-                <span className="text-fg">{textOf(standing.account) ?? 'an account'}</span>
-                {places.length === 0 ? null : <span className="font-mono text-fg-muted">{places.join(', ')}</span>}
+                <span className="text-fg">{textOf(standing.workspace) ?? 'a workspace'}</span>
+                {places}
                 <span className="ml-auto text-right text-fg-muted">
                   {expiresAt === null ? null : (
                     <>

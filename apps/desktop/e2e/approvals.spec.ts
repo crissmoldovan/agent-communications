@@ -29,7 +29,7 @@ function scenario(approvals: unknown[] = approvalsPending): Record<string, unkno
       approvalsPending: approvals,
       approvalRevoke: { approvalId: GMAIL, state: 'revoked' },
       updateStatus: null,
-      standingList: [],
+      standingList: { approvals: [] },
       eventsStatus: { owner: 'not-running' },
       doctor: {},
     },
