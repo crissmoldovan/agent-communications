@@ -125,8 +125,14 @@ test('the most specific rule wins: address over domain over account', () => {
     rule: { account: 'acme/gmail' },
     allowedActs: ['reply', 'send'],
   });
-  // A subdomain is not the domain.
-  assert.equal(allowedAct(settings, mail(['eve@eu.client.test'], ['send'])).allowed, true);
+  // A subdomain is covered by its domain's rule (lead's call, after review): an `@domain` rule holds all of it.
+  assert.deepEqual(allowedAct(settings, mail(['eve@eu.client.test'], ['send'])), {
+    allowed: false,
+    act: 'send',
+    place: 'eve@eu.client.test',
+    rule: { account: 'acme/gmail', conversation: '@client.test' },
+    allowedActs: ['reply'],
+  });
 
   // Slack: a channel's rule over the account's, even where the channel's allows more.
   const workspace = withRules([
@@ -461,6 +467,189 @@ test('a recipient whose domain is not one meets only its account rule', () => {
   assert.equal(decision.allowed, false);
   assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail' }, 'the account rule decides');
   assert.equal(allowedAct(settings, mail(['bob@exa.test'], ['send'])).allowed, true);
+});
+
+/*
+ * An address has more spellings than its case (lead's call, after review): `ceo+x@client.test` reaches the mailbox of
+ * `ceo@client.test`, and Gmail ignores dots and reads `googlemail.com` as `gmail.com`. A rule written one way held none
+ * of the others, so an agent could reach the person a rule names by writing their address another way.
+ */
+test('an address rule holds every +tag of the address, on the rule and on the recipient', () => {
+  const settings = withRules([
+    { account: 'acme/gmail', accountId: GMAIL_ID, acts: ['send', 'reply'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'ceo@client.test', acts: [] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'cfo+board@client.test', acts: [] },
+  ]);
+  for (const recipient of ['ceo+x@client.test', 'CEO+Board@Client.TEST', 'ceo@client.test', 'cfo@client.test']) {
+    const decision = allowedAct(settings, mail([recipient], ['send']));
+    assert.equal(decision.allowed, false, recipient);
+    assert.equal(!decision.allowed && decision.place, recipient, 'the refusal names the recipient as it was given');
+  }
+  assert.equal(allowedAct(settings, mail(['cfo+other@client.test'], ['send'])).allowed, false, 'a tag on both sides');
+  // Not another mailbox: dots count outside Gmail, and a tag is only what follows the first `+` after a name.
+  for (const recipient of ['c.e.o@client.test', 'ceox@client.test', 'ceo@eu.client.test']) {
+    assert.equal(allowedAct(settings, mail([recipient], ['send'])).allowed, true, recipient);
+  }
+});
+
+test('at Gmail, dots and googlemail.com reach the same mailbox, for an address rule and a domain rule', () => {
+  const settings = withRules([
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'jo.lee@gmail.com', acts: [] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@googlemail.com', acts: ['reply'] },
+  ]);
+  for (const recipient of ['jolee@gmail.com', 'j.o.l.e.e@googlemail.com', 'Jo.Lee+news@GoogleMail.com']) {
+    const decision = allowedAct(settings, mail([recipient], ['reply']));
+    assert.equal(decision.allowed, false, recipient);
+    assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail', conversation: 'jo.lee@gmail.com' });
+  }
+  // Another Gmail address is the domain rule's, written for googlemail.com and holding gmail.com.
+  assert.deepEqual(allowedAct(settings, mail(['sam@gmail.com'], ['send'])), {
+    allowed: false,
+    act: 'send',
+    place: 'sam@gmail.com',
+    rule: { account: 'acme/gmail', conversation: '@googlemail.com' },
+    allowedActs: ['reply'],
+  });
+});
+
+test('a domain rule covers its subdomains, and a subdomain rule wins over its parent', () => {
+  const settings = withRules([
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test', acts: [] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@eu.client.test', acts: ['reply', 'send'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'boss@eu.client.test', acts: ['reply'] },
+  ]);
+  // The parent's rule holds a subdomain no rule of its own names, however deep.
+  for (const recipient of ['x@us.client.test', 'x@a.b.client.test', 'x@client.test']) {
+    const decision = allowedAct(settings, mail([recipient], ['reply']));
+    assert.equal(decision.allowed, false, recipient);
+    assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail', conversation: '@client.test' });
+  }
+  // The longest domain that covers the recipient wins, here and in a subdomain of it.
+  for (const recipient of ['ana@eu.client.test', 'ana@paris.eu.client.test']) {
+    assert.deepEqual(
+      allowedAct(settings, mail([recipient], ['send'])),
+      {
+        allowed: true,
+        rule: { account: 'acme/gmail', conversation: '@eu.client.test' },
+        allowedActs: ['reply', 'send'],
+      },
+      recipient,
+    );
+  }
+  // An address over every domain.
+  const boss = allowedAct(settings, mail(['boss@eu.client.test'], ['send']));
+  assert.deepEqual(!boss.allowed && boss.rule, { account: 'acme/gmail', conversation: 'boss@eu.client.test' });
+  // A name that only ends the same way is not a subdomain.
+  assert.equal(allowedAct(settings, mail(['x@otherclient.test'], ['send'])).allowed, true);
+  // Changing the subdomain's rule is measured where it holds: widening it past its parent loosens.
+  const before = readBehaviourSettings(
+    withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test', acts: [] }]),
+  );
+  const after = readBehaviourSettings(settings);
+  const change = classifyBehaviourChange(before, after, {
+    before: [{ id: GMAIL_ID, account: 'acme/gmail' }],
+    after: [{ id: GMAIL_ID, account: 'acme/gmail' }],
+  });
+  assert.equal(change.loosens, true);
+  assert.ok(
+    change.deltas.some(
+      (delta) => delta.scope.conversation === '@eu.client.test' && delta.before.length === 0 && delta.after !== 'all',
+    ),
+    JSON.stringify(change.deltas),
+  );
+});
+
+/*
+ * A Slack post may name its channel by name — Slack resolves `eng` or `#eng` to a room — and a place that is not a
+ * conversation id met no conversation rule, only the account's: `{C0ENG: [reply]}` let a post into #eng named so. The
+ * channels refuse such a destination at prepare; beneath that, every rule of the account holds it (lead's call, after
+ * review), as a DM whose person could not be read is held to every person's rule.
+ */
+test('a Slack place that is no conversation id is held to every rule of its account', () => {
+  const settings = withRules([
+    { account: 'acme/slack', accountId: SLACK_ID, acts: ['post', 'reply', 'reaction'] },
+    { account: 'acme/slack', accountId: SLACK_ID, conversation: 'C0ENG', acts: ['reply', 'reaction'] },
+    { account: 'acme/slack', accountId: SLACK_ID, conversation: 'C0RANDOM', acts: ['post', 'reaction'] },
+  ]);
+  for (const place of ['eng', '#eng', 'c0eng', 'general', 'C0ENG ', '']) {
+    for (const act of ['post', 'reply'] as const) {
+      const decision = allowedAct(settings, slack([[place]], [act]));
+      assert.equal(decision.allowed, false, `${JSON.stringify(place)} ${act}`);
+    }
+    // What every rule allows is allowed: a reaction, here.
+    assert.equal(allowedAct(settings, slack([[place]], ['reaction'])).allowed, true, JSON.stringify(place));
+  }
+  // The ids themselves are as they were.
+  assert.equal(allowedAct(settings, slack([['C0ENG']], ['reply'])).allowed, true);
+  assert.equal(allowedAct(settings, slack([['C0RANDOM']], ['post'])).allowed, true);
+  // With no rule at all, nothing holds it: everything, as before.
+  assert.equal(allowedAct(withRules([]), slack([['eng']], ['post'])).allowed, true);
+  // A mail place is not a Slack one.
+  assert.equal(
+    allowedAct(
+      withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test', acts: [] }]),
+      mail(['bob@other.test'], ['send']),
+    ).allowed,
+    true,
+  );
+});
+
+/*
+ * A rule whose account name no account here could ever have held nothing, silently: `*`, a name in capitals, a name in
+ * the other version's grammar, a former name (never given again). A former name of an account still here holds that
+ * account; any other such rule is unreadable, and with no account it can name it holds every account (lead's call,
+ * after review).
+ */
+test('a rule naming an account no account could ever have is unreadable, and holds every account', () => {
+  for (const name of ['*', 'Acme/Gmail', 'acme', 'acme/gmail ', 'acme/Slack']) {
+    const settings = withRules([{ account: name, acts: ['reply'] }]);
+    const read = readBehaviourSettings(settings);
+    assert.deepEqual(read.rules, [], name);
+    assert.equal(read.unreadable.length, 1, name);
+    assert.equal(read.unreadable[0]?.account, null, `${name}: it names no account, so it holds every account`);
+    assert.ok(!(read.unreadable[0]?.reason ?? '').includes(name), 'nothing from the file is repeated');
+    assert.equal(allowedAct(settings, slack([['C0GENERAL']], ['reply'])).allowed, false, name);
+    assert.equal(allowedAct(settings, mail(['bob@client.test'], ['reply'])).allowed, false, name);
+  }
+  // In a version-1 configuration, a plain name is a name an account can have, and the other grammar is not.
+  const plain = (account: string): Config =>
+    parseConfig(
+      JSON.stringify({
+        version: 1,
+        inboxes: { acme: inbox },
+        accounts: {},
+        behaviour: { rules: [{ account, acts: ['reply'] }] },
+      }),
+    );
+  assert.deepEqual(readBehaviourSettings(plain('acme')).unreadable, []);
+  assert.deepEqual(readBehaviourSettings(plain('gone')).unreadable, [], 'an orphan by a name an account may have');
+  assert.equal(readBehaviourSettings(plain('acme/gmail')).unreadable[0]?.account, null);
+});
+
+test('a former name holds the account it names now, and one whose account is gone holds every account', () => {
+  const named = (rules: unknown[], formerNames: unknown): Config =>
+    parseConfig(
+      JSON.stringify({
+        version: 2,
+        inboxes: { 'acme/gmail': inbox },
+        accounts: { 'acme/slack': account },
+        formerNames,
+        behaviour: { rules },
+      }),
+    );
+  const formerNames = {
+    inboxes: { acme: { name: 'acme/gmail', id: GMAIL_ID }, 'old/gmail': { name: 'old/gmail-2', id: GONE_ID } },
+    accounts: {},
+  };
+  // The mailbox was `acme`: a rule left under that name holds it, and nothing else.
+  const renamed = named([{ account: 'acme', acts: ['reply'] }], formerNames);
+  assert.deepEqual(readBehaviourSettings(renamed).rules, [{ account: 'acme/gmail', acts: ['reply'] }]);
+  assert.equal(allowedAct(renamed, mail(['bob@client.test'], ['send'])).allowed, false);
+  assert.equal(allowedAct(renamed, slack([['C0GENERAL']], ['post'])).allowed, true);
+  // A former name whose account is gone can never be given again: it holds every account.
+  const gone = named([{ account: 'old/gmail', acts: ['reply'] }], formerNames);
+  assert.equal(readBehaviourSettings(gone).unreadable[0]?.account, null);
+  assert.equal(allowedAct(gone, slack([['C0GENERAL']], ['reply'])).allowed, false);
 });
 
 const ruleSet = (rules: BehaviourSettings['rules']): BehaviourSettings => ({ rules, unreadable: [] });

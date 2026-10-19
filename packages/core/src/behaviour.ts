@@ -13,9 +13,10 @@
  */
 import { domainToASCII } from 'node:url';
 import { MAIL_CONVERSATION_PATTERN, SLACK_CONVERSATION_PATTERN } from './agent-label.ts';
-import type { Config } from './config.ts';
+import type { Config, FormerNames } from './config.ts';
 import { CommsError } from './errors.ts';
 import { type CliHandoffs, handoffSentence } from './handoff-text.ts';
+import { NAME_PATTERN, PLAIN_NAME_PATTERN } from './name-grammar.ts';
 import { neutralise } from './untrusted.ts';
 
 /** B2: the acts a rule may name — the label's kinds (`ACT_KINDS`), and `delete`. */
@@ -122,16 +123,53 @@ export function normaliseMailConversation(value: string): string | null {
   return `${local}@${ascii}`;
 }
 
+/**
+ * What a rule's account is read against: the grammar names have in this configuration — `organisation/platform`, or
+ * version 1's plain names — and its former names, each with the name its account has now (null: that account is gone).
+ */
+interface NameContext {
+  readonly named: boolean;
+  readonly former: ReadonlyMap<string, string | null>;
+}
+
+function nameContextOf(config: Config): NameContext {
+  const naming = (config as { naming?: unknown }).naming;
+  const named = config.version === 2 || (config.version === 3 && naming === 2);
+  const current = new Map<string, string>();
+  for (const [name, entry] of [...Object.entries(config.inboxes ?? {}), ...Object.entries(config.accounts ?? {})]) {
+    current.set(entry.id, name);
+  }
+  const former = new Map<string, string | null>();
+  const records = (config as { formerNames?: Partial<FormerNames> }).formerNames;
+  for (const map of [records?.inboxes, records?.accounts]) {
+    for (const [name, record] of Object.entries(map ?? {})) former.set(name, current.get(record.id) ?? null);
+  }
+  return { named, former };
+}
+
+/**
+ * The account a rule's name holds (B3, lead's call after review): a former name holds the account it names now; a name
+ * no account here could ever have — outside the grammar (`*`, upper case), or a former name whose account is gone, since
+ * a former name is never given again — holds none, and is null, so its rule is unreadable and holds every account. A
+ * rule that can never match an account must never be a restriction that silently holds nothing.
+ */
+function accountNamed(written: string, names: NameContext): string | null {
+  if (names.former.has(written)) return names.former.get(written) ?? null;
+  return (names.named ? NAME_PATTERN : PLAIN_NAME_PATTERN).test(written) ? written : null;
+}
+
 /** One stored rule, or why it cannot be read. Reasons are fixed words: nothing from the file is repeated in them. */
-function readRule(raw: unknown, index: number): ReadRule {
+function readRule(raw: unknown, index: number, names: NameContext): ReadRule {
   const at = `rule ${index + 1}`;
   if (!isRecord(raw)) return { unreadable: { account: null, reason: `${at} is not an object` } };
-  const account = typeof raw.account === 'string' && raw.account.length > 0 ? raw.account : null;
+  const written = typeof raw.account === 'string' && raw.account.length > 0 ? raw.account : null;
+  const account = written === null ? null : accountNamed(written, names);
   const accountId = typeof raw.accountId === 'string' && raw.accountId.length > 0 ? raw.accountId : undefined;
   const unreadable = (reason: string): ReadRule => ({
     unreadable: { account, ...(accountId === undefined ? {} : { accountId }), reason: `${at} ${reason}` },
   });
-  if (account === null) return unreadable('names no account');
+  if (written === null) return unreadable('names no account');
+  if (account === null) return unreadable('names an account no account here could ever have');
   if (raw.accountId !== undefined && accountId === undefined) return unreadable('has an account id that is not one');
   if (!Array.isArray(raw.acts)) return unreadable('has no list of acts');
   let conversation: string | undefined;
@@ -178,8 +216,9 @@ export function readBehaviourSettings(config: Config): BehaviourSettings {
     if (rules === undefined) return { rules: [], unreadable: [] };
     if (!Array.isArray(rules)) return unreadableWhole('the behaviour rules are not a list');
     const settings: BehaviourSettings = { rules: [], unreadable: [] };
+    const names = nameContextOf(config);
     rules.forEach((raw: unknown, index) => {
-      const read = readRule(raw, index);
+      const read = readRule(raw, index, names);
       if ('rule' in read) settings.rules.push(read.rule);
       else settings.unreadable.push(read.unreadable);
     });
@@ -216,28 +255,73 @@ function unreadableHolds(settings: BehaviourSettings, who: Who): boolean {
 
 const NO_MATCH = -1;
 const ACCOUNT_LEVEL = 0;
-const DOMAIN_LEVEL = 1;
-const PLACE_LEVEL = 2;
+/** Above every domain's level: a domain has at most 127 labels. */
+const PLACE_LEVEL = 1000;
+
+/** A domain rule's level: above the account's, and the higher the more labels it names, so the longest match wins. */
+function domainLevel(domain: string): number {
+  return 1 + domain.split('.').length;
+}
+
+/** The two domains Gmail delivers to as one mailbox's, and the one they are compared as. */
+const GMAIL_DOMAINS: ReadonlySet<string> = new Set(['gmail.com', 'googlemail.com']);
+
+/** A normalised domain as rules compare it: `googlemail.com` is `gmail.com`. */
+function domainKey(domain: string): string {
+  return GMAIL_DOMAINS.has(domain) ? 'gmail.com' : domain;
+}
 
 /**
- * How specifically `rule` names a place's alias: its own conversation (a Slack id, exactly; an address), its domain
- * (`@domain`, for an address there, or for a place that is that domain), or the whole account. Addresses and domains
- * compare in one form (`normaliseMailConversation`) — both sides, since a rule may come from anywhere and a place is as
- * its channel writes it — and an address's domain is what follows its last `@`, so a quoted local part holding one
- * cannot hide it. A place whose domain is not one meets no conversation rule, only its account's.
+ * The mailbox a normalised address reaches, as an address rule compares it (B3, lead's call after review): a `+tag` off
+ * its local part, so `ceo+x@client.test` is `ceo@client.test`; and at Gmail, whose addresses ignore dots and whose two
+ * domains are one mailbox's, the dots off too and `googlemail.com` read as `gmail.com`. Both sides — the rule's and the
+ * recipient's — so no spelling of an address reaches its mailbox past the rule for it.
+ */
+function mailboxKey(normal: string): string {
+  const at = normal.lastIndexOf('@');
+  const domain = domainKey(normal.slice(at + 1));
+  const written = normal.slice(0, at);
+  const plus = written.indexOf('+');
+  const local = plus > 0 ? written.slice(0, plus) : written;
+  return `${domain === 'gmail.com' ? local.replaceAll('.', '') : local}@${domain}`;
+}
+
+/**
+ * A Slack place that is no conversation id (B4, lead's call after review): a channel's name, `#name`, an id in lower
+ * case. Slack can resolve one to any room, so no rule can be said not to be for it: every rule of the account holds it,
+ * at one level, and only what all of them allow is allowed — as a DM whose person could not be read is held to every
+ * person's rule. The channels refuse such a destination first; this is the backstop beneath them.
+ */
+function isUnknownSlackPlace(alias: string): boolean {
+  return !alias.includes('@') && !SLACK_CONVERSATION_PATTERN.test(alias);
+}
+
+/**
+ * How specifically `rule` names a place's alias: its own conversation (a Slack id, exactly; an address, as the mailbox
+ * it reaches — `mailboxKey`), the longest of its domains a rule names (`@domain` covers its subdomains, for an address
+ * there or a place that is that domain, and `@eu.client.test` wins over `@client.test`), or the whole account.
+ * Addresses and domains compare in one form (`normaliseMailConversation`) — both sides, since a rule may come from
+ * anywhere and a place is as its channel writes it — and an address's domain is what follows its last `@`, so a quoted
+ * local part holding one cannot hide it. A place whose domain is not one meets no conversation rule, only its account's;
+ * a Slack place that is no conversation id meets every rule (`isUnknownSlackPlace`).
  */
 function levelOf(rule: BehaviourRule, alias: string | undefined): number {
+  if (alias !== undefined && isUnknownSlackPlace(alias)) return PLACE_LEVEL;
   if (rule.conversation === undefined) return ACCOUNT_LEVEL;
   if (alias === undefined) return NO_MATCH;
   if (!rule.conversation.includes('@')) return rule.conversation === alias ? PLACE_LEVEL : NO_MATCH;
   const wanted = normaliseMailConversation(rule.conversation);
   const place = normaliseMailConversation(alias);
   if (wanted === null || place === null) return NO_MATCH;
+  const at = place.lastIndexOf('@');
+  const placeDomain = domainKey(place.slice(at + 1));
   if (wanted.startsWith('@')) {
-    const at = place.lastIndexOf('@');
-    return at !== -1 && place.slice(at) === wanted ? DOMAIN_LEVEL : NO_MATCH;
+    const domain = domainKey(wanted.slice(1));
+    return placeDomain === domain || placeDomain.endsWith(`.${domain}`) ? domainLevel(domain) : NO_MATCH;
   }
-  return place === wanted ? PLACE_LEVEL : NO_MATCH;
+  // A place that is a domain is not an address: only a domain rule names it.
+  if (at === 0) return NO_MATCH;
+  return mailboxKey(place) === mailboxKey(wanted) ? PLACE_LEVEL : NO_MATCH;
 }
 
 interface Resolved {
@@ -328,8 +412,9 @@ function decide(settings: BehaviourSettings, held: ReadonlySet<string>, query: A
 /**
  * B4: whether every act in `query` is allowed at every one of its places, by the rules in `config` — the one decision
  * every channel's prepare and execute make. A rule matches its account by id, or as an orphan by name; at each place the
- * most specific level wins (an address over its `@domain` over the account; a Slack conversation over the account), and
- * the aliases of one place matched at the same level give only the acts all of them allow.
+ * most specific level wins (an address over the longest `@domain` that covers it, over the account; a Slack
+ * conversation over the account), and the aliases of one place matched at the same level give only the acts all of
+ * them allow.
  */
 export function allowedAct(config: Config, query: ActQuery): ActDecision {
   return decide(readBehaviourSettings(config), heldIds(config), query);
@@ -591,4 +676,48 @@ export function allowedHereLine(decision: ActDecision, shown: ShownPlace): strin
   const conversation = decision.rule.conversation;
   const place = conversation === undefined ? '' : `, ${shownName(shown.place ?? conversation)}`;
   return `Allowed here: ${allowed} (rule: ${shownName(shown.account)}${place})`;
+}
+
+/**
+ * `config.behaviour` with every rule that holds the account `id` renamed from `from` to `to` (design
+ * 2026-10-19-agent-behaviour-rules, B3) — for a rename (`renameEntry`) and for every row of a names migration
+ * (`applyNamesMigration`), which `ConfigStore` checks a migration against.
+ *
+ * A rule bound to the account's id holds it whatever its name, and is renamed only so it reads as the account is
+ * called now. A rule that holds it by name — one whose id no account holds (an orphan), one with none, one this release
+ * cannot read — would hold nothing once the name went, and that is a restriction a rename would shed; renamed, it holds
+ * the account still. A rule bound to another account's id is left alone, whatever name it carries. Every other key, of
+ * the setting and of each rule, is kept as it was, and a value with no list of rules is returned as it is.
+ */
+export function behaviourRenamed(config: Config, id: string, from: string, to: string): unknown {
+  const stored = config.behaviour;
+  if (!isRecord(stored)) return stored;
+  const rules: unknown = stored.rules;
+  if (!Array.isArray(rules)) return stored;
+  const held = new Set(
+    [...Object.values(config.inboxes ?? {}), ...Object.values(config.accounts ?? {})].map((entry) => entry.id),
+  );
+  const holds = (rule: Record<string, unknown>): boolean => {
+    if (typeof rule.account !== 'string') return false;
+    if (rule.accountId === id) return true;
+    const bound = typeof rule.accountId === 'string' && held.has(rule.accountId);
+    return !bound && rule.account === from;
+  };
+  return {
+    ...stored,
+    rules: rules.map((rule: unknown) => (isRecord(rule) && holds(rule) ? { ...rule, account: to } : rule)),
+  };
+}
+
+/**
+ * `config.behaviour` as a names migration leaves it: every rule that holds a migrated account renamed with it, one row
+ * after another (`behaviourRenamed`). `ConfigStore` holds a migration to exactly this, and to nothing else.
+ */
+export function behaviourRulesMigrated(
+  config: Config,
+  rows: readonly { readonly from: string; readonly to: string; readonly id: string }[],
+): unknown {
+  let behaviour: unknown = config.behaviour;
+  for (const row of rows) behaviour = behaviourRenamed({ ...config, behaviour }, row.id, row.from, row.to);
+  return behaviour;
 }

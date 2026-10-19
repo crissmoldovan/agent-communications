@@ -14,6 +14,7 @@ import {
   type BehaviourAct,
   type BehaviourDelta,
   behaviourAccountsOf,
+  behaviourRulesMigrated,
   classifyBehaviourChange,
   type RuleRef,
   readBehaviourSettings,
@@ -26,7 +27,14 @@ import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { type CliHandoffs, handoffSentence, requiredHandoffs } from './handoff-text.ts';
 import { namesItsPlace } from './jail.ts';
 import { withCredentialsLock, withFileLock } from './lock.ts';
-import { NAME_MESSAGE, NAME_PATTERN, ORGANISATION_PATTERN, parseName, parseOrganisation } from './name-grammar.ts';
+import {
+  NAME_MESSAGE,
+  NAME_PATTERN,
+  ORGANISATION_PATTERN,
+  PLAIN_NAME_PATTERN,
+  parseName,
+  parseOrganisation,
+} from './name-grammar.ts';
 import { expandHome } from './paths.ts';
 import { namesMigrationEnabled } from './release-gate.ts';
 
@@ -46,7 +54,7 @@ export const READABLE_CONFIG_VERSIONS: readonly ConfigVersion[] = [1, 2, 3];
 
 export { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
 
-export const ALIAS_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const ALIAS_PATTERN: RegExp = PLAIN_NAME_PATTERN;
 const ALIAS_MESSAGE = 'names must be 1–32 lowercase letters, digits or hyphens, starting with a letter or digit';
 
 export type SendPolicy = 'chat' | 'confirm' | 'never';
@@ -1662,10 +1670,12 @@ function followsReauth(before: NamedConfig, after: NamedConfig, fromId: string, 
 }
 
 /**
- * Null when `after` is `before` with only account keys changed — plus the version, and exactly one record of each
- * former name naming where it went — or a description of the first other difference.
+ * Null when `after` is `before` with only account keys changed — plus the version, exactly one record of each former
+ * name naming where it went, and the behaviour rules that held an account by its old name holding it by its new one
+ * (`behaviourRulesMigrated`) — or a description of the first other difference.
  */
 function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null {
+  const renames: { from: string; to: string; id: string }[] = [];
   for (const map of ['inboxes', 'accounts'] as const) {
     const was = new Map(Object.values(before[map]).map((row) => [row.id, canonicalJson(row)]));
     const now = Object.values(after[map]);
@@ -1683,13 +1693,18 @@ function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null
       if (!record || record.id !== row.id || record.name !== keyOf.get(row.id)) {
         return `the former name "${alias}" is wrong`;
       }
+      renames.push({ from: alias, to: record.name, id: row.id });
     }
+  }
+  if (canonicalJson(behaviourRulesMigrated(before, renames) ?? null) !== canonicalJson(after.behaviour ?? null)) {
+    return 'the behaviour rules changed other than by the names';
   }
   const {
     version: _v1,
     inboxes: _i1,
     accounts: _a1,
     naming: _n1,
+    behaviour: _b1,
     ...restBefore
   } = before as PlainConfig & {
     naming?: unknown;
@@ -1700,6 +1715,7 @@ function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null
     accounts: _a2,
     formerNames: _f,
     naming: _n2,
+    behaviour: _b2,
     ...restAfter
   } = after as NamedConfig & { naming?: unknown };
   return canonicalJson(restBefore) === canonicalJson(restAfter) ? null : 'a setting other than a name changed';

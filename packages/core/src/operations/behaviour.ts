@@ -271,8 +271,9 @@ function storedRules(config: Config): { behaviour: Record<string, unknown>; rule
 }
 
 /** One stored rule as every channel reads it (`readBehaviourSettings`), or null when this release cannot read it. */
-function readStored(raw: unknown): BehaviourRule | null {
-  const [rule] = readBehaviourSettings({ behaviour: { rules: [raw] } } as unknown as Config).rules;
+function readStored(raw: unknown, config: Config): BehaviourRule | null {
+  // Read against this configuration, whose names and former names decide what a rule's account is (B3).
+  const [rule] = readBehaviourSettings({ ...config, behaviour: { rules: [raw] } }).rules;
   return rule ?? null;
 }
 
@@ -314,10 +315,10 @@ function planChange(config: Config, change: CheckedChange): Plan {
     const target = connectedAccount(config, place.account);
     checkRuleFits(change.rule, target);
     const at = (raw: unknown): boolean => {
-      const rule = readStored(raw);
+      const rule = readStored(raw, config);
       return rule !== null && samePlace(rule, place) && holds(rule, held, target);
     };
-    const same = rules.flatMap((raw) => (at(raw) ? [readStored(raw) as BehaviourRule] : []));
+    const same = rules.flatMap((raw) => (at(raw) ? [readStored(raw, config) as BehaviourRule] : []));
     const { acts } = change.rule;
     const already =
       same.length === 1 &&
@@ -351,7 +352,7 @@ function planChange(config: Config, change: CheckedChange): Plan {
   // A rule is removed for the account connected under this name now, or — gone — for the orphans that name it.
   const target = findConnected(config, place.account);
   const at = (raw: unknown): boolean => {
-    const rule = readStored(raw);
+    const rule = readStored(raw, config);
     if (rule === null || !samePlace(rule, place)) return false;
     return target === null
       ? rule.account === place.account && !(rule.accountId !== undefined && held.has(rule.accountId))
