@@ -1,8 +1,9 @@
 import { isDangerous } from './chars.ts';
-import { type Config, standingEpochOf } from './config.ts';
+import { ACCOUNT_ID_PATTERN, type Config, standingEpochOf } from './config.ts';
 import type { Core } from './core.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
 import { CommsError } from './errors.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { ensureSendEpochConfig } from './send-epoch.ts';
 import { isStandardEmoji, READS_AS_APPROVAL, STANDARD_EMOJI } from './standing-emoji.ts';
 
@@ -362,6 +363,210 @@ export function effectiveStanding(binding: StandingBinding, narrowed?: StandingN
     if (lower !== undefined && Number.isFinite(lower)) limits[name] = Math.min(limits[name], lower);
   }
   return { ...binding, contents, places, limits };
+}
+
+/**
+ * The narrowing `narrowing` makes of what is in force — `binding` as `narrowed` already leaves it — as the `narrowed` to
+ * store beside `binding`: the contents and exact places kept, and every limit, as asked. Applies at once, so it may
+ * only narrow (S8): USAGE for anything that would widen what is in force — a higher limit, a later expiry, a content
+ * or a place not held — and BAD_DATA for a limit outside the table.
+ */
+export function narrowedFurther(
+  binding: StandingBinding,
+  narrowed: StandingNarrowing | undefined,
+  narrowing: StandingNarrowing,
+): StandingNarrowing {
+  const before = effectiveStanding(binding, narrowed);
+  const kept = effectiveStanding(before, {
+    ...(narrowing.keep === undefined ? {} : { keep: narrowing.keep }),
+    ...(narrowing.places === undefined ? {} : { places: narrowing.places }),
+  });
+  const asked: Partial<StandingLimits> = { ...kept.limits };
+  for (const name of LIMIT_NAMES) {
+    const value = narrowing.limits?.[name];
+    if (value !== undefined) asked[name] = value;
+  }
+  const after = { ...kept, limits: checkedLimits(asked) };
+  if (classifyStandingChange(before, after) === 'widens') {
+    throw new CommsError('USAGE', 'nothing was narrowed: this would widen the standing approval, not narrow it', {
+      hint: 'A narrowing only lowers a limit, ends it sooner, or keeps fewer contents or places. Anything more is a new standing approval, which the person approves at their terminal with its code.',
+      details: { reason: 'widens' },
+    });
+  }
+  return {
+    keep: after.contents.map((content) => content.digest),
+    ...(after.places.kind === 'exact' ? { places: after.places.places.map((place) => place.id) } : {}),
+    limits: { ...after.limits },
+  };
+}
+
+/** How many days a standing approval lasts once approved, as narrowed: the lower of its own and the narrowing's. */
+export function standingDays(binding: StandingBinding, narrowed?: StandingNarrowing): number {
+  const lower = narrowed?.limits?.expiresDays;
+  return typeof lower === 'number' && Number.isFinite(lower)
+    ? Math.min(binding.limits.expiresDays, lower)
+    : binding.limits.expiresDays;
+}
+
+/** A Slack conversation a standing approval may name exactly: a channel, a private channel or group DM, or a DM. */
+export const STANDING_PLACE_PATTERN: RegExp = /^[CGD][A-Z0-9]{2,}$/;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const isStrings = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+/** Why `shared` is not a recorded sharing state, or null. */
+function sharedProblem(shared: unknown): string | null {
+  if (!isRecord(shared)) return 'a place has no sharing state';
+  if (typeof shared.extShared !== 'boolean' || typeof shared.pendingExtShared !== 'boolean') {
+    return 'a place has no sharing state';
+  }
+  if (shared.externalMembers !== null && typeof shared.externalMembers !== 'boolean') {
+    return 'a place has no sharing state';
+  }
+  return null;
+}
+
+/** Why `places` is not a standing approval's places, or null. */
+function placesProblem(places: unknown): string | null {
+  if (!isRecord(places)) return 'it has no places';
+  if (places.kind === 'threads-i-am-in') return Object.keys(places).length === 1 ? null : 'its places are not one kind';
+  if (places.kind !== 'exact' || !Array.isArray(places.places)) return 'it has no places';
+  if (places.places.length === 0) return 'it names no place';
+  const seen = new Set<string>();
+  for (const place of places.places as unknown[]) {
+    if (!isRecord(place) || typeof place.id !== 'string' || !STANDING_PLACE_PATTERN.test(place.id)) {
+      return 'a place is not a Slack channel or DM id';
+    }
+    if (seen.has(place.id)) return 'a place is named twice';
+    seen.add(place.id);
+    if (place.name !== null && typeof place.name !== 'string') return 'a place has no name or null';
+    if (!Number.isSafeInteger(place.members) || (place.members as number) < 0) return 'a place has no member count';
+    const shared = sharedProblem(place.shared);
+    if (shared !== null) return shared;
+  }
+  return null;
+}
+
+/**
+ * Why `binding` is not one a standing record may hold, or null: every content one `checkedContents` gives for its
+ * texts, in order, with its digest; every limit inside the table; places of one kind, each a Slack id once, with its
+ * member count and sharing; an account by its id; and who proposed it. The store refuses one before writing it, and
+ * the validator a record that holds one, so nothing a caller assembles by hand — a custom emoji, a 31-day expiry, a
+ * reply with a link — can become a standing approval.
+ */
+export function standingBindingProblem(binding: unknown): string | null {
+  if (!isRecord(binding)) return 'it is not a standing approval';
+  if (typeof binding.summary !== 'string') return 'it has no summary';
+  const target = binding.target;
+  if (!isRecord(target) || target.kind !== 'account' || typeof target.name !== 'string') return 'it names no account';
+  if (typeof target.id !== 'string' || !ACCOUNT_ID_PATTERN.test(target.id)) return 'it names no account by its id';
+  if (!Array.isArray(binding.contents)) return 'it has no contents';
+  const written = binding.contents as unknown[];
+  if (!written.every((content) => isRecord(content) && typeof content.text === 'string'))
+    return 'a content is unreadable';
+  const contents = written as StandingContent[];
+  let checked: StandingContent[];
+  try {
+    checked = checkedContents({
+      reactions: contents.filter((content) => content.kind === 'reaction').map((content) => content.text),
+      replies: contents.filter((content) => content.kind === 'reply').map((content) => content.text),
+    }).contents;
+  } catch {
+    return 'a content is not one a standing approval may hold';
+  }
+  // Only what was written: the default `eyes` stands for no contents at all, and a binding always says what it holds.
+  if (contents.length === 0) return 'it holds no content';
+  const canonical = (list: StandingContent[]) =>
+    canonicalJson(list.map((content) => ({ kind: content.kind, text: content.text, digest: content.digest })));
+  if (canonical(checked) !== canonical(contents))
+    return 'its contents are not as checked, in order, with their digests';
+  const places = placesProblem(binding.places);
+  if (places !== null) return places;
+  if (!isRecord(binding.limits)) return 'it has no limits';
+  try {
+    if (canonicalJson(checkedLimits(binding.limits as Partial<StandingLimits>)) !== canonicalJson(binding.limits)) {
+      return 'its limits are not whole and complete';
+    }
+  } catch {
+    return 'a limit is outside the table';
+  }
+  if (binding.proposedBy !== 'agent' && binding.proposedBy !== 'person') return 'it does not say who proposed it';
+  if (
+    binding.replaces !== undefined &&
+    (typeof binding.replaces !== 'string' || !APPROVAL_ID_PATTERN.test(binding.replaces))
+  ) {
+    return 'what it replaces is not an approval id';
+  }
+  if (!isStrings(binding.warnings)) return 'its warnings are unreadable';
+  return null;
+}
+
+/** A copy of `binding` holding exactly its own fields, or BAD_DATA naming why it is not one (`standingBindingProblem`). */
+export function canonicalStandingBinding(binding: StandingBinding): StandingBinding {
+  const problem = standingBindingProblem(binding);
+  if (problem !== null) {
+    throw new CommsError('BAD_DATA', `nothing was prepared: ${problem}`, {
+      hint: 'This is a bug — please report it.',
+      details: { reason: 'binding-invalid' },
+    });
+  }
+  return {
+    summary: binding.summary,
+    target: { kind: 'account', name: binding.target.name, id: binding.target.id },
+    contents: binding.contents.map((content) => ({ kind: content.kind, text: content.text, digest: content.digest })),
+    places:
+      binding.places.kind === 'threads-i-am-in'
+        ? { kind: 'threads-i-am-in' }
+        : {
+            kind: 'exact',
+            places: binding.places.places.map((place) => ({
+              id: place.id,
+              name: place.name,
+              members: place.members,
+              shared: {
+                extShared: place.shared.extShared,
+                pendingExtShared: place.shared.pendingExtShared,
+                externalMembers: place.shared.externalMembers,
+              },
+            })),
+          },
+    limits: { ...binding.limits },
+    proposedBy: binding.proposedBy,
+    ...(binding.replaces === undefined ? {} : { replaces: binding.replaces }),
+    warnings: [...binding.warnings],
+  };
+}
+
+/**
+ * Why `narrowed`, stored beside `binding`, is not a narrowing of it, or null: each key what a narrowing holds, each
+ * content and place one the binding has, and no limit above the binding's or outside the table. Not bound into the
+ * record's digest, since it changes after approval; only ever able to narrow, so a hand that edits it can only take away.
+ */
+export function standingNarrowingProblem(binding: StandingBinding, narrowed: unknown): string | null {
+  if (narrowed === undefined) return null;
+  if (!isRecord(narrowed)) return 'it is not a narrowing';
+  for (const key of Object.keys(narrowed))
+    if (!['keep', 'places', 'limits'].includes(key)) return 'it is not a narrowing';
+  if (narrowed.keep !== undefined && !isStrings(narrowed.keep)) return 'it keeps something that is not a digest';
+  if (narrowed.places !== undefined && !isStrings(narrowed.places)) return 'it keeps something that is not a place';
+  if (narrowed.limits !== undefined) {
+    if (!isRecord(narrowed.limits)) return 'its limits are unreadable';
+    for (const [name, value] of Object.entries(narrowed.limits)) {
+      if (!(LIMIT_NAMES as readonly string[]).includes(name)) return 'it narrows a limit there is none of';
+      const limit = name as keyof StandingLimits;
+      if (!Number.isSafeInteger(value) || (value as number) < STANDING_LIMITS[limit].min)
+        return 'a limit is outside the table';
+      if ((value as number) > binding.limits[limit]) return 'it raises a limit';
+    }
+  }
+  try {
+    effectiveStanding(binding, narrowed as StandingNarrowing);
+  } catch {
+    return 'it keeps what the standing approval does not hold';
+  }
+  return null;
 }
 
 /** Whether a place recorded as `after` is one `before` approved: the same id, shared the same, and no bigger a room. */

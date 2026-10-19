@@ -77,6 +77,8 @@ export type StoredApproval =
 
 const STATES: readonly string[] = ['pending', 'approved', 'sending', 'used', 'failed', 'unknown', 'expired', 'revoked'];
 const KINDS: readonly string[] = ['send', 'change', 'download', 'disclosure'];
+/** Version 2 alone has standing approvals (design 2026-10-19-standing-approvals): no earlier release wrote one. */
+const V2_KINDS: readonly string[] = [...KINDS, 'standing'];
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -128,6 +130,40 @@ function commonShape(raw: Record<string, unknown>): UnreadableReason | null {
       !(change.target === null || isObject(change.target)) ||
       !Array.isArray(change.loosened) ||
       !isStrings(change.effects)
+    ) {
+      return 'wrong-shape';
+    }
+  }
+  if (kind === 'standing') {
+    const standing = raw.standing;
+    if (
+      !isObject(standing) ||
+      !isString(standing.summary) ||
+      !isObject(standing.target) ||
+      !isString(standing.target.id) ||
+      !Array.isArray(standing.contents) ||
+      !standing.contents.every(
+        (content) => isObject(content) && isString(content.kind) && isString(content.text) && isString(content.digest),
+      ) ||
+      !isObject(standing.places) ||
+      !isString(standing.places.kind) ||
+      !isObject(standing.limits) ||
+      !isString(standing.proposedBy) ||
+      !optional(standing.replaces, isString) ||
+      !isStrings(standing.warnings)
+    ) {
+      return 'wrong-shape';
+    }
+    const narrowed = raw.narrowed;
+    if (
+      !optional(
+        narrowed,
+        (value) =>
+          isObject(value) &&
+          optional(value.keep, isStrings) &&
+          optional(value.places, isStrings) &&
+          optional(value.limits, isObject),
+      )
     ) {
       return 'wrong-shape';
     }
@@ -219,9 +255,10 @@ function v2Shape(raw: Record<string, unknown>): UnreadableReason | null {
   for (const field of ['channel', 'ownerScope', 'contentDigest'] as const) {
     if (!optional(raw[field], isString)) return 'wrong-shape';
   }
-  for (const field of ['pendingMs', 'approvedMs', 'sendEpoch'] as const) {
+  for (const field of ['pendingMs', 'approvedMs', 'sendEpoch', 'standingEpoch'] as const) {
     if (!optional(raw[field], (value) => typeof value === 'number')) return 'wrong-shape';
   }
+  if (!optional(raw.standingId, isString)) return 'wrong-shape';
   for (const field of [
     'route',
     'bindingDigest',
@@ -286,7 +323,7 @@ export function decodeStored(fileId: string, text: string, config: Config | null
   }
 
   // Version 2, or a version nobody here wrote: ownership and kind are explicit, a send's included.
-  if (!isString(raw.kind) || !KINDS.includes(raw.kind)) return unreadable(fileId, 'missing-kind');
+  if (!isString(raw.kind) || !V2_KINDS.includes(raw.kind)) return unreadable(fileId, 'missing-kind');
   const v2 = v2Shape(raw);
   if (v2 !== null) return unreadable(fileId, v2);
   const record = raw as unknown as ApprovalRecord;

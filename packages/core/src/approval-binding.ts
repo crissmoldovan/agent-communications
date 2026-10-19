@@ -21,8 +21,12 @@ import { CommsError } from './errors.ts';
  * How an approval is decided, fixed when it is made: `chat` — a yes in the conversation is enough — or `confirm` — a
  * person outside the chat decides. A send's route is the stricter of its live send policy and any escalation; a
  * change's is the live change policy. It never changes when the configuration does.
+ *
+ * `standing` — the send is one use of a standing approval the person gave in advance, at a terminal with its code
+ * (design 2026-10-19-standing-approvals, S9): a child, approved when it is made, for one claim within minutes. A
+ * standing record itself is on `confirm`, whatever the change policy.
  */
-export type ApprovalRoute = 'chat' | 'confirm';
+export type ApprovalRoute = 'chat' | 'confirm' | 'standing';
 
 /** The four activation documents that may receive standing disclosure authority. */
 export type DisclosureActivationKind = 'rule' | 'judge-budget' | 'judge-kind' | 'enable-all';
@@ -143,9 +147,24 @@ export function sameDisclosureBinding(left: DisclosureBinding, right: Disclosure
  */
 export type OwnerScope = 'owner' | 'prospective' | 'global';
 
-/** The lifetime profile, in milliseconds: pending on each route, approved, and a download's question. */
-export const APPROVAL_LIFETIMES: Readonly<{ chat: number; confirm: number; approved: number; download: number }> =
-  Object.freeze({ chat: 600_000, confirm: 1_800_000, approved: 86_400_000, download: 1_800_000 });
+/**
+ * The lifetime profile, in milliseconds: pending on each route, approved, a download's question, and a standing
+ * approval's child — usable once, within two minutes of the use that minted it. A standing record's own approved
+ * lifetime is its days (`approvedMs`, checked against its limits), not one of these.
+ */
+export const APPROVAL_LIFETIMES: Readonly<{
+  chat: number;
+  confirm: number;
+  approved: number;
+  download: number;
+  standingChild: number;
+}> = Object.freeze({
+  chat: 600_000,
+  confirm: 1_800_000,
+  approved: 86_400_000,
+  download: 1_800_000,
+  standingChild: 120_000,
+});
 
 /**
  * The sending lease (design 2026-10-05 §D1): a `sending` record whose claimant has not renewed it for this long reads
@@ -171,8 +190,9 @@ export function unknownAtOf(record: {
   return Number.isFinite(at) ? new Date(at + SENDING_LEASE_MS).toISOString() : undefined;
 }
 
-/** How long a pending send or change on `route` stays open. */
+/** How long a pending send or change on `route` stays open; a standing child is never pending, and lasts its own. */
 export function pendingMsOf(route: ApprovalRoute): number {
+  if (route === 'standing') return APPROVAL_LIFETIMES.standingChild;
   return route === 'confirm' ? APPROVAL_LIFETIMES.confirm : APPROVAL_LIFETIMES.chat;
 }
 
@@ -211,6 +231,10 @@ export interface BindingFields {
   approvedMs?: number | undefined;
   /** On a send: the owner's send epoch as read at prepare. */
   sendEpoch?: number | undefined;
+  /** On a standing record and its children: the standing epoch as read when it was made. Absent on every other. */
+  standingEpoch?: number | undefined;
+  /** On a standing approval's child: the standing record it is one use of. Absent on every other. */
+  standingId?: string | undefined;
   policy: SendPolicy;
   requiredPolicy: SendPolicy;
   download?:
@@ -239,11 +263,15 @@ export interface ApprovalIdentity {
   draftMessageId: string;
   expect: Expectation;
   sendEpoch?: number;
+  standingEpoch?: number;
+  standingId?: string;
 }
 
 /**
  * The identity a record is bound to, exactly as stored. An absent `inboxSub` is left out rather than kept as
- * `undefined`; a send always carries its epoch.
+ * `undefined`; a send and a standing record always carry their send epoch. A standing record and its children carry
+ * the standing epoch, and a child its standing id — each only when present, so every other record's identity, and its
+ * digest, is exactly what it was before standing approvals existed.
  */
 export function identityOf(record: BindingFields): ApprovalIdentity {
   return {
@@ -260,7 +288,9 @@ export function identityOf(record: BindingFields): ApprovalIdentity {
       bcc: [...record.expect.bcc],
       subject: record.expect.subject,
     },
-    ...(record.kind === 'send' ? { sendEpoch: record.sendEpoch as number } : {}),
+    ...(record.kind === 'send' || record.kind === 'standing' ? { sendEpoch: record.sendEpoch as number } : {}),
+    ...(record.standingEpoch === undefined ? {} : { standingEpoch: record.standingEpoch }),
+    ...(record.standingId === undefined ? {} : { standingId: record.standingId }),
   };
 }
 
