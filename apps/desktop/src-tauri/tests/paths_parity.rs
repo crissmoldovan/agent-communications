@@ -1,6 +1,7 @@
 //! The Rust port of `resolvePaths` gives what core gives, for every case recorded from core in
-//! `fixtures/resolve-paths.json` (the TypeScript half, `src/test/paths-parity.test.ts`, re-checks the fixture against
-//! core itself, so it cannot drift).
+//! `fixtures/resolve-paths.json`, POSIX and Windows alike (the TypeScript half, `src/test/paths-parity.test.ts` and
+//! `paths-parity-windows.test.ts`, re-checks the fixture against core itself, so it cannot drift). The port builds
+//! paths with the platform it is given, not the host's, so the Windows cases run on every host.
 
 use agentcomms_desktop::paths::{resolve_folders, Folders, PathEnv, Platform};
 use serde_json::Value;
@@ -14,13 +15,19 @@ fn the_port_matches_resolve_paths_for_every_recorded_case() {
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/resolve-paths.json")).expect("the fixture");
     let cases = fixture["cases"].as_array().expect("cases");
-    assert!(cases.len() >= 10, "{} cases", cases.len());
+    assert!(cases.len() >= 20, "{} cases", cases.len());
+    let windows = cases
+        .iter()
+        .filter(|case| case["platform"] == "win32")
+        .count();
+    assert!(windows >= 10, "{windows} Windows cases");
     for case in cases {
         let name = case["name"].as_str().expect("a name");
         let platform = match case["platform"].as_str().expect("a platform") {
             "linux" => Platform::Linux,
             "darwin" => Platform::MacOs,
-            other => panic!("{name}: the fixture holds POSIX cases only, not {other}"),
+            "win32" => Platform::Windows,
+            other => panic!("{name}: no platform called {other}"),
         };
         let env = &case["env"];
         let path_env = PathEnv {

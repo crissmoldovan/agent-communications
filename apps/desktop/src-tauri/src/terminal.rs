@@ -1358,6 +1358,87 @@ mod tests {
         words
     }
 
+    /// Windows itself: cmd.exe reads the line as the app hands it (`/s /c "<line>"`, written into the command line as it
+    /// is), and Node — the program a launcher runs with there — gets back exactly the words, while nothing cmd.exe
+    /// could act on in them runs. Only on Windows; skipped where there is no node.exe on PATH.
+    #[cfg(windows)]
+    #[test]
+    fn cmd_hands_node_back_exactly_the_words_of_the_windows_line() {
+        use std::os::windows::process::CommandExt;
+        let Some(node) = locate("node.exe") else {
+            eprintln!("skipped: there is no node.exe on PATH");
+            return;
+        };
+        let cmd = locate("cmd.exe").expect("cmd.exe");
+        let dir = tempfile::tempdir().expect("a folder");
+        let marker = dir.path().join("ran");
+        let script = dir.path().join("print args.js");
+        // Every word as JSON, with anything outside ASCII escaped, so the console's code page cannot change it.
+        fs::write(
+            &script,
+            "process.stdout.write(JSON.stringify(process.argv.slice(2)).replace(/[\\u007f-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')))",
+        )
+        .expect("a script");
+        let mut words = vec![node, script.to_string_lossy().into_owned()];
+        words.extend(strings(&[
+            "approve",
+            "C:\\Profiles\\First Last\\x",
+            "C:\\Profiles\\outgoing",
+            "acme/gmail",
+            "--force",
+            "a;b",
+            "a & b",
+            "x | y",
+            "a ^ b",
+            "(a b)",
+            "a <b>",
+            "it's",
+            "it\u{2019}s here",
+            "caf\u{e9}",
+            "a \u{2014} b",
+            "@name",
+            "a,b",
+            "~/outgoing",
+            " outgoing ",
+            "--name=x",
+            "-name.x",
+            "1kb",
+            "0x10",
+            ".5",
+            "#a",
+            "{a}",
+        ]));
+        words.push(format!("x & echo ran > {}", marker.display()));
+        let text = line(&words, Platform::Windows).expect("a line");
+        let output = Command::new(&cmd)
+            .raw_arg("/s")
+            .raw_arg("/c")
+            .raw_arg(format!("\"{text}\""))
+            .output()
+            .expect("cmd.exe ran");
+        assert!(output.status.success(), "{output:?}");
+        let printed: Vec<String> = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)));
+        assert_eq!(printed, words[2..].to_vec(), "{text}");
+        assert!(!marker.exists(), "cmd.exe ran a word: {text}");
+    }
+
+    /// And a word no quoting brings through gives no line, so cmd.exe is never handed one (Windows only).
+    #[cfg(windows)]
+    #[test]
+    fn cmd_is_never_handed_a_word_it_would_act_on() {
+        for word in UNSAFE_ON_WINDOWS {
+            assert_eq!(
+                line(
+                    &strings(&["C:\\x\\node.exe", "C:\\x\\core", word]),
+                    Platform::Windows
+                ),
+                None,
+                "{word:?}"
+            );
+        }
+    }
+
     #[test]
     fn windows_with_an_unsafe_word_copies_json() {
         for word in [

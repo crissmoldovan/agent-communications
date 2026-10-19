@@ -1,5 +1,5 @@
 {
-  "$comment": "Recorded from core's resolvePaths (packages/core/src/paths.ts); src/test/paths-parity.test.ts re-checks every case against it.",
+  "$comment": "Recorded from core's resolvePaths (packages/core/src/paths.ts); src/test/paths-parity.test.ts re-checks every POSIX case against it, and src/test/paths-parity-windows.test.ts every win32 case, with node:path answered by path.win32 as a Windows host answers it.",
   "cases": [
     {
       "name": "linux defaults",
@@ -201,6 +201,151 @@
         "stateDir": "/example/home/.config/agent-communications/state",
         "dataDir": "/example/home/.local/share/agent-communications",
         "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "windows defaults: config under %APPDATA%, the rest under %LOCALAPPDATA%",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {},
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "APPDATA and LOCALAPPDATA name the roots",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "D:\\Roaming",
+        "LOCALAPPDATA": "E:\\Local"
+      },
+      "expected": {
+        "configDir": "D:\\Roaming\\agent-communications",
+        "stateDir": "E:\\Local\\agent-communications\\state",
+        "dataDir": "E:\\Local\\agent-communications",
+        "secretsDir": "E:\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "an empty APPDATA or LOCALAPPDATA is unset",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "",
+        "LOCALAPPDATA": ""
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "XDG_CONFIG_HOME is honoured on Windows too, and state and secrets stay local",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "XDG_CONFIG_HOME": "D:\\xdg\\config"
+      },
+      "expected": {
+        "configDir": "D:\\xdg\\config\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "XDG_DATA_HOME is not read on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "XDG_DATA_HOME": "D:\\xdg\\data"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR takes state and secrets with it on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "D:\\comms"
+      },
+      "expected": {
+        "configDir": "D:\\comms",
+        "stateDir": "D:\\comms\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "D:\\comms\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_STATE_DIR moves the state alone on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_STATE_DIR": "F:\\state"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "F:\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_DATA_DIR moves the data on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "G:\\data"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "G:\\data",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "forward slashes, a trailing separator and dot segments are normalised",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "D:/comms/./x/../",
+        "AGENT_COMMS_DATA_DIR": "G:/data//here/"
+      },
+      "expected": {
+        "configDir": "D:\\comms",
+        "stateDir": "D:\\comms\\state",
+        "dataDir": "G:\\data\\here",
+        "secretsDir": "D:\\comms\\secrets"
+      }
+    },
+    {
+      "name": "every variable at once on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "D:\\Roaming",
+        "LOCALAPPDATA": "E:\\Local",
+        "XDG_CONFIG_HOME": "H:\\xdg",
+        "AGENT_COMMS_STATE_DIR": "F:\\state",
+        "AGENT_COMMS_DATA_DIR": "G:\\data"
+      },
+      "expected": {
+        "configDir": "H:\\xdg\\agent-communications",
+        "stateDir": "F:\\state",
+        "dataDir": "G:\\data",
+        "secretsDir": "E:\\Local\\agent-communications\\secrets"
       }
     }
   ]
