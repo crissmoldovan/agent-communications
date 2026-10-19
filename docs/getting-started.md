@@ -216,6 +216,32 @@ code typed at a terminal, within thirty, and the agent then has 24 hours to send
 Gmail for you to send yourself. Under `confirm` the agent hands you the command to run and waits for it
 (`gmail_send_wait`) — you never have to tell it you approved. If you say no, it revokes the approval.
 
+## What an agent may do, and how it writes
+
+Every send waits for your yes. You can also decide ahead of time what an agent may start at all, per account and per
+conversation, and how it should write.
+
+**What it may do is a rule, and the tools hold it.** For example: let it reply and react in a Slack workspace, but
+never start a conversation, edit or delete; or never send mail to anyone at a client's domain.
+
+```bash
+agentcomms behaviour allow acme/slack reply,reaction
+agentcomms behaviour allow acme/gmail none --conversation @client.test
+agentcomms behaviour      # every rule, and what each account allows
+```
+
+An act no rule allows is refused before any preview, and again at send if you narrowed the rule after saying yes. The
+agent is told to say which rule stopped it and not to try again. A rule that only narrows applies at once; one that
+lets an agent do more is shown to you first. With no rule, everything is allowed, as before. A server started before
+0.22.0 holds no rule until its client restarts it, and `agentcomms doctor` names any that is.
+
+**How it writes is your writing profile:** plain Markdown files in `compose/` in the configuration directory — for
+every message, for a platform, for one account, or for one conversation. `agentcomms profile init acme/gmail` starts
+one from a starter (tone, language, length, sign-off, threads) and never overwrites a file;
+`agentcomms profile <mailbox> --conversation sam@partner.test --conversation @partner.test` shows what an agent would
+read before writing to Sam from that mailbox, and which files it looked for. The agent reads it before it writes and follows it, and
+what you ask in the conversation wins. No tool lets an agent change it.
+
 ## Slack
 
 The Slack package is separate and needs no Google account. You make a Slack app in your own workspace from a

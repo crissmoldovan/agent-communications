@@ -186,10 +186,10 @@ export interface FakeGoogle {
 }
 
 /**
- * The part of Gmail's query language the fake understands: `from:`, `to:`, `subject:`, `in:`, `has:attachment`,
- * `is:unread`, `after:`/`before:` as epoch seconds, `older_than:`/`newer_than:` in days, `OR` and `{a b}` groups,
- * `-` negation, and bare words against the subject and snippet. Enough that a test proves the compiled query does
- * what it claims, rather than proving the fake agrees with itself.
+ * The part of Gmail's query language the fake understands: `from:`, `to:`, `subject:`, `in:`, `rfc822msgid:`,
+ * `has:attachment`, `is:unread`, `after:`/`before:` as epoch seconds, `older_than:`/`newer_than:` in days, `OR` and
+ * `{a b}` groups, `-` negation, and bare words against the subject and snippet. Enough that a test proves the compiled
+ * query does what it claims, rather than proving the fake agrees with itself.
  */
 function matchesQuery(
   message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown },
@@ -241,6 +241,9 @@ function matchesQuery(
       case 'category':
         // No categories are modelled, so a category never matches — and `-category:x` therefore always does.
         return false;
+      case 'rfc822msgid':
+        // The whole Message-ID, as Gmail matches it: not a part of it, and its angle brackets not needed.
+        return headerValue('message-id').trim().replace(/^<|>$/g, '').toLowerCase() === value.replace(/^<|>$/g, '');
       default:
         return `${message.snippet ?? ''} ${headerValue('subject')}`.toLowerCase().includes(value);
     }

@@ -97,6 +97,8 @@ async function setUp(
     handoffs: slackHandoffs(),
     policy: options.policy ?? ('chat' as const),
     sendEpoch: 0,
+    // The configuration the store classifies by, which holds no behaviour rules: every act is allowed, as before them.
+    currentConfig: config.loadConfig,
     approvals,
     permit: closedPermit(),
   };
@@ -209,6 +211,7 @@ test('a room whose size cannot be read says so rather than reporting a small one
     'hi',
   );
   const { call } = fakeSlack({ 'conversations.info': { ok: false, error: 'channel_not_found' } });
+  const { approvals, config } = storeFor(state);
   const prepared = await preparePost(
     {
       call,
@@ -219,7 +222,8 @@ test('a room whose size cannot be read says so rather than reporting a small one
       handoffs: slackHandoffs(),
       policy: 'chat',
       sendEpoch: 0,
-      approvals: storeFor(state).approvals,
+      currentConfig: config.loadConfig,
+      approvals,
     },
     draft,
     new NameBook(),
@@ -481,7 +485,7 @@ test('a room that grew between the preview and the post voids the approval', asy
    */
   const state = temp();
   const drafts = openDraftStore(state, NOW, slackHandoffs());
-  const { approvals } = storeFor(state);
+  const { approvals, config } = storeFor(state);
   const draft = await drafts.create(
     ACCOUNT,
     compose({ channel: 'C1', text: 'heads up', mentions: [{ kind: 'broadcast', who: 'here' }] }),
@@ -510,6 +514,7 @@ test('a room that grew between the preview and the post voids the approval', asy
     handoffs: slackHandoffs(),
     policy: 'chat' as const,
     sendEpoch: 0,
+    currentConfig: config.loadConfig,
     approvals,
     permit: closedPermit(),
   };

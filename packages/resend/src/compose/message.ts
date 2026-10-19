@@ -4,6 +4,7 @@ import { basename, extname } from 'node:path';
 import {
   AGENT_LABEL_WORDS,
   analyseOutboundHtml,
+  type BehaviourAct,
   type CliHandoffs,
   CommsError,
   canonicalAddress,
@@ -369,6 +370,26 @@ export function uniqueRecipients(message: Pick<OutboundMessage, 'to' | 'cc' | 'b
 }
 
 /**
+ * What the behaviour rules are asked about a send (design 2026-10-19-agent-behaviour-rules, B2, B4): the act, and the
+ * places it lands. Prepare stores it beside the message and the digest binds it, so execute asks again exactly what
+ * the person approved.
+ */
+export interface BehaviourCheck {
+  acts: BehaviourAct[];
+  places: string[][];
+}
+
+/**
+ * A send as the rules see it: the act is `send` — Resend has no threads here, so a message with In-Reply-To is one too
+ * (B2) — and every recipient, To, Cc and Bcc, is a place of its own, lower-cased, so one a rule forbids refuses the
+ * whole send (B4). The Reply-To is no place: it receives nothing.
+ */
+export function behaviourCheckOf(message: Pick<OutboundMessage, 'to' | 'cc' | 'bcc'>): BehaviourCheck {
+  const places = [...new Set(uniqueRecipients(message).map((address) => address.toLowerCase()))];
+  return { acts: ['send'], places: places.map((address) => [address]) };
+}
+
+/**
  * Elements that show a recipient something that is not text: images, SVG, media, frames, embedded objects — and
  * `link`, which pulls a stylesheet in. Matched on the source rather than on what a parser makes of it, so a spelling
  * the analyser does not know (`xlink:href`, say) is refused all the same; a false match only refuses HTML, and plain
@@ -389,11 +410,17 @@ function imagesIn(html: string, urls: readonly { where: string; url: string }[])
   return elements + urls.filter((entry) => SHOWN_ON_OPEN.test(entry.where)).length;
 }
 
-/** The digest an approval is bound to: everything a recipient can see or that decides who receives it. */
-export function digestOf(message: OutboundMessage): string {
+/**
+ * The digest an approval is bound to: everything a recipient can see or that decides who receives it — and, from this
+ * release, what the behaviour rules are asked about it (`BehaviourCheck`), as prepare stored it. Version 1 is a message
+ * an earlier release prepared, which stored none: its digest is as it was, so its approval still matches.
+ */
+export function digestOf(message: OutboundMessage, behaviour?: BehaviourCheck | undefined): string {
   return sha256Hex(
     canonicalJson({
-      v: 1,
+      v: behaviour === undefined ? 1 : 2,
+      // As stored, whatever it holds: a check changed after the preview is a digest the approval does not match.
+      ...(behaviour === undefined ? {} : { behaviour }),
       from: message.from,
       to: message.to,
       cc: message.cc,

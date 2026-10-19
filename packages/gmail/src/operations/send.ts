@@ -1,4 +1,5 @@
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
   approveAndWaitSentence,
@@ -60,6 +61,7 @@ import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
 import { VERSION } from '../version.ts';
 import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
+import { allowedHere, bindingOf, boundDigest, mailActOf, requireMailAct } from './mail-acts.ts';
 import { type UnsentSection, unsentSection } from './unsent.ts';
 import { oneOf } from './words.ts';
 
@@ -688,6 +690,8 @@ function previewFor(options: {
   rewrittenFrom?: string | undefined;
   /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
   security?: string | null | undefined;
+  /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
+  allowedHere?: string | undefined;
 }): string {
   const { analysis, facts, record, alias } = options;
   // Every way the draft writes a recipient carries that recipient's note: the note is this package's words alone.
@@ -747,13 +751,14 @@ function previewFor(options: {
   };
   // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
   // appears to come from — read from the From line the approval binds, so the terminal's approval says what the
-  // prepare said (L3); then, when this prepare rewrote that line, what it was.
+  // prepare said (L3); then, when this prepare rewrote that line, what it was; then what the rules allow here (B4).
   const lines = [...(options.security ? [options.security] : []), identityLine(identityOfFrom(analysis.from))];
   if (options.rewrittenFrom !== undefined) {
     lines.push(
       `The From line was rewritten for this send, its header alone: it was ${truncateDisplay(options.rewrittenFrom, 120)}`,
     );
   }
+  if (options.allowedHere !== undefined) lines.push(options.allowedHere);
   return `${lines.join('\n')}\n${renderMessagePreview(preview)}`;
 }
 
@@ -875,9 +880,17 @@ export async function prepareSend(
   if (first.analysis.to.length === 0 && first.analysis.cc.length === 0 && first.analysis.bcc.length === 0) {
     throw new CommsError('BAD_DATA', 'this draft has no recipients', { hint: 'Add them and prepare the send again.' });
   }
+  // What this send is — a reply proven from the mailbox, or a new message — and whether the behaviour rules allow it
+  // for every recipient (design 2026-10-19-agent-behaviour-rules, B2–B4): before the draft is relabelled, and before
+  // any approval or preview exists.
+  const firstAct = await mailActOf(transport, first.analysis);
+  requireMailAct(context, config, resolved, [firstAct], first.analysis);
   // Who it appears to come from, and a From that says so — rewritten, its header alone, when it does not (G2).
   const fitted = await fitFrom(context, resolved, draftId, first, requested);
   const { analysis, draftMessageId } = fitted.read;
+  // The draft as it is bound, after any relabelling, checked as what it is: decided again only if what it answers moved.
+  const act = analysis.inReplyTo === first.analysis.inReplyTo ? firstAct : await mailActOf(transport, analysis);
+  const allowed = requireMailAct(context, config, resolved, [act], analysis);
 
   const { facts, flags, correspondentHistory } = config.defaults.riskEscalation
     ? await studyRecipients(context, transport, resolved, analysis)
@@ -891,7 +904,8 @@ export async function prepareSend(
     inboxSub: resolved.inbox.sub,
     draftId,
     draftMessageId,
-    contentDigest: analysis.digest,
+    // The draft's digest, with the act and the recipients it was checked as: what the send checks again (B4).
+    contentDigest: boundDigest(analysis, act),
     sendEpoch: sendEpochOf(config, resolved.inbox.id),
     policy: livePolicy,
     requiredPolicy,
@@ -930,6 +944,7 @@ export async function prepareSend(
       flags,
       rewrittenFrom: fitted.rewrittenFrom,
       security,
+      allowedHere: allowedHere(config, resolved, allowed),
     }),
     identity: fitted.identity,
     fromRewritten: fitted.rewrittenFrom !== undefined,
@@ -943,7 +958,8 @@ export async function prepareSend(
       inbox: alias,
       id: record.approvalId,
     }),
-    digest: analysis.digest,
+    // What the approval is bound to: the draft, and the act and recipients it was checked as.
+    digest: record.contentDigest,
     expiresAt: record.expiresAt,
     // Not in the approval's digest: the draft is. The command is this process's own, located where it is printed.
     nextStep:
@@ -1025,7 +1041,8 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
   const { analysis, draftMessageId } = await readDraft(context, alias, record.draftId).catch(async (error: unknown) => {
     throw withApproval(error, await context.core.approvals.approvalOf(record));
   });
-  if (draftMessageId !== record.draftMessageId || analysis.digest !== record.contentDigest) {
+  const binding = bindingOf(record.contentDigest, analysis);
+  if (draftMessageId !== record.draftMessageId || binding === undefined) {
     const voided = await context.core.approvals.revoke(approvalId, 'the draft changed after the preview was prepared', {
       disposition: 'integrity',
       expect: { kind: 'send' },
@@ -1037,6 +1054,14 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
         approval: voided.form === 'v2' ? await context.core.approvals.approvalOf(voided.record) : null,
       },
     });
+  }
+  // The rules as they are now, for the act this approval was bound as (B4): a person is never asked to approve what
+  // a rule tightened since the prepare would refuse to send.
+  let allowed: ActDecision;
+  try {
+    allowed = requireMailAct(context, config, { alias, inbox }, binding.acts, analysis);
+  } catch (error) {
+    throw withApproval(error, await context.core.approvals.approvalOf(record));
   }
   const transport = await context.transport(alias);
   const { facts, flags } = config.defaults.riskEscalation
@@ -1052,6 +1077,7 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
       alias,
       effectivePolicy: stricterPolicy(livePolicy, record.requiredPolicy),
       flags,
+      allowedHere: allowedHere(config, { alias, inbox }, allowed),
     }),
     challenge,
     effectivePolicy: stricterPolicy(livePolicy, record.requiredPolicy),
@@ -1078,7 +1104,8 @@ export async function finishApproval(
   const approved = await context.core.approvals.approve(
     approvalId,
     via,
-    { draftMessageId, contentDigest: analysis.digest },
+    // The digest the approval is bound to, when the draft still reads as it did: a changed one never matches.
+    { draftMessageId, contentDigest: bindingOf(record.contentDigest, analysis)?.digest ?? analysis.digest },
     answer,
     'send',
     context.platform,
@@ -1174,7 +1201,8 @@ export async function executeSend(
     options.approvalId,
     {
       draftMessageId: before.draftMessageId,
-      contentDigest: before.analysis.digest,
+      // The digest the approval is bound to, when the draft still reads as it did: a changed one never matches.
+      contentDigest: bindingOf(outcome.record.contentDigest, before.analysis)?.digest ?? before.analysis.digest,
       inboxId: resolved.inbox.id,
       inboxSub: resolved.inbox.sub,
       expect,
@@ -1235,10 +1263,18 @@ export async function executeSend(
       } catch (error) {
         throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
       }
-      if (now.draftMessageId !== claimed.draftMessageId || now.analysis.digest !== claimed.contentDigest) {
+      const binding = bindingOf(claimed.contentDigest, now.analysis);
+      if (now.draftMessageId !== claimed.draftMessageId || binding === undefined) {
         const error = new CommsError('APPROVAL_VOID', 'nothing was sent: the draft changed while it was being sent', {
           hint: 'Prepare the send again to see what it says now.',
         });
+        throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
+      }
+      // The rules as they are now, read afresh, for the act and recipients that were approved (design
+      // 2026-10-19-agent-behaviour-rules, B4): a rule tightened after the yes stops the send before Gmail is asked.
+      try {
+        requireMailAct(context, await context.config(), resolved, binding.acts, now.analysis);
+      } catch (error) {
         throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
       }
 

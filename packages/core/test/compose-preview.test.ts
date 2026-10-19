@@ -107,7 +107,7 @@ test('the writing profile layers: built-in, the user, the platform, then one mai
   const full = await readComposeProfile(directory, { platform: 'gmail', inbox: 'work' });
   assert.deepEqual(
     full.sections.map((section) => section.layer),
-    ['default', 'user', 'platform', 'inbox'],
+    ['default', 'user', 'platform', 'account'],
     'later layers refine earlier ones, in that order',
   );
   assert.match(full.text, /Sign off with "C"/);

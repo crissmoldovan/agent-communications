@@ -11,9 +11,11 @@
  *
  * `config.ts` imports this module to judge a change, so this one imports from it only types.
  */
+import { domainToASCII } from 'node:url';
 import { MAIL_CONVERSATION_PATTERN, SLACK_CONVERSATION_PATTERN } from './agent-label.ts';
 import type { Config } from './config.ts';
 import { CommsError } from './errors.ts';
+import { type CliHandoffs, handoffSentence } from './handoff-text.ts';
 import { neutralise } from './untrusted.ts';
 
 /** B2: the acts a rule may name — the label's kinds (`ACT_KINDS`), and `delete`. */
@@ -100,6 +102,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 type ReadRule = { rule: BehaviourRule } | { unreadable: BehaviourSettings['unreadable'][number] };
 
+/**
+ * A mail conversation — an address or `@domain` — in the one form rules and places are compared in: lower-cased, one
+ * trailing dot off its domain (a fully qualified name is the same domain), and the domain in its ASCII (punycode) form,
+ * as `domainToASCII` gives it, so `@bücher.de` and `kunde@xn--bcher-kva.de` meet. The local part stays as written,
+ * lower-cased; the domain is what follows the last `@`. Null when there is no domain, or it is not one — `domainToASCII`
+ * refuses it, or a label in it is empty — so a rule naming it is unreadable (fail closed) and a place naming it meets
+ * only its account's rule. Without this a rule written in one spelling silently never held a recipient in the other.
+ */
+export function normaliseMailConversation(value: string): string | null {
+  const at = value.lastIndexOf('@');
+  if (at === -1) return null;
+  const local = value.slice(0, at).toLowerCase();
+  const written = value.slice(at + 1).toLowerCase();
+  const domain = written.endsWith('.') ? written.slice(0, -1) : written;
+  if (domain === '') return null;
+  const ascii = domainToASCII(domain).toLowerCase();
+  if (ascii === '' || ascii.startsWith('.') || ascii.endsWith('.') || ascii.includes('..')) return null;
+  return `${local}@${ascii}`;
+}
+
 /** One stored rule, or why it cannot be read. Reasons are fixed words: nothing from the file is repeated in them. */
 function readRule(raw: unknown, index: number): ReadRule {
   const at = `rule ${index + 1}`;
@@ -117,8 +139,13 @@ function readRule(raw: unknown, index: number): ReadRule {
     const given = raw.conversation;
     if (typeof given !== 'string' || !(SLACK_CONVERSATION_PATTERN.test(given) || MAIL_CONVERSATION_PATTERN.test(given)))
       return unreadable('names a conversation that is not a Slack channel or person, an address or @domain');
-    // As the label stores them: addresses and domains lower-cased, Slack ids as Slack writes them.
-    conversation = given.includes('@') ? given.toLowerCase() : given;
+    if (given.includes('@')) {
+      // Addresses and domains in the one form they are compared in (`normaliseMailConversation`); Slack ids as Slack
+      // writes them. A domain that is not one could not be matched, so the rule fails closed rather than never holding.
+      const normal = normaliseMailConversation(given);
+      if (normal === null) return unreadable('names a domain that is not one');
+      conversation = normal;
+    } else conversation = given;
   }
   const stored: readonly unknown[] = raw.acts;
   // An act this release does not know is dropped, which narrows the rule; the rest in their order, once each.
@@ -194,15 +221,18 @@ const PLACE_LEVEL = 2;
 
 /**
  * How specifically `rule` names a place's alias: its own conversation (a Slack id, exactly; an address), its domain
- * (`@domain`, for an address there, or for a place that is that domain), or the whole account. Addresses compare
- * lower-cased, and an address's domain is what follows its last `@`, so a quoted local part holding one cannot hide it.
+ * (`@domain`, for an address there, or for a place that is that domain), or the whole account. Addresses and domains
+ * compare in one form (`normaliseMailConversation`) — both sides, since a rule may come from anywhere and a place is as
+ * its channel writes it — and an address's domain is what follows its last `@`, so a quoted local part holding one
+ * cannot hide it. A place whose domain is not one meets no conversation rule, only its account's.
  */
 function levelOf(rule: BehaviourRule, alias: string | undefined): number {
   if (rule.conversation === undefined) return ACCOUNT_LEVEL;
   if (alias === undefined) return NO_MATCH;
   if (!rule.conversation.includes('@')) return rule.conversation === alias ? PLACE_LEVEL : NO_MATCH;
-  const wanted = rule.conversation.toLowerCase();
-  const place = alias.toLowerCase();
+  const wanted = normaliseMailConversation(rule.conversation);
+  const place = normaliseMailConversation(alias);
+  if (wanted === null || place === null) return NO_MATCH;
   if (wanted.startsWith('@')) {
     const at = place.lastIndexOf('@');
     return at !== -1 && place.slice(at) === wanted ? DOMAIN_LEVEL : NO_MATCH;
@@ -528,6 +558,25 @@ export function actNotAllowed(
       allowedActs: [...decision.allowedActs],
     },
   });
+}
+
+/**
+ * B4's hint, in the same words on every channel: nothing was done; the located core command that shows the rules, and
+ * the tool that does from a chat; and that the agent tells the person which rule stopped it and does not try again. It
+ * never names a command that changes the rules: a loosening is the person's to start. `cause`, when given, is said
+ * first — why this act is the one the rules were asked about, such as Gmail's when a message meant as a reply could not
+ * be proven one.
+ */
+export function behaviourRefusalHint(handoffs: CliHandoffs, cause?: string): string {
+  const lead = cause === undefined || cause.trim() === '' ? 'Nothing was done.' : `Nothing was done. ${cause.trim()}`;
+  const stop =
+    'Tell the person which rule stopped this, and do not try it again: changing a rule is theirs to start, not an agent’s.';
+  return handoffSentence(
+    handoffs.core(['behaviour']),
+    (command) =>
+      `${lead} ${command} shows the rules and what each lets an agent do here, as comms_behaviour does from a chat. ${stop}`,
+    { instead: `${lead} comms_behaviour shows the rules and what each lets an agent do here, from a chat. ${stop}` },
+  );
 }
 
 /**

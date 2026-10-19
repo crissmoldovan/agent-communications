@@ -1,11 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
+  actNotAllowed,
   agentLabelOf,
+  allowedAct,
+  allowedHereLine,
   approveAndWaitSentence,
+  behaviourRefusalHint,
   type CliHandoffs,
   CommsError,
+  type Config,
   canonicalAddress,
   DEFAULT_AGENT_LABEL_WORD,
   type Expectation,
@@ -14,6 +20,7 @@ import {
   handoffSentence,
   handoffSentenceToFill,
   integrityRefusal,
+  isBehaviourAct,
   type LegacyDrainReport,
   labelPhrase,
   type MessageIdentity,
@@ -41,7 +48,9 @@ import { resendRequest, sendThrottleOf, throttledRefusal, type WriteOutcome } fr
 import { APPROVAL_TAG, closedPermit, type FetchLike, spendOn } from '../api/guard.ts';
 import { addressField, type Envelope, wrapField } from '../compose/inbound.ts';
 import {
+  type BehaviourCheck,
   type BuiltMessage,
+  behaviourCheckOf,
   buildMessage,
   digestOf,
   identityOfFrom,
@@ -65,14 +74,16 @@ import { type CurrentOutcome, outcomeOf, outcomeUnavailable } from './last-event
  * the request builder. Everything before it exists to make one promise true — nothing leaves that a person has not
  * seen in the form it will arrive in:
  *
- * 1. **Prepare** builds the message (`compose/message.ts`), refuses a From on a domain that is not verified for sending
- *    before any approval exists, stores the message, and records an approval bound to its digest. The preview lists
+ * 1. **Prepare** builds the message (`compose/message.ts`), refuses a send the behaviour rules forbid at any one of its
+ *    recipients and a From on a domain that is not verified for sending before any approval exists, stores the message
+ *    with what the rules were asked, and records an approval bound to the digest of both. The preview lists
  *    every recipient, BCC included, and the reach — unique recipients. Above `REACH_CONFIRM_THRESHOLD`, or to an
  *    address that arrived in mail read in the last seven days and never written to from here, the send needs a
  *    person at a terminal whatever the policy says.
  * 2. **Approval** is the account's send policy: under `chat` the person's yes in the conversation; under `confirm`
  *    this CLI's `approve <id>` and a typed code; under `never` nothing.
- * 3. **Execute** re-reads the stored message and its attachments, claims the approval once (a lock and an O_EXCL
+ * 3. **Execute** re-reads the stored message and its attachments, asks the rules again what prepare asked them —
+ *    a rule tightened since the yes stops it, the approval untouched — claims the approval once (a lock and an O_EXCL
  *    marker), reserves a slot under the rate caps, records the attempt **before** the request leaves, and sends with
  *    `Idempotency-Key` = the approval id and the tag `agentcomms_approval=<id>` — only while its claim still holds the
  *    send (the fence, design 2026-10-05 §D1). It never retries. An outcome it cannot know — a dropped connection, a
@@ -229,6 +240,67 @@ function statusCommand(handoffs: CliHandoffs, approvalId: string, name: string) 
 }
 
 /**
+ * Where a refusal by the behaviour rules points: core's report of them, located from here (design
+ * 2026-10-19-agent-behaviour-rules, B4). Never a command that loosens one: that is the person's to start.
+ */
+function behaviourHint(handoffs: CliHandoffs): string {
+  return behaviourRefusalHint(handoffs);
+}
+
+/** What the rules in `config` decide for this account's send, as `check` puts it. */
+function decideSend(config: Config, named: NamedAccount, check: BehaviourCheck): ActDecision {
+  return allowedAct(config, {
+    accountId: named.account.id,
+    account: named.name,
+    places: check.places,
+    acts: check.acts,
+  });
+}
+
+/**
+ * B4, at prepare and at execute alike: the send `check` describes, allowed by the rules in `config` at every recipient,
+ * or `ACT_NOT_ALLOWED` naming the first recipient a rule forbids it at. Returns what the preview's line is made from.
+ */
+function requireAllowed(
+  context: ResendContext,
+  config: Config,
+  named: NamedAccount,
+  check: BehaviourCheck,
+): Extract<ActDecision, { allowed: true }> {
+  const decision = decideSend(config, named, check);
+  if (!decision.allowed) {
+    throw actNotAllowed(decision, { account: named.name, place: null }, behaviourHint(context.handoffs));
+  }
+  return decision;
+}
+
+/** B4's preview line: what is allowed where this send lands, and the rule that says so. */
+function allowedHere(decision: ActDecision, named: NamedAccount): string {
+  return allowedHereLine(decision, { account: named.name, place: null });
+}
+
+function isBehaviourCheck(value: unknown): value is BehaviourCheck {
+  if (typeof value !== 'object' || value === null) return false;
+  const { acts, places } = value as { acts?: unknown; places?: unknown };
+  return (
+    Array.isArray(acts) &&
+    acts.every(isBehaviourAct) &&
+    Array.isArray(places) &&
+    places.every((place) => Array.isArray(place) && place.every((alias) => typeof alias === 'string'))
+  );
+}
+
+/**
+ * What execute asks the rules: what prepare stored beside the message, which the digest binds — so one changed since
+ * is an approval the claim refuses — or, for a message an earlier release prepared, which stored none, the same worked
+ * out from its recipients, which its digest binds.
+ */
+function boundCheckOf(prepared: PreparedMessage): BehaviourCheck {
+  const bound: unknown = prepared.behaviour;
+  return isBehaviourCheck(bound) ? bound : behaviourCheckOf(prepared.message);
+}
+
+/**
  * Whether the From domain may send, checked before an approval exists.
  *
  * With a full-access key: the domain must be in the team's list, `verified`, and able to send. A sending-only key
@@ -363,6 +435,8 @@ function previewOf(options: {
   effective: SendPolicy;
   flags: readonly string[];
   handoffs: CliHandoffs;
+  /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
+  allowedHere: string;
   /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
   security?: string | null | undefined;
 }): string {
@@ -422,9 +496,9 @@ function previewOf(options: {
   };
   // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
   // appears to come from, read from the From the approval binds: the terminal's approval says what the prepare said
-  // (L3).
+  // (L3); then what the behaviour rules allow where it lands (B4).
   const security = options.security ? `${options.security}\n` : '';
-  return `${security}${identityLine(identityOfFrom(message.from))}\n${renderMessagePreview(preview)}`;
+  return `${security}${identityLine(identityOfFrom(message.from))}\n${options.allowedHere}\n${renderMessagePreview(preview)}`;
 }
 
 /** L3: the first line of a preview — the label recipients will see, or that there is none. */
@@ -526,6 +600,9 @@ export async function prepareSend(context: ResendContext, name: string, input: P
   }
   const { as: requested, ...email } = input;
   const composed = await buildMessage(email, { now: context.now(), attach: await attachPolicy(context) });
+  // What the behaviour rules allow, at every recipient, before Resend is asked anything or an approval exists (B4).
+  const check = behaviourCheckOf(composed.message);
+  const allowed = requireAllowed(context, config, named, check);
   const domainNote = await checkFromDomain(context, named, composed.message.fromDomain);
   // Who it appears to come from, and the From that says so (R1): settled before the digest, which binds it.
   const { message: outbound, identity } = labelled(config, named.name, named.account.id, composed, requested);
@@ -533,7 +610,7 @@ export async function prepareSend(context: ResendContext, name: string, input: P
   const study = await studyRecipients(context, named, built.message, config.defaults.riskEscalation);
   const requiredPolicy: SendPolicy = study.flags.length > 0 ? 'confirm' : 'chat';
   const effective = stricterPolicy(livePolicy, requiredPolicy);
-  const digest = digestOf(built.message);
+  const digest = digestOf(built.message, check);
   const preparedId = newPreparedId();
 
   const record = await context.core.approvals.create({
@@ -554,6 +631,7 @@ export async function prepareSend(context: ResendContext, name: string, input: P
     preparedId,
     accountId: named.account.id,
     message: built.message,
+    behaviour: check,
     digest,
     links: built.links,
     warnings: [domainNote, ...built.warnings],
@@ -592,6 +670,7 @@ export async function prepareSend(context: ResendContext, name: string, input: P
       effective,
       flags: study.flags,
       handoffs: context.handoffs,
+      allowedHere: allowedHere(allowed, named),
       security,
     }),
     policy: livePolicy,
@@ -646,7 +725,7 @@ async function reload(
     contents.push(bytes);
     attachments.push({ ...attachment, size: bytes.byteLength, sha256: sha256Hex(bytes) });
   }
-  return { prepared, digest: digestOf({ ...prepared.message, attachments }), contents };
+  return { prepared, digest: digestOf({ ...prepared.message, attachments }, prepared.behaviour), contents };
 }
 
 /** The request body, built from the stored message and nothing else. */
@@ -846,6 +925,9 @@ async function claimAndSend(
   const config = await context.config();
   const livePolicy = named.account.sendPolicy ?? config.defaults.sendPolicy;
   const { prepared, digest, contents } = await reload(context, known);
+  // What the behaviour rules allow now, asked as prepare asked them (B4): a rule tightened since the person's yes stops
+  // the send here, before the approval is spent or Resend is asked anything.
+  requireAllowed(context, config, named, boundCheckOf(prepared));
   // Everything that can refuse without sending does so before the approval is spent: the key, and a stop Resend asked for.
   const permit = closedPermit();
   const transport = await context.transport(named, permit);
@@ -1436,6 +1518,8 @@ export async function beginSendApproval(context: ResendContext, approvalId: stri
       effective,
       flags: record.riskFlags,
       handoffs: context.handoffs,
+      // As the rules stand now: one tightened since prepare shows here, and execute refuses the send.
+      allowedHere: allowedHere(decideSend(config, named, boundCheckOf(prepared)), named),
     }),
     challenge,
   };
