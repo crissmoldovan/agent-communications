@@ -3,6 +3,25 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**`agentcomms update --status` says where updates stand on this machine, and asks npm nothing.** Until now the level,
+a pause, the last check and the background job were each in a different place: `doctor` gave one line, `update --check`
+asked the registry, and the job had no read of its own. `update --status`, and `comms_update` with `status: true`, read
+this machine's own files and say all of it at once:
+
+- the level in force, the level set, and what decided it — the setting with any organisation's cap, or `CI`,
+  `AGENT_COMMS_UPDATE_CHECK=off` or `AGENT_COMMS_UPDATES=never` in the command's own environment;
+- a pause and when it ends, when npm was last asked, the latest release it named, and why it got no answer when it got
+  none;
+- the release running, and a security fix waiting;
+- the background job: where it is, when it was set up, when it last ran and whether it works.
+
+It runs no check, however due, and prints no notice. On Windows the scheduler is asked about the job only when this
+installation recorded one, as `doctor` asks it. With `--json` the fields are `level`, `set`, `by`, `cap`,
+`pausedUntil`, `lastChecked`, `latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known
+of it; [Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
+
 ## 0.23.0
 
 **An agent can acknowledge a Slack message without asking you, in your words, where and as often as you allowed —

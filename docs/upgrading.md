@@ -153,6 +153,16 @@ for that many days, 7 when no length is given. It is a plain answer with no appr
 pause clears nothing. A new pause replaces the old one, and none lasts longer than 14 days from when it was asked,
 however the clock jumps. `--resume` (`resume: true`) ends it at once. `doctor` says when it ends.
 
+**Where it all stands.** `agentcomms update --status` (or `comms_update` with `status: true`) says where updates stand
+on this machine, read from its own files alone: the level in force, the level set, and what decided it — the setting
+with any organisation's cap, or `CI`, `AGENT_COMMS_UPDATE_CHECK=off` or `AGENT_COMMS_UPDATES=never` in the command's
+own environment — any pause and when it ends, when npm was last asked, the latest release it named and why it got no
+answer when it got none, the release running, a security fix waiting, and the background job: where it is, when it
+was set up, when it last ran and whether it works. It asks npm nothing and prints no notice, however due the day's
+check is; on Windows the scheduler is asked about the job only when this installation recorded one. With `--json` its
+fields are `level`, `set`, `by`, `cap`, `pausedUntil`, `lastChecked`, `latest`, `running`, `security`, `lastError` and
+`job` (`state`, `where`, `installedAt`, `lastRun`, `working`), each `null` when nothing is known of it.
+
 **A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
 `every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up or
 has not run in 48 hours —

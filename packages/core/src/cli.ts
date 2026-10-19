@@ -101,6 +101,7 @@ import {
   updatePause,
   updateResume,
 } from './operations/update-settings.ts';
+import { updateStatus } from './operations/update-status.ts';
 import { profileSourcePath, shownPath, shownText } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
 import {
@@ -110,6 +111,7 @@ import {
   renderPrune,
   renderUpdate,
   renderUpdateCheck,
+  renderUpdateStatus,
   truncateDisplay,
 } from './render.ts';
 import { type ExactPlace, parseExpiry } from './standing.ts';
@@ -234,6 +236,8 @@ Usage — run these with this CLI, each as the words after its program:
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
+  update --status               where updates stand here: level, pause, last check, latest and
+                                running versions, and the background job; asks npm nothing
   update --level auto|every-14-days|never [--approval <id>]
                                 how this machine updates: a level that updates less is approved
                                 first; one that updates more applies at once
@@ -346,6 +350,7 @@ function parse(argv: string[]) {
       'no-verify': { type: 'boolean', default: false },
       'include-printed': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
+      status: { type: 'boolean', default: false },
       level: { type: 'string' },
       pause: { type: 'boolean', default: false },
       resume: { type: 'boolean', default: false },
@@ -1220,7 +1225,7 @@ export async function main(
         const days = values.pause ? sub : undefined;
         if ((sub !== undefined && !values.pause) || positionals.length > 2) {
           throw usage(
-            'usage: update [--check | --level <level> | --pause [1|7|14] | --resume | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
+            'usage: update [--check | --status | --level <level> | --pause [1|7|14] | --resume | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
           );
         }
         const job = values['background-job'];
@@ -1233,16 +1238,23 @@ export async function main(
           job !== undefined,
           values.background,
         ];
-        const modes = [values.check, ...settings].filter(Boolean).length;
+        const modes = [values.check, values.status, ...settings].filter(Boolean).length;
         if (modes > 1 || (values['no-verify'] && settings.some(Boolean))) {
           throw usage(
-            '--check, --level, --pause, --resume, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
+            '--check, --status, --level, --pause, --resume, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
           );
         }
         if (values['dry-run'] && !values.background) {
           throw usage(
             '--dry-run is for --background; the update itself shows every step and asks before it changes anything',
           );
+        }
+        if (values.status) {
+          // Where updates stand, from local files: no change, so nothing for an approval to be for (DA13).
+          if (values.approval !== undefined) throw usage('--status only reads, so it takes no --approval');
+          const status = await updateStatus(core, env, { platform, job: deps.updateJob, now: deps.update?.now });
+          writeResult(status, output, renderUpdateStatus);
+          return;
         }
         if (values.background) {
           // The job's own run: it prepares no change, so there is nothing for an approval to be for.

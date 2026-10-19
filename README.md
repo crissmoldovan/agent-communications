@@ -114,7 +114,9 @@ verifies, three days after it is out — `comms_update` with `backgroundJob: "on
 `agentcomms update --background-job on`; it takes effect when each client restarts. Choose `every-14-days` or `never`
 with `agentcomms update --level`, pause the notices for 1, 7 or 14 days with `--pause`, or update by hand with
 `comms_update`. A server this machine does not register itself — the Claude Code plugin's, the Gemini extension's —
-is updated where it was installed. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
+is updated where it was installed. `agentcomms update --status` (`comms_update` with `status: true`) says where it all
+stands — the level, a pause, the last check, the latest and running releases, the background job — asking npm nothing.
+`CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
 [Upgrading](docs/upgrading.md#the-daily-check) has the details.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default

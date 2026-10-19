@@ -66,7 +66,8 @@ A level that updates less is a change the person approves: show the preview, whi
 wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and
 `comms_approval_wait` to learn when they have), then call again with the `approvalId`. Moving back to one that updates
 more applies at once. Never choose a level or a pause for them. `comms_doctor` shows it on one line: the level, when it
-last checked, the latest release, the one running, and a pause with when it ends.
+last checked, the latest release, the one running, and a pause with when it ends. `comms_update` with `status: true`
+returns the same as fields, with what decided the level and where the background job stands, and asks npm nothing.
 
 ## Before anything: a core that can update
 
@@ -159,6 +160,7 @@ messages, in this order, skipping any that does not apply:
 | Step | Command |
 |---|---|
 | What is behind | `agentcomms update --check` |
+| Where updates stand | `agentcomms update --status` |
 | Update | `agentcomms update` — at a terminal it shows the plan and asks `yes`; anywhere else it exits `10` with the preview and an approval id, then `agentcomms update --approval <id>` |
 | Clear out old versions | `agentcomms mcp prune` — every managed server's, listed by server; `--server <name>` for one |
 | Not now | `agentcomms update --pause [1\|7\|14]` — no approval; `agentcomms update --resume` ends it |

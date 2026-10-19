@@ -6,6 +6,7 @@ import type { InstallResult, PruneResult } from './mcp-install.ts';
 import type { DoctorReport } from './operations/maintenance.ts';
 import type { PruneAllResult } from './operations/servers.ts';
 import type { UpdateItem, UpdateReport, UpdateResult } from './operations/update.ts';
+import type { UpdateStatus } from './operations/update-status.ts';
 
 /**
  * One renderer for every surface a send preview is shown on — the chat, an elicitation form, a terminal. Text the
@@ -562,6 +563,37 @@ export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): 
         : 'Nothing behind can be updated from here; each says why above.',
   );
   return lines.join('\n');
+}
+
+/**
+ * What `update --status` prints: a `key value` line per field, as `paths` prints its folders, the job's under `job.`.
+ * Nothing known is `none`. Each value is shown on one line, its control and invisible characters made visible: a
+ * check's error is the registry's text, and an organisation's name the configuration's.
+ */
+export function renderUpdateStatus(status: UpdateStatus): string {
+  const shown = (value: string | boolean | null): string => {
+    if (value === null) return 'none';
+    if (typeof value === 'boolean') return value ? 'yes' : 'no';
+    return escapeForDisplay(value).replace(/[\n\t]+/g, ' ');
+  };
+  const rows: [string, string | boolean | null][] = [
+    ['level', status.level],
+    ['set', status.set],
+    ['by', status.by],
+    ['cap', status.cap === null ? null : `${status.cap.level} (${status.cap.organisation})`],
+    ['pausedUntil', status.pausedUntil],
+    ['lastChecked', status.lastChecked],
+    ['latest', status.latest],
+    ['running', status.running],
+    ['security', status.security],
+    ['lastError', status.lastError],
+    ['job.state', status.job.state],
+    ['job.where', status.job.where],
+    ['job.installedAt', status.job.installedAt],
+    ['job.lastRun', status.job.lastRun],
+    ['job.working', status.job.working],
+  ];
+  return rows.map(([key, value]) => `${key.padEnd(15)} ${shown(value)}`).join('\n');
 }
 
 export function renderUpdate(result: UpdateResult, color: boolean): string {
