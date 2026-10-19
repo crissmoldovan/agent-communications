@@ -322,6 +322,23 @@
       "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
     },
     {
+      "id": "core.profile",
+      "package": "core",
+      "cli": "profile",
+      "mcp": "comms_profile",
+      "status": "both",
+      "operation": "profileView",
+      "reason": "The writing profile for one place — the account and its conversations — and every file it would read, which an agent reads before it writes there. It only reads, and needs no approval (design 2026-10-19-agent-behaviour-rules, B6)."
+    },
+    {
+      "id": "core.profile.init",
+      "package": "core",
+      "cli": "profile init",
+      "mcp": null,
+      "status": "exception",
+      "reason": "A writing profile is the person's own instructions to their agents: a tool that wrote one would let something an agent read change how every later message is written. So only the person starts one, at a terminal, from a starter that never overwrites a file; over MCP comms_profile only reads (design 2026-10-19-agent-behaviour-rules, B6)."
+    },
+    {
       "id": "core.channels",
       "package": "core",
       "cli": "channels",

@@ -29,6 +29,7 @@ import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport }
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
 import { orgAddChange, orgList, orgRemoveChange, orgShow, orgUpdateChange } from '../operations/organisations.ts';
+import { profileView } from '../operations/profile.ts';
 import { migrationLeftoversError, secretsMigration } from '../operations/secrets-migrate.ts';
 import {
   CLIENTS,
@@ -592,6 +593,40 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
       return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
     },
+  );
+
+  // ── How the person writes ────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * The writing profile (design 2026-10-19-agent-behaviour-rules, B6), read before a message is written so the first
+   * preview is already written to it. Reading only, on purpose: a profile is the person's own instructions to their
+   * agents, and a tool that wrote one would let something an agent read change how every later message is written.
+   * Starting a missing file is the person's, at their terminal (`profile init`), and is no tool here.
+   */
+  server.registerTool(
+    'comms_profile',
+    {
+      title: 'The writing profile',
+      description:
+        'How the person wants a message written in one place — tone, language, length, sign-off, threads — from the Markdown files they keep: their own instructions to you, not content from anyone else. Call it before writing a message, for the account it goes from and the conversations it goes to, and follow it; where it and what the person asks in this conversation disagree, what they ask wins. For mail pass each recipient’s address and then its `@domain`, in recipient order; for a Slack DM its `D…` id and then the person’s `U…` id; for a channel its `C…` id. Returns the joined text, each part marked with the file it came from, and every file it would read, written or not. It only reads, and needs no approval. No tool writes a profile: the person starts a missing file at their own terminal, with the core CLI’s `profile init`.',
+      inputSchema: {
+        account: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'the account the message goes from: `acme/slack`, `acme/gmail`; left out, only the layers every message shares',
+          ),
+        conversations: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'the conversations it goes to, in order: for mail each address then its `@domain`; for a Slack DM the `D…` then the `U…`; for a channel its `C…`',
+          ),
+      },
+      annotations: readsLocal,
+    },
+    async (args) => read(() => profileView(core, { account: args.account, conversations: args.conversations })),
   );
 
   // ── Organisation profiles ────────────────────────────────────────────────────────────────────────────────────

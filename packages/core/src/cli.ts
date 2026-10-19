@@ -71,6 +71,7 @@ import {
   orgShow,
   orgUpdateChange,
 } from './operations/organisations.ts';
+import { type ProfileInitResult, type ProfileView, profileInit, profileView } from './operations/profile.ts';
 import { migrationLeftoversError, secretsMigration } from './operations/secrets-migrate.ts';
 import {
   type ChannelsReport,
@@ -184,6 +185,13 @@ Usage — run these with this CLI, each as the words after its program:
   behaviour clear <account> [--conversation <id>] [--approval <id>]
                                 take a rule away, so the wider one holds there: approved first when that
                                 allows more
+  profile [<account>] [--conversation <id>…]
+                                the writing profile an agent reads before it writes there: the files it
+                                joins, in order, and which are written; --conversation repeats, one per
+                                mail recipient and its @domain, or a DM's D… and the person's U…
+  profile init [<account>] [--conversation <id>]
+                                start the missing profile file for that place from a starter, and print
+                                its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
   mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
@@ -316,7 +324,8 @@ function parse(argv: string[]) {
       adopt: { type: 'string' },
       store: { type: 'string' },
       source: { type: 'string' },
-      // `label rule add|remove` and `label name|icon --clear`; refused on every other command.
+      // `label rule add|remove` and `label name|icon --clear`; refused on every other command but those that share it
+      // (`LABEL_OPTIONS_SHARED`): `behaviour`, and `profile`, which takes it repeated, read from the tokens.
       conversation: { type: 'string' },
       kinds: { type: 'string' },
       as: { type: 'string' },
@@ -398,9 +407,13 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   });
 }
 
-/** The other commands that take one of `label`'s options, and which: `behaviour` names a rule's place as it does. */
+/**
+ * The other commands that take one of `label`'s options, and which: `behaviour` names a rule's place as it does, and
+ * `profile` the places a message goes to — `--conversation` repeated, read from the tokens (`conversationsGiven`).
+ */
 const LABEL_OPTIONS_SHARED: Readonly<Record<string, readonly string[]>> = Object.freeze({
   behaviour: ['conversation'],
+  profile: ['conversation'],
 });
 
 /**
@@ -425,10 +438,21 @@ function refuseLabelOptionsElsewhere(
       .map(([owner]) => owner),
   ];
   const commands = [...new Set(given.flatMap(owners))];
+  const named = commands.length === 1 ? commands[0] : `${commands.slice(0, -1).join(', ')} and ${commands.at(-1)}`;
   throw new CommsError(
     'USAGE',
-    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the ${commands.join(' and ')} ${commands.length === 1 ? 'command' : 'commands'} only`,
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the ${named} ${commands.length === 1 ? 'command' : 'commands'} only`,
     { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+/**
+ * Every `--conversation` given, in order. `parseArgs` keeps only the last of an option that is not `multiple`, and
+ * `label` takes one; `profile` takes several — one per mail recipient — so they are read from the tokens.
+ */
+function conversationsGiven(parsed: ReturnType<typeof parse>): string[] {
+  return (parsed.tokens ?? []).flatMap((token) =>
+    token.kind === 'option' && token.name === 'conversation' && token.value !== undefined ? [token.value] : [],
   );
 }
 
@@ -925,6 +949,25 @@ export async function main(
         writeResult(result, output, renderBehaviourChange);
         return;
       }
+      case 'profile': {
+        const conversations = conversationsGiven(parsed);
+        if (sub === 'init') {
+          const [, , account, ...extra] = positionals;
+          if (extra.length > 0 || conversations.length > 1) {
+            throw usage('usage: profile init [<account>] [--conversation <id>] — one file at a time');
+          }
+          writeResult(await profileInit(core, { account, conversation: conversations[0] }), output, renderProfileInit);
+          return;
+        }
+        const [, account, ...extra] = positionals;
+        if (extra.length > 0) throw usage('usage: profile [<account>] [--conversation <id>…]');
+        const view = await profileView(core, {
+          account,
+          conversations: conversations.length === 0 ? undefined : conversations,
+        });
+        writeResult(view, output, (shown) => renderProfile(shown, handoffs, account));
+        return;
+      }
       case 'channels': {
         if (sub !== undefined) throw usage('usage: channels');
         writeResult(await channelsAvailable(core, env), output, renderChannels);
@@ -1342,6 +1385,40 @@ function renderAttachEntries(entries: readonly AttachEntry[]): string[] {
   return entries.map((entry) =>
     entry.real === null || entry.real === entry.path ? `  ${entry.path}` : `  ${entry.path}  (${entry.real})`,
   );
+}
+
+/**
+ * `profile`: the profile as an agent is handed it, then which files it read and which it would read once written,
+ * and the command that starts one.
+ */
+function renderProfile(view: ProfileView, handoffs: CliHandoffs, account: string | undefined): string {
+  const read = view.sections.map((section) => (section.source === 'built-in' ? '(built in)' : section.source));
+  const missing = view.candidates.filter((path) => !view.sections.some((section) => section.source === path));
+  return [
+    view.text,
+    '',
+    'Read, in this order — each refines the ones before it:',
+    ...read.map((source) => `  ${source}`),
+    ...(missing.length === 0
+      ? []
+      : [
+          '',
+          'Not written yet, or empty:',
+          ...missing.map((path) => `  ${path}`),
+          '',
+          handoffSentence(handoffs.own(['profile', 'init', ...(account === undefined ? [] : [account])]), (command) =>
+            account === undefined
+              ? `To start your own from a starter: ${command}; name an account for its own file.`
+              : `To start this account's from a starter: ${command}; add --conversation <id> for one conversation's.`,
+          ),
+        ]),
+  ].join('\n');
+}
+
+function renderProfileInit(result: ProfileInitResult): string {
+  return result.created
+    ? `Started ${result.path} from the starter: change each line to say how you write there.`
+    : `${result.path} is already there, and was left as it is: edit it to say how you write there.`;
 }
 
 /** Exported for its test, which asks for Windows' quoting by name. */
