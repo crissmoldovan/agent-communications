@@ -191,6 +191,8 @@ export interface WorldMessage {
   readonly icon_url?: string;
   /** Which token posted it, by what it is: the person's, or the app's bot's. */
   readonly via: 'user' | 'bot';
+  /** The thread it is a reply in, by its first message's ts: absent at the top of a conversation. */
+  readonly thread_ts?: string;
   deleted?: boolean;
   edited?: { ts: string };
 }
@@ -521,9 +523,11 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     const username = field('username');
     const icon_emoji = field('icon_emoji');
     const icon_url = field('icon_url');
+    const thread_ts = field('thread_ts');
     world.messages.push({
       channel,
       ts,
+      ...(thread_ts === undefined ? {} : { thread_ts }),
       text: field('text') ?? '',
       ...(field('blocks') ? { blocks: JSON.parse(field('blocks') as string) } : {}),
       user: via === 'bot' ? world.botUserId : world.self,
@@ -554,7 +558,28 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
       .reverse();
     return { ok: true, messages: found.map(shown), response_metadata: { next_cursor: '' } };
   };
-  fake.script['conversations.replies'] = () => ({ ok: false, error: 'thread_not_found' });
+  /*
+   * A thread, as Slack reads one: named by any of its messages, in that conversation, and given from its first message —
+   * the parent, then its replies — up to `limit`. A message nobody has replied to is a thread of one. A ts no message in
+   * that conversation has is `thread_not_found`, as Slack says, wherever else a message with that ts may be.
+   */
+  fake.script['conversations.replies'] = (request) => {
+    const channel = request.params.get('channel') ?? '';
+    const ts = request.params.get('ts') ?? '';
+    const here = world.messages.filter((m) => m.channel === channel && !m.deleted);
+    const named = here.find((m) => m.ts === ts);
+    if (named === undefined) return { ok: false, error: 'thread_not_found' };
+    const root = named.thread_ts ?? named.ts;
+    const thread = here.filter((m) => m.ts === root || m.thread_ts === root);
+    const limit = Number(request.params.get('limit') ?? '0');
+    const page = limit > 0 ? thread.slice(0, limit) : thread;
+    return {
+      ok: true,
+      messages: page.map((m) => ({ ...shown(m), ...(m.thread_ts === undefined ? {} : { thread_ts: m.thread_ts }) })),
+      has_more: page.length < thread.length,
+      response_metadata: { next_cursor: '' },
+    };
+  };
   const own = (request: SlackRequest): WorldMessage | string => {
     const via = tokenOf(request);
     const channel = request.params.get('channel') ?? '';

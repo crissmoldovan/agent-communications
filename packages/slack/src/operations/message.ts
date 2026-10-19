@@ -59,9 +59,17 @@ export function requireMessageAt(where: MessageAt, alias: string, handoffs: CliH
   requireMessageTs(where.ts);
 }
 
-/** Refuses a ts that cannot be a message's — alone, for a caller whose channel comes from a draft read later. */
+/** Whether `ts` can be a message's, as Slack writes one. */
+export function isMessageTs(ts: string): boolean {
+  return MESSAGE_TS.test(ts);
+}
+
+/**
+ * Refuses a ts that cannot be a message's — alone, for a caller whose channel comes from a draft read later, and for a
+ * post's thread wherever one is given (`draftPayload`): Slack posts a reply whose thread is no message as a new one.
+ */
 export function requireMessageTs(ts: string): void {
-  if (MESSAGE_TS.test(ts)) return;
+  if (isMessageTs(ts)) return;
   throw new CommsError('USAGE', `"${truncateDisplay(ts, 60)}" is not a message timestamp`, {
     hint: 'Pass the message’s ts exactly as a read returned it, such as 1700000000.000100.',
     details: { ts, reason: 'not-a-ts' },

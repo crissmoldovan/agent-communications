@@ -7,7 +7,7 @@ import {
   behaviourRefusalHint,
   type ChannelPreview,
   type CliHandoffs,
-  type CommsError,
+  CommsError,
   type Config,
   canonicalJson,
   escapeForDisplay,
@@ -15,6 +15,7 @@ import {
   renderChannelPreview,
   sha256Hex,
 } from '@agentcomms/core';
+import { callSlack, type SlackCall } from '../api/call.ts';
 import type { Channel, NameBook } from './people.ts';
 
 /**
@@ -42,6 +43,11 @@ export interface BehaviourCheck {
    * read only then (a reaction reads its room for it only when a rule names one). Display only, never bound.
    */
   readonly names?: Readonly<Record<string, string>> | (() => Promise<Readonly<Record<string, string>>>) | undefined;
+  /**
+   * Why these are the acts asked, when that is not what the agent meant — a reply whose thread Slack does not have,
+   * asked as the post Slack would make of it. Said first in a refusal's hint (`behaviourRefusalHint`). Never bound.
+   */
+  readonly cause?: string | undefined;
 }
 
 /** What the gate decides with: the configuration as it is now, the account by its id and name, and its commands. */
@@ -53,8 +59,78 @@ export interface BehaviourDeps {
 }
 
 /** A post's acts (B2): `reply` in a thread, `post` at the top of a conversation, and `file` as well for any file. */
-export function postActs(threadTs: string | undefined, files: number): BehaviourAct[] {
-  return [threadTs === undefined ? 'post' : 'reply', ...(files > 0 ? (['file'] as const) : [])];
+export function postActs(inThread: boolean, files: number): BehaviourAct[] {
+  return [inThread ? 'reply' : 'post', ...(files > 0 ? (['file'] as const) : [])];
+}
+
+/**
+ * A post's question of the rules (B2, B4), its thread proven wherever the rules tell a post from a reply.
+ *
+ * `reply` is a message in a thread — but Slack posts one whose `thread_ts` names no message in that conversation as a
+ * new message at its top, so a thread is never taken on the draft's word (review of spec 2, finding 9). Where the rules
+ * as they are now allow a post and a reply alike, or neither, it does not matter which Slack makes of it: the post is
+ * asked as both, `reply` first, so it is allowed only where both are — and the claim, asking again on the rules as they
+ * are then, holds it to both as well, so no rule tightened in between lets either through. Only where they allow one and
+ * not the other is the thread read from Slack, in that conversation (`threadIsThere`): a message there at that ts makes
+ * it a `reply`; none, a `post`, and its refusal says why. So an account whose rules never tell the two apart — every
+ * account without rules — asks Slack nothing it did not ask before.
+ *
+ * Nothing is bound for it: the digest binds the channel and the thread already, and this is asked again from them at
+ * the approval screen and at the send — so a thread gone by the send is a post there, refused before the claim.
+ */
+export async function postCheck(
+  deps: BehaviourDeps & { readonly call: SlackCall },
+  post: { readonly channel: string; readonly threadTs: string | undefined; readonly files: number },
+  where: Pick<BehaviourCheck, 'places' | 'names'>,
+): Promise<BehaviourCheck> {
+  const at = { places: where.places, names: where.names };
+  const asPost: BehaviourCheck = { ...at, acts: postActs(false, post.files) };
+  if (post.threadTs === undefined) return asPost;
+  const asReply: BehaviourCheck = { ...at, acts: postActs(true, post.files) };
+  const reply = await decideAct(deps, asReply);
+  const top = await decideAct(deps, asPost);
+  if (reply.allowed === top.allowed) return { ...at, acts: [...asReply.acts, 'post'] };
+  if (await threadIsThere(deps.call, post.channel, post.threadTs)) return asReply;
+  return {
+    ...asPost,
+    cause: `Slack has no message at ${post.threadTs} in this conversation for it to reply under, so it would be posted as a new message, not in a thread.`,
+  };
+}
+
+/**
+ * Whether `ts` is a message in `channel` that a reply can go under, as Slack says now: `conversations.replies` there,
+ * for its first message, which answers for a message nobody has replied to as well.
+ *
+ * No — checked as a post — when Slack has no such thread for this account there (`thread_not_found`, or the room itself
+ * not found), or answers without that message: a ts from another conversation, or a reply's own ts, which starts no
+ * thread. A read that failed for a moment is neither: refused as TRANSIENT, with nothing sent, so it can be tried again
+ * — never read as "not a reply" (as Gmail's proof of a reply, review finding 3). Any other refusal is Slack's own, and
+ * goes out as it is: nothing is sent either way.
+ */
+async function threadIsThere(call: SlackCall, channel: string, ts: string): Promise<boolean> {
+  let response: Record<string, unknown>;
+  try {
+    response = (await callSlack(call, 'conversations.replies', { channel, ts, limit: 1 })) as Record<string, unknown>;
+  } catch (error) {
+    if (!(error instanceof CommsError)) throw error;
+    if (error.code === 'NOT_FOUND') return false;
+    if (!error.retryable) throw error;
+    throw new CommsError(
+      'TRANSIENT',
+      `nothing was sent: Slack could not be asked whether ${ts} is a message in ${channel}, which decides whether this is a reply`,
+      {
+        hint: 'Try again in a moment: nothing was sent, and no approval was spent.',
+        details: { channel, threadTs: ts, reason: 'thread-unread' },
+        cause: error,
+      },
+    );
+  }
+  const messages = Array.isArray(response.messages) ? (response.messages as unknown[]) : [];
+  return messages.some((message) => {
+    if (typeof message !== 'object' || message === null) return false;
+    const { ts: own, thread_ts: thread } = message as { ts?: unknown; thread_ts?: unknown };
+    return own === ts && (thread === undefined || thread === ts);
+  });
 }
 
 /** An edit's acts (B2): `edit`, and `file` as well when it adds files. Taking a file off is part of the edit. */
@@ -182,7 +258,7 @@ export async function actRefusal(
   return actNotAllowed(
     decision,
     { account: deps.workspaceName, place: await shownPlace(check, decision.place) },
-    behaviourHint(deps.handoffs),
+    behaviourRefusalHint(deps.handoffs, check.cause),
   );
 }
 

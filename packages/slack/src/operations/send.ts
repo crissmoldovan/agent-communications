@@ -53,7 +53,7 @@ import {
   boundDigest,
   placeNamesOf,
   placesOf,
-  postActs,
+  postCheck,
   requireAllowed,
   type SlackPreview,
 } from './behaviour.ts';
@@ -75,6 +75,7 @@ import {
   type SlackLabel,
   unlabelled,
 } from './label.ts';
+import { isMessageTs } from './message.ts';
 import { type Channel, channelOf, type NameBook } from './people.ts';
 
 /**
@@ -409,9 +410,27 @@ export function postedPayload(draft: SlackDraft, handoffs: CliHandoffs): Compose
   const stored = draft.payload;
   const threadTs: unknown = stored.thread_ts;
   if (threadTs !== undefined && typeof threadTs !== 'string') throw notComposed(draft, handoffs);
+  // A string that is no message ts: the composer now refuses one (`draftPayload`), so it was written before, or by hand.
+  if (threadTs !== undefined && !isMessageTs(threadTs)) throw notAThread(draft, threadTs, handoffs);
   const posted = payloadOf(stored.text, stored.channel, threadTs);
   if (canonicalJson(stored) !== canonicalJson(posted)) throw notComposed(draft, handoffs);
   return posted;
+}
+
+/**
+ * The gate's refusal of a draft whose thread is no message ts (review of spec 2, finding 9): Slack would post it as a
+ * new message at the top of the conversation, which is not what a preview of a reply shows. Nothing can be mended in
+ * it, since an update starts from what the draft posts: it is composed again.
+ */
+function notAThread(draft: SlackDraft, threadTs: string, handoffs: CliHandoffs): CommsError {
+  return new CommsError(
+    'BAD_DATA',
+    `nothing was sent: draft "${draft.draftId}" replies in a thread at "${truncateDisplay(threadTs, 40)}", which is not a message timestamp`,
+    {
+      hint: `${recomposeSentence(draft.draftId, handoffs)} Give the thread as its first message’s ts, exactly as a read returned it, such as 1700000000.000100.`,
+      details: { draftId: draft.draftId, reason: 'not-a-ts' },
+    },
+  );
 }
 
 /** The gate's refusal of a draft that is not what its text composes to — one wording, whichever part of it differs. */
@@ -430,13 +449,17 @@ function notComposed(draft: SlackDraft, handoffs: CliHandoffs): CommsError {
  * the gate would post it — so the advice cannot differ between showing a draft and trying to post it.
  */
 export function changedOutsideHint(draftId: string, handoffs: CliHandoffs): string {
-  const remove = handoffSentenceToFill(
+  return `It was changed outside agent-communications. ${recomposeSentence(draftId, handoffs)}`;
+}
+
+/** The one way to mend a draft the gate refuses: delete it, located, and compose it again. */
+function recomposeSentence(draftId: string, handoffs: CliHandoffs): string {
+  return handoffSentenceToFill(
     handoffs.own(['draft', 'delete', draftId, '--workspace']),
     ['<name>'],
     (command) => `Delete it with ${command} and compose it again.`,
     { instead: 'Delete it with slack_draft_delete from a chat and compose it again.' },
   );
-  return `It was changed outside agent-communications. ${remove}`;
 }
 
 /**
@@ -463,11 +486,12 @@ export async function viewPost(
   requested?: 'agent' | 'me' | undefined,
 ): Promise<PostView> {
   const { places, names, ...view } = await composedPost(deps, draft, book, requested);
-  const check: BehaviourCheck = {
-    acts: postActs(view.payload.thread_ts, (draft.files ?? []).length),
-    places,
-    names,
-  };
+  // `reply` only where Slack has the thread in that conversation, when the rules tell a reply from a post (finding 9).
+  const check = await postCheck(
+    deps,
+    { channel: view.payload.channel, threadTs: view.payload.thread_ts, files: (draft.files ?? []).length },
+    { places, names },
+  );
   const here = await allowedHere(deps, check);
   return {
     ...view,

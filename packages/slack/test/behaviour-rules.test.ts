@@ -504,3 +504,172 @@ test('beneath the refusal, a place that is no conversation id is held to every r
   }
   await requireAllowed(gate, { acts: ['reply'], places: [['eng']] });
 });
+
+// ── A reply is proven ───────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `reply` was decided from a `thread_ts` being there at all, and Slack posts one that names no message in that
+ * conversation as a new message at its top (review of spec 2, finding 9): so a reply-only rule let a top-level post
+ * through. The thread is read from Slack wherever the rules tell a post from a reply.
+ */
+const NO_MESSAGE = '1700000000.009999';
+const IN_SAM_DM = '1700000000.000300';
+
+test('a reply whose thread is no message in that conversation is checked as the post Slack makes of it', async (t) => {
+  for (const [what, threadTs] of [
+    ['a ts no message has', NO_MESSAGE],
+    ['the ts of a message in another conversation', IN_SAM_DM],
+  ] as const) {
+    const w = await behaviourWorld(t);
+    w.world.messages.push({ channel: SAM_DM, ts: IN_SAM_DM, text: 'hello', user: SAM, via: 'user' });
+    await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+    const error = await refusedWith(
+      prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'shipping', threadTs }, w.slack),
+      what,
+    );
+    assertActRefused(error, 'post', 'this agent may only reply in #eng (acme)');
+    assert.match(
+      error.hint ?? '',
+      new RegExp(`no message at ${threadTs.replace('.', '\\.')}`),
+      `${what}: ${error.hint}`,
+    );
+    assert.equal(await approvalCount(w.harness), 0, `${what}: an approval was made`);
+    nothingWritten(w, what);
+    assert.equal(w.asked('conversations.replies'), 1, what);
+  }
+});
+
+test('a reply under a message in its own conversation is a reply, and posts in that thread', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: MINE }, w.slack);
+  assert.equal(prepared.preview.allowedHere, 'Allowed here: reply (rule: acme, #eng)');
+  await sendPost(
+    w.context,
+    'acme',
+    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: ENG },
+    w.slack,
+  );
+  const posts = w.fake.requests.filter((request) => request.method === 'chat.postMessage');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0]?.params.get('thread_ts'), MINE);
+});
+
+test('a thread gone by the send is checked as a post there: refused before the claim, and nothing posts', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: MINE }, w.slack);
+  (w.world.messages[0] as { deleted?: boolean }).deleted = true;
+  const error = await refusedWith(
+    sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: ENG },
+      w.slack,
+    ),
+    'a reply whose thread is gone',
+  );
+  assertActRefused(error, 'post', 'this agent may only reply in #eng (acme)');
+  assert.equal(w.asked('chat.postMessage'), 0, 'a reply-only rule let a new message through');
+  assert.equal(asV2(await w.harness.core.approvals.get(prepared.approvalId))?.state, 'pending');
+});
+
+test('a thread Slack could not be asked about is taken for neither: TRANSIENT, with nothing made or sent', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+  const replies = w.fake.script['conversations.replies'];
+  const throttled = () => ({ ok: false, error: 'ratelimited' });
+
+  w.fake.script['conversations.replies'] = throttled;
+  const atPrepare = await refusedWith(
+    prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: MINE }, w.slack),
+    'a prepare whose thread could not be read',
+  );
+  assert.equal(atPrepare.code, 'TRANSIENT', atPrepare.message);
+  assert.equal(atPrepare.retryable, true);
+  assert.match(atPrepare.message, /^nothing was sent/);
+  assert.equal(await approvalCount(w.harness), 0);
+
+  w.fake.script['conversations.replies'] = replies as NonNullable<typeof replies>;
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: MINE }, w.slack);
+  w.fake.script['conversations.replies'] = throttled;
+  const atSend = await refusedWith(
+    sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: ENG },
+      w.slack,
+    ),
+    'a send whose thread could not be read',
+  );
+  assert.equal(atSend.code, 'TRANSIENT', atSend.message);
+  assert.equal(w.asked('chat.postMessage'), 0);
+  assert.equal(asV2(await w.harness.core.approvals.get(prepared.approvalId))?.state, 'pending');
+});
+
+test('where no rule tells a post from a reply, the thread is not read: Slack is asked what it always was', async (t) => {
+  for (const rules of [[], [{ conversation: ENG, acts: ['post', 'reply'] }]] as const) {
+    const w = await behaviourWorld(t);
+    await setRules(w.harness, rules);
+    const prepared = await prepareDraftPost(
+      w.context,
+      'acme',
+      { channel: ENG, text: 'on it', threadTs: NO_MESSAGE },
+      w.slack,
+    );
+    await sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: ENG },
+      w.slack,
+    );
+    assert.equal(w.asked('conversations.replies'), 0, JSON.stringify(rules));
+    assert.equal(w.asked('chat.postMessage'), 1);
+  }
+});
+
+test('a thread that is no message timestamp is refused wherever a post’s thread is given, before Slack is asked', async (t) => {
+  const w = await behaviourWorld(t);
+  const notTs = (error: CommsError, what: string) => {
+    assert.equal(error.code, 'USAGE', `${what}: ${error.message}`);
+    assert.equal(error.details?.reason, 'not-a-ts', what);
+  };
+  notTs(
+    await refusedWith(createDraft(w.context, 'acme', { channel: ENG, text: 'x', threadTs: 'yesterday' }), 'create'),
+    'create',
+  );
+  const draft = await createDraft(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: MINE });
+  notTs(await refusedWith(updateDraft(w.context, 'acme', draft.draftId, { threadTs: '1.2.3' }), 'update'), 'update');
+  notTs(
+    await refusedWith(
+      prepareDraftPost(w.context, 'acme', { channel: ENG, text: 'on it', threadTs: `${MINE} ` }, w.slack),
+      'prepare',
+    ),
+    'prepare',
+  );
+  assert.equal(w.fake.requests.length, 0, 'Slack was asked about a thread no ts could name');
+
+  // A draft file whose thread was written by hand is refused where every post is viewed, at prepare and at send.
+  const prepared = await prepareDraftPost(w.context, 'acme', { draftId: draft.draftId }, w.slack);
+  await handEdit(w, draft.draftId, (file) => {
+    file.payload.thread_ts = 'the standup';
+  });
+  for (const [what, work] of [
+    ['prepare', prepareDraftPost(w.context, 'acme', { draftId: draft.draftId }, w.slack)],
+    [
+      'send',
+      sendPost(
+        w.context,
+        'acme',
+        { draftId: draft.draftId, approvalId: prepared.approvalId, expectChannel: ENG },
+        w.slack,
+      ),
+    ],
+  ] as const) {
+    const error = await refusedWith(work, what);
+    assert.equal(error.code, 'BAD_DATA', `${what}: ${error.message}`);
+    assert.equal(error.details?.reason, 'not-a-ts', what);
+  }
+  assert.equal(w.asked('chat.postMessage'), 0);
+  assert.equal(await approvalCount(w.harness), 1, 'only the prepare before the file was changed made an approval');
+});
