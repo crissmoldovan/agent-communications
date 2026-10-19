@@ -551,3 +551,9 @@ word.
     child as it does a reply's (the claim's binding to the label's route); the person's own post marked with `app_id`
     or a `subtype` does not make a thread theirs under `threads-i-am-in` (§10.14); guests (§10.13).
     **(lead's call, after review)**
+17. **The Slack server's instructions keep saying every post or reaction needs a yes** (Slack review S7). A clause
+    for `slack_ack` does not fit: with twelve workspaces, nine of them able to post — the case `mcp.test.ts` holds
+    under the cap — the instructions measure 2,043 bytes against Claude Code's 2,048, measured after this review's
+    fixes. So they are left as they are, and `slack_ack`'s own description carries the exception, now with the pause
+    (§10.11). The skills' compatibility lines are the release's `sync:versions`, and are left to it.
+    **(lead's call, after review)**
