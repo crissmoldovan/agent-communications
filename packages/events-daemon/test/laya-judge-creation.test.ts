@@ -255,7 +255,8 @@ test('E2 Laya judge test: where Laya is not offered, a Laya judge test names Lay
         kind: 'local-endpoint',
         provider: 'ollama',
         model: 'synthetic-model',
-        endpoint: 'http://127.0.0.1:11434/v1/systemone',
+        // A bare loopback host: E2's checker refuses any other host, a port included, in a Laya test file.
+        endpoint: 'http://127.0.0.1/v1/systemone',
         approvedAddressSet: ['127.0.0.1'],
         promptTemplate: 'ollama-noul-v1',
         protocol: 'noul',
