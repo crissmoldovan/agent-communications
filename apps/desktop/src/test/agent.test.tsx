@@ -94,7 +94,8 @@ describe('Agent: the behaviour rules', () => {
   it('lists each rule: its account, conversation and acts', async () => {
     const bridge = createFakeBridge();
     renderApp(bridge, { screen: 'agent' });
-    const rules = within(await section('Behaviour rules')).getByRole('table', { name: 'Rules' });
+    // The table renders once the rules are read, which may be after the section shows.
+    const rules = await within(await section('Behaviour rules')).findByRole('table', { name: 'Rules' });
     const slack = (await within(rules).findByText('example/slack')).closest('tr') as HTMLElement;
     expect(within(slack).getByText('reply, reaction')).toBeTruthy();
     const gmail = within(rules).getByText('example/gmail').closest('tr') as HTMLElement;
@@ -193,7 +194,7 @@ describe('Agent: the behaviour rules', () => {
     });
     renderApp(bridge, { screen: 'agent' });
     const rules = await section('Behaviour rules');
-    const table = within(rules).getByRole('table', { name: 'Rules' });
+    const table = await within(rules).findByRole('table', { name: 'Rules' });
     const gmail = (await within(table).findByText('example/gmail')).closest('tr') as HTMLElement;
     fireEvent.click(within(gmail).getByRole('button', { name: 'Remove' }));
     expect(await within(rules).findByText(COPY.approveThisInTerminal)).toBeTruthy();
