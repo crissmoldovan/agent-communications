@@ -92,7 +92,7 @@ export interface LabelReport {
     platform: string;
     channel: string;
     phrase: string | null;
-    kinds: { kind: string; source: 'rule' | 'default'; rule?: string; appearsAs: string }[];
+    kinds: { kind: string; identity: 'agent' | 'me'; source: 'rule' | 'default'; rule?: string; appearsAs: string }[];
     conversations: string[];
     style?: 'app' | 'labelled';
     appRoute?: boolean;
@@ -157,27 +157,59 @@ export interface ResendAccountView {
 /** The acts a behaviour rule names (spec 2). */
 export type BehaviourAct = 'post' | 'reply' | 'reaction' | 'edit' | 'delete' | 'file' | 'send';
 
-/** core `BehaviourReport` (spec 2, `operations/behaviour.ts`). */
+/**
+ * core `BehaviourReport` (`packages/core/src/operations/behaviour.ts`, 0.22.0): `behaviour` prints it. Every rule, and
+ * for each connected account that acts on other people what an agent may start there, across the account and in each
+ * conversation a rule names.
+ */
 export interface BehaviourReport {
+  /** `orphan` when no account connected now holds the rule: it still holds by name. */
   rules: { account: string; conversation?: string; acts: BehaviourAct[]; orphan: boolean }[];
+  /** Rules this release cannot read: each holds its account — or, naming none, every account — to nothing. */
+  unreadable: { account: string | null; accountId?: string; reason: string }[];
   accounts: {
     account: string;
+    /** `all` where no rule holds, `[]` for nothing. */
     allowed: BehaviourAct[] | 'all';
     conversations: { conversation: string; allowed: BehaviourAct[] | 'all' }[];
   }[];
 }
 
+/** core `BehaviourChangeResult`: what `behaviour allow|clear` prints when it applied — the report as it reads after. */
+export interface BehaviourChangeResult extends BehaviourReport {
+  change: 'setRule' | 'removeRule';
+  /** False when the rules already said this, and nothing was written. */
+  changed: boolean;
+  /** Why nothing was written, what else the change did, or that older servers do not enforce a first rule yet. */
+  note: string | null;
+}
+
 /**
- * One standing approval (spec 3). Provisional: core's `standing list` lands in 0.23.0, and the fields here are the
- * design's (S8, S10) until it does.
+ * core `StandingView` (`packages/core/src/operations/standing.ts`, 0.23.0): one standing approval as it stands now,
+ * after any narrowing. The contents are the person's own words; a place's name is the workspace's.
  */
 export interface StandingView {
+  /** An approval id. */
   id: string;
-  account: string;
-  places: string[];
-  expiresAt: string;
+  /** The workspace, by the name it has now, or the one it was made under if it is gone. */
+  workspace: string;
+  state: 'pending' | 'active' | 'ended';
+  contents: { kind: 'reaction' | 'reply'; text: string; digest: string }[];
+  places:
+    | { kind: 'exact'; places: { id: string; name: string | null; members: number }[] }
+    | { kind: 'threads-i-am-in' };
+  limits: { perThread: number; perHour: number; perDay: number; expiresDays: number };
+  /** When an active one ends; null while it waits, and once it has ended. */
+  expiresAt: string | null;
+  /** Why an ended one ended. */
+  reason?: string;
+  /** Its uses in the last day. */
   usesToday: number;
-  active: boolean;
+}
+
+/** core `StandingReport`: what `standing list`, `standing revoke` and `standing off` print. */
+export interface StandingReport {
+  approvals: StandingView[];
 }
 
 /** The products that have a doctor. */

@@ -1,10 +1,63 @@
-[
-  {
-    "id": "ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F",
-    "account": "example/slack",
-    "places": ["C0EXAMPLE1"],
-    "expiresAt": "2026-10-26T09:00:00.000Z",
-    "usesToday": 2,
-    "active": true
-  }
-]
+{
+  "approvals": [
+    {
+      "id": "ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F",
+      "workspace": "example/slack",
+      "state": "active",
+      "contents": [
+        {
+          "kind": "reaction",
+          "text": "white_check_mark",
+          "digest": "1f4c2b7e9a0d3c5f6e8b1a2d4c6e8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e"
+        },
+        {
+          "kind": "reply",
+          "text": "Thanks, I'll take a look.",
+          "digest": "9e7d5c3b1a0f8e6d4c2b0a9f7e5d3c1b0a8f6e4d2c0b9a7f5e3d1c0b8a6f4e2d"
+        }
+      ],
+      "places": {
+        "kind": "exact",
+        "places": [
+          {
+            "id": "C0EXAMPLE1",
+            "name": "general",
+            "members": 12,
+            "shared": { "extShared": false, "pendingExtShared": false, "externalMembers": false }
+          }
+        ]
+      },
+      "limits": { "perThread": 1, "perHour": 10, "perDay": 30, "expiresDays": 7 },
+      "expiresAt": "2026-10-26T09:00:00.000Z",
+      "usesToday": 2,
+      "lastActs": [
+        {
+          "at": "2026-10-19T08:30:00.000Z",
+          "act": "reaction",
+          "contentDigest": "1f4c2b7e9a0d3c5f6e8b1a2d4c6e8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e",
+          "channel": "C0EXAMPLE1",
+          "ts": "1760862600.000100",
+          "outcome": "sent"
+        }
+      ]
+    },
+    {
+      "id": "ap_7F6E5D4C3B2A1Z0Y9X8W7V6T5S",
+      "workspace": "example/slack",
+      "state": "ended",
+      "contents": [
+        {
+          "kind": "reaction",
+          "text": "eyes",
+          "digest": "4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c"
+        }
+      ],
+      "places": { "kind": "threads-i-am-in" },
+      "limits": { "perThread": 1, "perHour": 10, "perDay": 30, "expiresDays": 7 },
+      "expiresAt": null,
+      "reason": "revoked by the person",
+      "usesToday": 0,
+      "lastActs": []
+    }
+  ]
+}
