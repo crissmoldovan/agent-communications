@@ -542,6 +542,12 @@ test('a profile this release is too old for is refused from both surfaces, with 
     assert.deepEqual(byTool.extensions, result.extensions);
     const plain = cli(m, ['org', 'show', 'acme']);
     assert.match(plain.stdout, /not applied here: future-thing \(needs 99\.0\.0 or later\)/);
+    // And `org update` as a person reads it: each line once — it printed it among what was left as it is, and again
+    // among the profile's notes below.
+    const updated = cli(m, ['org', 'update', 'acme']);
+    assert.equal(updated.status, 0, updated.stderr);
+    const said = updated.stdout.split('not applied here: future-thing (needs 99.0.0 or later)').length - 1;
+    assert.equal(said, 1, updated.stdout);
   } finally {
     await close();
   }

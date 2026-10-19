@@ -355,7 +355,6 @@ test('a looser cap, a removed file and a mix of tighter and looser all ask, and 
     [{ max: 'every-14-days' }, {}, /updates: at most every-14-days → no caps/],
     [{ background: false }, {}, /updates: no background updates → no caps/],
     [{ max: 'never' }, null, /updates: at most never → no caps/],
-    [{}, null, /updates: no caps → no caps/],
     // Tighter in one part and looser in another counts as looser.
     [
       { max: 'never' },
@@ -378,6 +377,20 @@ test('a looser cap, a removed file and a mix of tighter and looser all ask, and 
     assert.match(preview, words);
     assert.doesNotMatch(preview, /Done already/);
   }
+});
+
+test('removing a caps file that capped nothing is no change: nothing to approve, and the record forgets it at once', async () => {
+  // `{}` caps nothing, so taking it away loosens nothing. It asked for approval of "updates: no caps → no caps".
+  const o = org({});
+  await add(o);
+  assert.ok((await recordOf(o))?.updates, 'the empty caps file was recorded');
+  rmSync(o.updates);
+  const { prepared, result } = await update(o);
+  assert.equal(prepared, null, 'removing a caps file that capped nothing asked for an approval');
+  assert.equal(result.changed, true);
+  assert.equal((await recordOf(o))?.updates, undefined);
+  // And again: nothing to change.
+  assert.equal((await update(o)).result.changed, false);
 });
 
 test('a tighter cap read from a new source waits for that source to be approved', async () => {

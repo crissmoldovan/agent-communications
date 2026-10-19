@@ -181,7 +181,8 @@ that only tightens at once, with no approval: a lower `max` (`never` is tighter 
 than no cap), `background: false` added, or a new file that only adds caps. It does so even beside a change that waits
 for an approval, before the preview, which marks it done. A file that is looser in any part — a higher `max`,
 `background: false` taken out, the file removed, or a mix of tighter and looser — is approved first even when the
-profile's bytes are unchanged, as is a caps file read from a new `--source`. A record edited by hand is put back at once. A
+profile's bytes are unchanged, as is a caps file read from a new `--source`. Removing a caps file that capped nothing
+loosens nothing, and applies at once. A record edited by hand is put back at once. A
 member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
 `max` other than those two words is refused. `doctor` names the cap and the profile it comes from. A `config.json`
 that cannot be read lifts no cap: the strictest cap that can still be read in its place holds — what the file still
@@ -324,7 +325,13 @@ Every other part of the profile stays as strict as before.
 - An entry your release does not know, marked `required: true`, stops `org add` or `org update` with
   `NEEDS_NEWER_RELEASE` (exit 1): `<organisation>'s profile needs agent-communications <since> or later for "<name>":
   nothing was changed`. Your last approved settings stay as they were, and nothing else stops. Update first, then run
-  `org update` again. A profile of a later `version` than 1 is refused the same way.
+  `org update` again. A profile of a later `version` than 1 is refused the same way, by `agent-gmail setup --profile`
+  too. If that `org update` also turned `--for-other-addresses off`, which applies before the profile is read, the
+  message ends `for other addresses was turned off; nothing else was changed` instead.
+- `org show`, `comms_org_show` and the results of `org add` and `org update` list them under
+  `extensions: { applied, ignored: [{ name, since, reason }] }`. `reason` is `needs-newer` (a later release has it),
+  `unknown` (this release should know it and does not: a typo, or another build's), or `pending` (this release knows
+  it, and the next `org update` applies it).
 
 **For admins.** Nothing to do now: today's profiles are unchanged and stay valid, and when a feature first needs an
 extension its release notes say so. Members on 0.20.0 or older refuse **any** profile that carries `extensions`. They

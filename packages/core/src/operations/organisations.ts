@@ -502,14 +502,16 @@ const TIGHTENED_EXTENSION = /^extension ([a-z][a-z0-9-]{1,39}): .* \(tightens\)$
 /**
  * How two sets of update caps compare (design 2026-10-19, X6). `max` from tightest to loosest: `never`, then
  * `every-14-days`, then no cap — a word this release does not know reads as `never`, the strictest it could mean, as
- * the record's own reading of it does. `background: false` is tighter than its absence. A caps file gone is looser, and
- * a mix of tighter and looser counts as looser.
+ * the record's own reading of it does. `background: false` is tighter than its absence. A caps file gone is looser —
+ * unless it capped nothing, which leaves nothing to loosen — and a mix of tighter and looser counts as looser.
  */
 export function capsOrder(
   were: { max?: string | undefined; background?: boolean | undefined } | undefined,
   now: { max?: string | undefined; background?: boolean | undefined } | undefined,
 ): 'tighter' | 'same' | 'looser' {
-  if (now === undefined) return were === undefined ? 'same' : 'looser';
+  const capsNothing = (caps: typeof were) =>
+    caps === undefined || (caps.max === undefined && caps.background !== false);
+  if (now === undefined) return capsNothing(were) ? 'same' : 'looser';
   const rank = (caps: typeof were) => (caps?.max === undefined ? 2 : caps.max === 'every-14-days' ? 1 : 0);
   const background = (caps: typeof were) => (caps?.background === false ? 0 : 1);
   if (rank(now) > rank(were) || background(now) > background(were)) return 'looser';

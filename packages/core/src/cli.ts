@@ -220,7 +220,7 @@ Options:
   -h, --help    show this help
   -v, --version show the version
 
-Exit codes: 0 ok · 1 unexpected · 10 approval required
+Exit codes: 0 ok · 1 unexpected, or a profile that needs a later release · 10 approval required
             64 usage · 65 bad data · 66 not found · 69 provider unavailable · 75 transient
             77 auth or scope missing · 78 config error
 `;
@@ -1355,7 +1355,10 @@ function renderOrgList(views: readonly OrganisationView[], handoffs: CliHandoffs
 function renderOrgChange(result: OrgChangeResult): string {
   const lines = [result.changed ? 'Done.' : `Nothing to change: ${result.organisation} matches its profile.`];
   for (const line of result.applied) lines.push(`  - ${line}`);
-  if (result.reported.length > 0) lines.push('', 'Left as it is:', ...result.reported.map((line) => `  - ${line}`));
+  // What the profile's own notes say below — an extension not applied here — is said there once, not here as well.
+  const below = new Set(result.profile.notes);
+  const reported = result.reported.filter((line) => !below.has(line));
+  if (reported.length > 0) lines.push('', 'Left as it is:', ...reported.map((line) => `  - ${line}`));
   lines.push('', renderOrg(result.profile));
   return lines.join('\n');
 }

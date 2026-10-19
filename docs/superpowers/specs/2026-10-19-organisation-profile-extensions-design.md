@@ -168,6 +168,7 @@ tighter than its absence.
   once, with its SHA-256 recorded, and needs no approval.
 - **Beside a change that waits:** a tightening still applies at once, before the preview is returned, and the preview
   marks it done. This matches `--for-other-addresses off`.
+- **No change** (a file that capped nothing, `{}`, removed): it applies at once, as there is nothing to loosen.
 - **Looser in any part** (a higher `max`, `background: false` removed, or the file removed): it is approved first, as
   today.
 - **A mix of tighter and looser** counts as looser.
@@ -181,7 +182,9 @@ stops at its next run, with a notice.
 
 - **`comms_org_add`, `comms_org_update` and `comms_org_show`** return, and their commands print,
   `extensions: { applied: string[], ignored: { name, since, reason }[] }`.
-  - `reason` is `needs-newer` or `unknown`.
+  - `reason` is `needs-newer`, `unknown` or `pending`. `pending` is an entry the record lists as skipped that this
+    release knows: the next `org update` applies it, as X4 says. Its words are `not applied here yet: <name>, which this
+    release knows: an org update applies it`.
   - In 0.21 `applied` is always empty.
 - **Doctor's organisation row** adds `<n> extension(s) not applied here: …` when the record lists any. That line is
   information: `ok` stays true.

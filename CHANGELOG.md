@@ -35,7 +35,8 @@ asked for approval before applying any change to `<profile>.updates.json`, even 
 frequent. A cap that only tightens — `never` where it said `every-14-days`, `background: false` added, or caps added
 where there were none — now applies at once with no approval, even beside a change to the profile that waits. The
 preview lists it under "Done already, at once", and the result lists it first. A looser cap in any part, a caps file
-removed, or a mix of tighter and looser still asks first, as does a cap read from a new `--source`. `org add` still
+removed, or a mix of tighter and looser still asks first, as does a cap read from a new `--source`; a caps file that
+capped nothing, removed, is no change and asks nobody. `org add` still
 asks before anything, as it adds the whole profile.
 
 **A label change's preview names your Slack workspace as you know it.** `agentcomms label style <workspace> labelled`
