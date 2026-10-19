@@ -37,10 +37,10 @@ fn pattern(text: &str) -> Regex {
 static POSIX_BARE: LazyLock<Regex> = LazyLock::new(|| pattern(r"^[A-Za-z0-9_@%+=:,./-]+$"));
 
 /// One word for a POSIX shell: as it is when nothing in it is special, otherwise in single quotes, inside which
-/// nothing is special but the quote itself, written `'\''`. A port of core's `posixShellWord`
-/// (`packages/core/src/command-line.ts`).
+/// nothing is special but the quote itself, written `'\''`. A word that starts with `=` or `~` is quoted too: zsh reads
+/// `=ls` as the path of `ls`, and `~` as a home. A port of core's `posixShellWord` (`packages/core/src/command-line.ts`).
 pub fn posix_word(word: &str) -> String {
-    if POSIX_BARE.is_match(word) {
+    if POSIX_BARE.is_match(word) && !word.starts_with(['=', '~']) {
         word.to_string()
     } else {
         format!("'{}'", word.replace('\'', "'\\''"))
@@ -688,6 +688,12 @@ mod tests {
             posix(&["/opt/node js/bin/node", "cli.mjs"]),
             "'/opt/node js/bin/node' cli.mjs"
         );
+        // zsh reads a word that starts with `=` as a command's path (`=ls` is `/bin/ls`), and `~` as a home: both are
+        // quoted, as core quotes them. An `=` further in is nothing to either shell.
+        assert_eq!(
+            posix(&["claude", "=ls", "=", "~", "~root", "--name=x", "a=b"]),
+            "claude '=ls' '=' '~' '~root' --name=x a=b"
+        );
 
         // Windows (core's "one cmd.exe and PowerShell both read alike").
         let win = |words: &[&str]| {
@@ -859,6 +865,54 @@ mod tests {
             .arg(&text)
             .output()
             .expect("sh ran");
+        assert!(output.status.success(), "{output:?}");
+        let printed: Vec<String> = String::from_utf8(output.stdout)
+            .expect("text")
+            .lines()
+            .map(|each| {
+                let word = each
+                    .strip_prefix('[')
+                    .and_then(|rest| rest.strip_suffix(']'));
+                word.expect("one bracketed word a line").to_string()
+            })
+            .collect();
+        assert_eq!(printed, words[1..].to_vec());
+        assert!(!marker.exists(), "a word was run");
+    }
+
+    /// The same line, read by zsh as it comes (`-f`: no startup files, its default options, EQUALS among them), hands
+    /// the program exactly the words too. Skipped where there is no `/bin/zsh`.
+    #[cfg(unix)]
+    #[test]
+    fn the_posix_line_gives_zsh_back_every_hostile_word() {
+        if !Path::new("/bin/zsh").exists() {
+            eprintln!("skipped: there is no /bin/zsh here");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("a folder");
+        let marker = dir.path().join("ran");
+        let program = dir.path().join("print args");
+        fs::write(
+            &program,
+            "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]\\n' \"$word\"; done\n",
+        )
+        .expect("a script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+        let mut words = vec![program.to_string_lossy().into_owned()];
+        words.extend(strings(HOSTILE));
+        words.extend(strings(&[
+            "=ls", "=", "~", "~root", "--name=x", "a=b", "?", "[a]", "{a,b}", "#x", "^x", "!x",
+            "%1",
+        ]));
+        words.push(format!("$(touch {})", marker.display()));
+        let text = line(&words, Platform::MacOs).expect("a line");
+        let output = std::process::Command::new("/bin/zsh")
+            .args(["-f", "-c", &text])
+            .output()
+            .expect("zsh ran");
         assert!(output.status.success(), "{output:?}");
         let printed: Vec<String> = String::from_utf8(output.stdout)
             .expect("text")
