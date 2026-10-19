@@ -63,3 +63,29 @@ export function absoluteSearchPath(entries: readonly string[], platform: NodeJS.
     platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(entry) : entry !== '' && path.posix.isAbsolute(entry),
   );
 }
+
+/**
+ * The program that shows a notification on the person's screen (design 2026-10-19-standing-approvals, S10), named as
+ * every other program here is: macOS's `osascript` by its full path; Windows PowerShell by its full path under the
+ * Windows folder; on Linux the first `notify-send` that `exists` finds in an absolute entry of `PATH`, since it is no
+ * part of the system's own folders everywhere. `null` when there is none — on Linux without one, or a system this names
+ * no notifier for.
+ */
+export async function notifierProgram(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  exists: (path: string) => Promise<boolean>,
+): Promise<string | null> {
+  if (platform === 'darwin') return '/usr/bin/osascript';
+  if (platform === 'win32') return windowsSystemProgram('WindowsPowerShell\\v1.0\\powershell.exe', env);
+  if (platform !== 'linux') return null;
+  for (const directory of absoluteSearchPath((env.PATH ?? '').split(path.posix.delimiter), platform)) {
+    const candidate = path.posix.join(directory, 'notify-send');
+    try {
+      if (await exists(candidate)) return candidate;
+    } catch {
+      // Not readable here: not found here.
+    }
+  }
+  return null;
+}
