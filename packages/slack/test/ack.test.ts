@@ -281,6 +281,88 @@ const FLAWS: readonly Flaw[] = [
     reason: 'interactive',
     message: { bot_profile: { id: 'B0FLOW', name: 'Deploy request', is_workflow_bot: true } },
   },
+  // The allow-list (the lead's call, after review): what a deny-list of names missed, and what Slack adds tomorrow.
+  {
+    name: 'context_actions with feedback_buttons',
+    reason: 'interactive',
+    message: {
+      blocks: [
+        {
+          type: 'context_actions',
+          elements: [
+            {
+              type: 'feedback_buttons',
+              action_id: 'feedback',
+              positive_button: { text: { type: 'plain_text', text: 'Good' }, value: 'good' },
+              negative_button: { text: { type: 'plain_text', text: 'Bad' }, value: 'bad' },
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    name: 'an icon_button',
+    reason: 'interactive',
+    message: {
+      blocks: [
+        {
+          type: 'context_actions',
+          elements: [
+            { type: 'icon_button', icon: 'trash', text: { type: 'plain_text', text: 'Delete' }, action_id: 'x' },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    name: 'a context holding an icon_button',
+    reason: 'interactive',
+    message: {
+      blocks: [
+        {
+          type: 'context',
+          elements: [
+            { type: 'icon_button', icon: 'trash', text: { type: 'plain_text', text: 'Delete' }, action_id: 'x' },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    name: 'a block type this release does not know',
+    reason: 'interactive',
+    message: { blocks: [{ type: 'approval_card', text: { type: 'mrkdwn', text: 'Approve the deploy?' } }] },
+  },
+  {
+    name: 'a section with an overflow menu',
+    reason: 'interactive',
+    message: {
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: 'Deploy?' },
+          accessory: { type: 'overflow', action_id: 'more', options: [] },
+        },
+      ],
+    },
+  },
+  {
+    name: "a legacy attachment's own blocks with a button",
+    reason: 'interactive',
+    message: {
+      attachments: [
+        {
+          blocks: [
+            {
+              type: 'actions',
+              elements: [{ type: 'button', text: { type: 'plain_text', text: 'Go' }, action_id: 'go' }],
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 for (const flaw of FLAWS) {
@@ -314,6 +396,55 @@ for (const flaw of FLAWS) {
     });
   }
 }
+
+test('a message whose blocks only show something is acknowledged: the allow-list holds what people write', async (t) => {
+  const w = await world(t);
+  const s = await inEng(w);
+  const ts = say(w, {
+    channel: ENG,
+    blocks: [
+      {
+        type: 'rich_text',
+        block_id: 'a1',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'text', text: 'can someone look at ', style: { bold: true } },
+              { type: 'link', url: 'https://example.test/deploy', text: 'the deploy' },
+              { type: 'emoji', name: 'eyes' },
+              { type: 'user', user_id: SELF },
+            ],
+          },
+          {
+            type: 'rich_text_list',
+            style: 'bullet',
+            elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'one' }] }],
+          },
+          { type: 'rich_text_quote', elements: [{ type: 'text', text: 'quoted' }] },
+          { type: 'rich_text_preformatted', elements: [{ type: 'text', text: 'npm test' }] },
+        ],
+      },
+      { type: 'header', text: { type: 'plain_text', text: 'Deploy' } },
+      { type: 'divider' },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '*Status*' },
+        fields: [{ type: 'plain_text', text: 'stuck' }],
+        accessory: { type: 'image', image_url: 'https://example.test/a.png', alt_text: 'a graph' },
+      },
+      {
+        type: 'context',
+        elements: [
+          { type: 'mrkdwn', text: 'by Sam' },
+          { type: 'image', image_url: 'https://example.test/b.png', alt_text: 'Sam' },
+        ],
+      },
+      { type: 'image', image_url: 'https://example.test/c.png', alt_text: 'the log' },
+    ],
+  });
+  assert.equal((await acknowledge(w, withEyes(s, ENG, ts))).act, 'reaction');
+});
 
 test('a U user with a bot_profile is not human', async (t) => {
   // Another agent's bot: a `U…` user that `users.info` does not call a bot, with the bot_profile its app gives it.

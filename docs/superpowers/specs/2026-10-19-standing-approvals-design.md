@@ -512,3 +512,10 @@ word.
       `comms_standing`. The ledger's `use` line records the sender. Reached, it is `STANDING_LIMIT`, `perSender`, with
       when it frees.
     - The 15-minute window stays. **(lead's call, after review)**
+12. **"Nothing to press" is an allow-list** (S4; Slack review S5). A list of interactive names missed
+    `context_actions`, `feedback_buttons`, `icon_button`, and whatever Slack adds next. A message, and its thread's
+    parent, may now carry only these blocks (`onlyStaticBlocks`, in a file of its own): `section` with text and fields
+    and no accessory but an image; `context` of text and images only; `divider`; `header`; `image`; and `rich_text` of
+    sections, lists, quotes and preformatted runs holding text, links, emoji, mentions, dates and colours. Anything
+    else, a block type unknown here included, is `interactive`; so is a legacy attachment with actions, a callback or
+    blocks of its own outside the list, and a `blocks` that is not an array. **(lead's call, after review)**

@@ -47,6 +47,7 @@ import {
   viewPost,
 } from './send.ts';
 import type { SessionDeps } from './session.ts';
+import { onlyStaticBlocks } from './static-blocks.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -119,7 +120,10 @@ const PAGE_SIZE = 200;
 const CHANNEL_SINCE = 100;
 const DAY_MS = 86_400_000;
 
-/** What a message carries for a person to press, or a form to fill (S4): block types and elements alike. */
+/**
+ * What a legacy attachment can carry for a person to press, or a form to fill: looked for however deep, beside the
+ * allow-list of blocks (`onlyStaticBlocks`), which is what decides.
+ */
 const INTERACTIVE = new Set([
   'actions',
   'input',
@@ -353,17 +357,23 @@ function holdsInteractive(value: unknown, depth: number): boolean {
 }
 
 /**
- * Nothing to press (S4): a message with buttons, menus or inputs — in its blocks, or a legacy attachment's actions — or
- * one a workflow sent. A reaction on a form or an approval request can read as an answer to it.
+ * Nothing to press (S4): its blocks, and any a legacy attachment carries, only what the allow-list holds to show and
+ * offer nothing (`onlyStaticBlocks`, the lead's call after review) — anything else, a type unknown here among them, is
+ * something to press; a legacy attachment's actions or callback; or a message a workflow sent. A reaction on a form or
+ * an approval request can read as an answer to it.
  */
 function interactive(message: Raw): boolean {
   if (isRecord(message.bot_profile) && message.bot_profile.is_workflow_bot === true) return true;
+  if (!onlyStaticBlocks(message.blocks)) return true;
+  if (message.attachments !== undefined && !Array.isArray(message.attachments)) return true;
   for (const attachment of list(message.attachments)) {
     if ((Array.isArray(attachment.actions) && attachment.actions.length > 0) || attachment.callback_id !== undefined) {
       return true;
     }
+    if (!onlyStaticBlocks(attachment.blocks)) return true;
   }
-  return holdsInteractive(message.blocks, 0) || holdsInteractive(message.attachments, 0);
+  // Belt and braces: anything a person could press, however deep in what the attachments hold.
+  return holdsInteractive(message.attachments, 0);
 }
 
 /** What a message a person typed never carries: any of these, and a bot, an app, a workflow or Slack made it. */
