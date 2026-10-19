@@ -127,7 +127,9 @@ one is the act that is checked.
   of its account at one level, so only what all of them allow is allowed, as a DM whose person could not be read is
   held to every person's rule. Slack refuses such a destination at prepare (B4); this is the backstop beneath it.
   **(lead's call, after review)**
-- **Two rules for the same place** can't exist: adding one replaces the other.
+- **Two rules for the same place** can't exist: adding one replaces the other. Two rules whose addresses only reach
+  one mailbox — `ceo@client.test` and `ceo+board@client.test` — are two places, both kept, and a recipient there gets
+  only what both allow, as two rules at one level do. **(lead's call, after review)**
 - **Two different places can match at the same specificity,** such as a Slack DM matched by its `D…` rule and by the
   person's `U…` rule. Then **the narrower wins**: only the acts both allow are allowed.
 
@@ -168,16 +170,38 @@ or `refused` naming the rule.
 
 **Deciding the act:**
 - **Slack** decides `post` or `reply` from `thread_ts`. A file needs `file` as well (B2). **(lead's call, after
-  review:** a `thread_ts` is checked for its form, and at prepare the parent is read from that channel; one Slack does
-  not find there is posted by Slack as a new top-level message, so the act is `post`, checked as that.**)**
+  review:** Slack posts a `thread_ts` that names no message in that conversation as a new top-level message, so a
+  thread is never taken on the draft's word. A post's `thread_ts` must have a message ts's form — `USAGE` where it is
+  given, `BAD_DATA` in a stored or hand-written draft. Where the rules as they are now allow a reply and not a post, or
+  a post and not a reply, the thread is read from Slack (`conversations.replies` in that channel at that ts): a message
+  there makes it a `reply`; none makes it a `post`, checked as that, the refusal's hint saying why. Where they allow
+  both, or neither, the post is checked as both acts, so Slack is asked nothing more — and an account with no rules
+  asks Slack nothing it did not before. This is decided again at the approval screen and at the send, from the channel
+  and thread the digest already binds, so a thread gone by the send is a post there. A read that fails for a moment is
+  `TRANSIENT`, nothing sent.**)**
+- **A Slack destination is a conversation id** — a channel's `C…` or `G…`, a DM's `D…`, in capitals and digits — and
+  anything else (a channel's name, `#name`, an id in lower case) is refused `USAGE` (`not-a-conversation`) at draft
+  create and update, at post prepare, at a reaction's prepare and claim, at an edit's and a deletion's, and wherever a
+  post is viewed, before Slack is asked anything. `chat.postMessage` takes a name, and a name matched no rule. Beneath
+  this, core holds a place that is no id to every rule of its account (B3). **(lead's call, after review)**
 - **Gmail** decides `reply` only from an `In-Reply-To` naming a message in this mailbox, outside Spam and Trash (B2),
   and only for the recipients on that message. A forward, or a bare thread id, is `send`. **(lead's call, after
   review:** a Gmail error while proving the reply raises `TRANSIENT` — nothing sent, nothing used, retryable — and
   never reads as "not a reply", which a rule that allows only replies would refuse for good.**)**
 - **The conversation is the destination:** a Slack channel id, the DM's channel or the person (a `U…` rule matches the
   DM with them), or each recipient's address for mail.
+- **A person's rule holds every group DM with them too (lead's call, after review).** A group DM (`G…`, an mpim) is
+  one place for each person in it but this account, each place the room with that person — `[G…, U…]` — and every
+  place must allow the act. So a person's narrower rule holds the group DM, a rule for the room itself still wins over
+  the account's where no person's rule speaks, and a person's wider rule cannot widen the room past what its other
+  people allow. The members are those Slack reports (`conversations.members`, paged), read only while a rule names a
+  person. Failing closed: members that could not be read, or a `G…` room that could not be read at all (it may be a
+  group DM), are held to every person's rule. Nothing more is bound, so a channel's and a group DM's approvals keep
+  their digests; the members are read and held again at the claim. (The decision as given was the room and each
+  member as separate places; pairing each member with the room keeps a rule for the room able to allow more than its
+  account, as every conversation rule may.)
 - **For mail, each recipient is resolved on its own:** address, then the longest `@domain`, then account. The act — for
-  Gmail, the act the message is to that recipient — must be allowed for every one of them. A rule for `@client.com` that forbids `send` refuses a message with any recipient there.
+  Gmail, the act the message is to that recipient — must be allowed for every one of them. A rule for `@client.test` that forbids `send` refuses a message with any recipient there.
   **(lead's call:** the strictest reading, because one forbidden recipient is the point of such a rule. The label's
   own mail matching, which applies a conversation rule only when every recipient matches, is not reused.**)**
 
@@ -296,6 +320,7 @@ Out of scope. An organisation-wide floor ("no agent may delete in our workspace"
 **Rules and resolution:**
 - The most specific rule wins: an address over its `@domain`, over the account.
 - A DM matched by both a `D…` rule and a `U…` rule gets the narrower.
+- A group DM is held to the rule of every person in it, and to every person's rule when its members cannot be read.
 - An empty `acts` means nothing is allowed.
 - With no rule, everything is allowed.
 
@@ -319,8 +344,8 @@ with no preview and no approval created.
 - This uses Gmail's fake transport, Slack's loopback fake and Resend's loopback fake. Nothing real is reached.
 
 **Deciding the act:**
-- Slack `thread_ts` gives `reply` only with a parent in that channel; an unknown `thread_ts`, or one from another
-  channel, is checked as `post`.
+- Slack `thread_ts` gives `reply` only with a parent in that channel, where the rules tell a reply from a post; an
+  unknown `thread_ts`, or one from another channel, is checked as `post`; a malformed one is refused.
 - A Slack destination that is no conversation id is refused at prepare, and held to every rule beneath that.
 - A Gmail recipient not on the message a reply answers is checked as `send`; Spam and Trash prove nothing; a Gmail
   error during the proof is `TRANSIENT`.

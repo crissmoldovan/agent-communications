@@ -106,10 +106,12 @@ type ReadRule = { rule: BehaviourRule } | { unreadable: BehaviourSettings['unrea
 /**
  * A mail conversation — an address or `@domain` — in the one form rules and places are compared in: lower-cased, one
  * trailing dot off its domain (a fully qualified name is the same domain), and the domain in its ASCII (punycode) form,
- * as `domainToASCII` gives it, so `@bücher.de` and `kunde@xn--bcher-kva.de` meet. The local part stays as written,
- * lower-cased; the domain is what follows the last `@`. Null when there is no domain, or it is not one — `domainToASCII`
- * refuses it, or a label in it is empty — so a rule naming it is unreadable (fail closed) and a place naming it meets
- * only its account's rule. Without this a rule written in one spelling silently never held a recipient in the other.
+ * as `domainToASCII` gives it, so `@bücher.example` and `kunde@xn--bcher-kva.example` meet. The local part stays as
+ * written, lower-cased; the domain is what follows the last `@`. Null when there is no domain, or it is not one —
+ * `domainToASCII` refuses it, or a label in it is empty — so a rule naming it is unreadable (fail closed) and a place
+ * naming it meets only its account's rule. Without this a rule written in one spelling silently never held a recipient
+ * in the other. (An address rule then compares as the mailbox it reaches — `mailboxKey` — and a domain rule covers its
+ * subdomains — `levelOf`.)
  */
 export function normaliseMailConversation(value: string): string | null {
   const at = value.lastIndexOf('@');

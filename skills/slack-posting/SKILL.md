@@ -63,14 +63,18 @@ writes a profile; the person starts one at their own terminal with `agentcomms p
 
 **What you may do here is the person's rule.** A behaviour rule can let an agent do only some acts in a workspace, or
 in one conversation: `post` (a new top-level message), `reply` (in a thread), `reaction`, `edit`, `delete` and `file`.
-A file needs `file` and, for where it lands, `post` or `reply`; an edit that adds files needs `edit` and `file`. Every
-preview says what holds, in a line such as `Allowed here: reply, reaction (rule: acme/slack, #general)` or `Allowed
-here: everything (no rule)` — show it with the rest.
+A file needs `file` and, for where it lands, `post` or `reply`; an edit that adds files needs `edit` and `file`. A
+person's rule holds every DM and group DM with them. Name the conversation by its id (`C…`, `G…`, `D…`), never by a
+channel's name, and a thread by its first message's `ts` as a read returned it: a thread Slack does not have in that
+conversation would be posted as a new message, so it is checked as a `post`. Every preview says what holds, in a line
+such as `Allowed here: reply, reaction (rule: acme/slack, #general)` or `Allowed here: everything (no rule)` — show it
+with the rest.
 
 An act no rule allows is refused before any preview with `ACT_NOT_ALLOWED` (exit `10`); so is one whose rule was
 narrowed after the person's yes, at send. Either way nothing was posted. Tell the person which rule refused it — the
 message says what is allowed, and where — and stop. Never retry it, never get it out another way (a top-level post for
-a refused reply, a reaction for a refused post), and never start a change that lets an agent do more
+a refused reply, a reaction for a refused post, a channel's name for its id, a made-up thread to pass a post off as a
+reply), and never start a change that lets an agent do more
 (`comms_behaviour` with `setRule` or `removeRule`) unless the person asked for it. `comms_behaviour` with no change
 (CLI: `agentcomms behaviour`) shows every rule.
 

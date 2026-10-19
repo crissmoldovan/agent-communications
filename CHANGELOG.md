@@ -27,7 +27,9 @@ agent may start there, and only those: `post`, `reply`, `reaction`, `edit`, `del
   parent's: `@eu.client.test` over `@client.test`. An address rule holds the address with any `+tag` —
   `ceo+x@client.test` is `ceo@client.test` — and at Gmail with or without dots, at `gmail.com` or `googlemail.com`
   alike, so no spelling of an address reaches its mailbox past the rule for it. A Slack DM is matched by its `D…` rule
-  and by the person's `U…` rule together, and only what both allow holds.
+  and by the person's `U…` rule together, and only what both allow holds; a person's rule holds every group DM with
+  them as well, so "with Sam, only react" holds in a group DM Sam is in, and a group DM whose members cannot be read is
+  held to every person's rule.
 - **A rule that only narrows applies at once.** One that lets an agent do more — an act added, a rule removed whose
   fallback is wider, a conversation allowed more than its account — is a change you approve first, its preview showing
   each level before → after. An agent may start one, but the skills tell it to only when you asked.
@@ -36,10 +38,10 @@ agent may start there, and only those: `post`, `reply`, `reaction`, `edit`, `del
   a rule it cannot read at all makes its account allow nothing, and `doctor` says so. A rule naming an account no
   account here could ever have — `*`, a name in capitals, a former name whose account is gone — makes every account
   allow nothing; one naming a former name holds the account it names now; and `agentcomms names migrate` takes every
-  rule with the account it renames. Addresses and domains match
-  whatever their case, whether a domain is written in Unicode or in its `xn--` form, and with or without a trailing dot:
-  a rule for `@bücher.de` holds mail to `kunde@xn--bcher-kva.de`. A rule naming a domain that is not one is refused when
-  added, and one written by hand makes its account allow nothing.
+  rule with the account it renames. Addresses and domains match whatever their case, whether a domain is written in
+  Unicode or in its `xn--` form, and with or without a trailing dot: a rule for `@bücher.example` holds mail to
+  `kunde@xn--bcher-kva.example`. A rule naming a domain that is not one is refused when added, and one written by hand
+  makes its account allow nothing.
 
 **An act a rule does not allow is refused, and the agent stops.** "this agent may only reply and react in #general
 (cue/slack)": `ACT_NOT_ALLOWED`, before any preview or approval exists, so nothing waits for you. The same refusal
@@ -55,7 +57,13 @@ a command that changes the rules.
 - **Slack:** a post with no thread is `post`, one in a thread `reply`; a file needs `file` and, for where it lands,
   `post` or `reply`; a reaction is `reaction`; an edit is `edit`, and `file` as well when it adds files; a deletion is
   `delete`. Each is checked in `slack_post_prepare`, `slack_react`, `slack_edit_prepare` and `slack_delete_prepare`, and
-  again in the one place every send passes before Slack is called.
+  again in the one place every send passes before Slack is called. Where an act lands is a conversation id — a
+  channel's `C…` or `G…`, a DM's `D…` — never a channel's name, `#name` or an id in lower case: anything else is
+  refused (`USAGE`) before Slack is asked anything, since Slack posts into a room by its name and a name matched no
+  rule. A reply is a reply only under a message Slack has there: a post's thread must be a message's ts, and where the
+  rules allow a reply but not a post (or a post but not a reply), the thread is read from Slack — one it does not have
+  in that conversation is the new top-level message Slack would make of it, checked as a `post`, and the refusal says
+  so. A read that fails for a moment is `TRANSIENT`, with nothing sent.
 - **Gmail:** every recipient — To, Cc and Bcc — is checked on their own, as the act the message is to them, and one
   forbidden recipient refuses the whole message, naming them. `gmail_send_prepare` and `gmail_draft_send` refuse
   alike; drafts stay possible under every rule, since a draft reaches nobody.
