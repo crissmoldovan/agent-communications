@@ -365,3 +365,23 @@ and `edited` state, and `standing list` and `doctor` show the acts.
 - Custom workspace emoji.
 - Anything an organisation sets.
 - Events-service rules that send by themselves. Those would use standing approvals, in a later design.
+
+## 8. Settled while planning (2026-10-19)
+
+Writing the plan (`docs/superpowers/plans/2026-10-19-standing-approvals.md`) against the code turned up six points.
+Each is settled here, and where this section and S1 to S11 differ, this section is the later word. **(lead's call)**
+
+1. **Creating one is Slack's command.**
+   - Core has no Slack client, but the preview must show each place's name, member count and sharing. So creating and
+     widening are `agent-slack standing add` and `slack_standing_add`, with `--replaces <id>` for a widening.
+   - Core keeps `agentcomms standing list|narrow|revoke|off` and `comms_standing`.
+   - The forced terminal-code approval (S8) is the same, whichever CLI asks for it.
+2. **Narrowing has a CLI command,** `agentcomms standing narrow`, so it matches the MCP side.
+3. **One refusal code, `STANDING_REFUSED`** (exit 10), with a fixed list of reasons, covers refusals under S4, S5 and
+   S7. `STANDING_LIMIT` stays for the limits.
+4. **The emoji allowed are a curated list** of 30 standard names, shipped in the code. Ten of them carry the
+   reads-as-approval warning.
+5. **A child send binds the standing epoch** as well as the send epoch. `standing off`, and revoking a standing
+   approval, revoke its unused children.
+6. **The notification text on Windows goes in through environment variables,** read by a fixed script, because
+   PowerShell's `-Command` joins trailing arguments into the script. It is never spliced in.
