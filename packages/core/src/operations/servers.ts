@@ -62,6 +62,7 @@ import { resolveName } from '../names.ts';
 import { isBehind } from '../npm.ts';
 import { homeDirectory, type PathOverrides } from '../paths.ts';
 import { launcherOf, registrationPathPins, registrationVersion } from '../registrations.ts';
+import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
 import type { VerifiedProvenance } from '../update-provenance.ts';
 import {
@@ -871,6 +872,11 @@ export interface PruneAllResult extends PruneResult {
  * one effect — the removal cannot be taken back — so the approval is bound to exactly that list; and the removal is
  * then restricted to it (`only`), so a runtime that became unused after the list was shown stays.
  *
+ * A removal never runs beside an update (`update-lock.ts`): a background run installs a release and checks it before
+ * any pointer names it, and a prune beside it would find that runtime unused. So it is refused at once while an update
+ * holds the lock — before an approval is prepared — and the removal itself holds the lock, refused in turn when an
+ * update has started since. A refusal stops nothing else.
+ *
  * `own` is the calling channel's product, from its own `mcp prune`, so the runtime kept as "this release" is the
  * release of the command that was run; checked to be that channel's, as for an install.
  */
@@ -903,6 +909,8 @@ export function serverPruneChange(
       if (request.dryRun) {
         return { before: config, after: config, summary: `Show which ${label} runtimes are unused` };
       }
+      // Never beside an update: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir, 'prune');
       const preview = await pruneManagedRuntimes(context, product, { ...base, dryRun: true });
       approved = preview.removed.map((item) => item.path);
       return {
@@ -913,11 +921,13 @@ export function serverPruneChange(
       };
     },
     apply: () =>
-      pruneManagedRuntimes(context, product, {
-        ...base,
-        dryRun: request.dryRun === true,
-        ...(request.dryRun ? {} : { only: approved }),
-      }),
+      request.dryRun
+        ? pruneManagedRuntimes(context, product, { ...base, dryRun: true })
+        : withPersonUpdateLock(
+            core.paths.stateDir,
+            () => pruneManagedRuntimes(context, product, { ...base, dryRun: false, only: approved }),
+            'prune',
+          ),
   };
 }
 
@@ -978,6 +988,8 @@ function everyServerPruneChange(
       if (request.dryRun) {
         return { before: config, after: config, summary: 'Show which runtimes of every managed server are unused' };
       }
+      // Never beside an update: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir, 'prune');
       const previews = await pruneEach({ dryRun: true });
       approved = previews.flatMap((part) => part.removed.map((item) => item.path));
       const counts = previews
@@ -992,7 +1004,9 @@ function everyServerPruneChange(
     },
     apply: async () => {
       const dryRun = request.dryRun === true;
-      const parts = await pruneEach(dryRun ? { dryRun } : { dryRun, only: approved });
+      const parts = dryRun
+        ? await pruneEach({ dryRun })
+        : await withPersonUpdateLock(core.paths.stateDir, () => pruneEach({ dryRun, only: approved }), 'prune');
       const looked = parts.filter((part) => part.removed.length + part.kept.length > 0);
       const refused = looked.length > 0 && looked.every((part) => part.refused !== undefined);
       return {

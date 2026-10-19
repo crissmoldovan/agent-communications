@@ -346,7 +346,8 @@ directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` sh
 `mcp prune` deletes the old ones, and only those it can show are unused. From 0.21 core's `mcp prune` with no
 `--server` goes through every managed server's runtimes and lists them by server; `--server <name>`, or a channel's
 own `mcp prune`, keeps to one. It keeps this release's; the runtime each stable launcher starts, and the one it keeps
-to fall back and roll back to; any runtime an
+to fall back and roll back to; any runtime newer than this release or than what its launcher starts, which an update
+may be installing or checking; any runtime an
 entry names in a client config it reads; any runtime it printed an entry for (`--client json`, `--print`, or a
 client whose CLI was not on `PATH`), because it cannot see where that entry was pasted; and any runtime a running
 process started from. The configs it reads are Claude Code's `.claude.json` (under `CLAUDE_CONFIG_DIR` when that
@@ -373,7 +374,9 @@ npx -y @agentcomms/core@latest mcp prune --server gmail    # only Gmail's
 A dry run changes nothing and asks nobody. Removing is a change you approve, as the list of runtimes it would delete —
 a deleted runtime cannot be taken back — and it removes no more than that list, even if another becomes unused
 meanwhile. From an agent it exits `10` with the list and an approval id, for `mcp prune --approval <id>` after your
-yes.
+yes. From 0.21 a removal never runs beside an update: while `agentcomms update`, a rollback or the background run is
+installing, switching or pruning, `mcp prune` is refused at once and removes nothing — asked or approved — so run it
+again in a few minutes. A dry run still answers.
 
 ### The server starts but every call fails
 

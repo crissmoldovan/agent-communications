@@ -113,7 +113,7 @@ export function updateRollbackChange(core: Core): GatedChange<UpdateRollbackResu
   return {
     plan: async (config) => {
       // Never beside a background run: refused here, before an approval is prepared or claimed, and held below.
-      await refuseWhileUpdating(core.paths.stateDir);
+      await refuseWhileUpdating(core.paths.stateDir, 'rollback');
       planned = await planRollback(core);
       const { plans } = planned;
       return {
@@ -132,7 +132,7 @@ export function updateRollbackChange(core: Core): GatedChange<UpdateRollbackResu
     apply: async () => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the rollback was applied before it was planned');
       const { plans, left } = planned;
-      return withPersonUpdateLock(core.paths.stateDir, () => rollBack(core, plans, left));
+      return withPersonUpdateLock(core.paths.stateDir, () => rollBack(core, plans, left), 'rollback');
     },
     refuseApproval: (approvalId) =>
       new CommsError('USAGE', 'nothing was changed: no stable launcher here has a release before to go back to', {

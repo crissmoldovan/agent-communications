@@ -74,9 +74,14 @@ as before. A command printed from a checkout, an npx cache or a global install i
 core's own runtimes; Gmail's, Slack's and the events service's needed `--server <name>` each, though an update tells
 you to prune them all. It now goes through every managed server and lists each runtime it would remove, grouped by
 server, in one preview you approve. `--server <name>` still keeps it to one server, and `comms_server_prune` works the
-same way: with no `channel` it covers every server. What it keeps is unchanged: this release's runtime, any runtime a
+same way: with no `channel` it covers every server. It keeps what it kept: this release's runtime, any runtime a
 client config or a printed entry names or a running process uses, and the runtime each stable launcher starts plus
-the one it keeps to roll back to. After an update, the result now names this one prune, not one command per channel.
+the one it keeps to roll back to. It now also keeps any runtime newer than this release or than what its launcher
+starts, which an update may be installing or checking. And a prune never runs beside an update: while
+`agentcomms update`, a rollback or the background run is under way, a prune that would remove something is refused at
+once and deletes nothing, and one approved before is refused when it is claimed; run it again in a few minutes. A dry
+run still answers. This holds for `--server` and for each channel's own `mcp prune` too. After an update, the result
+now names this one prune, not one command per channel.
 
 ## 0.20.0
 

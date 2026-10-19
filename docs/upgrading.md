@@ -291,10 +291,13 @@ or why it was not. `--dry-run` says what it would do and why, with the provenanc
 it reads Sigstore's trust root into a temporary folder of its own and removes it, where a run keeps it in
 `sigstore` in the state directory.
 
-A background run and a person's update or rollback never overlap: each holds one lock for the machine,
+A background run and a person's update, rollback or prune never overlap: each holds one lock for the machine,
 `.update.lock` in the state directory, while it installs, switches or prunes. A run that finds it held does nothing
 that day; `agentcomms update` and `comms_update` that find it held are refused at once — before any approval is
-prepared — saying a background run is under way, to try again in a few minutes.
+prepared — saying a background run is under way, to try again in a few minutes. From 0.21 so are `mcp prune` and
+`comms_server_prune`, when they would remove something, and a prune approved before the run started is refused when
+it is claimed; a dry run still answers. A prune also keeps any runtime newer than this release or than what its
+stable launcher starts, which a run may be installing or checking before it switches.
 
 ## 0.21.0: organisation profiles gain `extensions`
 

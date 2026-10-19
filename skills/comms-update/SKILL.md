@@ -123,7 +123,8 @@ versions 1 and 2" until its client is restarted. Approvals a 0.13 server prepare
 retired then ("prepared by an earlier release; prepare it again"): prepare them again. After the restart, call `comms_server_prune` with no
 `channel`: it goes through every managed server's old runtimes, lists them by server, and asks before it deletes any.
 It keeps any version a running process still uses, so a window that was not restarted keeps its old one until it
-is, and the runtimes each stable launcher starts or keeps for a rollback.
+is, and the runtimes each stable launcher starts or keeps for a rollback. While an update or the background run is
+under way it is refused and deletes nothing: say so, and call it again in a few minutes.
 
 ## 4. Then walk through what the new release asks of the person
 

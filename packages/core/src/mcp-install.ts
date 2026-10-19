@@ -14,6 +14,7 @@ import {
   launcherExists,
   launcherName,
   launcherPaths,
+  launcherRuntimeVersion,
   readPointer,
   registeredLauncher,
   restorePointer,
@@ -30,6 +31,7 @@ import {
 import { nodeProgram } from './node-program.ts';
 import { homeDirectory, shortenHome, withoutPathOptions } from './paths.ts';
 import { absoluteSearchPath, childEnvironment } from './system-programs.ts';
+import { compareVersions } from './versions.ts';
 
 /*
  * Registering the server with an MCP client. Two failures seen in the wild shape this:
@@ -1902,6 +1904,10 @@ export async function listManagedRuntimes(
  *  - only directories directly inside `<data>/runtime`, named like a version, that hold this product's package —
  *    never a symbolic link, never another product's runtime, never anything else in that directory;
  *  - never this release's own;
+ *  - never one newer than this release, or than the runtime its stable launcher starts: what an update is installing,
+ *    or checking before it switches, is newer than anything a pointer names yet. The update lock keeps a person's
+ *    prune from running beside an update (`serverPruneChange`); this keeps that runtime even when no lock is held —
+ *    an update interrupted half-way, a prune that is not a person's;
  *  - never one an entry names in a client config `scanRegisteredServers` reads, in any scope — the ones this
  *    environment names, and every one an install recorded registering into, wherever `CLAUDE_CONFIG_DIR` or
  *    `CODEX_HOME` pointed then. When one of those files is there and cannot be read, nothing is removed at all: a
@@ -1999,6 +2005,18 @@ export async function pruneManagedRuntimes(
   };
 
   const current = managedRuntimeDir(context.core.paths.dataDir, product.packageName, product.version);
+  const starts = pointer === undefined ? null : launcherRuntimeVersion(pointer.current, name);
+  /** Why a runtime newer than this release, or than what the launcher starts, stays; null for any other. */
+  const newer = (version: string): string | null => {
+    const installing = 'an update may be installing it, or checking it before it switches';
+    if (compareVersions(version, product.version) === 1) {
+      return `newer than this release, ${product.version}: ${installing}`;
+    }
+    if (starts !== null && compareVersions(version, starts) === 1) {
+      return `newer than ${starts}, which the stable launcher starts: ${installing}`;
+    }
+    return null;
+  };
   for (const { path, version, aliases } of candidates) {
     const owner = registered.find((server) => [server.command, ...server.args].some((part) => mentions(aliases, part)));
     // An applied record holds nothing by itself: its config is read above, and names the runtime or does not.
@@ -2009,6 +2027,7 @@ export async function pruneManagedRuntimes(
       path === current
         ? 'this release'
         : (pointed(aliases) ??
+          newer(version) ??
           (owner
             ? // Where, when it is not a file this shell would think of: otherwise the runtime looks kept for nothing.
               `registered with ${owner.client} as "${owner.name}"${known.has(owner.path) ? '' : ` in ${owner.path}`}`

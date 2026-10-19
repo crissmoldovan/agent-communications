@@ -27,6 +27,7 @@ import { serverInstallChange, serverPruneChange } from '../src/operations/server
 import { renderDoctor } from '../src/render.ts';
 import type { SecretStore } from '../src/secrets.ts';
 import { sendEpochOf } from '../src/send-epoch.ts';
+import { withUpdateLock } from '../src/update-lock.ts';
 import { VERSION } from '../src/version.ts';
 import { v1SendRecord, writeV1Record } from './fixtures/approval-v1-0.13.0.ts';
 import { pinArgs, writeManaged } from './fixtures/cli-command/trees.ts';
@@ -2174,6 +2175,94 @@ test(
     assert.match(dry.stdout, /^Gmail:\n {2}Would remove 0\.0\.1: /m);
   },
 );
+
+test('a prune is refused, removing nothing, while an update holds the update lock — every server or one', async () => {
+  // The background run installs a release and checks it before any pointer names it; a prune beside it would find
+  // that runtime unused and delete it. So a prune takes the lock an update takes, as a person's update does: refused at
+  // once, before anything is asked, and refused again when an approval is claimed while an update has started since.
+  const m = machine();
+  const old = runtime(m, '@agentcomms/core', '0.0.1');
+  const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
+  const refused = (error: unknown) => {
+    assert.ok(error instanceof CommsError, String(error));
+    assert.equal(error.code, 'LOCK_TIMEOUT');
+    assert.match(error.message, /^nothing was changed: /);
+    assert.match(error.message, /update/);
+    assert.match(error.hint ?? '', /Run the prune again in a few minutes/);
+    return true;
+  };
+  const prune = (request: Parameters<typeof serverPruneChange>[2], approvalId?: string) =>
+    gatedChange(m.core, serverPruneChange(m.core, m.env, { processes: nobodyRuns, ...request }), {
+      channel: 'core',
+      surface: 'cli',
+      ...(approvalId === undefined ? {} : { approvalId }),
+    });
+
+  // Asked while an update holds the lock: refused before an approval is prepared.
+  await withUpdateLock(m.core.paths.stateDir, async () => {
+    await assert.rejects(prune({}), refused);
+    await assert.rejects(prune({ channel: 'gmail' }), refused);
+    // A dry run removes nothing, so it is still free.
+    const dry = await prune({ dryRun: true });
+    assert.equal(dry.status, 'applied');
+  });
+  assert.equal((await m.core.approvals.list()).length, 0, 'no approval was prepared while the update ran');
+
+  // Asked with no update under way, and claimed while one is: the claim is refused, and nothing is removed.
+  for (const request of [{}, { channel: 'gmail' as const }]) {
+    const asked = await prune(request);
+    assert.equal(asked.status, 'approval-required');
+    if (asked.status !== 'approval-required') return;
+    await withUpdateLock(m.core.paths.stateDir, async () => {
+      await assert.rejects(prune(request, asked.prepared.approvalId), refused);
+    });
+    assert.ok(existsSync(old) && existsSync(gmail), 'a prune beside an update removed a runtime');
+  }
+});
+
+test('a runtime newer than this release, or than what its stable launcher starts, is never pruned', async () => {
+  // What an update is installing, or checking before it switches, is newer than anything a pointer names yet. Even
+  // with no lock held — an update interrupted half-way, a lock taken over — that runtime is not shown as unused.
+  const m = machine();
+  const newer = runtime(m, '@agentcomms/gmail', '999.0.0');
+  const gmailOld = runtime(m, '@agentcomms/gmail', '0.0.1');
+  const slack = {
+    old: runtime(m, '@agentcomms/slack', '0.0.1'),
+    current: startableRuntime(m, '@agentcomms/slack', '0.0.3'),
+    installing: runtime(m, '@agentcomms/slack', '0.0.4'),
+  };
+  await switchPointer(m.core.paths.dataDir, 'slack', slack.current);
+  const { ok, close } = await connect(m, { processes: nobodyRuns });
+  try {
+    const dry = await ok('comms_server_prune', { dryRun: true });
+    const shown = dry.result as {
+      removed: { path: string }[];
+      kept: { path: string; reason: string }[];
+    };
+    assert.deepEqual(shown.removed.map((item) => item.path).sort(), [gmailOld, slack.old].sort());
+    const why = (path: string) => shown.kept.find((item) => item.path === path)?.reason ?? '';
+    assert.match(why(newer), new RegExp(`^newer than this release, ${VERSION.replaceAll('.', '\\.')}: `));
+    assert.match(why(slack.installing), /^newer than 0\.0\.3, which the stable launcher starts: /);
+    assert.match(why(newer), /an update may be installing it, or checking it before it switches/);
+
+    // The removal approved and applied: only what was shown unused goes.
+    const first = await ok('comms_server_prune', {});
+    assert.doesNotMatch(String(first.preview), /999\.0\.0|0\.0\.4/);
+    await ok('comms_server_prune', { approvalId: first.approvalId });
+    assert.ok(existsSync(newer) && existsSync(slack.installing) && existsSync(slack.current));
+    assert.ok(!existsSync(gmailOld) && !existsSync(slack.old));
+
+    // And `--server` alike.
+    const one = await ok('comms_server_prune', { channel: 'slack', dryRun: true });
+    assert.match(
+      (one.result as { kept: { path: string; reason: string }[] }).kept.find((item) => item.path === slack.installing)
+        ?.reason ?? '',
+      /^newer than 0\.0\.3, which the stable launcher starts: /,
+    );
+  } finally {
+    await close();
+  }
+});
 
 // ── Migrations ──────────────────────────────────────────────────────────────────────────────────────────────────
 
