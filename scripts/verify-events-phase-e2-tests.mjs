@@ -293,6 +293,31 @@ function verifyDaemonBoundary(root) {
   }
 }
 
+/** Test-only worker launch seams must never become a production escape hatch. */
+function verifyWorkerTestSeams(root) {
+  const sourceRoot = 'packages/events-daemon/src';
+  const boundaryProbe = `${sourceRoot}/runtime/laya/worker-boundary-probe.ts`;
+  for (const file of filesBelow(root, sourceRoot)) {
+    if (!file.endsWith('.ts') || file === boundaryProbe) continue;
+    const source = readText(root, file);
+    if (
+      /\bcreateLayaWorkerBoundaryForTest\b/.test(source) ||
+      /\bexport\s+\*\s+from\s*['"][^'"]*worker-boundary-probe(?:\.ts)?['"]/.test(source)
+    ) {
+      fail(`${file} imports or re-exports the test-only Laya worker boundary entry`);
+    }
+    if (/\bsandboxExecAvailable\s*\(\s*\{[\s\S]{0,512}?\bspawnSync\s*:/.test(source)) {
+      fail(`${file} passes a sandboxExecAvailable spawnSync seam`);
+    }
+    if (/\bcreateLayaWorkerBoundary(?:ForTest)?\s*\(\s*\{[\s\S]{0,512}?\bspawn\s*:/.test(source)) {
+      fail(`${file} passes a Laya worker boundary spawn seam`);
+    }
+    if (/\bcreateLayaWorkerBoundary(?:ForTest)?\s*\(\s*\{[\s\S]{0,512}?\bstartListeners\s*:/.test(source)) {
+      fail(`${file} passes a Laya worker boundary listener seam`);
+    }
+  }
+}
+
 function verifyTestsAreSealed(root) {
   const runner = readText(root, 'packages/events-daemon/test/support/laya-mutants.ts');
   if (!runner.includes("join(root, 'test/helpers/loopback-seal-preload.mjs')")) {
@@ -504,6 +529,7 @@ export function verifyEventsPhaseE2({ root = repositoryRoot } = {}) {
   if (fragments.length === 0) fail('no task-owned E2 proof fragment exists');
   for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema);
   verifyDaemonBoundary(resolvedRoot);
+  verifyWorkerTestSeams(resolvedRoot);
   verifyTestsAreSealed(resolvedRoot);
   verifyInstallFence(resolvedRoot);
 }

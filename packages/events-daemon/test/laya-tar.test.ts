@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { archiveChunks, runtimeFile, type UstarFixtureEntry, writeUstarFixture } from './support/laya-ustar.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 type TarCode =
   | 'TAR_CHECKSUM'
@@ -182,7 +183,7 @@ function malformedNumericField(kind: 'base-256' | 'negative' | 'non-octal' | 'ov
   return Buffer.from(`${'0'.repeat(width - 2)}x\0`, 'ascii');
 }
 
-test('E2 tar: extracts only listed package regular files', async () => {
+test('E2 tar: extracts only listed package regular files', { skip: WINDOWS_SKIP }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const listed = runtimeFile('index.mjs', 'tiny runtime');
     const archive = await writeUstarFixture(directory, 'valid.tgz', [
@@ -403,7 +404,7 @@ test('E2 tar: rejects a malformed ustar header', async () => {
   );
 });
 
-test('E2 tar: refuses whole archive before staging a later malformed header', async () => {
+test('E2 tar: refuses whole archive before staging a later malformed header', { skip: WINDOWS_SKIP }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const listed = runtimeFile('first.mjs', 'first');
     const archive = await writeModifiedUstarFixture(
@@ -423,7 +424,9 @@ test('E2 tar: refuses whole archive before staging a later malformed header', as
   });
 });
 
-test('E2 tar: refuses whole archive before staging a later implied-directory collision', async () => {
+test('E2 tar: refuses whole archive before staging a later implied-directory collision', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const listed = runtimeFile('Foo/first.mjs', 'first');
     const archive = await writeUstarFixture(directory, 'late-directory-collision.tgz', [

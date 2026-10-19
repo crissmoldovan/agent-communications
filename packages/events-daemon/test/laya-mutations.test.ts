@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { expectEveryLayaMutationToFail, loadLayaMutations } from './support/laya-mutants.ts';
+import { expectEveryLayaMutationToFail, expectLayaMutationToFail, loadLayaMutations } from './support/laya-mutants.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
@@ -551,6 +551,70 @@ test('E2 mutation: rejects a duplicate judge-kind literal', async () => {
   });
 });
 
+test('E2 mutation: rejects production use of test-only Laya worker seams', async () => {
+  const cases: readonly [string, string, RegExp][] = [
+    [
+      'test-only boundary import',
+      // Joined, so the copied-tree runner does not read this fixture text as a module the test itself imports.
+      ['export { createLayaWorkerBoundaryForTest } from', "'./worker-boundary-probe.ts';\n"].join(' '),
+      /test-only Laya worker boundary entry/,
+    ],
+    [
+      'sandbox availability spawn seam',
+      "sandboxExecAvailable({ platform: 'darwin', architecture: 'arm64', spawnSync: () => ({ status: 0, signal: null }) });\n",
+      /sandboxExecAvailable spawnSync seam/,
+    ],
+    [
+      'boundary spawn seam',
+      "createLayaWorkerBoundary({ dataDirectory: '/tmp', spawn: forgedSpawn });\n",
+      /Laya worker boundary spawn seam/,
+    ],
+    [
+      'boundary listener seam',
+      "createLayaWorkerBoundary({ dataDirectory: '/tmp', startListeners: forgedListeners });\n",
+      /Laya worker boundary listener seam/,
+    ],
+  ];
+  for (const [name, source, expected] of cases) {
+    await withCase(async (root) => {
+      await writeTracked(
+        root,
+        `packages/events-daemon/src/runtime/laya/forged-${name.replaceAll(' ', '-')}.ts`,
+        source,
+      );
+      await expectRejected(root, expected);
+    });
+  }
+});
+
+test('E2 mutation: the five Windows filesystem oracles declare the common Windows skip', async () => {
+  const cases = [
+    [
+      'packages/events-daemon/test/laya-runtime-installer.test.ts',
+      'E2 runtime installer: writes owner-only files and directories',
+    ],
+    ['packages/events-daemon/test/laya-tar.test.ts', 'E2 tar: extracts only listed package regular files'],
+    [
+      'packages/events-daemon/test/laya-tar.test.ts',
+      'E2 tar: refuses whole archive before staging a later malformed header',
+    ],
+    [
+      'packages/events-daemon/test/laya-tar.test.ts',
+      'E2 tar: refuses whole archive before staging a later implied-directory collision',
+    ],
+    ['packages/events-daemon/test/laya-tree-verifier.test.ts', 'E2 tree verifier: reports a changed executable bit'],
+  ] as const;
+  for (const [file, name] of cases) {
+    const source = await readFile(join(repositoryRoot, file), 'utf8');
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(
+      source,
+      new RegExp(`test\\(\\s*'${escaped}',\\s*\\{\\s*skip: WINDOWS_SKIP,?\\s*\\},`),
+      `${file}: ${name}`,
+    );
+  }
+});
+
 test('E2 mutation: rejects a warm-store assumption', async () => {
   await withCase(async (root) => {
     await writeFile(join(root, 'scripts/verify-laya-ci-install.mjs'), 'export const coldStore = false;\n');
@@ -594,6 +658,126 @@ test('E2 mutation: a registered production mutant cannot be skipped', async () =
     () => mutants.assertEveryLayaMutationExecuted(mutations, new Set()),
     /registered production mutant was never executed/,
   );
+});
+
+function mutationAccountingFixture(
+  id: string,
+  testName = 'E2 runtime installer: writes owner-only files and directories',
+) {
+  return {
+    id,
+    kind: 'production' as const,
+    owner: 'task-5',
+    source: 'packages/events-daemon/src/runtime/laya/tar.ts',
+    testFile: 'packages/events-daemon/test/laya-runtime-installer.test.ts',
+    testName,
+    testPattern: testName,
+    before: 'before',
+    after: 'after',
+  };
+}
+
+function skippedBaseline(testName: string, reason: string): string {
+  return [
+    'TAP version 13',
+    `# Subtest: ${testName}`,
+    `ok 1 - ${testName} # SKIP ${reason}`,
+    '1..1',
+    '# tests 1',
+    '# suites 0',
+    '# pass 0',
+    '# fail 0',
+    '# cancelled 0',
+    '# skipped 1',
+    '# todo 0',
+  ].join('\n');
+}
+
+test('E2 mutation: a Windows baseline with exactly WINDOWS_SKIP is platform-skipped', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const mutation = mutationAccountingFixture('windows-exact');
+  const skipped = new Map([
+    [
+      mutation.id,
+      {
+        platform: 'win32' as const,
+        baselineOutput: skippedBaseline(
+          mutation.testName,
+          'B1-G: the local event service does not run on Windows in this release',
+        ),
+      },
+    ],
+  ]);
+  assert.doesNotThrow(() => mutants.assertEveryLayaMutationExecuted([mutation], new Set(), skipped));
+});
+
+test('E2 mutation: a Windows baseline skip with another reason is refused', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const mutation = mutationAccountingFixture('windows-other-reason');
+  const skipped = new Map([
+    [mutation.id, { platform: 'win32' as const, baselineOutput: skippedBaseline(mutation.testName, 'other reason') }],
+  ]);
+  assert.throws(
+    () => mutants.assertEveryLayaMutationExecuted([mutation], new Set(), skipped),
+    /unapproved platform skip/,
+  );
+});
+
+test('E2 mutation: a Linux or macOS baseline skip is refused', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const mutation = mutationAccountingFixture('non-windows-skip');
+  for (const platform of ['darwin', 'linux'] as const) {
+    const skipped = new Map([
+      [
+        mutation.id,
+        {
+          platform,
+          baselineOutput: skippedBaseline(
+            mutation.testName,
+            'B1-G: the local event service does not run on Windows in this release',
+          ),
+        },
+      ],
+    ]);
+    assert.throws(
+      () => mutants.assertEveryLayaMutationExecuted([mutation], new Set(), skipped),
+      /unapproved platform skip/,
+      platform,
+    );
+  }
+});
+
+test('E2 mutation: a production row cannot be both platform-skipped and executed', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const mutation = mutationAccountingFixture('both-skipped-and-executed');
+  const skipped = new Map([
+    [
+      mutation.id,
+      {
+        platform: 'win32' as const,
+        baselineOutput: skippedBaseline(
+          mutation.testName,
+          'B1-G: the local event service does not run on Windows in this release',
+        ),
+      },
+    ],
+  ]);
+  assert.throws(
+    () => mutants.assertEveryLayaMutationExecuted([mutation], new Set([mutation.id]), skipped),
+    /both platform-skipped and executed/,
+  );
+});
+
+test('E2 mutation: the copied boundary-source oracle passes its unmutated baseline before its guard is mutated', async () => {
+  const mutation = (await loadLayaMutations()).find(
+    (candidate) => candidate.id === 'e2-boundary-source-network-import',
+  );
+  assert.ok(mutation, 'Task 7 registers the worker-source guard mutation');
+  const execution = await expectLayaMutationToFail(mutation);
+  assert.match(execution.baselineOutput, /^# tests 1$/m);
+  assert.match(execution.baselineOutput, /^# pass 1$/m);
+  assert.match(execution.baselineOutput, /^# fail 0$/m);
+  assert.ok(execution.changedLine !== null && execution.changedLine > 0);
 });
 
 test('E2 mutation: copied production checker fails only its named oracle', async (context) => {

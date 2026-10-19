@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RuntimeInstallFile } from '../src/runtime/laya/runtime-installer.ts';
 import { archiveChunks, runtimeFile, writeUstarFixture } from './support/laya-ustar.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 async function installerModule() {
   return import('../src/runtime/laya/runtime-installer.ts');
@@ -156,7 +157,7 @@ test('E2 tree verifier: reports a resized installed file', async () => {
   });
 });
 
-test('E2 tree verifier: reports a changed executable bit', async () => {
+test('E2 tree verifier: reports a changed executable bit', { skip: WINDOWS_SKIP }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const installed = await installedTree(directory, true);
     const { verifyRuntimeTree } = await verifierModule();

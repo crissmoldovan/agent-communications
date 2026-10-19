@@ -5,7 +5,7 @@ import { defineConfig } from 'tsdown';
 // daemon and `agent-gmail` are always the same code rather than two copies that drift. The native keychain module
 // ships a binary per platform and must never be inlined: core loads it, optionally, where it is installed.
 export default defineConfig({
-  entry: { index: 'src/index.ts', cli: 'src/cli.ts' },
+  entry: { index: 'src/index.ts', cli: 'src/cli.ts', 'laya-worker': 'src/runtime/laya/worker-main.ts' },
   format: 'esm',
   platform: 'node',
   target: 'node22',

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RuntimeInstallFile } from '../src/runtime/laya/runtime-installer.ts';
 import { archiveChunks, runtimeFile, writeUstarFixture } from './support/laya-ustar.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 async function installerModule() {
   return import('../src/runtime/laya/runtime-installer.ts');
@@ -88,7 +89,7 @@ test('E2 runtime installer: leaves no final tree when a later package fails veri
   });
 });
 
-test('E2 runtime installer: writes owner-only files and directories', async () => {
+test('E2 runtime installer: writes owner-only files and directories', { skip: WINDOWS_SKIP }, async () => {
   await withTemporaryDirectory(async (directory) => {
     const installed = await installOnePackage(directory);
     const file = join(installed.root, 'node_modules/@tiny/runtime/index.mjs');
