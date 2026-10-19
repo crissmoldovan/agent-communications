@@ -63,7 +63,10 @@ describe('the gated sections', () => {
     renderApp(bridge);
     await advance(0);
     const expectations: [Screen, string[]][] = [
-      ['overview', ['Needs 0.24.0 or later; this machine has 0.21.0.']],
+      [
+        'overview',
+        ['Needs 0.24.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.'],
+      ],
       ['accounts', ['Needs 0.22.0 or later; this machine has 0.21.0.']],
       ['agent', ['Needs 0.22.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.']],
       ['updates', ['Needs 0.24.0 or later; this machine has 0.21.0.']],

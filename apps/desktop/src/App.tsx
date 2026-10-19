@@ -14,7 +14,8 @@ import { Overview } from './screens/Overview.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Updates } from './screens/Updates.tsx';
 
-const SCREENS: Record<Screen, ComponentType> = {
+/** A screen may open another, as Overview opens Approvals; the others take nothing. */
+const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void }>> = {
   overview: Overview,
   accounts: Accounts,
   approvals: Approvals,
@@ -63,7 +64,7 @@ export function App({ initialScreen = 'overview' }: { initialScreen?: Screen | u
   const Current = SCREENS[screen];
   return (
     <Shell screen={screen} onScreen={setScreen}>
-      <Current />
+      <Current onScreen={setScreen} />
     </Shell>
   );
 }
