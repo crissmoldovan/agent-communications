@@ -283,6 +283,45 @@
       "reason": "A Slack workspace's style `labelled` trades Slack's own APP tag, which no one can fake, for words in the message, so it is a change the person approves; `app`, the default, applies at once."
     },
     {
+      "id": "core.behaviour",
+      "package": "core",
+      "cli": "behaviour",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourReport",
+      "reason": "What an agent may do: every rule, whether its account is still connected, and what each account allows, across it and in each conversation a rule names. `comms_behaviour` with no change is this report."
+    },
+    {
+      "id": "core.behaviour.allow",
+      "package": "core",
+      "cli": "behaviour allow",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourChange",
+      "argv": ["parity/slack", "reply,reaction"],
+      "args": { "setRule": { "account": "parity/slack", "acts": ["reply", "reaction"] } },
+      "expect": {
+        "request.setRule.account": "parity/slack",
+        "request.removeRule.account": null
+      },
+      "reason": "A rule that lets an agent do more anywhere — an act added, a conversation allowed more than its account — is a change the person approves; one that only narrows what is allowed applies at once."
+    },
+    {
+      "id": "core.behaviour.clear",
+      "package": "core",
+      "cli": "behaviour clear",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourChange",
+      "argv": ["parity/slack"],
+      "args": { "removeRule": { "account": "parity/slack" } },
+      "expect": {
+        "request.setRule.account": null,
+        "request.removeRule.account": "parity/slack"
+      },
+      "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
+    },
+    {
       "id": "core.channels",
       "package": "core",
       "cli": "channels",

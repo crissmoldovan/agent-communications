@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
+import { BEHAVIOUR_ACTS } from '../behaviour.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
@@ -12,6 +13,12 @@ import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
+import {
+  BEHAVIOUR_CHANGE_KINDS,
+  type BehaviourChangeRequest,
+  behaviourChange,
+  behaviourReport,
+} from '../operations/behaviour.ts';
 import {
   CHANGE_POLICIES,
   changePolicyChange,
@@ -528,6 +535,62 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       }
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as LabelChangeRequest;
       return change(() => labelChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── What an agent may do ─────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Which acts an agent may start at all, per account and per conversation (design 2026-10-19-agent-behaviour-rules,
+   * B5): `agentcomms behaviour` and this, one operation. A rule's object is strict, as the label's are: a `conversaton`
+   * lost on the way would turn a rule for one channel into one for the whole account.
+   */
+  const placeArgs = {
+    account: z.string().describe('the account it is for, by its name: `organisation/platform`'),
+    conversation: z
+      .string()
+      .optional()
+      .describe(
+        'only here — Slack: a channel or DM id (C…, G…, D…) or a person (U…); mail: an address, or @domain. Leave out for the whole account',
+      ),
+  };
+
+  server.registerTool(
+    'comms_behaviour',
+    {
+      title: 'What an agent may do',
+      description: `Report or change which acts an agent may start at all — ${BEHAVIOUR_ACTS.join(', ')} — on each account and in each conversation; every act it may start still waits for the person's yes to its exact content. With no change it only reports: every rule, and for each account what is allowed across it and in each conversation a rule names. Otherwise exactly one of \`setRule\` — only these acts there, replacing the rule at that level; \`acts: []\` allows nothing — or \`removeRule\`. A change that only narrows what is allowed applies at once. One that allows more anywhere — an act added, a rule removed whose fallback is wider, a conversation allowed more than its account — is a change the person approves: the first call returns the preview, each level before → after, and an approvalId; call again with it once they agree. Start one that allows more only when the person asked for it.`,
+      inputSchema: {
+        setRule: z
+          .strictObject({
+            ...placeArgs,
+            acts: z
+              .array(z.enum(BEHAVIOUR_ACTS as unknown as [string, ...string[]]))
+              .describe('the acts an agent may start there, and only these; empty for none'),
+          })
+          .optional()
+          .describe('what an agent may do in one place: the rule for it, added or replaced'),
+        removeRule: z
+          .strictObject(placeArgs)
+          .optional()
+          .describe('a rule to take away, by its account and conversation, so the wider one holds there'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = BEHAVIOUR_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `setRule` or `removeRule` — with it.',
+          });
+          return behaviourReport(core);
+        });
+      }
+      const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
+      return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
     },
   );
 
