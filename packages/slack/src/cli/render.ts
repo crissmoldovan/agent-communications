@@ -13,13 +13,15 @@ import {
 } from '@agentcomms/core';
 import type { SlackDraft } from '../compose/drafts.ts';
 import { handoffsSentence } from '../handoffs.ts';
-import { renderManifest } from '../manifest.ts';
+import { chosenPortSentence, renderManifest } from '../manifest.ts';
 import type { DeletedMessage, EditedMessage } from '../operations/amend.ts';
 import type { AppCreated, AppUpdated } from '../operations/app.ts';
 import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { DeletedDraft, DraftView } from '../operations/drafts.ts';
 import type { FileDownloadQuestion, FileDownloadResult } from '../operations/files.ts';
+import type { AgentIconResult } from '../operations/icon.ts';
+import type { AgentManifestResult, ManifestResult } from '../operations/manifest.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
@@ -501,6 +503,8 @@ export function renderManifestHelp(
   color: boolean,
   target: { workspace: string | null; manifestUrl: string | null } | undefined,
   handoffs: CliHandoffs,
+  /** True when this call chose the port for a new app: then it is said to be that app's, in place of "keep it". */
+  portChosen = false,
 ): string {
   const { workspace, manifestUrl } = target ?? { workspace: null, manifestUrl: null };
   /*
@@ -538,7 +542,13 @@ export function renderManifestHelp(
     '',
     ...steps,
     '',
-    paint(color, 'dim', `Keep --port ${port}: Slack matches the redirect URL in this manifest exactly.`),
+    paint(
+      color,
+      'dim',
+      portChosen
+        ? chosenPortSentence(port)
+        : `Keep --port ${port}: Slack matches the redirect URL in this manifest exactly.`,
+    ),
     '',
     mode === 'read'
       ? paint(
@@ -572,6 +582,45 @@ export function renderManifestHelp(
             'This app can post, upload and react, each only after your approval. slack_manifest prints one for read that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then call slack_mode_set with appUpdated from a chat.',
           ),
         ),
+  ].join('\n');
+}
+
+/**
+ * The manifest of an app that signs in with its client secret (PKCE off): the operation's own steps, numbered, and its
+ * notes — so a person at a terminal and an agent reading `slack_manifest` are told the same thing.
+ *
+ * Not the PKCE app's text, which says there is no client secret to copy and connects without `--with-client-secret`:
+ * both are false here. Why the app must be new comes first, because pasting this on an existing app is the mistake to
+ * prevent; and no step offers to move an existing workspace onto it, which is that same mistake.
+ */
+export function renderClientSecretManifestHelp(result: ManifestResult, color: boolean): string {
+  return [
+    paint(color, 'bold', `A Slack app for "${result.mode}" access, signed in with its client secret`),
+    '',
+    ...result.notes.map((note) => paint(color, 'dim', note)),
+    ...(result.notes.length > 0 ? [''] : []),
+    ...result.steps.map((step, i) => `${i + 1}. ${step}`),
+    ...(result.portFrom === 'chosen'
+      ? []
+      : [
+          '',
+          paint(color, 'dim', `Keep --port ${result.port}: Slack matches the redirect URL in this manifest exactly.`),
+        ]),
+  ].join('\n');
+}
+
+/**
+ * The organisation's agent app (CUE-493): the operation's own steps and notes, as `slack_manifest` returns them, so the
+ * administrator at a terminal and an agent reading the tool are told the same thing. Steps first — they are what to do —
+ * then what to weigh before sharing the token.
+ */
+export function renderAgentManifestHelp(result: AgentManifestResult, color: boolean): string {
+  return [
+    paint(color, 'bold', "Your organisation's agent app: one bot-only app, whose token members paste"),
+    '',
+    ...result.steps.map((step, i) => `${i + 1}. ${step}`),
+    '',
+    ...result.notes.map((note) => paint(color, 'dim', note)),
   ].join('\n');
 }
 
@@ -778,6 +827,18 @@ export function renderPeople(result: PeopleResult, color: boolean): string {
   }
   if (!result.complete) lines.push('', paint(color, 'dim', 'More remain.'));
   return lines.join('\n');
+}
+
+/** `icon make`: the file made, then the two steps the person takes with it, then that nothing else changed. */
+export function renderAgentIcon(result: AgentIconResult, color: boolean): string {
+  return [
+    `made ${result.path} · ${result.width} × ${result.height} PNG · ${sizeOf(result.bytes)}`,
+    `suggested name ${result.suggestedName}`,
+    '',
+    renderSteps('Next:', result.steps, color),
+    '',
+    paint(color, 'dim', 'Nothing was uploaded, and nothing changed in Slack or in the configuration.'),
+  ].join('\n');
 }
 
 export function renderFiles(result: FilesResult, color: boolean): string {

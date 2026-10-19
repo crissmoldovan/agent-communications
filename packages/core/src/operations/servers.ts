@@ -1,4 +1,4 @@
-import { access, constants, readFile, realpath } from 'node:fs/promises';
+import { access, constants, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GatedChange } from '../change-flow.ts';
@@ -7,16 +7,30 @@ import {
   CHANNEL_SERVERS,
   CHANNELS,
   type Channel,
-  channelLabel,
-  channelServer,
   isChannel,
+  isServer,
   requireChannelManifest,
+  SERVERS,
+  type ServerId,
+  serverFacts,
+  serverKind,
+  serverLabel,
 } from '../channel-servers.ts';
 import { accountNoun, hasNarrowing, narrowingOwner, pinOption } from '../channel-words.ts';
+import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
+import { writeFileAtomic } from '../fs.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
+import { launcherCli, launcherName, launcherPaths, readPointer } from '../launcher.ts';
+import {
+  type ManagedShimWriteResult,
+  managedShimPath,
+  managedShimsSupported,
+  managedShimUnsupportedNotice,
+  writeManagedShim,
+} from '../managed-shims.ts';
 import { scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
 import {
   checkServerName,
@@ -24,6 +38,7 @@ import {
   type InstallContext,
   type InstallOptions,
   type InstallResult,
+  installManagedRuntime,
   installRemedyOf,
   isProductServer,
   type Launcher,
@@ -39,20 +54,32 @@ import {
   preflightInstall,
   pruneManagedRuntimes,
   reusableRuntime,
+  runningCommandLines,
   type SupportedClient,
   whichExecutable,
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { isBehind } from '../npm.ts';
-import type { PathOverrides } from '../paths.ts';
+import { homeDirectory, type PathOverrides } from '../paths.ts';
 import { launcherOf, registrationPathPins, registrationVersion } from '../registrations.ts';
+import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
+// Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
+import type { VerifiedProvenance } from '../update-provenance.ts';
+import {
+  BUILT_BY,
+  type ReleaseRegistry,
+  type ReleaseSources,
+  type ReleaseVerifier,
+  runtimeIntegrityProblem,
+  verifyReleaseSet,
+} from '../update-release.ts';
 import { VERSION } from '../version.ts';
 
 /**
- * Registering, pruning and listing the MCP servers of every channel, from the core.
+ * Registering, pruning and listing every declared channel or service MCP server, from the core.
  *
- * `agentcomms mcp install` registers the core server; `comms_server_install` registers any channel's; and
- * `agent-gmail mcp install` and `agent-slack mcp install` register their own. All four are the one change here, over
+ * `agentcomms mcp install` registers core or a declared service; `comms_server_install` registers any declared
+ * server; and channel CLIs register their own. They are the one change here, over
  * the shared installer (`mcp-install.ts`), and all go through the change flow: registering a server is a loosening in
  * the design's terms (§3.1) — it hands a client a new set of tools — and so is asked for once and applied on the
  * second call with the approval. Printing an entry registers nothing and asks nobody.
@@ -63,7 +90,7 @@ import { VERSION } from '../version.ts';
  * the other — or worse, a channel's own command would register with no approval at all, which is what it did.
  *
  * The version installed is this core's own, or the calling channel's when it passes its product. The packages are
- * released together, at one version, so the core that is asked to install Gmail installs the Gmail of its own release.
+ * released together, at one version, so the core asked to install Gmail or events installs its own release.
  */
 
 export const CLIENTS: readonly SupportedClient[] = Object.freeze([
@@ -112,10 +139,10 @@ const exists = (path: string) =>
  * core depends on none of them. So the channel is looked for beside this core — `packages/gmail` next to
  * `packages/core` in a checkout — and from source when this core runs from source, as the channel CLIs do.
  */
-async function localModuleUrl(channel: Channel): Promise<string> {
+async function localModuleUrl(server: ServerId): Promise<string> {
   const coreRoot = await corePackageRoot();
-  const unscopedName = channelServer(channel).packageName.split('/').at(-1) ?? channel;
-  const root = channel === 'core' ? coreRoot : join(dirname(coreRoot), unscopedName);
+  const unscopedName = serverFacts(server).packageName.split('/').at(-1) ?? server;
+  const root = server === 'core' ? coreRoot : join(dirname(coreRoot), unscopedName);
   const source = join(root, 'src', 'cli.ts');
   const built = join(root, 'dist', 'cli.mjs');
   const fromSource = fileURLToPath(import.meta.url).endsWith('.ts');
@@ -128,7 +155,7 @@ async function localModuleUrl(channel: Channel): Promise<string> {
   }
   throw new CommsError(
     'USAGE',
-    `\`--launcher local\` registers a checkout's own code, and there is no ${channelServer(channel).packageName} beside this one`,
+    `\`--launcher local\` registers a checkout's own code, and there is no ${serverFacts(server).packageName} beside this one`,
     { hint: `Looked in ${root}. Use the managed launcher, or run the install from that checkout.` },
   );
 }
@@ -141,18 +168,27 @@ async function localModuleUrl(channel: Channel): Promise<string> {
  * newer release here is all it takes to register one this core is older than — which is what `agentcomms update` does.
  * `comms_server_install` and every `mcp install` name none, and register their own release as they always have.
  */
+export async function serverProduct(
+  server: ServerId,
+  launcher: Launcher | undefined,
+  version: string = VERSION,
+): Promise<McpProduct> {
+  return {
+    ...serverFacts(server),
+    version,
+    // Only the `local` launcher reads `moduleUrl`, and only it needs a checkout beside this one; the others must not
+    // be refused for the lack of one.
+    moduleUrl: launcher === 'local' ? await localModuleUrl(server) : '',
+  };
+}
+
+/** Backward-compatible name for callers that install a channel server. */
 export async function channelProduct(
   channel: Channel,
   launcher: Launcher | undefined,
   version: string = VERSION,
 ): Promise<McpProduct> {
-  return {
-    ...channelServer(channel),
-    version,
-    // Only the `local` launcher reads `moduleUrl`, and only it needs a checkout beside this one; the others must not
-    // be refused for the lack of one.
-    moduleUrl: launcher === 'local' ? await localModuleUrl(channel) : '',
-  };
+  return serverProduct(channel, launcher, version);
 }
 
 /**
@@ -165,11 +201,11 @@ export async function channelProduct(
  * registered, from the channel; a product for another package would register something else under those words, and
  * the person would have approved a sentence that was not true.
  */
-function ownProduct<P extends Pick<McpProduct, 'packageName'>>(channel: Channel, own: P | undefined): P | undefined {
-  if (own !== undefined && own.packageName !== channelServer(channel).packageName) {
+function ownProduct<P extends Pick<McpProduct, 'packageName'>>(server: ServerId, own: P | undefined): P | undefined {
+  if (own !== undefined && own.packageName !== serverFacts(server).packageName) {
     throw new CommsError(
       'UNEXPECTED',
-      `${own.packageName} is not the ${channelLabel(channel)} server's package, so it cannot register that server`,
+      `${own.packageName} is not the ${serverLabel(server)} server's package, so it cannot register that server`,
     );
   }
   return own;
@@ -178,7 +214,8 @@ function ownProduct<P extends Pick<McpProduct, 'packageName'>>(channel: Channel,
 // ── Install ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ServerInstallRequest {
-  channel: Channel;
+  /** The declared server id. Kept as `channel` for CLI–MCP compatibility with earlier releases. */
+  channel: ServerId;
   client: SupportedClient;
   name?: string | undefined;
   /**
@@ -203,7 +240,58 @@ export interface ServerInstallRequest {
 export type ServerInstallResult = InstallResult & {
   /** What the person has to do before the server's tools appear, or null when nothing was registered. */
   restart: string | null;
+  /**
+   * The provenance of the runtime this install fetched from npm, or found there for a release it verified: verified,
+   * or — a channel's own command installing the release it is running, which it cannot check — not, with `note`
+   * saying so and naming core's command that checks it (also among `warnings`). Absent when it fetched nothing.
+   */
+  provenance?: { package: string; version: string; verified: boolean; note?: string | undefined } | undefined;
 };
+
+export interface ServerInstallDeps {
+  /** The platform whose install behavior is planned; this process's unless a test supplies another. */
+  platform?: NodeJS.Platform | undefined;
+  /**
+   * Every package's full document on the registry, read for the tarball integrity of the runtime a first install
+   * fetches. Handed in, as the verifier is: core's CLI and server hand in the registry npm reads (`npmRegistry`), and
+   * nothing here reaches the network on its own — WhatsApp's bundle, which carries this module, reaches none. Without
+   * one, an install that would fetch a runtime is refused.
+   */
+  registry?: ReleaseRegistry | null | undefined;
+  /**
+   * Verifies the release a first install fetches from npm, with the pins and the refusal of the update by hand
+   * (`verifyReleaseSet`; security review of 0.20.0). Core's CLI and server hand in theirs (`stateReleaseVerifier`), a
+   * test its own. Without one — a channel's own process, which carries no Sigstore — an install that would fetch a
+   * runtime is refused, naming core's command, and nothing skips it — but for the one release the command is running
+   * itself (`running`), which npx already fetched and which is running: that is installed as before, said in the
+   * preview and the result not to be verified, and recorded so in its receipt (owner's decision, 2026-10-17).
+   */
+  verifyRelease?: ReleaseVerifier | undefined;
+  /**
+   * The release this process is running, when it is a channel's own command: the only one it may install without
+   * verifying, and only with no verifier. Left out, the channel's own product (`own`) is it: the version it is.
+   */
+  running?: { packageName: string; version: string } | undefined;
+}
+
+/**
+ * What a first install verifies with, from an update's own sources: the same registry and verifier, and the registry
+ * npm reads (`npmRegistry`, which the caller hands in) where the update names none. An update handed a stand-in
+ * `latest` and no registry — a test's — reads no real registry, and neither does the install then.
+ */
+export function installVerification(
+  update: {
+    registry?: ReleaseRegistry | undefined;
+    verifyRelease?: ReleaseVerifier | undefined;
+    latestVersion?: unknown;
+  },
+  npm: ReleaseRegistry,
+): Pick<ServerInstallDeps, 'registry' | 'verifyRelease'> {
+  return {
+    registry: update.registry ?? (update.latestVersion === undefined ? npm : null),
+    ...(update.verifyRelease !== undefined ? { verifyRelease: update.verifyRelease } : {}),
+  };
+}
 
 /**
  * Refuses what the channel's own `mcp install` has no flag for, rather than ignoring it.
@@ -212,7 +300,7 @@ export type ServerInstallResult = InstallResult & {
  * register a server reaching every workspace for a caller who believed they had pinned it.
  */
 function checkRequest(request: ServerInstallRequest): void {
-  if (!isChannel(request.channel)) {
+  if (!isServer(request.channel)) {
     throw new CommsError('USAGE', `"${String(request.channel)}" is not a channel`, {
       hint: `One of: ${CHANNELS.join(', ')}.`,
     });
@@ -230,7 +318,7 @@ function checkRequest(request: ServerInstallRequest): void {
   // Where the name enters, for every surface — the tool and all three `mcp install` commands — before anything is
   // planned or asked: it is quoted in the preview, so a name that reads as a pin is a preview that lies.
   if (request.name !== undefined) checkServerName(request.name);
-  const label = channelLabel(request.channel);
+  const label = serverLabel(request.channel);
   /*
    * A channel's own names for its pin and its switches, refused on a server that has none — by whose option each is,
    * from the manifests, in the words the refusal always had.
@@ -288,7 +376,7 @@ function checkPin(config: Config, request: ServerInstallRequest): void {
   }
   const { account } = resolveName(config, 'account', pin);
   if (account.platform !== request.channel) {
-    throw new CommsError('USAGE', `"${pin}" is not a ${channelLabel(request.channel)} ${accountNoun(request.channel)}`);
+    throw new CommsError('USAGE', `"${pin}" is not a ${serverLabel(request.channel)} ${accountNoun(request.channel)}`);
   }
 }
 
@@ -312,7 +400,27 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
 }
 
 /**
- * Registering one channel's server with one client, as a change.
+ * The install receipt a fetched runtime keeps in its folder: which release, whether its provenance was verified, and
+ * by whom it was installed — core, which verifies, or a channel's own command, which cannot (owner's decision,
+ * 2026-10-17). Doctor and a person can read it; nothing else depends on it.
+ */
+export const INSTALL_RECEIPT = '.agentcomms-install.json';
+
+/** A sentence's first letter in capitals: core's command, said after a full stop. */
+const capitalised = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
+/** What an install's plan found, for its apply to hold the install to: see `serverInstallChange`. */
+interface Planned {
+  product: McpProduct;
+  install: PlannedInstall;
+  /** The release a first install fetches, verified before the preview; undefined when it fetches none. */
+  verified: VerifiedProvenance | undefined;
+  /** A channel's own command fetching the release it is running, which it cannot verify (`running`). */
+  unverifiedOwn: boolean;
+}
+
+/**
+ * Registering one declared server with one client, as a change.
  *
  * The effects are what a person is agreeing to, one sentence each, and everything that decides what the server may
  * reach is in them — which server, which client, under which name, pinned to what, replacing what, started how. The
@@ -332,24 +440,144 @@ export function serverInstallChange(
   env: NodeJS.ProcessEnv,
   request: ServerInstallRequest,
   own?: McpProduct,
+  deps: ServerInstallDeps = {},
 ): GatedChange<ServerInstallResult> {
   checkRequest(request);
   ownProduct(request.channel, own);
-  const context: InstallContext = { env, core };
-  const facts = channelServer(request.channel);
-  const label = channelLabel(request.channel);
+  const context: InstallContext = { env, core, ...(deps.platform === undefined ? {} : { platform: deps.platform }) };
+  const facts = serverFacts(request.channel);
+  const label = serverLabel(request.channel);
   const noun = accountNoun(request.channel);
   const pinName = pinOption(request.channel);
   const switchable = hasNarrowing(request.channel, 'readOnly');
   const name = request.name ?? facts.defaultServerName;
   const launcher = request.launcher ?? 'managed';
-  const productNow = async (): Promise<McpProduct> => own ?? (await channelProduct(request.channel, request.launcher));
+  const productNow = async (): Promise<McpProduct> => own ?? (await serverProduct(request.channel, request.launcher));
   /*
    * What the plan found, for the apply to hold the install to. The install looks at the machine again when it runs,
    * and what it finds then has to be what the plan found — whether it writes or prints, where, what it replaces, and
    * what the server is pinned to — or the person agreed to one thing and got another. See `PlannedInstall`.
    */
-  let planned: { product: McpProduct; install: PlannedInstall } | undefined;
+  let planned: Planned | undefined;
+  /*
+   * Where a first install reads the release's document and verifies it (security review of 0.20.0): the registry and
+   * the verifier the caller handed in — core's CLI and server, npm's and theirs; a test, its stand-ins.
+   */
+  const sources = (): ReleaseSources => ({
+    registry: deps.registry ?? null,
+    verify: deps.verifyRelease ?? null,
+    why:
+      deps.verifyRelease === undefined
+        ? "nothing here can verify provenance: run the install from core's own command or server"
+        : 'this install was handed a verifier and no registry',
+  });
+  /**
+   * Core's own command for this same install, located — the one that verifies — said by `say`; `instead` where no
+   * command can be named.
+   */
+  const coreWords = (): string[] => {
+    const words = ['mcp', 'install', '--server', request.channel, '--client', request.client];
+    if (request.name !== undefined) words.push('--name', request.name);
+    const pin = pinOf(request);
+    const option = pinOption(request.channel);
+    if (pin !== undefined && option !== undefined && option !== 'readOnly') words.push(`--${option}`, pin);
+    if (request.readOnly) words.push('--read-only');
+    if (request.force) words.push('--force');
+    return words;
+  };
+  const inCore = (say: (command: string) => string, instead: string): string => {
+    try {
+      return handoffSentence(requireHandoffs(core, deps.platform).core(coreWords()), say, { instead });
+    } catch {
+      // A core opened with no caller has no command to name: the words alone, never a bare guess.
+      return instead;
+    }
+  };
+  /** Where a process that cannot verify — a channel's own, with no Sigstore — sends the person: core, which can. */
+  const verifyInCore = (): string =>
+    inCore(
+      (command) =>
+        `Core verifies a release's provenance before it installs it: run ${command} in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.`,
+      "Core verifies a release's provenance before it installs it: run core's `mcp install --server` in your own terminal, or call comms_server_install from a chat. Nothing was prepared to approve.",
+    );
+  /** Where the release a channel's own command installs unverified is checked: core's command, located. */
+  const checkedInCore = (): string =>
+    inCore(
+      (command) => `core's ${command} checks it before it installs it`,
+      "core's `mcp install --server` checks it before it installs it",
+    );
+  /** The receipt a runtime this install fetched keeps beside it (`INSTALL_RECEIPT`). */
+  const writeReceipt = (runtime: string, packageName: string, version: string, verified: boolean, by: string) =>
+    writeFileAtomic(
+      join(runtime, INSTALL_RECEIPT),
+      `${JSON.stringify({ package: packageName, version, verified, by, at: new Date().toISOString() }, null, 2)}\n`,
+    );
+  /*
+   * The runtime a managed registration starts, held to what the plan verified, before the launcher is pointed or
+   * anything is registered. A runtime to fetch is fetched here, with npm running no package's script, and must then
+   * hold the very tarball that verified, every package of ours in it verifying too (`runtimeIntegrityProblem`): one
+   * that does not is removed, and nothing is registered on it. One the plan found on disk is used as it was found, and
+   * one gone since is not fetched unverified.
+   */
+  const verifiedRuntime = async (done: Planned): Promise<ServerInstallResult['provenance']> => {
+    const { dataDir } = core.paths;
+    const { packageName, version } = done.product;
+    const runtime = managedRuntimeDir(dataDir, packageName, version);
+    const there = await reusableRuntime(dataDir, packageName, version);
+    if (done.verified === undefined) {
+      if (there !== null) return undefined;
+      /*
+       * A channel's own command installing the release it is running (owner's decision, 2026-10-17): the same package
+       * at the same version npx fetched to run it, which this process cannot verify. Installed as before, and said
+       * and recorded not to be verified; core's command checks it.
+       */
+      if (done.unverifiedOwn) {
+        await installManagedRuntime(context, done.product, version).catch(async (error) => {
+          throw await remedyLocated(error, core);
+        });
+        await writeReceipt(runtime, packageName, version, false, `${label}’s own command`);
+        const note = `${packageName}@${version} was installed without its provenance verified: this command cannot check provenance, so it installed the release it is running itself. ${capitalised(checkedInCore())}.`;
+        return { package: packageName, version, verified: false, note };
+      }
+      throw new CommsError(
+        'CONFIG',
+        `this registration changed between being planned and being applied: ${runtime} was on this machine when it was planned, and is not now, so it would be fetched from npm without being verified. So nothing was installed or registered`,
+        {
+          hint: 'Run the same install again: it is planned afresh from what is there now, verifies the release it would fetch, and asks again.',
+        },
+      );
+    }
+    if (there === null) {
+      await installManagedRuntime(context, done.product, version).catch(async (error) => {
+        throw await remedyLocated(error, core);
+      });
+    }
+    const { sha512 } = done.verified;
+    const problem = await runtimeIntegrityProblem(runtime, packageName, sha512, {
+      verify: sources().verify,
+      known: new Map([[`${packageName}@${version}`, sha512]]),
+    });
+    if (problem === null) {
+      // Fetched now, or found on disk and shown to be the verified tarball: its receipt says so from now on.
+      await writeReceipt(runtime, packageName, version, true, 'core');
+      return { package: packageName, version, verified: true };
+    }
+    if (there === null) await rm(runtime, { recursive: true, force: true }).catch(() => undefined);
+    const general =
+      "An install registers only a runtime whose packages of this suite were all built by this repository's release workflow, as their Sigstore provenance shows. If it happens again, do not install it some other way; report it as SECURITY.md says.";
+    throw new CommsError(
+      'BAD_DATA',
+      `nothing was registered: ${problem}${there === null ? ', so it was removed' : ''}. The launcher was not pointed at it`,
+      {
+        // A runtime found on disk is left for whatever starts it now: say how to put a verified one in its place.
+        hint:
+          there === null
+            ? general
+            : `To fetch a verified one, remove ${runtime} — whatever starts it stops until it is installed again — and run this install again: it fetches ${packageName}@${version} from npm and verifies it before anything is registered. ${general}`,
+        details: { package: packageName, version },
+      },
+    );
+  };
   return {
     plan: async (config) => {
       checkPin(config, request);
@@ -360,7 +588,42 @@ export function serverInstallChange(
         throw await remedyLocated(error, core);
       });
       const { target, previous, effective, kept, command } = preflight;
-      planned = { product, install: plannedInstall(preflight) };
+      /*
+       * A first install fetches the release from npm: verified first, before the preview is made — and again when the
+       * approval is claimed, since the claim plans again — against the pins the update holds a release to. One that
+       * does not verify refuses the install, and nothing is prepared to approve.
+       */
+      const managedApply = request.print !== true && launcher === 'managed';
+      const fetches =
+        managedApply && (await reusableRuntime(core.paths.dataDir, product.packageName, version)) === null;
+      /*
+       * A runtime already on disk is held to the verified release too, wherever there is a verifier — core's install
+       * (re-review of 0.20.0, severity 4): one a channel's own command installed unverified, or one made some other
+       * way, is registered on only once it is shown to be the tarball that verified, as the update holds one.
+       */
+      const checksDisk = managedApply && !fetches && deps.verifyRelease !== undefined;
+      const from = sources();
+      // The release a channel's own command is running, which npx already fetched: the one it may install unverified.
+      const running =
+        deps.running ?? (own === undefined ? undefined : { packageName: own.packageName, version: own.version });
+      const unverifiedOwn =
+        fetches &&
+        deps.verifyRelease === undefined &&
+        running !== undefined &&
+        running.packageName === product.packageName &&
+        running.version === version;
+      const verified =
+        (fetches && !unverifiedOwn) || checksDisk
+          ? (
+              await verifyReleaseSet(
+                from,
+                new Map([[product.packageName, version]]),
+                'install',
+                from.registry === null || from.verify === null ? verifyInCore() : undefined,
+              )
+            ).get(product.packageName)
+          : undefined;
+      planned = { product, install: plannedInstall(preflight), verified, unverifiedOwn };
       const effects: string[] = [];
       if (target.writes) {
         // The pin and the switch the server is started with, in the channel's words: "pinned to the mailbox …".
@@ -404,13 +667,32 @@ export function serverInstallChange(
           effects.push(`${request.client} will start it from ${await localCliEntry(product.moduleUrl)}`);
         }
       }
-      if (
-        request.print !== true &&
-        launcher === 'managed' &&
-        (await reusableRuntime(core.paths.dataDir, facts.packageName, version)) === null
-      ) {
+      if (fetches) {
         effects.push(
           `installs ${facts.packageName}@${version} from npm into ${managedRuntimeDir(core.paths.dataDir, facts.packageName, version)}`,
+        );
+      }
+      if (request.print !== true && launcher === 'managed') {
+        effects.push(launcherSwitchEffect(core.paths.dataDir, facts.packageName, label, version));
+      }
+      if (request.print !== true && launcher === 'managed' && managedShimsSupported(context)) {
+        const path = managedShimPath({ env, dataDir: core.paths.dataDir, platform: context.platform }, facts.binary);
+        effects.push(`writes or repoints the owned CLI shim at ${path}; a foreign file there is left unchanged`);
+      }
+      /*
+       * What it verified for a release it fetches, as the update's preview says it: last, one sentence — or that it
+       * cannot, and where it would be. A runtime already on disk is verified and checked all the same (`checksDisk`),
+       * but adds no sentence: a channel's own `mcp install` and `comms_server_install` are one change, an approval one
+       * prepares claimed by the other (capabilities.json), so where both register on what is already here they say
+       * the same words; core refuses at the claim what it cannot verify.
+       */
+      if (verified !== undefined && fetches) {
+        effects.push(`${verified.package}@${verified.version} was verified before this preview: built by ${BUILT_BY}`);
+      } else if (unverifiedOwn) {
+        // Core's command by its words: located, with its four folders, it is longer than a preview's line shows. The
+        // result names it located.
+        effects.push(
+          `${product.packageName}@${version} will not be verified: this command cannot check provenance, so it installs the release it is running itself; core's \`${coreWords().join(' ')}\` checks it before it installs it`,
         );
       }
       return {
@@ -426,18 +708,107 @@ export function serverInstallChange(
     apply: async () => {
       if (planned === undefined)
         throw new CommsError('UNEXPECTED', 'the registration was applied before it was planned');
-      const result = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
+      const provenance = request.print !== true && launcher === 'managed' ? await verifiedRuntime(planned) : undefined;
+      const installed = await mcpInstall(context, planned.product, installOptions(request), planned.install).catch(
         async (error) => {
           throw await remedyLocated(error, core);
         },
       );
+      const result = request.print === true ? installed : await withManagedShim(context, planned.product, installed);
       return {
         ...result,
+        // Not verified is said where every surface prints an install's words, and recorded in the result as well.
+        ...(provenance?.note === undefined ? {} : { warnings: [...result.warnings, provenance.note] }),
+        ...(provenance === undefined ? {} : { provenance }),
         restart: result.applied
           ? `Restart ${request.client} to load "${result.name}": no MCP client loads a new server into a session that is already running.`
           : null,
       };
     },
+  };
+}
+
+/**
+ * What a managed install or update does to the product's stable launcher, as the preview says it (design 2026-10-16,
+ * U6): it points it at the release's runtime, and every registration of the product that starts it — in any client —
+ * runs that release from its next start.
+ */
+export function launcherSwitchEffect(dataDir: string, packageName: string, label: string, version: string): string {
+  const { launcher } = launcherPaths(dataDir, launcherName(packageName));
+  return `points the stable launcher ${launcher} at ${managedRuntimeDir(dataDir, packageName, version)}: every ${label} registration on this machine that starts it runs ${version} from its next start`;
+}
+
+/**
+ * A managed install's CLI shim (CUE-406), once the registration's outcome is known: the command the locator finds in
+ * the runtime the entry starts, written where nothing is or over this installation's own unchanged shim, and never
+ * over anything else. A shim that cannot be written leaves the registration as it went, and says how to repair both.
+ * The installer may not import the locator, so the operation writes it — for `mcp install` and `update` alike.
+ */
+export async function withManagedShim(
+  context: InstallContext,
+  product: McpProduct,
+  installed: InstallResult,
+): Promise<InstallResult> {
+  if (installed.launcher !== 'managed') return installed;
+  const shimContext = { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform };
+  if (!managedShimsSupported(shimContext)) {
+    return { ...installed, shimNotice: managedShimUnsupportedNotice(shimContext) };
+  }
+  const warnings = [...installed.warnings];
+  let shim: ManagedShimWriteResult | undefined;
+  let shimFailure: string | undefined;
+  try {
+    /*
+     * The shim starts the stable launcher, as the registration does (design 2026-10-16, U6), so an update that
+     * switches the launcher's pointer moves the command a person types too, and rewrites nothing. The CLI the launcher
+     * starts is still located first, from the runtime its pointer names: a runtime this Node cannot run, or whose
+     * package does not declare its command, gets no shim.
+     */
+    const name = launcherName(product.packageName);
+    const { launcher } = launcherPaths(context.core.paths.dataDir, name);
+    const pointer = await readPointer(context.core.paths.dataDir, name);
+    if (pointer === undefined) {
+      throw new CommsError('CONFIG', `the stable launcher ${launcher} has no pointer, so it starts nothing yet`);
+    }
+    const cliEntry = launcherCli(pointer.current, name);
+    const located = locateCliCommand({
+      caller: { url: pathToFileURL(cliEntry).href, packageName: product.packageName },
+      target: {
+        packageName: product.packageName,
+        manifest: { label: product.defaultServerName, binary: product.binary },
+      },
+      words: [],
+      uses: [],
+      paths: { ...context.core.paths, downloadsDir: context.core.paths.dataDir },
+      platform: context.platform,
+      // This Node as PATH finds it, as the registration beside the shim names it: a link stays the link (CUE-492).
+      env: context.env,
+    });
+    if (!located.ok) {
+      throw new CommsError('CONFIG', `the managed CLI command could not be located: ${located.message}`);
+    }
+    shim = await (context.writeShim ?? writeManagedShim)(shimContext, {
+      binary: product.binary,
+      command: [launcher],
+      entry: launcher,
+    });
+  } catch (error) {
+    shimFailure = error instanceof Error ? error.message : String(error);
+    const path = join(homeDirectory(context.env), '.local', 'bin', product.binary);
+    warnings.push(
+      `The MCP registration ${installed.applied ? 'succeeded' : 'was not changed'}, but the CLI shim at ${path} could not be written (${shimFailure}). Fix that shim directory, then run this managed install again with \`--force\`; the owned registration is replaced without widening it and the shim is repaired.`,
+    );
+  }
+  if (shim?.status === 'foreign') {
+    warnings.push(
+      `${shim.path} already exists but was not written by this installation, so it was left unchanged; move it aside and run this managed install again with \`--force\` to create the CLI shim at that path.`,
+    );
+  }
+  return {
+    ...installed,
+    warnings,
+    ...(shim === undefined ? {} : { shim }),
+    ...(shimFailure === undefined ? {} : { shimFailure }),
   };
 }
 
@@ -449,11 +820,14 @@ export function serverInstallChange(
 async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
   const remedy = installRemedyOf(error);
   if (remedy === undefined || !(error instanceof CommsError)) return error;
-  const channel = CHANNELS.find((each) => channelServer(each).binary === remedy.binary);
-  if (channel === undefined) return error;
+  const server = SERVERS.find((each) => serverFacts(each).binary === remedy.binary);
+  if (server === undefined) return error;
   const maker = await requireHandoffs(core).registered();
+  const handoff = isChannel(server)
+    ? maker.of(server, remedy.words)
+    : maker.core(['mcp', 'install', '--server', server, ...remedy.words.slice(2)]);
   return new CommsError(error.code, error.message, {
-    hint: handoffSentence(maker.of(channel, remedy.words), remedy.say),
+    hint: handoffSentence(handoff, remedy.say),
     ...(error.details === undefined ? {} : { details: error.details }),
     ...(error.cause === undefined ? {} : { cause: error.cause }),
   });
@@ -462,19 +836,50 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
 // ── Prune ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface ServerPruneRequest {
-  channel: Channel;
+  /**
+   * The declared server id, kept as `channel` for CLI–MCP compatibility with earlier releases. Left out, every managed
+   * server the channel registry declares (`SERVERS`): `agentcomms mcp prune`, and `comms_server_prune` with no channel.
+   */
+  channel?: ServerId | undefined;
   dryRun?: boolean | undefined;
   includePrinted?: boolean | undefined;
   /** For a test: the command lines of the running processes, or null when they cannot be listed. */
   processes?: (() => Promise<readonly string[] | null>) | undefined;
 }
 
+/** One declared server's part of a prune that names no server: its own prune, and whose it is. */
+export interface ServerPruned extends PruneResult {
+  server: ServerId;
+  /** The server as a person knows it: "agentcomms (core)", "Gmail". */
+  label: string;
+}
+
 /**
- * Removing a channel's unused managed runtimes, as a change.
+ * A prune of every managed server: each server's own prune, in the registry's order, and all of it together — every
+ * runtime removed and kept, each saying whose it is, and every shim — so it reads as one server's prune does.
+ * `refused` is set only when every server with a runtime to look at was stopped: then nothing at all was removed.
+ * `refusedServers` names each server that was stopped whenever any was, so one left unchecked beside others that went
+ * ahead is not missed.
+ */
+export interface PruneAllResult extends PruneResult {
+  removed: { path: string; version: string; server: ServerId }[];
+  kept: { path: string; version: string; reason: string; server: ServerId }[];
+  servers: ServerPruned[];
+  /** Each server whose prune was stopped, and why: none of its runtimes was looked at, so all of them stay. */
+  refusedServers?: { server: ServerId; label: string; refused: string }[] | undefined;
+}
+
+/**
+ * Removing a declared server's unused managed runtimes, as a change.
  *
  * A dry run is free: it removes nothing. Otherwise the plan is that same dry run, and each runtime it would remove is
  * one effect — the removal cannot be taken back — so the approval is bound to exactly that list; and the removal is
  * then restricted to it (`only`), so a runtime that became unused after the list was shown stays.
+ *
+ * A removal never runs beside an update (`update-lock.ts`): a background run installs a release and checks it before
+ * any pointer names it, and a prune beside it would find that runtime unused. So it is refused at once while an update
+ * holds the lock — before an approval is prepared — and the removal itself holds the lock, refused in turn when an
+ * update has started since. A refusal stops nothing else.
  *
  * `own` is the calling channel's product, from its own `mcp prune`, so the runtime kept as "this release" is the
  * release of the command that was run; checked to be that channel's, as for an install.
@@ -484,19 +889,20 @@ export function serverPruneChange(
   env: NodeJS.ProcessEnv,
   request: ServerPruneRequest,
   own?: Pick<McpProduct, 'packageName' | 'version'>,
-): GatedChange<PruneResult> {
-  if (!isChannel(request.channel)) {
+): GatedChange<PruneResult | PruneAllResult> {
+  if (request.channel === undefined && own === undefined) return everyServerPruneChange(core, env, request);
+  if (request.channel === undefined || !isServer(request.channel)) {
     throw new CommsError('USAGE', `"${String(request.channel)}" is not a channel`, {
       hint: `One of: ${CHANNELS.join(', ')}.`,
     });
   }
   const context: InstallContext = { env, core };
   const { packageName, version } = ownProduct(request.channel, own) ?? {
-    packageName: channelServer(request.channel).packageName,
+    packageName: serverFacts(request.channel).packageName,
     version: VERSION,
   };
   const product = { packageName, version };
-  const label = channelLabel(request.channel);
+  const label = serverLabel(request.channel);
   const base = {
     includePrinted: request.includePrinted === true,
     ...(request.processes ? { processes: request.processes } : {}),
@@ -507,21 +913,126 @@ export function serverPruneChange(
       if (request.dryRun) {
         return { before: config, after: config, summary: `Show which ${label} runtimes are unused` };
       }
+      // Never beside an update: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir, 'prune');
       const preview = await pruneManagedRuntimes(context, product, { ...base, dryRun: true });
       approved = preview.removed.map((item) => item.path);
       return {
         before: config,
         after: config,
-        effects: preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
+        effects: pruneEffects(label, preview),
         summary: `Remove ${approved.length} unused ${label} runtime${approved.length === 1 ? '' : 's'}`,
       };
     },
     apply: () =>
-      pruneManagedRuntimes(context, product, {
-        ...base,
-        dryRun: request.dryRun === true,
-        ...(request.dryRun ? {} : { only: approved }),
-      }),
+      request.dryRun
+        ? pruneManagedRuntimes(context, product, { ...base, dryRun: true })
+        : withPersonUpdateLock(
+            core.paths.stateDir,
+            () => pruneManagedRuntimes(context, product, { ...base, dryRun: false, only: approved }),
+            'prune',
+          ),
+  };
+}
+
+/** What a removal of runtimes does, in the preview's words: each runtime, then each owned CLI shim. */
+function pruneEffects(label: string, preview: PruneResult): string[] {
+  return [
+    ...preview.removed.map((item) => `deletes the unused ${label} runtime ${item.version} at ${item.path}`),
+    ...preview.shims.removed.map((path) => `deletes the owned ${label} CLI shim at ${path}`),
+  ];
+}
+
+/**
+ * Every managed server's unused runtimes, as one change (0.21): what an update leaves behind is every server's, and
+ * `--server` for each was a step a person had to know to take. The servers are the channel registry's (`SERVERS`),
+ * channels and declared services alike, never a list written here; each is pruned exactly as `--server` prunes it —
+ * this release's runtime, one any client config or printed entry names, one a running process uses, and the runtime
+ * its stable launcher starts and the one it keeps for a rollback all stay, each said why.
+ *
+ * A dry run is free. Otherwise the plan is every server's dry run, shown grouped by server, and the approval is bound to
+ * exactly that list; the removal is then restricted to it, so nothing that became unused after it was shown goes. A
+ * server whose prune was stopped — a pointer or a config that cannot be read — is named in the preview, beside what the
+ * others remove, and in the result's `refusedServers`. The running processes are listed again for each server, just
+ * before it is decided, as the prune of one server lists them: a listing taken at the start of the pass would not see
+ * a process started from a runtime while the servers before it were pruned. And, as for one server, a removal never
+ * runs beside an update.
+ */
+function everyServerPruneChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ServerPruneRequest,
+): GatedChange<PruneAllResult> {
+  const context: InstallContext = { env, core };
+  const servers = SERVERS.map((server) => ({
+    server,
+    label: serverLabel(server),
+    product: { packageName: serverFacts(server).packageName, version: VERSION },
+  }));
+  const pruneEach = async (options: { dryRun: boolean; only?: readonly string[] }): Promise<ServerPruned[]> => {
+    const parts: ServerPruned[] = [];
+    for (const { server, label, product } of servers) {
+      // Each server's prune lists the running processes itself, just before it decides (`pruneManagedRuntimes`).
+      const result = await pruneManagedRuntimes(context, product, {
+        includePrinted: request.includePrinted === true,
+        processes: request.processes ?? runningCommandLines,
+        ...options,
+      });
+      parts.push({ server, label, ...result });
+    }
+    return parts;
+  };
+  /** Each server whose prune was stopped, and why. */
+  const refusedOf = (parts: readonly ServerPruned[]) =>
+    parts.flatMap(({ server, label, refused }) => (refused === undefined ? [] : [{ server, label, refused }]));
+  let approved: string[] = [];
+  return {
+    plan: async (config) => {
+      if (request.dryRun) {
+        return { before: config, after: config, summary: 'Show which runtimes of every managed server are unused' };
+      }
+      // Never beside an update: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir, 'prune');
+      const previews = await pruneEach({ dryRun: true });
+      approved = previews.flatMap((part) => part.removed.map((item) => item.path));
+      const counts = previews
+        .filter((part) => part.removed.length > 0)
+        .map((part) => `${part.removed.length} ${part.label}`);
+      const removals = previews.flatMap((part) => pruneEffects(part.label, part));
+      // Beside what it removes, each server it could not check, so the one left alone is read with the rest. Alone,
+      // they remove nothing, and there is nothing to approve: the result says them.
+      const unchecked = refusedOf(previews).map(
+        ({ label, refused }) => `does not check the ${label} runtimes, and removes none of them: ${refused}`,
+      );
+      return {
+        before: config,
+        after: config,
+        effects: removals.length > 0 ? [...removals, ...unchecked] : [],
+        summary: `Remove ${approved.length} unused runtime${approved.length === 1 ? '' : 's'}${counts.length > 0 ? `: ${counts.join(', ')}` : ''}`,
+      };
+    },
+    apply: async () => {
+      const dryRun = request.dryRun === true;
+      const parts = dryRun
+        ? await pruneEach({ dryRun })
+        : await withPersonUpdateLock(core.paths.stateDir, () => pruneEach({ dryRun, only: approved }), 'prune');
+      const looked = parts.filter((part) => part.removed.length + part.kept.length > 0);
+      const refused = looked.length > 0 && looked.every((part) => part.refused !== undefined);
+      const refusedServers = refusedOf(parts);
+      return {
+        runtimeDir: join(core.paths.dataDir, 'runtime'),
+        dryRun,
+        removed: parts.flatMap((part) => part.removed.map((item) => ({ ...item, server: part.server }))),
+        kept: parts.flatMap((part) => part.kept.map((item) => ({ ...item, server: part.server }))),
+        shims: {
+          removed: parts.flatMap((part) => part.shims.removed),
+          kept: parts.flatMap((part) => part.shims.kept),
+        },
+        ...(refused ? { refused: [...new Set(looked.map((part) => part.refused))].join('; ') } : {}),
+        servers: parts,
+        ...(refusedServers.length > 0 ? { refusedServers } : {}),
+      };
+    },
   };
 }
 
@@ -550,7 +1061,9 @@ export interface ChannelRegistration {
 }
 
 export interface ChannelAvailability {
-  channel: Channel;
+  /** Stable server id. Kept as `channel` in this compatibility-shaped report. */
+  channel: ServerId;
+  kind: 'channel' | 'service';
   label: string;
   package: string;
   binary: string;
@@ -608,8 +1121,8 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
 export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Promise<ChannelsReport> {
   const scan = await scanRegisteredServers(env);
   const channels: ChannelAvailability[] = [];
-  for (const channel of CHANNELS) {
-    const facts = channelServer(channel);
+  for (const channel of SERVERS) {
+    const facts = serverFacts(channel);
     const runtimes = await listManagedRuntimes(core.paths.dataDir, facts.packageName);
     const bin = await whichExecutable(facts.binary, env);
     const onPath = bin ? { path: bin, version: await versionBehind(bin, facts.packageName) } : null;
@@ -632,7 +1145,8 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
     }
     channels.push({
       channel,
-      label: channelLabel(channel),
+      kind: serverKind(channel),
+      label: serverLabel(channel),
       package: facts.packageName,
       binary: facts.binary,
       serverName: facts.defaultServerName,

@@ -1,6 +1,7 @@
 import type net from 'node:net';
 import type tls from 'node:tls';
 import { APPROVED_TYPESAFE_MODELS } from '../domain/judges.ts';
+import { type JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { validateLocalEndpoint } from '../network/local-endpoint.ts';
 import {
   addressSetDigest,
@@ -34,7 +35,7 @@ export type JudgeTransportPhase = 'dns' | 'tcp' | 'tls' | 'write';
 type LocalJudgeBase = {
   readonly judgeId: string;
   readonly version: number;
-  readonly kind: 'local-endpoint';
+  readonly kind: typeof JUDGE_KIND_LOCAL_ENDPOINT;
   readonly provider: string;
   readonly model: string;
   readonly endpoint: string;
@@ -46,8 +47,8 @@ export type TransportJudge =
   | {
       readonly judgeId: string;
       readonly version: number;
-      readonly kind: 'typesafe';
-      readonly provider: 'typesafe';
+      readonly kind: typeof JUDGE_KIND_TYPESAFE;
+      readonly provider: typeof JUDGE_KIND_TYPESAFE;
       readonly model: string;
       readonly endpoint: typeof TYPESAFE_ENDPOINT;
       readonly promptTemplate: string;
@@ -55,6 +56,12 @@ export type TransportJudge =
     }
   | (LocalJudgeBase & { readonly protocol: 'noul' })
   | (LocalJudgeBase & { readonly protocol: 'json-score'; readonly scorePointer: string });
+
+/** The material and immutable generation identity read together from the hosted judge's current secret slot. */
+export interface HostedJudgeCredential {
+  readonly generation: number;
+  readonly material: string;
+}
 
 export interface JudgeTransportCall {
   readonly judge: TransportJudge;
@@ -64,16 +71,17 @@ export interface JudgeTransportCall {
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
   /** B3 supplies this at the hosted boundary only; it is never persisted or returned. */
-  readonly hostedApiKey?: string | undefined;
+  readonly hostedApiKey?: HostedJudgeCredential | undefined;
 }
 
 export interface JudgeTransportHooks {
   readonly beforeGate?: ((phase: JudgeTransportPhase) => Promise<void>) | undefined;
   /**
-   * Synchronous and physically adjacent to the DNS/TCP/TLS/write action. It returns nothing: a gate that returns a value,
+   * Synchronous and physically adjacent to the DNS/TCP/TLS/write action. The transport-supplied assertion belongs
+   * inside the gate immediately before its durable I/O transition. It returns nothing: a gate that returns a value,
    * a promise above all, has not finished deciding and refuses the phase.
    */
-  readonly finalGate: (phase: JudgeTransportPhase) => undefined;
+  readonly finalGate: (phase: JudgeTransportPhase, assertBeforeTransition?: () => void) => undefined;
   /** A coordinator may serialize once for admission and pass those exact bytes to the sealed writer. */
   readonly preparedRequest?: PreparedJudgeTransportRequest | undefined;
 }
@@ -92,8 +100,10 @@ export interface JudgeTransportOptions {
 }
 
 export interface PreparedJudgeTransportRequest {
-  readonly adapter: 'typesafe' | 'ollama';
+  readonly adapter: typeof JUDGE_KIND_TYPESAFE | 'ollama';
   readonly endpoint: URL;
+  /** Non-null for every hosted request, so each adjacent transport gate can revalidate the exact secret generation. */
+  readonly hostedKeyGeneration: number | null;
   /** The exact protocol body lets the coordinator prove that it reserved the stricter full request. */
   readonly body: Buffer;
   readonly request: Buffer;
@@ -127,15 +137,15 @@ function requestWithinLimit(request: Uint8Array): boolean {
   return request.byteLength <= JUDGE_MAX_REQUEST_BYTES;
 }
 
-function adapterFor(call: JudgeTransportCall): 'typesafe' | 'ollama' | null {
-  if (call.judge.kind === 'typesafe') {
+function adapterFor(call: JudgeTransportCall): typeof JUDGE_KIND_TYPESAFE | 'ollama' | null {
+  if (call.judge.kind === JUDGE_KIND_TYPESAFE) {
     if (
       call.judge.endpoint !== TYPESAFE_ENDPOINT ||
       call.judge.protocol !== 'noul' ||
       !(APPROVED_TYPESAFE_MODELS as readonly string[]).includes(call.judge.model)
     )
       return null;
-    return 'typesafe';
+    return JUDGE_KIND_TYPESAFE;
   }
   if (call.judge.protocol !== 'noul' || call.judge.provider !== 'ollama') return null;
   let endpoint: ReturnType<typeof validateLocalEndpoint>;
@@ -191,13 +201,20 @@ export function prepareJudgeTransportRequest(
     return refused('MALFORMED_RESPONSE', true);
   let wire: ReturnType<typeof buildJudgeWireRequest>;
   try {
+    if (
+      call.judge.kind === JUDGE_KIND_TYPESAFE &&
+      (call.hostedApiKey === undefined ||
+        !positiveInteger(call.hostedApiKey.generation) ||
+        call.hostedApiKey.material.length === 0)
+    )
+      return refused('ADAPTER_REFERENCE_BLOCKED', true);
     wire = buildJudgeWireRequest({
       adapter,
       model: call.judge.model,
       state: call.state,
       questionName: call.questionName,
       instructions: call.instructions,
-      ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey }),
+      ...(call.hostedApiKey === undefined ? {} : { hostedApiKey: call.hostedApiKey.material }),
     });
   } catch {
     return refused('ADAPTER_REFERENCE_BLOCKED', true);
@@ -205,7 +222,7 @@ export function prepareJudgeTransportRequest(
   let endpoint: URL;
   try {
     endpoint =
-      call.judge.kind === 'typesafe'
+      call.judge.kind === JUDGE_KIND_TYPESAFE
         ? new URL(TYPESAFE_ENDPOINT)
         : validateLocalEndpoint(call.judge.endpoint, call.judge.approvedAddressSet).url;
   } catch {
@@ -213,7 +230,13 @@ export function prepareJudgeTransportRequest(
   }
   const request = requestBytesForEndpoint(endpoint, wire.body, wire.headers);
   if (!requestWithinLimit(request)) return refused('REQUEST_TOO_LARGE', true);
-  return { adapter, endpoint, body: wire.body, request };
+  return {
+    adapter,
+    endpoint,
+    hostedKeyGeneration: call.hostedApiKey?.generation ?? null,
+    body: wire.body,
+    request,
+  };
 }
 
 function boundedResponse(socket: net.Socket | tls.TLSSocket): Promise<Buffer> {
@@ -254,7 +277,15 @@ async function beforeDeadline<T>(
   clock: JudgeTransportClock,
   disposeLate?: (value: T) => void,
 ): Promise<T> {
-  assertBeforeDeadline(deadline, clock);
+  try {
+    assertBeforeDeadline(deadline, clock);
+  } catch (error) {
+    work.then(
+      (late) => disposeLate?.(late),
+      () => undefined,
+    );
+    throw error;
+  }
   const remaining = deadline - clock.now();
   let timedOut = false;
   let handle: unknown;
@@ -268,7 +299,16 @@ async function beforeDeadline<T>(
         }, remaining);
       }),
     ]);
-    assertBeforeDeadline(deadline, clock);
+    try {
+      assertBeforeDeadline(deadline, clock);
+    } catch (error) {
+      try {
+        disposeLate?.(result);
+      } catch {
+        // Cleanup failure cannot turn an elapsed attempt into a usable socket or hide the deadline refusal.
+      }
+      throw error;
+    }
     return result;
   } finally {
     if (handle !== undefined) clock.clearTimeout(handle);
@@ -312,14 +352,16 @@ export class JudgeTransport {
     let enteredIo = false;
     try {
       await this.#beforeGate(hooks, 'dns');
-      this.#finalGate(hooks, 'dns');
-      assertBeforeDeadline(deadline, this.#clock);
+      this.#finalGate(hooks, 'dns', deadline);
       // A literal local endpoint reaches this preparation without DNS. Hosted judges use a hostname, so resolving it
       // is the first physical action and any later refusal is conservatively post-I/O.
-      enteredIo = call.judge.kind === 'typesafe';
+      enteredIo = call.judge.kind === JUDGE_KIND_TYPESAFE;
+      // The gate's commit can carry it past the deadline: the clock is read once more, with nothing between this and
+      // the action. A refusal here is post-I/O when the gate committed the attempt in flight, and settles as one.
+      assertBeforeDeadline(deadline, this.#clock);
       const connection = await beforeDeadline(
         preparePinnedConnection(
-          call.judge.kind === 'typesafe'
+          call.judge.kind === JUDGE_KIND_TYPESAFE
             ? {
                 url: endpoint,
                 addressMode: 'global-only',
@@ -338,9 +380,9 @@ export class JudgeTransport {
       assertBeforeDeadline(deadline, this.#clock);
 
       await this.#beforeGate(hooks, 'tcp');
-      this.#finalGate(hooks, 'tcp');
-      assertBeforeDeadline(deadline, this.#clock);
+      this.#finalGate(hooks, 'tcp', deadline);
       enteredIo = true;
+      assertBeforeDeadline(deadline, this.#clock);
       const tcp = await beforeDeadline(
         this.#tcpConnect({ host: connection.address, port: connection.port }),
         deadline,
@@ -351,7 +393,7 @@ export class JudgeTransport {
       socket = tcp;
       if (connection.useTls) {
         await this.#beforeGate(hooks, 'tls');
-        this.#finalGate(hooks, 'tls');
+        this.#finalGate(hooks, 'tls', deadline);
         assertBeforeDeadline(deadline, this.#clock);
         socket = await beforeDeadline(
           this.#tlsConnect({ socket: tcp, ...connection.tls }),
@@ -363,7 +405,7 @@ export class JudgeTransport {
       }
 
       await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);
       const response = boundedResponse(socket);
@@ -397,14 +439,16 @@ export class JudgeTransport {
   }
 
   /**
-   * At every call site only the synchronous deadline check stands between this gate and the physical B2 network action;
-   * no await may be inserted between them.
+   * The deadline is checked after the awaited preparation and again inside the durable production gate immediately
+   * before its state transition. No await may be inserted between this gate and the physical B2 network action.
    */
-  #finalGate(hooks: JudgeTransportHooks, phase: JudgeTransportPhase): void {
+  #finalGate(hooks: JudgeTransportHooks, phase: JudgeTransportPhase, deadline: number): void {
+    assertBeforeDeadline(deadline, this.#clock);
     let decision: unknown;
     try {
-      decision = hooks.finalGate(phase);
-    } catch {
+      decision = hooks.finalGate(phase, () => assertBeforeDeadline(deadline, this.#clock));
+    } catch (error) {
+      if (error instanceof DeadlineExceeded) throw error;
       throw new FenceRefused();
     }
     if (decision !== undefined) {

@@ -100,6 +100,21 @@ Nothing in it is executed or used as a command line. It names apps and nothing e
 - `slack.apps.read` / `.send`: either may be absent. Each may carry `appId`; when it does, a token naming another app
   is refused. When it does not, the first sign-in records the app id Slack returns, and later ones must match it.
 - Either `gmail` or `slack` may be absent. The whole document is at most 64 KiB.
+- **The agent app is named beside the profile, not in it** (amended 2026-10-16, CUE-493, for 0.20.0). An organisation
+  may have one bot-only Slack agent app, whose token members paste with `workspace bot`. Its id goes in a companion
+  file in the same folder, the profile's name with `.agent-app.json` for its `.json`: `{"agentcomms":
+  "organisation-agent-app", "version": 1, "organisation", "slack": {"workspace", "appId"}}`, strict, at most 64 KiB,
+  its organisation and workspace the profile's. Every object of a version-1 profile is strict in every release since
+  0.13.0, so a new key in the profile would make a member still on one of them refuse the whole document at `org
+  update`; they never open the companion file. Read with the profile by `org add` and `org update`, it is bound by its
+  own SHA-256 in the same approval — another file, or none where there was one, is a change approved first even with
+  the profile's bytes unchanged — and recorded as `slack.apps.agent: { appId, sha256 }`, which the configuration's
+  loose schema keeps through older releases' ordinary writes (an older `org update` rebuilds `apps` and drops it; the
+  next update by this release names it again, approved).
+- **Version 1 gained `extensions`** (amended 2026-10-19, CUE-494, for 0.21.0, under the
+  [extensions design](2026-10-19-organisation-profile-extensions-design.md)): one more top-level key, an object of at
+  most 16 named entries, each carrying `required` and `since` beside the extension's own fields. It is the only door
+  for what later releases add; every other object of the profile stays strict, and no new companion file is added.
 - **Every field comes from whoever wrote the profile**, and is checked as untrusted, so each has a grammar and a bound,
   and the schema refuses anything else:
 
@@ -411,6 +426,8 @@ only repairs drift (it brings the configuration back to what was already approve
 | a Slack app role removed | accounts on it are reported with two ways on: `workspace mode` to the remaining role (if the profile still has one), or `workspace remove`; a move to the removed role is unavailable |
 | Slack `redirectPort` changed | later sign-ins use the new port |
 | `slack` removed | the Slack part is cleared; accounts keep working, are reported as no longer listed, and lose the mode move |
+| an entry listed as ignored is now understood | a change, never drift, even with unchanged bytes and source: classified by the extension's own classifier — a tightening applies at once, a loosening or a change of who acts is approved first, before → after ([extensions design](2026-10-19-organisation-profile-extensions-design.md), X4; amended 2026-10-19) |
+| the caps file only tightens | applied at once with its SHA-256 recorded, even beside a change that waits, and the preview marks it done; looser in any part, a file removed, or a mix is approved first ([extensions design](2026-10-19-organisation-profile-extensions-design.md), X6; amended 2026-10-19) |
 | unchanged bytes, drift found | reconciled under the credentials lock, row by row: **(a′)** an owned generation's row holding the *same* client id with no organisation's mark — what an older release's `client add --replace` leaves — is marked again in place (the active one's secret is then held to the profile's; an earlier one's is left alone), not counted as a reused name; **(a)** the active owned generation's row missing — recreated from the profile under its name, or under the next free name if a different row holds that name now; **(b)** a row marked with this organisation that has the generation's client id but is otherwise altered (another project id, a secret reference that is not `clientSecretRef(name)`) — rewritten from the profile when it is the active generation, by snapshot and restore; **(c)** a row marked with this organisation whose client id is no longer the generation's — its marker alone is cleared, leaving the row and its secret as they are (it becomes an ordinary client of the person's, which `client` commands can manage), and, if it was the active generation, a new one is built under a free name; **(d)** a missing inactive generation — reported as unrecoverable (§D4); **(e)** an *inactive* generation's row, still marked, with the generation's client id but altered (a secret reference that is not `clientSecretRef(name)`, another project id) — it cannot be rebuilt, because the profile holds only the active client's secret, so its marker alone is cleared, the row and secret are left as they are, and it is reported as no longer managed. Nothing is deleted; every repair is listed in the result |
 
 `agentcomms org remove <organisation>` is refused while any mailbox uses a client of any of its generations or any

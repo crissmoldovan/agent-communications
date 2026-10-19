@@ -3,12 +3,12 @@
   "cases": [
     {
       "case": "integration-e-e2-discriminator",
-      "operation": "judgeUnavailable",
-      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "operation": "B3OperatorControl.E2Unavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
       "mutation": {
-        "from": "return { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' };",
-        "to": "return { kind: 'unavailable', code: 'E2_REQUIRED', phase: 'E2' };"
+        "from": "    if (unavailable !== undefined) return unavailable;",
+        "to": "    if (unavailable !== undefined) return { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' };"
       },
       "mutationTest": "B3 E/E2 operators are content-free unavailable results with no producer state",
       "loadedMarker": "integration-e-e2-discriminator"

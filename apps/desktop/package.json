@@ -1,0 +1,47 @@
+{
+  "name": "@agentcomms/desktop",
+  "version": "0.24.0",
+  "private": true,
+  "description": "Agent Comms: the tray app that shows this machine's agent-communications. Never published to npm.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --port 1420 --strictPort",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "tauri": "tauri",
+    "check:bundle": "node scripts/bundle-check.mjs",
+    "licenses": "node scripts/third-party-licenses.mjs",
+    "check:licenses": "node scripts/third-party-licenses.mjs --check"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "@cueplusplus/theme-cue": "1.1.2",
+    "@cueplusplus/theme-terminal": "1.1.2",
+    "@cueplusplus/tokens": "0.29.0",
+    "@cueplusplus/ui": "0.29.0",
+    "@tauri-apps/api": "2.12.4",
+    "lucide-react": "1.59.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@tauri-apps/cli": "2.12.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "catalog:",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "30.1.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "catalog:",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}

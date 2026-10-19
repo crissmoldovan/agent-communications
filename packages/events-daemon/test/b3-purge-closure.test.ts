@@ -13,6 +13,7 @@ import {
 } from '../src/runtime/target-version-references.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 function subscriberRemovalPorts(
@@ -114,20 +115,6 @@ function seedRevocableSubscriberWork(store: EventDatabase, input: { readonly aut
       )
       .run();
   });
-}
-
-async function freeLoopbackPort(): Promise<number> {
-  const probe = createServer();
-  await new Promise<void>((resolve, reject) => {
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => resolve());
-  });
-  const address = probe.address();
-  await new Promise<void>((resolve, reject) =>
-    probe.close((error) => (error === undefined ? resolve() : reject(error))),
-  );
-  if (address === null || typeof address === 'string') throw new Error('loopback port probe has no TCP address');
-  return address.port;
 }
 
 function seedSubscriberIntent(
@@ -272,11 +259,19 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
   let store: EventDatabase | undefined;
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   let server: Awaited<ReturnType<typeof startSseServer>> | undefined;
+  let listener: ReturnType<typeof createServer> | undefined;
   let client: ReturnType<typeof request> | undefined;
   let unregister: (() => void) | undefined;
   try {
     try {
-      const port = await freeLoopbackPort();
+      listener = createServer();
+      await new Promise<void>((resolve, reject) => {
+        listener?.once('error', reject);
+        listener?.listen(0, '127.0.0.1', () => resolve());
+      });
+      const address = listener.address();
+      if (address === null || typeof address === 'string') throw new Error('loopback listener has no TCP address');
+      const { port } = address;
       store = await openEventDatabase({ stateDir });
       seedRevocableSubscriberWork(store, { authorityPort: port });
       const subscriber = store.database
@@ -290,8 +285,9 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
            VALUES ('subscriber', 'subscriber-purge', 1, 'sse-bearer', 1, ?, 'synthetic-bearer-digest', X'00', 'current', NULL, 1)`,
         )
         .run(subscriber.digest);
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
       server = await startSseServer({
+        listener,
         store,
         subscriberId: 'subscriber-purge',
         subscriberVersion: 1,
@@ -352,6 +348,9 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
     unregister?.();
     client?.destroy();
     await server?.close();
+    if (listener?.listening) {
+      await new Promise<void>((resolve) => listener?.close(() => resolve()));
+    }
     await owner?.stop();
     store?.close();
     await rm(stateDir, { recursive: true, force: true });

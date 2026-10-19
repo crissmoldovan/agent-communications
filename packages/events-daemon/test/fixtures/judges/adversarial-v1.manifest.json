@@ -1,0 +1,143 @@
+{
+  "schema": "agentcomms.events.judge-adversarial-manifest-v1",
+  "files": [
+    "packages/events-daemon/test/fixtures/judges/adversarial-v1.journal.json",
+    "packages/events-daemon/test/fixtures/judges/adversarial-v1.jsonl",
+    "packages/events-daemon/test/fixtures/judges/adversarial-v1.manifest.json",
+    "packages/events-daemon/test/support/judge-adversarial-fixture.ts",
+    "packages/events-daemon/test/support/judge-adversarial-mutants.ts",
+    "packages/events-daemon/test/support/short-temp.ts",
+    "packages/events-daemon/test/support/strict-mutation-child.ts",
+    "packages/events-daemon/test/support/writer-quiescer.ts"
+  ],
+  "corpus": "adversarial-v1.jsonl",
+  "sha256": "e4a8883dece2ea6163d833bb3cda1858d561e6c01e8c67a3686b0dfd01b3bddb",
+  "journal": "adversarial-v1.journal.json",
+  "journalSha256": "ed4b2ad51c96416c75a16de31736889e4511a03b57a7e71d7d914148674807e5",
+  "cases": [
+    {
+      "id": "provider-match-is-not-authority",
+      "sha256": "daa24c2a02ebf66d09b9eb45f76065ca051ff1afea73fb58175435fcbcc41224"
+    },
+    {
+      "id": "provider-match-low-score-refusal",
+      "sha256": "ab3b51f39903b2155ff3efe9d89308359ff156a97f35d92bc03875882508f9eb"
+    },
+    {
+      "id": "exact-input-envelope-injection",
+      "sha256": "c56247413e7152b688592d1c0ef6686e5013869d035c061d041df1cd7e7467d9"
+    },
+    {
+      "id": "exact-input-control-unicode",
+      "sha256": "a6ebc66f8bb090b5134523bce1405478f4b2b45bc6779a43a31985b512c133d2"
+    },
+    {
+      "id": "exact-input-provenance",
+      "sha256": "05e08b6ae97f508b580905bf5d3bb948cdd0562f54da0b27e2a379ef0184ac87"
+    },
+    {
+      "id": "truncated-json-refusal",
+      "sha256": "7c0ce2dd038674d577762317f9fa4156f9091bc63674509459f3791228bf6784"
+    },
+    {
+      "id": "multiple-json-refusal",
+      "sha256": "905af666149381da2d42616628c11cd4b392b927209e974a9ed6f0e6319a7b43"
+    },
+    {
+      "id": "nan-score-refusal",
+      "sha256": "9ba000c8ab777bb9867330f05e3018a0ff38b688f4cc0df868e048ba518c4f0d"
+    },
+    {
+      "id": "infinite-score-refusal",
+      "sha256": "d658cda7b53889e104fd5dd91621db07267c70dfdb4f27b33bb3a492111682cc"
+    },
+    {
+      "id": "range-score-refusal",
+      "sha256": "79257e7d5658de6d3c00ecba9c8613014cf4945bb9166a07b294e107ffae2a8c"
+    },
+    {
+      "id": "wrong-type-score-refusal",
+      "sha256": "d381dca0fe9cfe3b66743783c61db029b1de6f2bdfe34bf51d25c9752adf3725"
+    },
+    {
+      "id": "provider-tool-refusal",
+      "sha256": "a37edec738b629537f318424ec4d40df22c16a6352d532205ff1dcb03b07e1b5"
+    },
+    {
+      "id": "hostile-reason-refusal",
+      "sha256": "cf9dd2a6edcbda189994d284ff9d43a95ed37d08719e531b3de5ef8083156a8a"
+    },
+    {
+      "id": "redirect-refusal",
+      "sha256": "e4ae1ed515c11fa1c0d8ee5229ad660861fc27178fb856dbb22f6af1d260aad8"
+    },
+    {
+      "id": "oversize-response-refusal",
+      "sha256": "d809362e70e673260a1bc85da3344fb78dea995ef67da9e64f5dcf182ec3a275"
+    },
+    {
+      "id": "output-token-refusal",
+      "sha256": "b55b6eb8360892b9963d27b202333b003e950e7a820aa0df84a121cb65629a9b"
+    },
+    {
+      "id": "input-token-refusal",
+      "sha256": "7a73aa58d25bb5dfa8fcac191a0b88d77f1df9d0d1a2ef238dad335a67cf0d8a"
+    },
+    {
+      "id": "request-cap-refusal",
+      "sha256": "a182054a9c528902613051dd0e389893ece942472ab2264c8281ea10356f694b"
+    },
+    {
+      "id": "disabled-kind-refusal",
+      "sha256": "a58a768a596880bdf27976d79c8f72ca4e18fd9265fecfced21bcccae8adb611"
+    },
+    {
+      "id": "kind-disable-race",
+      "sha256": "51c537e079b6f8eaf779b67fc4ebae9decac3ba004b651ac8c175e452da8cbdb"
+    },
+    {
+      "id": "rule-revocation-race",
+      "sha256": "df42875688e79864ea567996c8e4c9f36b4f5d7cce776b80b4238ee3cfe23b94"
+    },
+    {
+      "id": "inactive-budget-refusal",
+      "sha256": "b3833f4a5f4e902683d43082f993782714eb3c7de817f89bcb4a97013334b6bc"
+    },
+    {
+      "id": "budget-owner-race",
+      "sha256": "867ae92fb1102f6a19de2f11fafc359c3654dbaf573ca1a8bb7ffbdf84165a26"
+    },
+    {
+      "id": "post-io-unknown",
+      "sha256": "b34c75c911882f1912e010a29ba86e85547013c5f5c58834a4a02a05b1cb9613"
+    },
+    {
+      "id": "response-to-hold",
+      "sha256": "c7476e799956b4e3dd7d5362df0382a3d3722f22d1f02d945e2fe47fd3758b1f"
+    },
+    {
+      "id": "response-after-hold-expiry",
+      "sha256": "168aa69b50d3c8c3a2631a8f0b678a18f1a555b323f2f44c4a372be96434ef95"
+    },
+    {
+      "id": "late-response-after-expiry",
+      "sha256": "57f467539c6c5053351c1683f00a1da40a3b64546d8b2cf8430833b9e3b14383"
+    },
+    {
+      "id": "userinfo-endpoint-refusal",
+      "sha256": "d3bf8d1e846033c719bd88a1e0a587613e0d3fb6f5c7eca2a2d891f7056d6404"
+    },
+    {
+      "id": "path-host-drift-refusal",
+      "sha256": "7dd99eafd840447f5b7c2f4a2666d113a06f71a087c63590c3f318de4dc03006"
+    },
+    {
+      "id": "host-drift-write-fence-refusal",
+      "sha256": "c05d9a1a9d722242c7bc87de84b69337896fc939768d1bce05656c57226b74d3"
+    },
+    {
+      "id": "dns-rebinding-refusal",
+      "sha256": "904c89dc0eb61021e2c8953e2628ddbc8f1cc0fbc906cee4041ee41379093085"
+    }
+  ]
+}

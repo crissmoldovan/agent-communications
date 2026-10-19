@@ -2,7 +2,7 @@
 name: slack-setup
 description: "Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. Symptoms: 'connect my Slack', 'set up agent-slack', 'why can't it post', 'move this workspace to send mode', 'agent-slack doctor says something is wrong'. Not for reading or posting once it works — slack-reading and slack-posting do those."
 license: MIT
-compatibility: "@agentcomms/slack@0.15.2"
+compatibility: "@agentcomms/slack@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -43,14 +43,52 @@ profile app. Do not edit or uninstall either organisation app.
 this package prints, which means the scopes are visible to them before anything is granted and the workspace's
 admins keep control of it.
 
-```sh
-agent-slack manifest --mode read --port 51234
-```
+### Setting up an own app, one step at a time
 
-The **port matters and is chosen before the sign-in**, not by the operating system. Slack stores redirect URLs on
-the app and matches them exactly, so the port in the manifest and the port in `workspace add` must be the same
-number. This is the one place the package deliberately diverges from Gmail, which takes whatever port it is
-handed.
+Give the person one step at a time: say what it does and why, then its numbered instructions, and wait until they
+have done it before the next. Each step needs something only they can do: a page in Slack, or their own terminal.
+
+**Step 1 — Print the manifest.** The manifest is the app: its scopes, and the redirect URL Slack sends the sign-in
+back to. Slack stores that URL on the app and matches it exactly, so its loopback port is settled now, before any
+sign-in, and the app keeps it — the one place this package deliberately differs from Gmail, which takes whatever port
+it is handed at sign-in. Nobody has to pick the number: `agent-slack manifest` without `--workspace` is for a new
+app, so it chooses a free port itself, one nothing holds and no other workspace here uses, and prints it both in the
+manifest and in the command that connects the app. An explicit `--port` still wins.
+
+1. Run `agent-slack manifest --mode read`, or `--mode send` for an app that may post after approval
+   (`slack_manifest` from a chat).
+2. Keep what it prints: the steps, the JSON, and the port. `portFrom: "chosen"` in the result says this call chose
+   it; from then on it is that app's, and every later sign-in reuses it.
+
+**Step 2 — Create the app in Slack.** Pasting the manifest is the person's act on api.slack.com, so the scopes are in
+front of them before anything is granted. It is a new app: for a workspace already connected, edit the app it uses
+instead (below), never a second one.
+
+1. Open https://api.slack.com/apps, then "Create New App" → "From a manifest".
+2. Pick the workspace, paste the JSON, and create the app.
+3. On "Basic Information", copy the Client ID. It is not a secret.
+
+**Step 3 — Connect it.** The sign-in uses the Client ID and the same port, and stops at Slack's consent screen, which
+is the person's to approve.
+
+1. Run the command step 1 printed — `agent-slack workspace add acme/slack --client-id <id> --port <port>` — or call
+   `slack_workspace_add` with `workspace`, `clientId` and `port`.
+2. Approve it in Slack, then finish it, as "Connecting" says.
+
+**An app that signs in with its client secret** — PKCE off, so that its sign-in can bring back the bot token (see
+"Letting an agent's posts appear as the app") — takes the same three steps, with three differences:
+
+1. Step 1 is `agent-slack manifest --mode send --with-client-secret` (`slack_manifest` with `pkce: false`), and the
+   app must be **new**: its manifest has PKCE off, and that cannot be undone on an existing app — once an app has
+   turned PKCE on, Slack never turns it off.
+2. In step 2, also keep the **Client Secret** to hand (under "App Credentials" on "Basic Information"). It is typed
+   once, at a hidden prompt, and never pasted into chat.
+3. Step 3 runs only in the person's own terminal: `agent-slack workspace add <name> --mode send --client-id <id>
+   --port <port> --with-client-secret`, exactly as the result printed it, asks for the secret without showing it. No
+   tool takes it; hand them the command.
+
+If a sign-in says its port is in use, something else holds it at that moment: close whatever uses it and sign in
+again — or, for a new app, run `agent-slack manifest` again, which chooses another free port for that app.
 
 For a workspace connected through a person's own app, name it: `agent-slack manifest --workspace acme/slack --mode send` (over MCP,
 `slack_manifest` with `workspace`) uses the port it signed in with and returns the direct link to its own app's
@@ -59,8 +97,8 @@ person's to do — hand them the link and the JSON. A workspace connected before
 link, and the person finds the app at https://api.slack.com/apps instead.
 
 Two fields in that manifest are load-bearing: `oauth_config.pkce_enabled` and `token_rotation_enabled`. Without
-PKCE, Slack treats a loopback redirect like a server redirect and no sign-in can complete. Both were verified
-against a real workspace on 2026-09-22.
+PKCE, Slack treats a loopback redirect like a server redirect and no PKCE sign-in can complete — which is why only
+the client-secret app turns it off. Both were verified against a real workspace on 2026-09-22.
 
 ### Or let the CLI make the app
 
@@ -97,7 +135,7 @@ port automatically. Use `mode: "send"` (CLI: `--mode send`) to select its send a
 With a person's own app, use the Client ID and the port from its manifest:
 
 ```sh
-agent-slack workspace add acme/slack --client-id <id> --port 51234
+agent-slack workspace add acme/slack --client-id <id> --port <port>   # the port its manifest printed
 agent-slack workspace list
 agent-slack doctor
 ```
@@ -248,8 +286,45 @@ through that app rather than editing it locally.
 `agent-slack workspace mode <name>` (`slack_mode`) reports where a workspace stands and prints the
 steps for its account type. An own-app workspace signed in with 0.4.1 or later remembers its port, so `--port` can be left out of `workspace reauth`,
 `workspace mode` and `manifest --workspace`, which use the recorded one. `agent-slack manifest` without
-`--workspace` names no workspace, so it has no recorded port to use and needs `--port` given. An older workspace
-has none recorded either, so give `--port` there too: its steps print `<port>` until it is given one.
+`--workspace` names no workspace, so it is for a new app and chooses a free port, which that app then keeps. An older
+workspace has none recorded, so give `--port` there: its steps print `<port>` until it is given one.
+
+## Letting an agent's posts appear as the app
+
+What an agent sends is labelled as the person's agent: as the app, named after them, where the app can post, and as
+them with the label in the message elsewhere (the `slack-posting` skill). Posting as the app needs the send app's
+**bot token**, which the ordinary sign-in cannot fetch — Slack does not let a PKCE sign-in on `localhost` ask for bot
+scopes. So a `send` workspace is in one of three states; `doctor`'s "Posting as the app" check says which:
+
+1. **No bot token.** The state after the ordinary sign-in, and of every workspace connected before this release. It
+   works as it is: posts go out as the person, labelled. Do nothing unless the person wants posts to appear as the app.
+   A workspace connected through an organisation profile stays here unless its organisation has an **agent app**: a
+   bot-only app its administrator made from `agent-slack manifest --mode agent` (`slack_manifest` with
+   `mode: "agent"`), installed once, whose bot token the administrator shares privately. The member then pastes it
+   with `agent-slack workspace bot <name>` in their own terminal, as in state 2 — their own connection is untouched.
+   When the profile names the agent app, `doctor` says to ask the organisation's admin for its token and then run
+   `workspace bot`, and `workspace bot` refuses any other app's token. Without it, `doctor` keeps a note and names no
+   command, because state 2 refuses the shared app's rotating tokens and state 3 refuses a profile account: the note
+   says posting as an app becomes possible once the organisation's admin adds an agent app to its profile. Never ask
+   for the token in the chat. When the admin revokes the token, the first act made with the old one is refused and the
+   token is removed, so posts go out as the person, labelled, and `doctor` says when — until the new one is pasted.
+2. **Pasted once.** The app's manifest must be the `send` one (it declares the bot user and its four scopes); the
+   person presses **Install to Workspace** on the app's **OAuth & Permissions** page, copies the **Bot User OAuth
+   Token** (`xoxb-…`), and runs `agent-slack workspace bot <name>` **in their own terminal**, which asks for it without
+   showing it and checks it with Slack before keeping it. There is no tool for this: never ask for the token in the
+   chat, and never run the command yourself — it refuses an agent. It refuses a rotating token (`xoxe.…`), and an app
+   made from this package's manifest rotates its tokens, which Slack never turns off; for such an app, use state 3.
+3. **Signed in with the app's client secret.** For a new app with PKCE off — Slack does not let PKCE be turned off on
+   an existing app — made from `agent-slack manifest --mode send --with-client-secret` (`slack_manifest` with
+   `pkce: false`), which chooses its port and prints the steps (above). The person runs, in their own terminal, `agent-slack workspace add <name> --mode send
+   --client-id <id> --port <port> --with-client-secret` (or `agent-slack workspace reauth <name> --mode send
+   --with-client-secret`), which asks for the client secret at a hidden prompt; the sign-in brings back the bot token
+   with the person's. Whether Slack accepts this sign-in's `http://localhost` redirect is not yet confirmed: if it
+   refuses (`bad_redirect_uri`), go back to state 2.
+
+The read app has no bot user, and a read workspace keeps no bot token. Narrowing to `read` or removing the workspace
+deletes the bot token from this machine and never revokes it: it is the workspace's, shared by everyone who
+installed the same app.
 
 ## Going back to `read`
 
@@ -288,7 +363,12 @@ installed in the workspace; removing it there is the person's step in Slack's se
 - who the token actually is, via `auth.test` — the only check that can tell a revoked token from a working one,
   because everything else reads files this package wrote;
 - other Slack MCP servers registered on this machine. Where it says *not checked*, it could not look, and that is
-  not the same as "none": open the client's MCP server list and look for another Slack entry yourself.
+  not the same as "none": open the client's MCP server list and look for another Slack entry yourself;
+- for a `send` workspace, whether its app's bot token is actually stored — so whether an agent's posts can appear as
+  the app — and, when it is not, the ways that can work for it (see above): for a person's own app connected with its
+  client secret, signing in again with it; for one connected by PKCE, the three steps to a new app with PKCE off (state
+  3, after `workspace remove`, since one connection per person per workspace is kept); pasting once only if its tokens
+  do not rotate; and for a workspace connected through an organisation profile, a note and no command.
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
 the files can say, and `--workspace <name>` checks one workspace. `slack_doctor` runs the same checks and returns
@@ -296,6 +376,8 @@ the same JSON, with `offline` and `workspace`; on a server pinned to one workspa
 
 ## Pitfalls
 
+- **Asking for a secret in the chat.** The bot token and the client secret are typed by the person at their own
+  terminal, into `workspace bot` or `--with-client-secret`; a chat's transcript keeps whatever is pasted into it.
 - **Starting an own-app widening before the app is updated.** Slack grants what the app declares, so a
   `send` sign-in through a `read` app comes back `read` and nothing is recorded. Do the own-app
   manifest step first; `workspace mode <name> send` enforces the order.

@@ -16,8 +16,15 @@ import {
   resolveProfileSlackTarget,
   secretsStoreOf,
   shownText,
+  slackBotUserIdOf,
 } from '@agentcomms/core';
-import { type ExchangedToken, safeSlackFailureText, scopeMismatch } from '../auth/authorize.ts';
+import {
+  type ExchangedBot,
+  type ExchangedToken,
+  requireBotForSend,
+  safeSlackFailureText,
+  scopeMismatch,
+} from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../auth/bundle.ts';
 import type { SlackFlow } from '../auth/flow.ts';
 import type { InstallMode } from '../manifest.ts';
@@ -32,6 +39,30 @@ import type { PendingRevocationResult } from './revocations.ts';
  * "re-authorise" means the same person and the same workspace, and a browser will happily authorise somebody
  * else if the person is signed into two accounts.
  */
+
+/**
+ * A Slack account as this package records it: core's account, and the send app's bot user it posts as when its app
+ * has one (design 2026-10-15 S1). Kept as the account's own key, which core's loose schema carries through every write.
+ */
+export type SlackAccount = AccountConfig & {
+  botUserId?: string | undefined;
+  /**
+   * Where the app's client secret is, for an account that signs in with it rather than PKCE (design 2026-10-15 S1,
+   * revised): every renewal of its tokens sends the secret, as Slack's rotation requires of a confidential client.
+   */
+  clientSecretRef?: string | undefined;
+};
+
+/** The secret store reference of the app's client secret, for an account that signs in with it. */
+export function clientSecretRefOf(account: AccountConfig): string | undefined {
+  const value = (account as SlackAccount).clientSecretRef;
+  return typeof value === 'string' && value.startsWith('slack/client-secret/') ? value : undefined;
+}
+
+/** The bot user this account's app posts as, when one was recorded and looks like a Slack user id. */
+export function botUserIdOf(account: AccountConfig): string | undefined {
+  return slackBotUserIdOf(account);
+}
 
 export interface WorkspaceView {
   readonly alias: string;
@@ -53,6 +84,13 @@ export interface WorkspaceView {
   readonly committedBeforeAbort?: true | undefined;
   /** Present after switching profile apps; each old token's cleanup state is reported separately. */
   readonly cleanup?: PendingRevocationResult | undefined;
+  /** The bot user the send app posts as (design 2026-10-15 S1). Absent for a read workspace, or an app without one. */
+  readonly appUserId?: string | undefined;
+  /**
+   * Why the app's bot token could not be kept, when a sign-in was saved and that one write failed: its posts then go
+   * out as the person, labelled, until it signs in again. Never the token.
+   */
+  readonly appTokenUnsaved?: string | undefined;
 }
 
 /**
@@ -81,6 +119,7 @@ export function viewOf(alias: string, account: AccountConfig, profileLabel?: str
       : {}),
     ...(account.profileApp ? { profileApp: account.profileApp } : {}),
     createdAt: account.createdAt,
+    ...(botUserIdOf(account) ? { appUserId: botUserIdOf(account) } : {}),
   };
 }
 
@@ -266,6 +305,9 @@ export function validateExchange(options: {
       hint: 'Leave every permission ticked on the consent screen, or re-create the app from the manifest.',
     });
   }
+  // A client-secret sign-in asked for the bot scopes: a send one must come back with the bot token (S1, revised).
+  if (flow.clientSecretRef !== undefined) requireBotForSend(token, mode, handoffs);
+
   if (extra.length > 0) {
     /*
      * Asking for `read` and getting posting back is not a broken app. Slack adds every scope a person has granted this
@@ -462,8 +504,16 @@ export function profileTargetFor(flow: SlackFlow, config: Config, handoffs: CliH
   return live;
 }
 
-/** The credential, as one value, from what Slack returned. */
-export function bundleFrom(token: ExchangedToken, now: Date): TokenBundle {
+/**
+ * The credential, as one value, from what Slack returned. `refreshExpires` is false for an app that signs in with its
+ * client secret: Slack's PKCE page says it is PKCE that makes refresh tokens "expire in 30 days instead of lasting
+ * indefinitely", so no expiry is recorded for one that never enabled it.
+ */
+export function bundleFrom(
+  token: ExchangedToken,
+  now: Date,
+  options: { refreshExpires?: boolean | undefined } = {},
+): TokenBundle {
   return {
     v: BUNDLE_VERSION,
     state: 'ready',
@@ -484,7 +534,9 @@ export function bundleFrom(token: ExchangedToken, now: Date): TokenBundle {
      * is a property of the app, not a field. Recorded rather than inferred later, because the only other way to
      * discover it is a refresh that fails.
      */
-    refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000).toISOString(),
+    ...(options.refreshExpires === false
+      ? {}
+      : { refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000).toISOString() }),
     issuedAt: now.toISOString(),
   };
 }
@@ -492,6 +544,48 @@ export function bundleFrom(token: ExchangedToken, now: Date): TokenBundle {
 /** Where a newly connected workspace's credential lives. */
 export function secretRefFor(accountId: string): string {
   return `slack/token/${accountId}`;
+}
+
+/**
+ * Where the send app's bot token lives, beside the user token (design 2026-10-15 S1): one place per account, written
+ * after the sign-in that issued it is saved, and deleted — never revoked — when the account narrows to read or is
+ * removed, because the token is the workspace's and others who installed the same app hold it too.
+ */
+export function botSecretRefFor(accountId: string): string {
+  return `slack/bot-token/${accountId}`;
+}
+
+/**
+ * Where a Slack app's client secret is kept, for the sign-in that uses it (design 2026-10-15 S1, revised): by the app's
+ * id, which a renewal finds it by. Typed at a person's terminal, kept in the core's secret store, never printed.
+ */
+export function clientSecretRefFor(appId: string): string {
+  return `slack/client-secret/${appId}`;
+}
+
+/**
+ * Where a first sign-in keeps the secret until Slack has said which app it is: by the Client ID it was started with,
+ * which names the same app. Moved under the app's id once the sign-in is saved, and deleted when its flow ends.
+ */
+export function pendingClientSecretRefFor(clientId: string): string {
+  return `slack/client-secret/pending/${clientId}`;
+}
+
+/** The bot token, as one value the refresh machinery can renew: the user token's shape (S1). */
+export function botBundleFrom(
+  bot: ExchangedBot,
+  now: Date,
+  options: { refreshExpires?: boolean | undefined } = {},
+): TokenBundle {
+  return bundleFrom(
+    {
+      accessToken: bot.accessToken,
+      refreshToken: bot.refreshToken,
+      expiresInSeconds: bot.expiresInSeconds,
+    } as ExchangedToken,
+    now,
+    options,
+  );
 }
 
 /**
@@ -517,6 +611,8 @@ export function accountFrom(options: {
   /** Where its credential is stored; a new account's own reference when left out. */
   secretRef?: string | undefined;
   provenance?: { organisation: string; profileApp: 'read' | 'send' } | undefined;
+  /** Where the app's client secret is, for an account that signs in with it (S1, revised). */
+  clientSecretRef?: string | undefined;
 }): AccountConfig {
   const { token, mode, flow, accountId, now } = options;
   return {
@@ -534,7 +630,10 @@ export function accountFrom(options: {
     ...(options.provenance ?? {}),
     redirectPort: flow.port,
     createdAt: now.toISOString(),
-  };
+    // The bot user the send app posts as (S1); its token is stored apart, under `botSecretRefFor`.
+    ...(mode === 'send' && token.bot ? { botUserId: token.bot.userId } : {}),
+    ...(options.clientSecretRef === undefined ? {} : { clientSecretRef: options.clientSecretRef }),
+  } as SlackAccount;
 }
 
 export { newAccountId, serialiseBundle };
@@ -591,6 +690,12 @@ export async function removeWorkspace(
       ),
     });
   }
+  /*
+   * The app's bot token first: deleted, never revoked (design 2026-10-15 S1). It is the workspace's, and everyone who
+   * installed the same app holds it, so revoking it would stop their posts too. A sign-in stores one only after the
+   * account naming its bot user is saved, so an account that names none has none to delete.
+   */
+  if (botUserIdOf(found.account) !== undefined) await deps.secrets.delete(botSecretRefFor(found.account.id));
   await deps.secrets.delete(found.account.secretRef);
   await deps.update((config) => {
     /*
@@ -629,5 +734,17 @@ export async function removeWorkspace(
     const { [held.alias]: _removed, ...rest } = config.accounts;
     return { ...config, accounts: rest };
   });
+  /*
+   * The app's client secret, once no workspace left signs in with it (S1, revised). After the entry is gone, not before:
+   * it posts nothing, and an entry left without it could not renew its tokens. Best effort — a secret left behind is
+   * the app's, not a token, and the next sign-in with it writes it again.
+   */
+  const secretRef = clientSecretRefOf(found.account);
+  if (secretRef !== undefined) {
+    const others = Object.values(deps.config.accounts).filter(
+      (account) => account.id !== found.account.id && clientSecretRefOf(account) === secretRef,
+    );
+    if (others.length === 0) await deps.secrets.delete(secretRef).catch(() => undefined);
+  }
   return { alias, accountId: found.account.id, removed: true, cleanup: options.cleanup ?? [] };
 }

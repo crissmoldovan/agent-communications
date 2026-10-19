@@ -1,182 +1,985 @@
 {
   "version": 1,
+  "audit": {
+    "matrixVersion": 1,
+    "covers": "Tasks 3-9 and 11",
+    "deferred": "Task 10"
+  },
   "guards": [
-    { "id": "task-1-canonical-documents" },
-    { "id": "task-2-durable-schema" },
-    { "id": "phase-e-b3-prerequisite-gate" },
-    { "id": "phase-e-b3-secret-origin" },
-    { "id": "phase-e-b3-pending-target-origin" },
-    { "id": "phase-e-source-scope" },
-    { "id": "phase-e-synthetic-scope" },
-    { "id": "e1-prepare-disabled-kind" },
-    { "id": "e1-claim-before-core-disabled-kind" },
-    { "id": "e1-local-claim-transaction-disabled-kind" },
-    { "id": "e1-finalise-transaction-disabled-kind" },
-    { "id": "e5-rolling-includes-reserved" },
-    { "id": "e5-rolling-includes-in-flight" },
-    { "id": "e5-concurrency-excludes-settled" },
-    { "id": "e5-stable-rule-key" },
-    { "id": "e5-input-max-before-io" },
-    { "id": "e5-byte-estimate" },
-    { "id": "e5-no-active-singleton" },
-    { "id": "e5-unparsed-outcome-never-refunds" },
-    { "id": "e5-omitted-result-never-defaults-completed" },
-    { "id": "e5-terminal-decision-is-no-match" },
-    { "id": "e5-terminal-projection-purge" },
-    { "id": "e5-single-transport-entry" },
-    { "id": "e5-concurrency-release" },
-    { "id": "e5-double-settle" },
-    { "id": "e5-owner-start-recovery" },
-    { "id": "e5-v1-literal-judge-kinds" },
-    { "id": "e6-reference-date" },
-    { "id": "e6-header-allowlist" },
-    { "id": "e6-single-line-hosted-key" },
-    { "id": "e6-request-cap" },
-    { "id": "e6-response-cap" },
-    { "id": "e6-streaming-response-cap" },
-    { "id": "e6-output-token-limit" },
-    { "id": "e6-provider-match" },
-    { "id": "e6-score-clamp" },
-    { "id": "e6-closed-score-pointer" },
-    { "id": "e6-dns-final-gate" },
-    { "id": "e6-tcp-final-gate" },
-    { "id": "e6-tls-final-gate" },
-    { "id": "e6-write-final-gate" },
-    { "id": "e6-write-gate-adjacency" },
-    { "id": "e6-no-http-client" },
-    { "id": "e6-no-proxy-path" },
-    { "id": "e6-no-redirect" },
-    { "id": "e6-literal-loopback-only" },
-    { "id": "e6-attempt-deadline" },
-    { "id": "e6-post-gate-deadline" },
-    { "id": "e6-final-gate-deadline" },
-    { "id": "e6-synchronous-final-gate" },
-    { "id": "e6-response-deadline" },
-    { "id": "e6-fatal-utf8" },
-    { "id": "e6-a-accept-non-global" },
-    { "id": "e6-a-skip-embedded-addresses" },
-    { "id": "e6-a-allow-global-only-non-typesafe" },
-    { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" },
-    { "id": "e4-no-pointer-at-prepare" },
-    { "id": "e4-final-pointer-drift" },
-    { "id": "e4-claim-pointer-drift" },
-    { "id": "e4-disabled-judge-add" },
-    { "id": "e4-kind-disable-recovery" },
-    { "id": "e4-laya-before-intent" },
-    { "id": "e4-budget-digest-prepare" },
-    { "id": "e4-kind-digest-prepare" },
-    { "id": "e4-budget-digest-claim" },
-    { "id": "e4-kind-digest-claim" },
-    { "id": "e4-budget-digest-finalise" },
-    { "id": "e4-kind-digest-finalise" },
-    { "id": "e4-budget-digest-live-reservation" },
-    { "id": "e4-kind-digest-live-reservation" },
-    { "id": "e4-first-enablement-disable" },
-    { "id": "e4-absent-kind-disable-generation" },
-    { "id": "e4-expiry-rule-version" },
-    { "id": "e4-tightening-rule-version" },
-    { "id": "e4-unscoped-kind-static-guard" },
-    { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" },
-    { "id": "e7-deterministic-first" },
-    { "id": "e7-taint-before-reserve" },
-    { "id": "e7-exact-input-provenance" },
-    { "id": "e7-settlement-token" },
-    { "id": "e7-pause-fence" },
-    { "id": "e7-full-request-estimate" },
-    { "id": "e7-single-decision-owner" },
-    { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" }
+    {
+      "id": "task-1-canonical-documents"
+    },
+    {
+      "id": "task-2-durable-schema"
+    },
+    {
+      "id": "phase-e-b3-prerequisite-gate"
+    },
+    {
+      "id": "phase-e-b3-secret-origin"
+    },
+    {
+      "id": "phase-e-b3-pending-target-origin"
+    },
+    {
+      "id": "phase-e-source-scope"
+    },
+    {
+      "id": "phase-e-synthetic-scope"
+    },
+    {
+      "id": "e1-prepare-disabled-kind"
+    },
+    {
+      "id": "e1-claim-before-core-disabled-kind"
+    },
+    {
+      "id": "e1-local-claim-transaction-disabled-kind"
+    },
+    {
+      "id": "e1-finalise-transaction-disabled-kind"
+    },
+    {
+      "id": "e5-rolling-includes-reserved"
+    },
+    {
+      "id": "e5-rolling-includes-in-flight"
+    },
+    {
+      "id": "e5-concurrency-excludes-settled"
+    },
+    {
+      "id": "e5-stable-rule-key"
+    },
+    {
+      "id": "e5-input-max-before-io"
+    },
+    {
+      "id": "e5-byte-estimate"
+    },
+    {
+      "id": "e5-no-active-singleton"
+    },
+    {
+      "id": "e5-unparsed-outcome-never-refunds"
+    },
+    {
+      "id": "e5-omitted-result-never-defaults-completed"
+    },
+    {
+      "id": "e5-terminal-decision-is-no-match"
+    },
+    {
+      "id": "e5-terminal-projection-purge"
+    },
+    {
+      "id": "e5-single-transport-entry"
+    },
+    {
+      "id": "e5-concurrency-release"
+    },
+    {
+      "id": "e5-double-settle"
+    },
+    {
+      "id": "e5-owner-start-recovery"
+    },
+    {
+      "id": "e5-v1-literal-judge-kinds"
+    },
+    {
+      "id": "e5-released-retry-new-attempt"
+    },
+    {
+      "id": "e5-released-terminal-transition"
+    },
+    {
+      "id": "e5-inflight-never-releases"
+    },
+    {
+      "id": "e5-inflight-at-physical-io"
+    },
+    {
+      "id": "e6-reference-date"
+    },
+    {
+      "id": "e6-header-allowlist"
+    },
+    {
+      "id": "e6-single-line-hosted-key"
+    },
+    {
+      "id": "e6-request-cap"
+    },
+    {
+      "id": "e6-response-cap"
+    },
+    {
+      "id": "e6-streaming-response-cap"
+    },
+    {
+      "id": "e6-output-token-limit"
+    },
+    {
+      "id": "e6-provider-match"
+    },
+    {
+      "id": "e6-score-clamp"
+    },
+    {
+      "id": "e6-closed-score-pointer"
+    },
+    {
+      "id": "e6-dns-final-gate"
+    },
+    {
+      "id": "e6-tcp-final-gate"
+    },
+    {
+      "id": "e6-tls-final-gate"
+    },
+    {
+      "id": "e6-write-final-gate"
+    },
+    {
+      "id": "e6-write-gate-adjacency"
+    },
+    {
+      "id": "e6-no-http-client"
+    },
+    {
+      "id": "e6-no-proxy-path"
+    },
+    {
+      "id": "e6-no-redirect"
+    },
+    {
+      "id": "e6-literal-loopback-only"
+    },
+    {
+      "id": "e6-attempt-deadline"
+    },
+    {
+      "id": "e6-post-gate-deadline"
+    },
+    {
+      "id": "e6-final-gate-deadline"
+    },
+    {
+      "id": "e6-synchronous-final-gate"
+    },
+    {
+      "id": "e6-response-deadline"
+    },
+    {
+      "id": "e6-fatal-utf8"
+    },
+    {
+      "id": "e6-a-accept-non-global"
+    },
+    {
+      "id": "e6-a-skip-embedded-addresses"
+    },
+    {
+      "id": "e6-a-allow-global-only-non-typesafe"
+    },
+    {
+      "id": "e6-m-accept-alias"
+    },
+    {
+      "id": "e6-m-substitute-constant-model"
+    },
+    {
+      "id": "e4-no-pointer-at-prepare"
+    },
+    {
+      "id": "e4-final-pointer-drift"
+    },
+    {
+      "id": "e4-claim-pointer-drift"
+    },
+    {
+      "id": "e4-disabled-judge-add"
+    },
+    {
+      "id": "e4-kind-disable-recovery"
+    },
+    {
+      "id": "e4-laya-before-intent"
+    },
+    {
+      "id": "e4-budget-digest-prepare"
+    },
+    {
+      "id": "e4-kind-digest-prepare"
+    },
+    {
+      "id": "e4-budget-digest-claim"
+    },
+    {
+      "id": "e4-kind-digest-claim"
+    },
+    {
+      "id": "e4-budget-digest-finalise"
+    },
+    {
+      "id": "e4-kind-digest-finalise"
+    },
+    {
+      "id": "e4-budget-digest-live-reservation"
+    },
+    {
+      "id": "e4-kind-digest-live-reservation"
+    },
+    {
+      "id": "e4-first-enablement-disable"
+    },
+    {
+      "id": "e4-absent-kind-disable-generation"
+    },
+    {
+      "id": "e4-expiry-rule-version"
+    },
+    {
+      "id": "e4-tightening-rule-version"
+    },
+    {
+      "id": "e4-unscoped-kind-static-guard"
+    },
+    {
+      "id": "e4-primary-key-exemption"
+    },
+    {
+      "id": "e4-required-guard-rows"
+    },
+    {
+      "id": "e7-deterministic-first"
+    },
+    {
+      "id": "e7-taint-before-reserve"
+    },
+    {
+      "id": "e7-exact-input-provenance"
+    },
+    {
+      "id": "e7-settlement-token"
+    },
+    {
+      "id": "e7-pause-fence"
+    },
+    {
+      "id": "e7-full-request-estimate"
+    },
+    {
+      "id": "e7-single-decision-owner"
+    },
+    {
+      "id": "e7-deterministic-shared-route"
+    },
+    {
+      "id": "e7-evaluator-writer-lease"
+    },
+    {
+      "id": "e8-sqlite-hold-clock"
+    },
+    {
+      "id": "e8-ingest-tie"
+    },
+    {
+      "id": "e8-lease-recovery"
+    },
+    {
+      "id": "e8-expiry-before-control"
+    },
+    {
+      "id": "e8-decision-bound-token"
+    },
+    {
+      "id": "e8-final-resolution-recheck"
+    },
+    {
+      "id": "e8-account-purge-claim"
+    },
+    {
+      "id": "e8-evaluator-db-clock"
+    },
+    {
+      "id": "e8-hold-write-expiry"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening"
+    },
+    {
+      "id": "e8-held-final-live-account-fence"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin"
+    },
+    {
+      "id": "e11-provider-match-authority"
+    },
+    {
+      "id": "e11-envelope-provenance"
+    },
+    {
+      "id": "e11-range-token-cap"
+    },
+    {
+      "id": "e11-wrong-type-score"
+    },
+    {
+      "id": "e11-host-drift-before-byte"
+    },
+    {
+      "id": "e11-journal-exactness"
+    },
+    {
+      "id": "e11-refusal-content-free"
+    },
+    {
+      "id": "e11-late-hold-response"
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist"
+    },
+    {
+      "id": "e11-response-fixture-pinning"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing"
+    },
+    {
+      "id": "e12-target-remove-purge"
+    },
+    {
+      "id": "e12-subscriber-remove-purge"
+    },
+    {
+      "id": "e12-judge-remove-purge"
+    },
+    {
+      "id": "e12-account-remove-readd-purge"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge"
+    },
+    {
+      "id": "e12-rule-disable-purge"
+    },
+    {
+      "id": "e12-disable-all-purge"
+    },
+    {
+      "id": "e12-account-rule-revoke"
+    },
+    {
+      "id": "e12-derived-parent-revoke"
+    },
+    {
+      "id": "e12-account-source-purge"
+    },
+    {
+      "id": "e12-judge-key-generation-fence"
+    },
+    {
+      "id": "e12-judge-kind-literal-guard"
+    },
+    {
+      "id": "e12-audit-matrix"
+    },
+    {
+      "id": "e12-static-network-path"
+    },
+    {
+      "id": "e12-purge-caller-registry"
+    },
+    {
+      "id": "e12-corpus-dependency-closure"
+    },
+    {
+      "id": "e12-held-purge-race"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call"
+    },
+    {
+      "id": "e12-hold-api-expiry-call"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call"
+    },
+    {
+      "id": "e13-required-release-gate"
+    },
+    {
+      "id": "e13-b3-capability-row"
+    },
+    {
+      "id": "e13-doctor-hold-clock"
+    },
+    {
+      "id": "e13-laya-typed-unavailable"
+    },
+    {
+      "id": "e13-kind-enablement-approval"
+    },
+    {
+      "id": "e13-owner-judge-wiring"
+    },
+    {
+      "id": "e-review-judge-input-envelope"
+    },
+    {
+      "id": "e-review-event-taint-platform"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure"
+    },
+    {
+      "id": "e-review-kind-disable-keeps-rule-authority"
+    },
+    {
+      "id": "e-review-preio-release-commit"
+    },
+    {
+      "id": "e-review-response-owner-recovery"
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal"
+    },
+    {
+      "id": "e-review-b3-capability-operation"
+    },
+    {
+      "id": "e-review-isatap-embedded-address"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal"
+    },
+    {
+      "id": "e-review-kind-disable-enable-all"
+    },
+    {
+      "id": "e-review-revoked-judge-activation"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure"
+    }
   ],
   "mutations": [
-    { "id": "e1-canonical-documents" },
-    { "id": "e2-durable-schema" },
-    { "id": "e3-b3-contract-version" },
-    { "id": "e3-b3-unavailable-variants" },
-    { "id": "e3-b3-vector-schema-validation" },
-    { "id": "e3-scope-account-source" },
-    { "id": "e3-scope-synthetic-work" },
-    { "id": "e1-prepare-disabled-kind" },
-    { "id": "e1-claim-before-core-disabled-kind" },
-    { "id": "e1-local-claim-transaction-disabled-kind" },
-    { "id": "e1-finalise-transaction-disabled-kind" },
-    { "id": "e5-rolling-includes-reserved" },
-    { "id": "e5-rolling-includes-in-flight" },
-    { "id": "e5-concurrency-excludes-settled" },
-    { "id": "e5-stable-rule-key" },
-    { "id": "e5-input-max-before-io" },
-    { "id": "e5-byte-estimate" },
-    { "id": "e5-no-active-singleton" },
-    { "id": "e5-unparsed-outcome-never-refunds" },
-    { "id": "e5-omitted-result-never-defaults-completed" },
-    { "id": "e5-terminal-decision-is-no-match" },
-    { "id": "e5-terminal-projection-purge" },
-    { "id": "e5-single-transport-entry" },
-    { "id": "e5-concurrency-release" },
-    { "id": "e5-double-settle" },
-    { "id": "e5-owner-start-recovery" },
-    { "id": "e5-v1-literal-judge-kinds" },
-    { "id": "e6-reference-date" },
-    { "id": "e6-header-allowlist" },
-    { "id": "e6-single-line-hosted-key" },
-    { "id": "e6-request-cap" },
-    { "id": "e6-response-cap" },
-    { "id": "e6-streaming-response-cap" },
-    { "id": "e6-output-token-limit" },
-    { "id": "e6-provider-match" },
-    { "id": "e6-score-clamp" },
-    { "id": "e6-closed-score-pointer" },
-    { "id": "e6-dns-final-gate" },
-    { "id": "e6-tcp-final-gate" },
-    { "id": "e6-tls-final-gate" },
-    { "id": "e6-write-final-gate" },
-    { "id": "e6-write-gate-adjacency" },
-    { "id": "e6-no-http-client" },
-    { "id": "e6-no-proxy-path" },
-    { "id": "e6-no-redirect" },
-    { "id": "e6-literal-loopback-only" },
-    { "id": "e6-attempt-deadline" },
-    { "id": "e6-post-gate-deadline" },
-    { "id": "e6-final-gate-deadline" },
-    { "id": "e6-synchronous-final-gate" },
-    { "id": "e6-response-deadline" },
-    { "id": "e6-fatal-utf8" },
-    { "id": "e6-a-accept-non-global" },
-    { "id": "e6-a-skip-embedded-addresses" },
-    { "id": "e6-a-allow-global-only-non-typesafe" },
-    { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" },
-    { "id": "e4-no-pointer-at-prepare" },
-    { "id": "e4-final-pointer-drift" },
-    { "id": "e4-claim-pointer-drift" },
-    { "id": "e4-disabled-judge-add" },
-    { "id": "e4-kind-disable-recovery" },
-    { "id": "e4-laya-before-intent" },
-    { "id": "e4-budget-digest-prepare" },
-    { "id": "e4-kind-digest-prepare" },
-    { "id": "e4-budget-digest-claim" },
-    { "id": "e4-kind-digest-claim" },
-    { "id": "e4-budget-digest-finalise" },
-    { "id": "e4-kind-digest-finalise" },
-    { "id": "e4-budget-digest-live-reservation" },
-    { "id": "e4-kind-digest-live-reservation" },
-    { "id": "e4-first-enablement-disable" },
-    { "id": "e4-absent-kind-disable-generation" },
-    { "id": "e4-expiry-rule-version" },
-    { "id": "e4-tightening-rule-version" },
-    { "id": "e4-unscoped-kind-static-guard" },
-    { "id": "e4-primary-key-exemption" },
-    { "id": "e4-required-guard-rows" },
-    { "id": "e7-deterministic-first" },
-    { "id": "e7-taint-before-reserve" },
-    { "id": "e7-exact-input-provenance" },
-    { "id": "e7-settlement-token" },
-    { "id": "e7-pause-fence" },
-    { "id": "e7-full-request-estimate" },
-    { "id": "e7-single-decision-owner" },
-    { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" }
+    {
+      "id": "e1-canonical-documents"
+    },
+    {
+      "id": "e2-durable-schema"
+    },
+    {
+      "id": "e3-b3-contract-version"
+    },
+    {
+      "id": "e3-b3-unavailable-variants"
+    },
+    {
+      "id": "e3-b3-vector-schema-validation"
+    },
+    {
+      "id": "e3-scope-account-source"
+    },
+    {
+      "id": "e3-scope-synthetic-work"
+    },
+    {
+      "id": "e1-prepare-disabled-kind"
+    },
+    {
+      "id": "e1-claim-before-core-disabled-kind"
+    },
+    {
+      "id": "e1-local-claim-transaction-disabled-kind"
+    },
+    {
+      "id": "e1-finalise-transaction-disabled-kind"
+    },
+    {
+      "id": "e5-rolling-includes-reserved"
+    },
+    {
+      "id": "e5-rolling-includes-in-flight"
+    },
+    {
+      "id": "e5-concurrency-excludes-settled"
+    },
+    {
+      "id": "e5-stable-rule-key"
+    },
+    {
+      "id": "e5-input-max-before-io"
+    },
+    {
+      "id": "e5-byte-estimate"
+    },
+    {
+      "id": "e5-no-active-singleton"
+    },
+    {
+      "id": "e5-unparsed-outcome-never-refunds"
+    },
+    {
+      "id": "e5-omitted-result-never-defaults-completed"
+    },
+    {
+      "id": "e5-terminal-decision-is-no-match"
+    },
+    {
+      "id": "e5-terminal-projection-purge"
+    },
+    {
+      "id": "e5-single-transport-entry"
+    },
+    {
+      "id": "e5-concurrency-release"
+    },
+    {
+      "id": "e5-double-settle"
+    },
+    {
+      "id": "e5-owner-start-recovery"
+    },
+    {
+      "id": "e5-v1-literal-judge-kinds"
+    },
+    {
+      "id": "e5-released-retry-new-attempt"
+    },
+    {
+      "id": "e5-released-terminal-transition"
+    },
+    {
+      "id": "e5-inflight-never-releases"
+    },
+    {
+      "id": "e5-inflight-at-physical-io"
+    },
+    {
+      "id": "e6-reference-date"
+    },
+    {
+      "id": "e6-header-allowlist"
+    },
+    {
+      "id": "e6-single-line-hosted-key"
+    },
+    {
+      "id": "e6-request-cap"
+    },
+    {
+      "id": "e6-response-cap"
+    },
+    {
+      "id": "e6-streaming-response-cap"
+    },
+    {
+      "id": "e6-output-token-limit"
+    },
+    {
+      "id": "e6-provider-match"
+    },
+    {
+      "id": "e6-score-clamp"
+    },
+    {
+      "id": "e6-closed-score-pointer"
+    },
+    {
+      "id": "e6-dns-final-gate"
+    },
+    {
+      "id": "e6-tcp-final-gate"
+    },
+    {
+      "id": "e6-tls-final-gate"
+    },
+    {
+      "id": "e6-write-final-gate"
+    },
+    {
+      "id": "e6-write-gate-adjacency"
+    },
+    {
+      "id": "e6-no-http-client"
+    },
+    {
+      "id": "e6-no-proxy-path"
+    },
+    {
+      "id": "e6-no-redirect"
+    },
+    {
+      "id": "e6-literal-loopback-only"
+    },
+    {
+      "id": "e6-attempt-deadline"
+    },
+    {
+      "id": "e6-post-gate-deadline"
+    },
+    {
+      "id": "e6-final-gate-deadline"
+    },
+    {
+      "id": "e6-synchronous-final-gate"
+    },
+    {
+      "id": "e6-response-deadline"
+    },
+    {
+      "id": "e6-fatal-utf8"
+    },
+    {
+      "id": "e6-a-accept-non-global"
+    },
+    {
+      "id": "e6-a-skip-embedded-addresses"
+    },
+    {
+      "id": "e6-a-allow-global-only-non-typesafe"
+    },
+    {
+      "id": "e6-m-accept-alias"
+    },
+    {
+      "id": "e6-m-substitute-constant-model"
+    },
+    {
+      "id": "e4-no-pointer-at-prepare"
+    },
+    {
+      "id": "e4-final-pointer-drift"
+    },
+    {
+      "id": "e4-claim-pointer-drift"
+    },
+    {
+      "id": "e4-disabled-judge-add"
+    },
+    {
+      "id": "e4-kind-disable-recovery"
+    },
+    {
+      "id": "e4-laya-before-intent"
+    },
+    {
+      "id": "e4-budget-digest-prepare"
+    },
+    {
+      "id": "e4-kind-digest-prepare"
+    },
+    {
+      "id": "e4-budget-digest-claim"
+    },
+    {
+      "id": "e4-kind-digest-claim"
+    },
+    {
+      "id": "e4-budget-digest-finalise"
+    },
+    {
+      "id": "e4-kind-digest-finalise"
+    },
+    {
+      "id": "e4-budget-digest-live-reservation"
+    },
+    {
+      "id": "e4-kind-digest-live-reservation"
+    },
+    {
+      "id": "e4-first-enablement-disable"
+    },
+    {
+      "id": "e4-absent-kind-disable-generation"
+    },
+    {
+      "id": "e4-expiry-rule-version"
+    },
+    {
+      "id": "e4-tightening-rule-version"
+    },
+    {
+      "id": "e4-unscoped-kind-static-guard"
+    },
+    {
+      "id": "e4-primary-key-exemption"
+    },
+    {
+      "id": "e4-required-guard-rows"
+    },
+    {
+      "id": "e7-deterministic-first"
+    },
+    {
+      "id": "e7-taint-before-reserve"
+    },
+    {
+      "id": "e7-exact-input-provenance"
+    },
+    {
+      "id": "e7-settlement-token"
+    },
+    {
+      "id": "e7-pause-fence"
+    },
+    {
+      "id": "e7-full-request-estimate"
+    },
+    {
+      "id": "e7-single-decision-owner"
+    },
+    {
+      "id": "e7-deterministic-shared-route"
+    },
+    {
+      "id": "e7-evaluator-writer-lease"
+    },
+    {
+      "id": "e8-sqlite-hold-clock"
+    },
+    {
+      "id": "e8-ingest-tie"
+    },
+    {
+      "id": "e8-lease-recovery"
+    },
+    {
+      "id": "e8-expiry-before-control"
+    },
+    {
+      "id": "e8-decision-bound-token"
+    },
+    {
+      "id": "e8-final-resolution-recheck"
+    },
+    {
+      "id": "e8-account-purge-claim"
+    },
+    {
+      "id": "e8-evaluator-db-clock"
+    },
+    {
+      "id": "e8-hold-write-expiry"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening"
+    },
+    {
+      "id": "e8-held-final-live-account-fence"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin"
+    },
+    {
+      "id": "e11-provider-match-authority"
+    },
+    {
+      "id": "e11-envelope-provenance"
+    },
+    {
+      "id": "e11-range-token-cap"
+    },
+    {
+      "id": "e11-wrong-type-score"
+    },
+    {
+      "id": "e11-host-drift-before-byte"
+    },
+    {
+      "id": "e11-journal-exactness"
+    },
+    {
+      "id": "e11-refusal-content-free"
+    },
+    {
+      "id": "e11-late-hold-response"
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist"
+    },
+    {
+      "id": "e11-response-fixture-pinning"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing"
+    },
+    {
+      "id": "e12-target-remove-purge"
+    },
+    {
+      "id": "e12-subscriber-remove-purge"
+    },
+    {
+      "id": "e12-judge-remove-purge"
+    },
+    {
+      "id": "e12-account-remove-readd-purge"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge"
+    },
+    {
+      "id": "e12-rule-disable-purge"
+    },
+    {
+      "id": "e12-disable-all-purge"
+    },
+    {
+      "id": "e12-account-rule-revoke"
+    },
+    {
+      "id": "e12-derived-parent-revoke"
+    },
+    {
+      "id": "e12-account-source-purge"
+    },
+    {
+      "id": "e12-judge-key-generation-fence"
+    },
+    {
+      "id": "e12-judge-kind-literal-guard"
+    },
+    {
+      "id": "e12-audit-matrix"
+    },
+    {
+      "id": "e12-static-network-path"
+    },
+    {
+      "id": "e12-purge-caller-registry"
+    },
+    {
+      "id": "e12-corpus-dependency-closure"
+    },
+    {
+      "id": "e12-held-purge-race"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call"
+    },
+    {
+      "id": "e12-hold-api-expiry-call"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call"
+    },
+    {
+      "id": "e13-required-release-gate"
+    },
+    {
+      "id": "e13-b3-capability-row"
+    },
+    {
+      "id": "e13-doctor-hold-clock"
+    },
+    {
+      "id": "e13-laya-typed-unavailable"
+    },
+    {
+      "id": "e13-kind-enablement-approval"
+    },
+    {
+      "id": "e13-owner-judge-wiring"
+    },
+    {
+      "id": "e-review-judge-input-envelope"
+    },
+    {
+      "id": "e-review-event-taint-platform"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure"
+    },
+    {
+      "id": "e-review-kind-disable-keeps-rule-authority"
+    },
+    {
+      "id": "e-review-preio-release-commit"
+    },
+    {
+      "id": "e-review-response-owner-recovery"
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal"
+    },
+    {
+      "id": "e-review-b3-capability-operation"
+    },
+    {
+      "id": "e-review-isatap-embedded-address"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal"
+    },
+    {
+      "id": "e-review-kind-disable-enable-all"
+    },
+    {
+      "id": "e-review-revoked-judge-activation"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure"
+    }
   ],
   "cases": [
     {
@@ -231,7 +1034,7 @@
       "id": "e3-b3-vector-schema-validation",
       "task": "E3",
       "coverage": ["phase-e-b3-pending-target-origin"],
-      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
       "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
       "mutation": {
         "id": "e3-b3-vector-schema-validation",
@@ -502,6 +1305,55 @@
         "test": "E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS"
       },
       "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-released-retry-new-attempt",
+      "task": "E5",
+      "coverage": ["e5-released-retry-new-attempt"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-released-retry-new-attempt",
+        "test": "E5 attempt ledger: a released attempt stays terminal while one retry row owns and counts the logical work"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-released-terminal-transition",
+      "task": "E5",
+      "coverage": ["e5-released-terminal-transition"],
+      "productionEntry": "packages/events-daemon/src/store/migrations.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e5-released-terminal-transition",
+        "test": "E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-inflight-never-releases",
+      "task": "E5",
+      "coverage": ["e5-inflight-never-releases"],
+      "productionEntry": "packages/events-daemon/src/store/migrations.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e5-inflight-never-releases",
+        "test": "E5 migration: upgraded attempt rows reject released-to-reserved and in-flight-to-released transitions"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-inflight-at-physical-io",
+      "task": "E5",
+      "coverage": ["e5-inflight-at-physical-io"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e5-inflight-at-physical-io",
+        "test": "E7 attempt boundary: work stays reserved before first physical I/O and post-gate failure settles"
+      },
+      "strictRunner": "judge-task5-mutants",
+      "network": true
     },
     {
       "id": "e6-reference-date",
@@ -797,7 +1649,10 @@
       "coverage": ["e6-fatal-utf8"],
       "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
       "test": "packages/events-daemon/test/judge-transport.test.ts",
-      "mutation": { "id": "e6-fatal-utf8", "test": "E6: malformed UTF-8 anywhere in a Noul answer is fail-closed" },
+      "mutation": {
+        "id": "e6-fatal-utf8",
+        "test": "E6: malformed UTF-8 anywhere in a Noul answer is fail-closed"
+      },
       "strictRunner": "judge-transport-mutants"
     },
     {
@@ -808,7 +1663,7 @@
       "test": "packages/events-daemon/test/network/address-policy.test.ts",
       "mutation": {
         "id": "e6-a-accept-non-global",
-        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+        "test": "NET-B2: validates the outer and every embedded transition address"
       },
       "strictRunner": "judge-transport-mutants"
     },
@@ -1219,6 +2074,872 @@
         "test": "E4 mutation: verifier static scope and required Task-4 guard rows refuse drift"
       },
       "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e8-sqlite-hold-clock",
+      "task": "E8",
+      "coverage": ["e8-sqlite-hold-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-sqlite-hold-clock",
+        "test": "E8: a hold uses the SQLite transaction clock and retention wins its deadline tie"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-ingest-tie",
+      "task": "E8",
+      "coverage": ["e8-ingest-tie"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-ingest-tie",
+        "test": "E8: a hold uses the SQLite transaction clock and retention wins its deadline tie"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-lease-recovery",
+      "task": "E8",
+      "coverage": ["e8-lease-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-lease-recovery",
+        "test": "E8: a DB-time claim is decision-bound, expires for recovery, and cannot claim at the hold deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-expiry-before-control",
+      "task": "E8",
+      "coverage": ["e8-expiry-before-control"],
+      "productionEntry": "packages/events-daemon/src/runtime/expiry.ts",
+      "test": "packages/events-daemon/test/judge-hold-retention.test.ts",
+      "mutation": {
+        "id": "e8-expiry-before-control",
+        "test": "E8: expiry uses SQLite time before control despite process-clock rollback and cannot leave a late hold"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-decision-bound-token",
+      "task": "E8",
+      "coverage": ["e8-decision-bound-token"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-decision-bound-token",
+        "test": "E8: final hold resolution refuses a mismatched decision-bound claim token before any delivery write"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-final-resolution-recheck",
+      "task": "E8",
+      "coverage": ["e8-final-resolution-recheck"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-final-resolution-recheck",
+        "test": "E8: resolution rechecks its authority after decrypt and refuses a disabled hold without a delivery"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-account-purge-claim",
+      "task": "E8",
+      "coverage": ["e8-account-purge-claim"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-purge.ts",
+      "test": "packages/events-daemon/test/judge-hold-retention.test.ts",
+      "mutation": {
+        "id": "e8-account-purge-claim",
+        "test": "E8: tightening recomputes creation-bound hold limits and purge removes the held claim"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-evaluator-db-clock",
+      "task": "E8",
+      "coverage": ["e8-evaluator-db-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-evaluator-db-clock",
+        "test": "E8 P1: a fast evaluator clock cannot expire a hold before its SQLite ingest deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-hold-write-expiry",
+      "task": "E8",
+      "coverage": ["e8-hold-write-expiry"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-hold-write-expiry",
+        "test": "E8 P1: the final hold writer terminalises from its SQLite transaction time when ingest has already ended"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence",
+      "task": "E8",
+      "coverage": ["e8-held-whatsapp-live-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-whatsapp-live-fence",
+        "test": "E8 P1: held WhatsApp resolution applies the shared live-list fence before it reads retained content"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version",
+      "task": "E8",
+      "coverage": ["e8-held-whatsapp-journal-version"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-whatsapp-journal-version",
+        "test": "E8 P2: held WhatsApp resolution commits against the journal head after a visible list change"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap",
+      "task": "E8",
+      "coverage": ["e8-legacy-hold-ingest-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/tightening.test.ts",
+      "mutation": {
+        "id": "e8-legacy-hold-ingest-cap",
+        "test": "APR-B1: a retention tightening moves every persisted B1 deadline only earlier"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening",
+      "task": "E8",
+      "coverage": ["e8-legacy-hold-repeated-tightening"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/retention-tightening-phase-d.test.ts",
+      "mutation": {
+        "id": "e8-legacy-hold-repeated-tightening",
+        "test": "D4a: every retention tightening recomputes a live legacy hold from its current deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-final-live-account-fence",
+      "task": "E8",
+      "coverage": ["e8-held-final-live-account-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-final-live-account-fence",
+        "test": "E8 P1: held resolution rechecks the live account after delivery encryption and taint before its final write"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e9-fixed-synthetic-judge-input",
+      "task": "E9",
+      "coverage": ["e9-fixed-synthetic-judge-input"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-test.ts",
+      "test": "packages/events-daemon/test/judge-test-operation.test.ts",
+      "mutation": {
+        "id": "e9-fixed-synthetic-judge-input",
+        "test": "E9 judge test: the fixed synthetic input is tainted, globally reserved and sent through the sealed transport"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-judge-key-rotate-current-generation",
+      "task": "E9",
+      "coverage": ["e9-judge-key-rotate-current-generation"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-secret-control.ts",
+      "test": "packages/events-daemon/test/b3-secrets.test.ts",
+      "mutation": {
+        "id": "e9-judge-key-rotate-current-generation",
+        "test": "B3 secret slots create and rotate only exact immutable owners with content-free receipts"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-mcp-kind-enable-no-active-pointer",
+      "task": "E9",
+      "coverage": ["e9-mcp-kind-enable-no-active-pointer"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-operator-control.test.ts",
+      "mutation": {
+        "id": "e9-mcp-kind-enable-no-active-pointer",
+        "test": "E9 operator control creates immutable subscriber and judge versions while retaining the E2 model seam"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e9-pending-rule-judge-origin",
+      "task": "E9",
+      "coverage": ["e9-pending-rule-judge-origin"],
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/pending-rule-judge-test.test.ts",
+      "mutation": {
+        "id": "e9-pending-rule-judge-origin",
+        "test": "E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e11-provider-match-authority",
+      "task": "E11",
+      "coverage": ["e11-provider-match-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-provider-match-authority",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-envelope-provenance",
+      "task": "E11",
+      "coverage": ["e11-envelope-provenance"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-envelope-provenance",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-range-token-cap",
+      "task": "E11",
+      "coverage": ["e11-range-token-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-range-token-cap",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-wrong-type-score",
+      "task": "E11",
+      "coverage": ["e11-wrong-type-score"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-wrong-type-score",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-host-drift-before-byte",
+      "task": "E11",
+      "coverage": ["e11-host-drift-before-byte"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-host-drift-before-byte",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-journal-exactness",
+      "task": "E11",
+      "coverage": ["e11-journal-exactness"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-journal-exactness",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-refusal-content-free",
+      "task": "E11",
+      "coverage": ["e11-refusal-content-free"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-refusal-content-free",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-late-hold-response",
+      "task": "E11",
+      "coverage": ["e11-late-hold-response"],
+      "productionEntry": "packages/events-daemon/src/runtime/expiry.ts",
+      "test": "packages/events-daemon/test/judge-adversarial-corpus.test.ts",
+      "mutation": {
+        "id": "e11-late-hold-response",
+        "test": "E11 adversarial corpus: every synthetic row asserts its sealed transport boundary and fixture-pinned journal bytes"
+      },
+      "strictRunner": "judge-adversarial-mutants",
+      "network": true
+    },
+    {
+      "id": "e11-corpus-integrity-allowlist",
+      "task": "E11",
+      "coverage": ["e11-corpus-integrity-allowlist"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-corpus-integrity-allowlist",
+        "test": "E11 adversarial corpus integrity: an unrecognised host, key-shaped token, and captured-provider response each fail the allowlist scan"
+      },
+      "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e11-response-fixture-pinning",
+      "task": "E11",
+      "coverage": ["e11-response-fixture-pinning"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-response-fixture-pinning",
+        "test": "E11 adversarial corpus integrity: a missing scripted response fails the exact response inventory"
+      },
+      "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e11-corpus-manifest-pairing",
+      "task": "E11",
+      "coverage": ["e11-corpus-manifest-pairing"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e11-corpus-manifest-pairing",
+        "test": "E11 adversarial corpus integrity: every row, digest, journal and shared manifest pairing is synthetic and exact"
+      },
+      "strictRunner": "judge-adversarial-mutants"
+    },
+    {
+      "id": "e12-target-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-target-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/revocations.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-target-remove-purge",
+        "test": "E12 purge closure: target remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-subscriber-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-subscriber-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-subscriber-remove-purge",
+        "test": "E12 purge closure: subscriber remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-judge-remove-purge",
+      "task": "E12",
+      "coverage": ["e12-judge-remove-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-judge-remove-purge",
+        "test": "E12 purge closure: judge remove uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-remove-readd-purge",
+      "task": "E12",
+      "coverage": ["e12-account-remove-readd-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-remove-readd-purge",
+        "test": "E12 purge closure: account remove and re-add use the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-whatsapp-hide-purge",
+      "task": "E12",
+      "coverage": ["e12-whatsapp-hide-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/whatsapp-visibility.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-whatsapp-hide-purge",
+        "test": "E12 purge closure: WhatsApp hide uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-rule-disable-purge",
+      "task": "E12",
+      "coverage": ["e12-rule-disable-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/revocations.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-rule-disable-purge",
+        "test": "E12 purge closure: rule disable uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-disable-all-purge",
+      "task": "E12",
+      "coverage": ["e12-disable-all-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/lifecycle.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-disable-all-purge",
+        "test": "E12 purge closure: disable all uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-rule-revoke",
+      "task": "E12",
+      "coverage": ["e12-account-rule-revoke"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-rule-revoke",
+        "test": "E12 purge closure: single-account rule revoke uses the production participant"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-derived-parent-revoke",
+      "task": "E12",
+      "coverage": ["e12-derived-parent-revoke"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-derived-parent-revoke",
+        "test": "E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-account-source-purge",
+      "task": "E12",
+      "coverage": ["e12-account-source-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/account-fence.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e12-account-source-purge",
+        "test": "E12 account scope: removing Gmail preserves same-id Slack work and its final reservation authority"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-judge-key-generation-fence",
+      "task": "E12",
+      "coverage": ["e12-judge-key-generation-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-judge-key-generation-fence",
+        "test": "E12 judge race: hosted-key rotation during DNS refuses the retired generation before any request byte"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e12-judge-kind-literal-guard",
+      "task": "E12",
+      "coverage": ["e12-judge-kind-literal-guard"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-judge-kind-literal-guard",
+        "test": "E3 scope: static guards analyse each kind literal and each SQL statement independently"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-audit-matrix",
+      "task": "E12",
+      "coverage": ["e12-audit-matrix"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-audit-matrix",
+        "test": "E12 scope: the audit matrix and explicit Task 10 deferral are structural, not manifest-defined"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-static-network-path",
+      "task": "E12",
+      "coverage": ["e12-static-network-path"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-static-network-path",
+        "test": "E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-purge-caller-registry",
+      "task": "E12",
+      "coverage": ["e12-purge-caller-registry"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e12-purge-caller-registry",
+        "test": "E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-corpus-dependency-closure",
+      "task": "E12",
+      "coverage": ["e12-corpus-dependency-closure"],
+      "productionEntry": "scripts/verify-events-adversarial-corpus.mjs",
+      "test": "packages/events-daemon/test/judge-corpus-integrity.test.ts",
+      "mutation": {
+        "id": "e12-corpus-dependency-closure",
+        "test": "E12 adversarial corpus integrity: a registered helper re-export cannot escape dependency-closed scanning"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-held-purge-race",
+      "task": "E12",
+      "coverage": ["e12-held-purge-race"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-held-purge-race",
+        "test": "E12 judge race: paused held resolution loses to target, subscriber, judge, account re-add, WhatsApp hide and expiry purges"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-claim-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-claim-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-claim-expiry-call",
+        "test": "E12 hold claim expiry caller terminalises through its exact production operation"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-api-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-api-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-api-expiry-call",
+        "test": "E12 hold expiry API caller terminalises through its exact production operation"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e12-hold-resolution-expiry-call",
+      "task": "E12",
+      "coverage": ["e12-hold-resolution-expiry-call"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e12-hold-resolution-expiry-call",
+        "test": "E12 final hold-resolution expiry caller commits terminal purge before reporting stale"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e13-required-release-gate",
+      "task": "E13",
+      "coverage": ["e13-required-release-gate"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-final-release.test.ts",
+      "mutation": {
+        "id": "e13-required-release-gate",
+        "test": "E13 final release: verify and direct release retain both Phase-E gates"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-b3-capability-row",
+      "task": "E13",
+      "coverage": ["e13-b3-capability-row"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-final-release.test.ts",
+      "mutation": {
+        "id": "e13-b3-capability-row",
+        "test": "E13 final release: the positive B3 tree passes and B3 drift refuses verify and release before preflight"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-doctor-hold-clock",
+      "task": "E13",
+      "coverage": ["e13-doctor-hold-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-doctor-hold-clock",
+        "test": "E13 final doctor reports kind, budget, reservations, hold clocks, a missing key and typed Laya unavailability"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-laya-typed-unavailable",
+      "task": "E13",
+      "coverage": ["e13-laya-typed-unavailable"],
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-laya-typed-unavailable",
+        "test": "E13 final doctor reports kind, budget, reservations, hold clocks, a missing key and typed Laya unavailability"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-kind-enablement-approval",
+      "task": "E13",
+      "coverage": ["e13-kind-enablement-approval"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-kind-enablement-approval",
+        "test": "E13 release gate: every judge kind remains unusable until a person-approved enablement creates its pointer"
+      },
+      "strictRunner": "judge-final-mutants"
+    },
+    {
+      "id": "e13-owner-judge-wiring",
+      "task": "E13",
+      "coverage": ["e13-owner-judge-wiring"],
+      "productionEntry": "packages/events-daemon/src/runtime/scheduler.ts",
+      "test": "packages/events-daemon/test/judge-final-e2e.test.ts",
+      "mutation": {
+        "id": "e13-owner-judge-wiring",
+        "test": "E13 final owner E2E: Gmail source reaches a local judge match through control approvals and owner restart"
+      },
+      "strictRunner": "judge-final-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-judge-input-envelope",
+      "task": "E7",
+      "coverage": ["e-review-judge-input-envelope"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "test": "packages/events-daemon/test/judge-taint.test.ts",
+      "mutation": {
+        "id": "e-review-judge-input-envelope",
+        "test": "E7 taint: exact judge input preserves copied scalar, parent and subtree provenance while constants inherit none"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-event-taint-platform",
+      "task": "E7",
+      "coverage": ["e-review-event-taint-platform"],
+      "productionEntry": "packages/events-daemon/src/runtime/untrusted.ts",
+      "test": "packages/events-daemon/test/event-taint-platform.test.ts",
+      "mutation": {
+        "id": "e-review-event-taint-platform",
+        "test": "E7 taint platform: real Slack and WhatsApp delivery commits see the channel-scoped handle first"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-kind-disable-work-closure",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-work-closure"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-kinds.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-work-closure",
+        "test": "E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-kind-disable-keeps-rule-authority",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-keeps-rule-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-keeps-rule-authority",
+        "test": "E4 purge closure: kind disable removes every bound work class and re-enable resumes nothing"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-preio-release-commit",
+      "task": "E5",
+      "coverage": ["e-review-preio-release-commit"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/pending-rule-judge-test.test.ts",
+      "mutation": {
+        "id": "e-review-preio-release-commit",
+        "test": "E9 pending-rule judge test is terminal/app-only and binds one live pending approval before a tester is reached"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-response-owner-recovery",
+      "task": "E7",
+      "coverage": ["e-review-response-owner-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-evaluation.test.ts",
+      "mutation": {
+        "id": "e-review-response-owner-recovery",
+        "test": "E7: pause fences reserved judge I/O and completed-response decision writes"
+      },
+      "strictRunner": "judge-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-valid-mcp-kind-disable-parity",
+      "task": "E9",
+      "coverage": ["e-review-valid-mcp-kind-disable-parity"],
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-e2e-surface.test.ts",
+      "mutation": {
+        "id": "e-review-valid-mcp-kind-disable-parity",
+        "test": "B3 judge mutation parity: valid isolated inputs succeed through real Commander and MCP adapters"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-b3-capability-row-removal",
+      "task": "E3",
+      "coverage": ["e-review-b3-capability-row-removal"],
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e-review-b3-capability-row-removal",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-b3-capability-operation",
+      "task": "E3",
+      "coverage": ["e-review-b3-capability-operation"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e-review-b3-capability-operation",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-isatap-embedded-address",
+      "task": "E6",
+      "coverage": ["e-review-isatap-embedded-address"],
+      "productionEntry": "packages/events-daemon/src/network/address-policy.ts",
+      "test": "packages/events-daemon/test/network/address-policy.test.ts",
+      "mutation": {
+        "id": "e-review-isatap-embedded-address",
+        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e-review-exact-deadline-socket-disposal",
+      "task": "E6",
+      "coverage": ["e-review-exact-deadline-socket-disposal"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e-review-exact-deadline-socket-disposal",
+        "test": "E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte"
+      },
+      "strictRunner": "judge-transport-mutants",
+      "network": true
+    },
+    {
+      "id": "e-review-kind-disable-enable-all",
+      "task": "E4",
+      "coverage": ["e-review-kind-disable-enable-all"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-kind-disable-enable-all",
+        "test": "E4 review: kind disable cancels enable-all when any bound active rule uses that judge kind"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-revoked-judge-activation",
+      "task": "E4",
+      "coverage": ["e-review-revoked-judge-activation"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-revoked-judge-activation",
+        "test": "E4 review: a pending agentic rule cannot activate after its embedded judge is revoked"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-bound-rule-authority",
+      "task": "E4",
+      "coverage": ["e-review-prepare-bound-rule-authority"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-bound-rule-authority",
+        "test": "E4 review: prepare rechecks bound rule authority inside the intent insertion transaction after awaited setup"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-plan-before-intent",
+      "task": "E4",
+      "coverage": ["e-review-prepare-plan-before-intent"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-plan-before-intent",
+        "test": "E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e-review-prepare-plan-after-disclosure",
+      "task": "E4",
+      "coverage": ["e-review-prepare-plan-after-disclosure"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/activation-judge-authority.test.ts",
+      "mutation": {
+        "id": "e-review-prepare-plan-after-disclosure",
+        "test": "E4 review: prepare rechecks the complete pointer plan before intent and after disclosure writes"
+      },
+      "strictRunner": "judge-mutants"
     }
   ]
 }

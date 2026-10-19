@@ -21,6 +21,7 @@ for (const asset of ['laya-manifest.json', 'laya-runtime.json']) {
   await readFile(join(packageRoot, asset), 'utf8');
 }
 const cli = join(dist, 'cli.mjs');
+const installed = JSON.parse(await readFile(join(dist, '..', 'package.json'), 'utf8'));
 // `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
 const sealUrl = new URL('./loopback-seal-preload.mjs', import.meta.url).href;
 const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help'], {
@@ -28,6 +29,11 @@ const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help']
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 assert.match(help, /Usage: agent-events/);
+const cliVersion = execFileSync(process.execPath, ['--import', sealUrl, cli, '--version'], {
+  encoding: 'utf8',
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+assert.equal(cliVersion, `${installed.version}\n`, 'the packed daemon CLI reports the installed package version');
 const statusArgs = ['--import', sealUrl, cli, '--json', 'status'];
 if (windows)
   assert.throws(
@@ -155,6 +161,12 @@ if (process.platform !== 'win32') {
         clientInfo: { name: 'packed-consumer', version: '0' },
       });
       assert.equal(initialized.result.protocolVersion, '2025-03-26');
+      // The server names the version that is actually installed, read from that installed package's own manifest.
+      assert.deepEqual(
+        initialized.result.serverInfo,
+        { name: 'agent-events', version: installed.version },
+        'the packed daemon MCP server reports the installed package version',
+      );
       mcp.notify('notifications/initialized', {});
       const status = await mcp.request('tools/call', { name: 'events_status', arguments: {} });
       assert.equal(status.result.structuredContent.owner, 'running');

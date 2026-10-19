@@ -7,11 +7,17 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
+import Ajv2020Runtime, { type Ajv2020 as Ajv2020Class, type Options } from 'ajv/dist/2020.js';
 import { run as runEventsCli } from '../src/cli/program.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
-import { DOCTOR_REPORT_V1_SCHEMA_VERSION, projectB3Doctor } from '../src/runtime/b3-doctor-projection.ts';
+import {
+  DOCTOR_REPORT_V1_SCHEMA_VERSION,
+  projectB3Doctor,
+  projectE9Doctor,
+} from '../src/runtime/b3-doctor-projection.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const FORBIDDEN = [
@@ -30,7 +36,14 @@ test('B3 doctor process and file-sink mutation cases declare complete overlay in
   const manifest = JSON.parse(await readFile(new URL('./b3-guard-manifests/doctor.json', import.meta.url), 'utf8')) as {
     readonly cases?: readonly { readonly case?: unknown; readonly overlayInputs?: unknown }[];
   };
-  const expected = ['package.json', 'capabilities.json', 'packages/*/package.json', 'scripts/**'];
+  const expected = [
+    'package.json',
+    'capabilities.json',
+    'packages/*/package.json',
+    'scripts/**',
+    'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json',
+    'packages/events-daemon/src/operations/contracts/doctor-v2.schema.json',
+  ];
   const names = new Set([
     'doctor-scans-cli-stderr-for-content',
     'doctor-scans-process-log-for-content',
@@ -205,6 +218,41 @@ test('B3 doctor projection has a closed content-free data surface', { skip: WIND
       for (const forbidden of ['doctor-sender-marker', ...FORBIDDEN])
         assert.doesNotMatch(serialized, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
       assert.equal(report.schemaVersion, DOCTOR_REPORT_V1_SCHEMA_VERSION);
+      const phaseEReport = await projectE9Doctor({
+        database: store.database,
+        installationId: store.installationId,
+        lifecycle: { enabled: false, paused: false, switchGeneration: 0 },
+        protocolVersions: [1],
+        ports: { assertObjectSecretReady: async () => undefined } as never,
+        config: { load: async () => ({ inboxes: {}, accounts: {} }) } as never,
+        approvals: { get: async () => null } as never,
+        decryptSourceState: async () => null,
+      });
+      assert.deepEqual(
+        phaseEReport.judgeBoundary,
+        [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+        'the Phase-E projection is a v1 semantic superset with only Laya still unavailable',
+      );
+      const v1Schema = JSON.parse(
+        await readFile(join(import.meta.dirname, '../src/operations/contracts/doctor-v1.schema.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const v2Schema = JSON.parse(
+        await readFile(join(import.meta.dirname, '../src/operations/contracts/doctor-v2.schema.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const Ajv2020 = Ajv2020Runtime as unknown as new (options?: Options) => Ajv2020Class;
+      const ajv = new Ajv2020({ allErrors: true, strict: false });
+      ajv.addSchema(v1Schema);
+      const validatesV2 = ajv.compile(v2Schema);
+      assert.equal(validatesV2(phaseEReport), true, JSON.stringify(validatesV2.errors));
+      const { judge: _judge, ...v1Projection } = phaseEReport;
+      const restoredV1 = { ...v1Projection, schemaVersion: 'doctor-v1' as const };
+      const validatesV1 = ajv.getSchema(v1Schema.$id as string);
+      assert.ok(validatesV1, 'the pinned v1 schema remains addressable');
+      assert.equal(validatesV1(restoredV1), true, JSON.stringify(validatesV1.errors));
+      assert.deepEqual(restoredV1, {
+        ...report,
+        judgeBoundary: [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+      });
     } finally {
       store.close();
     }
@@ -249,7 +297,7 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
       store.close();
     }
     try {
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -267,8 +315,13 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
       assert.equal(inProcess.code, 0, inProcess.stderr);
       assert.equal(
         (JSON.parse(inProcess.stdout) as { readonly schemaVersion?: unknown }).schemaVersion,
-        DOCTOR_REPORT_V1_SCHEMA_VERSION,
+        'doctor-v2',
         'the in-process CLI run reached the owner and printed the doctor report',
+      );
+      assert.deepEqual(
+        (JSON.parse(inProcess.stdout) as { readonly judgeBoundary?: unknown }).judgeBoundary,
+        [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+        'the live Phase-E doctor retains v1 boundary meaning for the only unavailable E2 kind',
       );
 
       const { server } = await createEventsMcpServer({ stateDir });
@@ -281,9 +334,11 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
           readonly content: readonly { readonly type: string; readonly text?: string }[];
         };
         assert.equal(JSON.stringify(result.structuredContent), result.content[0]?.text);
-        assert.equal(
-          (result.structuredContent as { readonly schemaVersion?: unknown }).schemaVersion,
-          DOCTOR_REPORT_V1_SCHEMA_VERSION,
+        assert.equal((result.structuredContent as { readonly schemaVersion?: unknown }).schemaVersion, 'doctor-v2');
+        assert.deepEqual(
+          (result.structuredContent as { readonly judgeBoundary?: unknown }).judgeBoundary,
+          [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
+          'the MCP result retains the E2-only doctor boundary',
         );
         return { cli, inProcess, mcp: JSON.stringify(result) };
       } finally {

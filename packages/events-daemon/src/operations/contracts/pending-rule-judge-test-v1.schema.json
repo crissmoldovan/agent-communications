@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/pending-rule-judge-test-v1.schema.json",
+  "title": "Pending rule judge test v1 sidecar request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "activationId",
+    "ruleId",
+    "ruleVersion",
+    "judgeId",
+    "judgeVersion",
+    "approvalId",
+    "digest",
+    "challenge"
+  ],
+  "properties": {
+    "kind": { "const": "pending-rule-judge-test" },
+    "activationId": { "type": "string", "minLength": 1 },
+    "ruleId": { "type": "string", "minLength": 1 },
+    "ruleVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "judgeId": { "type": "string", "minLength": 1 },
+    "judgeVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "approvalId": { "type": "string", "minLength": 1 },
+    "digest": { "type": "string", "minLength": 1 },
+    "challenge": { "type": "string", "minLength": 1 }
+  }
+}

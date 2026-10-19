@@ -7,7 +7,7 @@ import { GmailContext } from '../src/context.ts';
 import { createGmailMcpServer } from '../src/mcp/server.ts';
 import { createDraft } from '../src/operations/drafts.ts';
 import { locatedGmailLine } from './support/handoffs.ts';
-import { type Harness, newHarness } from './support/harness.ts';
+import { type Harness, newHarness, setAgentLabel } from './support/harness.ts';
 
 /**
  * Sending through MCP, including the one channel a model cannot answer.
@@ -102,13 +102,36 @@ test('an agent prepares, shows the preview, and sends exactly what it showed', a
       name: 'gmail_draft_send',
       arguments: {
         inbox: 'work',
-        draftId: id,
         approvalId: preparation.approvalId,
-        expect: preparation.expect,
       },
     })) as ToolResult;
     assert.ok(!sent.isError, JSON.stringify(sent.structuredContent));
     assert.ok((sent.structuredContent as { sentMessageId: string }).sentMessageId);
+  } finally {
+    await close();
+  }
+});
+
+test('gmail_draft_send accepts the approval id without a draft id or expect block', async () => {
+  const harness = await mailbox('chat');
+  const id = await draftId(harness);
+  const { client, close } = await connect(harness);
+  try {
+    const prepared = (await client.callTool({
+      name: 'gmail_send_prepare',
+      arguments: { inbox: 'work', draftId: id },
+    })) as ToolResult;
+    const approvalId = (prepared.structuredContent as { approvalId: string }).approvalId;
+    const sent = (await client.callTool({
+      name: 'gmail_draft_send',
+      arguments: { inbox: 'work', approvalId },
+    })) as ToolResult;
+    assert.notEqual(sent.isError, true, `approval-id-only Gmail MCP send succeeds: ${JSON.stringify(sent)}`);
+    assert.equal(
+      harness.google.requests.filter((request) => request.path.endsWith('/send')).length,
+      1,
+      'approval-id-only Gmail MCP execution reaches the fake once',
+    );
   } finally {
     await close();
   }
@@ -130,7 +153,7 @@ test('under confirm, an un-allowlisted client is refused and told where to go', 
 
     const refused = (await client.callTool({
       name: 'gmail_draft_send',
-      arguments: { inbox: 'work', draftId: id, approvalId: preparation.approvalId, expect: preparation.expect },
+      arguments: { inbox: 'work', approvalId: preparation.approvalId },
     })) as ToolResult;
     assert.equal(refused.isError, true);
     const error = (refused.structuredContent as { error: { code: string; hint: string } }).error;
@@ -176,7 +199,7 @@ test('a client on the list raises a form, and only the typed code sends', async 
     const preparation = prepared.structuredContent as { approvalId: string; expect: unknown };
     const refused = (await careless.client.callTool({
       name: 'gmail_draft_send',
-      arguments: { inbox: 'work', draftId: id, approvalId: preparation.approvalId, expect: preparation.expect },
+      arguments: { inbox: 'work', approvalId: preparation.approvalId },
     })) as ToolResult;
     assert.equal(refused.isError, true, 'a form answered without reading it does not send anything');
   } finally {
@@ -196,7 +219,7 @@ test('a client on the list raises a form, and only the typed code sends', async 
     const preparation = prepared.structuredContent as { approvalId: string; expect: unknown };
     const sent = (await real.client.callTool({
       name: 'gmail_draft_send',
-      arguments: { inbox: 'work', draftId: id, approvalId: preparation.approvalId, expect: preparation.expect },
+      arguments: { inbox: 'work', approvalId: preparation.approvalId },
     })) as ToolResult;
     assert.ok(!sent.isError, JSON.stringify(sent.structuredContent));
     assert.ok((sent.structuredContent as { sentMessageId: string }).sentMessageId);
@@ -228,6 +251,8 @@ test('gmail_draft_send finds another mailbox’s or another kind’s approval as
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'confirm' });
   await harness.connectInbox({ alias: 'home', email: 'sam@example.test', sub: 'sub-2', sendPolicy: 'confirm' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Sam Example' });
   await harness.core.config.update(
     (config) => ({
       ...config,
@@ -243,7 +268,6 @@ test('gmail_draft_send finds another mailbox’s or another kind’s approval as
   );
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const homeDraft = await createDraft(context, 'home', { to: ['kim@partner.test'], subject: 'Home', text: 'Hi.' });
-  const workDraft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tue', text: 'Tue.' });
   let forms = 0;
   const { client, close } = await connect(harness, {
     clientName: 'trusted-client',
@@ -265,7 +289,7 @@ test('gmail_draft_send finds another mailbox’s or another kind’s approval as
     for (const approvalId of [`ap_${'7'.repeat(26)}`, home.approvalId, change.approvalId]) {
       const refused = (await client.callTool({
         name: 'gmail_draft_send',
-        arguments: { inbox: 'work', draftId: workDraft.draftId, approvalId, expect: home.expect },
+        arguments: { inbox: 'work', approvalId },
       })) as ToolResult;
       const error = (
         refused.structuredContent as { error: { code: string; message: string; hint: string; details: unknown } }
@@ -296,7 +320,7 @@ test('the send tools say where the approval stands: prepared, refused for a pers
     // An untrusted client: refused, with the approval as it stands — still pending, and left alone.
     const refused = (await client.callTool({
       name: 'gmail_draft_send',
-      arguments: { inbox: 'work', draftId: id, approvalId: prepared.approvalId, expect: prepared.expect },
+      arguments: { inbox: 'work', approvalId: prepared.approvalId },
     })) as ToolResult;
     const error = (
       refused.structuredContent as { error: { code: string; details: { approval: Record<string, unknown> } } }
@@ -319,7 +343,7 @@ test('the send tools say where the approval stands: prepared, refused for a pers
     const sent = (
       await chatClient.client.callTool({
         name: 'gmail_draft_send',
-        arguments: { inbox: 'work', draftId: chatDraft, approvalId: prepared.approvalId, expect: prepared.expect },
+        arguments: { inbox: 'work', approvalId: prepared.approvalId },
       })
     ).structuredContent as { sentMessageId: string; approval: Record<string, unknown> };
     assert.equal(sent.approval.state, 'used');
@@ -342,7 +366,7 @@ test('over MCP, a send Gmail accepted without an id says exactly that, and a los
       ).structuredContent as { approvalId: string; expect: unknown };
       return (await client.callTool({
         name: 'gmail_draft_send',
-        arguments: { inbox: 'work', draftId: id, approvalId: prepared.approvalId, expect: prepared.expect },
+        arguments: { inbox: 'work', approvalId: prepared.approvalId },
       })) as ToolResult;
     };
 
@@ -454,7 +478,7 @@ test('a declined form is revoked at once, as declined: claims at 11 and 29 minut
       approvalId: string;
       expect: unknown;
     };
-    const send = { inbox: 'work', draftId: id, approvalId: prepared.approvalId, expect: prepared.expect };
+    const send = { inbox: 'work', approvalId: prepared.approvalId };
     clock.minute(1);
     const declined = errorOf(await call(client, 'gmail_draft_send', send));
     assert.equal(declined.code, 'APPROVAL_VOID');
@@ -496,7 +520,7 @@ test('a cancelled or dismissed form decides nothing: the approval stays pending 
       try {
         const prepared = (await call(client, 'gmail_send_prepare', { inbox: 'work', draftId: id }))
           .structuredContent as { approvalId: string; expect: unknown };
-        const send = { inbox: 'work', draftId: id, approvalId: prepared.approvalId, expect: prepared.expect };
+        const send = { inbox: 'work', approvalId: prepared.approvalId };
         clock.minute(1);
         const result =
           how === 'cancelled'

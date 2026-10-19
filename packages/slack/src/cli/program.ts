@@ -1,18 +1,18 @@
+import { readFile } from 'node:fs/promises';
 import {
   agentMarker,
   answerDownloadAtTerminal,
-  approvalsOf,
   approveChangeAtTerminal,
   approveRefusedHint,
+  approveStandingAtTerminal,
   CommsError,
   canPrompt,
   cliHandoffs,
   colorEnabled,
   commandPathOf,
-  DOWNLOAD_CLAIM,
   downloadAtTerminal,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChangeAtTerminal,
   handoffSentence,
@@ -24,12 +24,12 @@ import {
   openCore,
   PATH_OPTIONS,
   paint,
+  parseExpiry,
   pathOverridesFromCliOptions,
   personAtTerminal,
   refuseRetiredOut,
   refuseUnclaimedApproval,
   renderApprovalWait,
-  renderChannelPreview,
   renderPrune,
   resolvePaths,
   runCommand,
@@ -39,7 +39,7 @@ import {
   serverPruneChange,
   terminalUpdateHooks,
   UPDATE_CHECK_CHILD_COMMAND,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   waitForApproval,
   wholeNumber,
   writeError,
@@ -53,11 +53,14 @@ import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
-import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
+import { type InstallMode, parseMode, renderAgentManifest, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
+import { ack } from '../operations/ack.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
+import { renderSlackPreview } from '../operations/behaviour.ts';
+import { storeBotToken } from '../operations/bot-token.ts';
 import {
   connectWorkspace,
   planModeSet,
@@ -78,6 +81,7 @@ import {
   type FileDownloadQuestion,
   type FileDownloadResult,
 } from '../operations/files.ts';
+import { makeAgentIcon } from '../operations/icon.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
 import {
@@ -101,17 +105,22 @@ import {
 } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
+import { prepareStandingAdd } from '../operations/standing.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
+import { standingNarrowedView, standingPending } from '../standing-views.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
-import { readConfigurationToken } from './config-token.ts';
+import { askHidden, readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
+  renderAgentIcon,
+  renderAgentManifestHelp,
   renderAppCreated,
   renderAppUpdated,
   renderAppUpdateNeeded,
   renderChanged,
   renderChannels,
+  renderClientSecretManifestHelp,
   renderConnected,
   renderCreatedDraft,
   renderDeletedDraft,
@@ -252,8 +261,7 @@ Getting started — run these with this CLI:
   read <channel> --workspace acme/slack
 
 Exit codes: 0 ok · 1 unexpected · 10 a post or a change was refused or needs approval, or a
-sign-in is still waiting · 11 an update is out: update first, or put it off, with the commands
-it names · 64 usage · 65 bad data · 66 not found · 69 provider or secret store unavailable · 75
+sign-in is still waiting · 64 usage · 65 bad data · 66 not found · 69 provider or secret store unavailable · 75
 temporary (retry later) · 77 sign-in or permission needed · 78 configuration problem.`,
     )
     .exitOverride();
@@ -308,46 +316,26 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   let softExit: number | null = null;
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
-    // `sign-in-listen` too: it is the listener a sign-in started, not a command anybody types, and stopping it would
-    // break the sign-in the person is in the middle of. So is the update check a command handed on (#48).
-    if (exemptFromUpdateGate(path, ['sign-in-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
+    // `sign-in-listen` too: it is the listener a sign-in started, not a command anybody types, and a line on its
+    // stderr would say nothing to anybody. So is the update check a command handed on (#48).
+    if (exemptFromUpdateNotice(path, ['sign-in-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-slack',
-          channel: 'slack',
-          running: VERSION,
-          output: output(),
-          noInput: false,
-          streams,
-          approvals: approvalsOf(command),
-          // A download's `--choice` is the question the person just answered: held to that kind, as the tool's is.
-          // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-          approvalClaim:
-            path.join(' ') === 'files download'
-              ? DOWNLOAD_CLAIM
-              : path.join(' ') === 'approval wait'
-                ? { lookup: true }
-                : undefined,
-          ...terminalUpdateHooks(core, env, { channel: 'slack', output: output(), streams }),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'slack',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+      ...terminalUpdateHooks(core, env),
+    });
   });
 
   const act =
@@ -355,10 +343,6 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       const interrupted = new AbortController();
       let foreground: { flowId: string; settled: Promise<unknown> } | undefined;
       const context = new SlackContext({
@@ -447,22 +431,53 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('manifest')
     .description('the Slack app to create, as a manifest you can paste')
-    .addOption(modeOption())
-    .option('--port <port>', 'the loopback port its redirect will use')
+    .addOption(
+      new Option(
+        '--mode <mode>',
+        "how much access to ask Slack for; `agent` for an organisation's bot-only agent app, whose token members paste",
+      )
+        .choices(['read', 'send', 'agent'])
+        .default('read'),
+    )
+    .option(
+      '--port <port>',
+      'the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app',
+    )
     .option('--workspace <name>', 'for a workspace already connected: its port, and the link to its own app')
+    .option(
+      '--with-client-secret',
+      'the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app',
+    )
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
         const result = await manifestFor(context, {
-          mode: String(flags.mode) as InstallMode,
+          mode: String(flags.mode),
           port: flags.port,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
+          ...(flags.withClientSecret === true ? { pkce: false } : {}),
         });
         writeResult(
           result,
           output(),
-          (data) =>
-            `${renderManifestHelp(data.mode, data.port, options.color, data, context.handoffs)}\n\n${renderManifest(data.mode, data.redirectUrl)}`,
+          (data) => {
+            // The organisation's agent app: its own steps, and its own manifest, with no port in either.
+            if (data.mode === 'agent')
+              return `${renderAgentManifestHelp(data, options.color)}\n\n${renderAgentManifest()}`;
+            const pkce = data.manifest.oauth_config.pkce_enabled;
+            // The PKCE app's text is this command's own, as it was; the client-secret app's is the operation's steps.
+            const help = pkce
+              ? renderManifestHelp(
+                  data.mode,
+                  data.port,
+                  options.color,
+                  data,
+                  context.handoffs,
+                  data.portFrom === 'chosen',
+                )
+              : renderClientSecretManifestHelp(data, options.color);
+            return `${help}\n\n${renderManifest(data.mode, data.redirectUrl, { pkce })}`;
+          },
           streams,
         );
       }),
@@ -624,7 +639,11 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       .description(
         'connect through the named organisation profile’s read app, or send app with --mode send; an own app uses --client-id and --port',
       )
-      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port'),
+      .option('--client-id <id>', 'use your own app’s Client ID; also requires --port')
+      .option(
+        '--with-client-secret',
+        "sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string | undefined, flags: Options) => {
       if (flags.finish) {
@@ -654,6 +673,19 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         });
       }
       const mode = String(flags.mode) as InstallMode;
+      const words = [
+        'workspace',
+        'add',
+        alias,
+        '--mode',
+        mode,
+        ...(flags.clientId === undefined ? [] : ['--client-id', String(flags.clientId)]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_add`: in send mode, a change approved before the sign-in starts.
       const started = await changeAt(
         context,
@@ -664,6 +696,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
         [
@@ -775,6 +808,67 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     }),
   );
 
+  /*
+   * The send app's bot token, pasted once (design 2026-10-15 S1, revised): the PKCE sign-in cannot ask Slack for bot
+   * scopes, so a person copies the token from the app's own page. A person's command only, at a terminal, as `approve`
+   * is: an agent never handles a secret, so there is no tool for this, and no flag or variable to pass the token in.
+   * A shell agent can defeat the checks — `script` makes any command see a terminal — and they are a speed bump, not a
+   * boundary; what the token is gets checked with Slack before anything keeps it (`storeBotToken`).
+   */
+  workspace
+    .command('bot <alias>')
+    .description(
+      "keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal",
+    )
+    .action(
+      act(async (context, options, alias: string) => {
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "only a person can give this workspace its app's bot token, not an agent",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) =>
+                  `Ask the person to run ${command} in their own terminal. Never paste the token into a chat: the transcript keeps it.`,
+                {
+                  instead:
+                    'Ask the person to run this command in their own terminal. Never paste the token into a chat.',
+                },
+              ),
+              details: { marker },
+            },
+          );
+        }
+        if (!canPrompt(env, streams, { json: options.json })) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            "giving this workspace its app's bot token needs an interactive terminal",
+            {
+              hint: handoffSentence(
+                context.handoffs.own(['workspace', 'bot', alias]),
+                (command) => `Run ${command} directly in a terminal: it asks for the token without showing it.`,
+              ),
+            },
+          );
+        }
+        const pasted = await askHidden(
+          streams,
+          'Bot User OAuth Token (the app’s OAuth & Permissions page, after Install to Workspace; it is not shown as you type): ',
+        );
+        // The same operation a test drives: checked with Slack through the guard, then kept. Never printed.
+        const stored = await storeBotToken(context, alias, pasted, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+        writeResult(
+          stored,
+          output(),
+          () =>
+            `${paint(options.color, 'green', '✓')} "${stored.alias}" keeps its app's bot token: an agent's posts now go out as the app (bot user ${stored.botUserId}) where it can post.`,
+          streams,
+        );
+      }),
+    );
+
   approvalOption(
     workspace
       .command('remove <alias>')
@@ -804,7 +898,12 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         'read',
         'send',
       ]),
-    ).description('sign in again: renew the grant, or change how much access it has'),
+    )
+      .description('sign in again: renew the grant, or change how much access it has')
+      .option(
+        '--with-client-secret',
+        "sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too",
+      ),
   ).action(
     act(async (context, options, alias: string, flags: Options) => {
       if (flags.finish) {
@@ -826,6 +925,17 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
        * quietly downgrade it, which is the opposite of what "the same, again" means.
        */
       const mode = flags.mode === undefined ? undefined : (String(flags.mode) as InstallMode);
+      const words = [
+        'workspace',
+        'reauth',
+        alias,
+        ...(mode === undefined ? [] : ['--mode', mode]),
+        ...given(flags, ['port', 'start']),
+        ...(flags.withClientSecret === true ? ['--with-client-secret'] : []),
+      ];
+      // Asked before anything starts, and only at a person's terminal (S1, revised).
+      const clientSecret =
+        flags.withClientSecret === true ? await readClientSecret(context, options.json, words) : undefined;
       // The same operation as `slack_workspace_reauth`: a widening is approved before its sign-in starts.
       const started = await changeAt(
         context,
@@ -835,15 +945,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           port: flags.port,
           detached: flags.start === true,
           listenerCommand: deps.listenerCommand,
+          ...(clientSecret === undefined ? {} : { clientSecret }),
         }),
         flags,
-        [
-          'workspace',
-          'reauth',
-          alias,
-          ...(mode === undefined ? [] : ['--mode', mode]),
-          ...given(flags, ['port', 'start']),
-        ],
+        words,
       );
       await presentSignIn(context, started, true, options, {
         start: flags.start === true,
@@ -897,6 +1002,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           offline: flags.offline === true,
           workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
           probe: deps.probe,
+          session: { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);
@@ -914,6 +1020,64 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
 
   const session = (context: SlackContext, alias: string) =>
     openWorkspace(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+
+  /*
+   * Who a post, reaction or edit appears to come from (design 2026-10-15 L3): the person's word for this one act, and
+   * nothing an agent picks for itself. Left out, the rules and the default — `agent`, labelled — decide.
+   */
+  /*
+   * The app's client secret, for the sign-in that uses it (design 2026-10-15 S1, revised): a person's, at a hidden prompt,
+   * and refused to an agent or anything without a terminal before it asks — as `approve` and `workspace bot` refuse.
+   * No option or variable takes the secret itself: a command line lands in shell history.
+   */
+  const readClientSecret = async (context: SlackContext, json: boolean, words: string[]): Promise<string> => {
+    const again = context.handoffs.own(words);
+    const marker = agentMarker(env);
+    if (marker) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "only a person can sign in with the app's client secret, not an agent",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Ask the person to run ${command} in their own terminal. Never paste the secret into a chat: the transcript keeps it.`,
+            {
+              instead: 'Ask the person to run this command in their own terminal. Never paste the secret into a chat.',
+            },
+          ),
+          details: { marker },
+        },
+      );
+    }
+    if (!canPrompt(env, streams, { json })) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "signing in with the app's client secret needs an interactive terminal",
+        {
+          hint: handoffSentence(
+            again,
+            (command) =>
+              `Run ${command} directly in a terminal, without --json: it asks for the secret without showing it.`,
+          ),
+        },
+      );
+    }
+    const typed = (
+      await askHidden(
+        streams,
+        "The app's client secret (its Basic Information page, under App Credentials; it is not shown as you type): ",
+      )
+    ).trim();
+    if (typed === '') throw new CommsError('USAGE', 'no client secret was typed, so nothing started');
+    return typed;
+  };
+
+  const identityOption = (): Option =>
+    new Option(
+      '--as <identity>',
+      'who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one',
+    ).choices(['agent', 'me']);
 
   workspaceOption(program.command('channels'))
     .description('the channels and conversations this account can see')
@@ -1135,6 +1299,24 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       }),
     );
 
+  // ── The agent emoji ─────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * A picture, made on this machine: the person's Slack photo with the robot badge, to upload as a workspace emoji
+   * themselves. It reads Slack and changes nothing there or in the configuration, so it asks nobody; `slack_icon_make`
+   * is the same operation from a chat.
+   */
+  const icon = program.command('icon').description('your agent’s emoji: your Slack photo with a robot badge');
+  icon
+    .command('make <workspace>')
+    .description('make the emoji as a PNG in the data folder, and say where to upload it; changes nothing in Slack')
+    .action(
+      act(async (context, options, alias: string) => {
+        const result = await makeAgentIcon(context, await session(context, alias));
+        writeResult(result, output(), () => renderAgentIcon(result, options.color), streams);
+      }),
+    );
+
   // ── Drafting and posting ────────────────────────────────────────────────────────────────────────────────────
 
   const draft = program.command('draft').description('compose and keep messages locally; nothing reaches Slack');
@@ -1255,16 +1437,17 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   workspaceOption(post.command('prepare'))
     .description('show what would be posted, and how many people it interrupts. Posts nothing')
     .requiredOption('--draft <draftId>', 'the draft to prepare')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         // The same operation as `slack_post_prepare` given a `draftId`: one draft, one preview, from either surface.
         const prepared = await prepareDraftPost(
           context,
           String(flags.workspace),
-          { draftId: String(flags.draft) },
+          { draftId: String(flags.draft), ...(flags.as === undefined ? {} : { as: flags.as }) },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
-        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+        writeResult(prepared, output(), (data) => renderSlackPreview(data.preview), streams);
       }),
     );
 
@@ -1297,6 +1480,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--emoji <name>', 'the emoji name, without colons')
     .option('--remove', 'remove your reaction instead', false)
     .option('--approval <approvalId>', 'the approval a person gave with `approve`, under `confirm`')
+    .addOption(identityOption())
     .action(
       act(async (context, options, flags: Options) => {
         const wanted = {
@@ -1317,6 +1501,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           wanted,
           flags.approval ? String(flags.approval) : undefined,
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+          flags.as,
         );
         writeResult(
           done,
@@ -1327,6 +1512,149 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
                 ? ''
                 : ` ${done.note.charAt(0).toUpperCase()}${done.note.slice(1)}${/[.!?]$/.test(done.note) ? '' : '.'}`
             }`,
+          streams,
+        );
+      }),
+    );
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8 and §8.1): acknowledgements an agent may send without
+   * asking, within contents, places, counts and an expiry the person approved at their terminal with its code. `add`
+   * prepares one — reading each place's name, member count and sharing for its preview — and a person at this terminal
+   * approves it there and then; anyone else is handed the approve command. Listing, narrowing and ending them are core's.
+   */
+  const standing = program
+    .command('standing')
+    .description('acknowledgements your agent may send without asking, once you approve them here with a code');
+
+  workspaceOption(standing.command('add'))
+    .description(
+      'prepare a standing approval: fixed contents, places and limits. Approved only with the code at a terminal',
+    )
+    .option('--reactions <names>', 'standard emoji names, comma-separated; eyes alone when no content is given')
+    .option('--replies-file <file>', 'a file of fixed replies, one per line, each at most 200 characters')
+    .requiredOption('--places <places>', 'threads-i-am-in, or channel and DM ids, comma-separated')
+    .option('--per-thread <n>', 'acts per thread, across every standing approval: 1 to 3, 1 when left out')
+    .option('--per-hour <n>', 'acts an hour: 1 to 30, 10 when left out')
+    .option('--per-day <n>', 'acts a day: 1 to 100, 30 when left out')
+    .option(
+      '--per-sender <n>',
+      'acts a day on messages from any one person, across every standing approval: 1 to 10, 3 when left out',
+    )
+    .option('--expires <days>', 'how long it lasts once approved, as 7d: 1d to 30d, 7d when left out')
+    .option('--replaces <id>', 'the standing approval this replaces: narrower applies at once, wider asks for a code')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const listed = (value: unknown): string[] =>
+          String(value)
+            .split(',')
+            .map((part) => part.trim())
+            .filter((part) => part !== '');
+        let replies: string[] | undefined;
+        if (flags.repliesFile !== undefined) {
+          const file = String(flags.repliesFile);
+          let text: string;
+          try {
+            text = await readFile(file, 'utf8');
+          } catch (error) {
+            throw new CommsError('USAGE', `the replies file could not be read: ${(error as Error).message}`, {
+              hint: 'Pass a file of plain text, one reply per line.',
+            });
+          }
+          // One reply per line; a blank line is none.
+          replies = text.split(/\r?\n/).filter((line) => line.trim() !== '');
+        }
+        const places = String(flags.places).trim() === 'threads-i-am-in' ? 'threads-i-am-in' : listed(flags.places);
+        const count = (name: string, value: unknown) => wholeNumber(value, { name, min: 1 });
+        // Decided as every changing command decides it: a person at this terminal, with no agent marker.
+        const person = agentMarker(env) === null && canPrompt(env, streams, { json: options.json });
+        // The same operation as `slack_standing_add`: see `prepareStandingAdd`.
+        const outcome = await prepareStandingAdd(
+          context,
+          String(flags.workspace),
+          {
+            ...(flags.reactions === undefined ? {} : { reactions: listed(flags.reactions) }),
+            ...(replies === undefined ? {} : { replies }),
+            places,
+            perThread: count('--per-thread', flags.perThread),
+            perHour: count('--per-hour', flags.perHour),
+            perDay: count('--per-day', flags.perDay),
+            perSender: count('--per-sender', flags.perSender),
+            ...(flags.expires === undefined ? {} : { expiresDays: parseExpiry(String(flags.expires)) }),
+            ...(flags.replaces === undefined ? {} : { replaces: String(flags.replaces) }),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+          { proposedBy: person ? 'person' : 'agent' },
+        );
+        if (outcome.status === 'narrowed') {
+          writeResult(
+            standingNarrowedView(outcome.record),
+            output(),
+            (view) => `Narrowed at once: standing approval ${view.standingId} now holds less. Nothing was asked for.`,
+            streams,
+          );
+          return;
+        }
+        const { prepared } = outcome;
+        if (!person) {
+          // The preview is what the agent shows the person, so it is printed, not only tucked into the envelope.
+          if (!options.json) streams.stdout.write(`${prepared.preview}\n\n`);
+          throw standingPending(context, prepared);
+        }
+        // The person is here: they read it and type its code, or press Enter, which ends it.
+        const approved = await approveStandingAtTerminal(
+          context.core,
+          prepared.approvalId,
+          env,
+          { json: options.json, color: options.color, platform: context.platform },
+          streams,
+        );
+        writeResult(
+          approved,
+          output(),
+          (result) =>
+            result.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking.'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          streams,
+        );
+      }),
+    );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): the agent names the message and the content by
+   * its digest, and nothing else — no draft, no words, no removal. The gate builds the payload and decides everything a
+   * person would otherwise have been asked.
+   */
+  workspaceOption(program.command('ack'))
+    .description(
+      'acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent',
+    )
+    .requiredOption('--standing <id>', 'the standing approval, as standing list shows it')
+    .requiredOption('--channel <id>', 'the conversation the message is in')
+    .requiredOption('--ts <ts>', 'the message')
+    .requiredOption('--content <digest>', 'the content, by the digest standing list shows for it')
+    .action(
+      act(async (context, _options, flags: Options) => {
+        // The same operation as `slack_ack`: see `ack`.
+        const done = await ack(
+          context,
+          String(flags.workspace),
+          {
+            standingId: String(flags.standing),
+            channel: String(flags.channel),
+            ts: String(flags.ts),
+            content: String(flags.content),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(
+          done,
+          output(),
+          (data) =>
+            `${data.act === 'reaction' ? 'Reacted to' : 'Replied in the thread of'} ${data.ts} in ${data.channel}, ${
+              data.label?.route === 'app' ? 'as the app' : 'labelled as your agent'
+            }, under standing approval ${data.standingId}. Notice: ${data.notice}.`,
           streams,
         );
       }),
@@ -1352,6 +1680,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       '--remove-file <fileId...>',
       'take this file of the message off it, by id; it stays in Slack, shared nowhere',
     )
+    .addOption(identityOption())
     .action(
       act(async (context, _options, flags: Options) => {
         // The same operation as `slack_edit_prepare` given a `draftId`: see `prepareEdit`.
@@ -1362,10 +1691,11 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             draftId: String(flags.draft),
             ts: String(flags.ts),
             removeFiles: flags.removeFile as string[] | undefined,
+            ...(flags.as === undefined ? {} : { as: flags.as }),
           },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
-        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+        writeResult(prepared, output(), (data) => renderSlackPreview(data.preview), streams);
       }),
     );
 
@@ -1456,7 +1786,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('approve <approvalId>')
     .description(
-      'approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved',
+      'approve a post, a reaction, an edit, a deletion, a change or a standing approval at this terminal: read it, then type the code back — or answer where a download is saved',
     )
     .action(
       act(async (context, globalOptions, approvalId: string) => {
@@ -1499,6 +1829,25 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
          * core's own terminal approval.
          */
         const pending = await context.core.approvals.get(approvalId);
+        /*
+         * A standing approval, with its own preview and code (design 2026-10-19-standing-approvals, S8): the command the
+         * person already has approves it, as core's `approve` does, and never with a typed yes.
+         */
+        if (kindOf(pending) === 'standing') {
+          const outcome = await approveStandingAtTerminal(
+            context.core,
+            approvalId,
+            env,
+            { json: globalOptions.json, color: globalOptions.color, platform: context.platform },
+            streams,
+          );
+          streams.stdout.write(
+            outcome.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking.\n'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.\n',
+          );
+          return;
+        }
         if (kindOf(pending) === 'change') {
           const outcome = await approveChangeAtTerminal(
             context.core,

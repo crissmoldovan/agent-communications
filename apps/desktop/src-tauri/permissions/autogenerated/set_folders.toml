@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-folders"
+description = "Enables the set_folders command without any pre-configured scope."
+commands.allow = ["set_folders"]
+
+[[permission]]
+identifier = "deny-set-folders"
+description = "Denies the set_folders command without any pre-configured scope."
+commands.deny = ["set_folders"]

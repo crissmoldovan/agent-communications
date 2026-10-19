@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import {
@@ -11,7 +22,6 @@ import {
   commandsIn,
   environmentAssignments,
   FOUR_FOLDERS,
-  filesUnder,
   freshShell,
   inWindowsShells,
   isCanonical,
@@ -59,6 +69,15 @@ import { tempDir } from './helpers/temp-dir.mjs';
 const CORE = builtCli('core');
 const GMAIL = builtCli('gmail');
 const VERSION = JSON.parse(readFileSync(join(ROOT, 'packages', 'core', 'package.json'), 'utf8')).version;
+/**
+ * Core's CLI carrying the test's verifier (re-review of 0.20.0, severity 4): core verifies the release whose runtime it
+ * registers on, and a built CLI would ask npm and Sigstore, which no test may reach. Run with type stripping.
+ */
+const VERIFIED_CORE = [
+  '--experimental-strip-types',
+  '--disable-warning=ExperimentalWarning',
+  join(ROOT, 'packages', 'core', 'test', 'fixtures', 'verified-core-cli.ts'),
+];
 
 /** A client secret for the test profile: a made-up value, never a real credential. */
 const FAKE_SECRET = 'fake-cue403-client-secret-not-real';
@@ -127,14 +146,64 @@ function held(result) {
 }
 
 /**
- * Checks a printed command is the acceptance criterion's first outcome: this Node, `entry`, then exactly one canonical
- * absolute option for each folder in `uses` with the printing process's value — and no other path option — then
- * `tail`. Returns its words.
+ * This Node as a process with `env` names it in a command it prints (CUE-492): the first `node` on that PATH that is
+ * the same real file as this Node, as PATH spells it — the printing machine's `node-bin/node` link stays the link — and
+ * otherwise `process.execPath`; with no environment (`null`, a command located in this process with none), nothing is
+ * looked for. Worked out here, not asked of core, so a test of a command's program checks core's choice.
  */
-function assertLocated(command, { entry, folders, uses = FOUR_FOLDERS, tail, platform = process.platform }) {
+function printedNode(env) {
+  const own = process.execPath;
+  if (env === null) return own;
+  const windows = process.platform === 'win32';
+  const same = (a, b) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  let real;
+  try {
+    real = realpathSync(own);
+  } catch {
+    return own;
+  }
+  const names = windows
+    ? (env.PATHEXT ?? '.EXE;.CMD;.BAT')
+        .split(';')
+        .filter(Boolean)
+        .map((extension) => `node${extension.toLowerCase()}`)
+    : ['node'];
+  const folders = (env.PATH ?? env.Path ?? '')
+    .split(delimiter)
+    .filter((folder) => (windows ? /^[A-Za-z]:[\\/]/.test(folder) : folder !== '' && isAbsolute(folder)));
+  for (const folder of folders) {
+    for (const name of names) {
+      const candidate = join(folder, name);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        accessSync(candidate, constants.X_OK);
+        if (!same(realpathSync(candidate), real)) continue;
+        return same(candidate, own) ? own : candidate;
+      } catch {
+        // not here, or not runnable: keep looking
+      }
+    }
+  }
+  return own;
+}
+
+/**
+ * Checks a printed command is the acceptance criterion's first outcome: this Node, as the PATH of the process that
+ * printed it (`printedWith`, its environment) finds it, `entry`, then exactly one canonical absolute option for each
+ * folder in `uses` with the printing process's value — and no other path option — then `tail`. Returns its words.
+ */
+function assertLocated(
+  command,
+  { entry, folders, uses = FOUR_FOLDERS, tail, printedWith, platform = process.platform },
+) {
+  assert.ok(printedWith !== undefined, 'say which environment printed the command, or null for none');
   const words = wordsOf(command, platform);
   assert.ok(words !== null, `a line to paste, not the JSON form: ${command}`);
-  assert.equal(words[0], process.execPath, `the program is this Node: ${command}`);
+  assert.equal(
+    words[0],
+    printedNode(printedWith),
+    `the program is this Node, as the printer's PATH finds it: ${command}`,
+  );
   assert.equal(words[1], entry, `it runs the installation's own entry: ${command}`);
   const pins = pinsOf(words);
   assert.deepEqual(
@@ -201,17 +270,18 @@ test('a change prepared at the CLI is approved at a fresh terminal and run again
 
   // The printing process pinned downloads too; neither command opens them, so neither carries them (D2).
   const approve = commandEndingWith(hint, ['approve', id]);
-  assertLocated(approve, { entry: CORE, folders: m.folders, tail: ['approve', id] });
+  assertLocated(approve, { entry: CORE, folders: m.folders, tail: ['approve', id], printedWith: m.env });
   const rerun = commandEndingWith(hint, ['attach', 'roots', 'add', allowed, '--approval', id]);
   assertLocated(rerun, {
     entry: CORE,
     folders: m.folders,
     tail: ['attach', 'roots', 'add', allowed, '--approval', id],
+    printedWith: m.env,
   });
 
   // And the wait that learns when they have (design 2026-10-05 §D7, D7-b): core's own, pinned as the approve is.
   const wait = commandEndingWith(hint, ['approval', 'wait', id]);
-  assertLocated(wait, { entry: CORE, folders: m.folders, tail: ['approval', 'wait', id] });
+  assertLocated(wait, { entry: CORE, folders: m.folders, tail: ['approval', 'wait', id], printedWith: m.env });
 
   // The person, at a terminal of their own: the approval is in the printing process's store, and they approve it —
   // while the agent, in a shell of its own, waits as it was told, and sees them do it.
@@ -325,7 +395,12 @@ test('a change prepared through the core server is approved at a fresh terminal,
   const asked = await server.call('comms_attach', { rootsAdd: allowed });
   assert.equal(asked.approvalRequired, true, JSON.stringify(asked));
   const approve = commandEndingWith(asked.next, ['approve', asked.approvalId]);
-  assertLocated(approve, { entry: CORE, folders: m.folders, tail: ['approve', asked.approvalId] });
+  assertLocated(approve, {
+    entry: CORE,
+    folders: m.folders,
+    tail: ['approve', asked.approvalId],
+    printedWith: m.env,
+  });
   assert.deepEqual(environmentAssignments(asked.next), []);
   // The wait it names is a tool of the server that named it (D7-b).
   assert.match(asked.next, /; learn when they have with comms_approval_wait\./);
@@ -380,6 +455,7 @@ test(
       entry: CORE,
       folders: m.folders,
       tail: ['org', 'add', profile, '--store', 'file', '--approval', id],
+      printedWith: m.env,
     });
     const first = shellUnder(m.root, 'first');
     const added = posixShell(add, first);
@@ -389,7 +465,7 @@ test(
     // Adding it again hands over `org update`, which reads the client's secret back from the store.
     const again = m.print(['org', 'add', profile, '--store', 'file']);
     const update = commandEndingWith(again.stderr, ['org', 'update', 'acme']);
-    assertLocated(update, { entry: CORE, folders: m.folders, tail: ['org', 'update', 'acme'] });
+    assertLocated(update, { entry: CORE, folders: m.folders, tail: ['org', 'update', 'acme'], printedWith: m.env });
     const second = shellUnder(m.root, 'second');
     const read = posixShell(update, second);
     assert.equal(read.status, 0, `${read.stdout}\n${read.stderr}`);
@@ -485,7 +561,13 @@ test('every kind of command a handoff names pins exactly the folders it declares
   /** Checks a row's command carries exactly its folders, then runs it from a fresh shell on those alone. */
   function run(row) {
     if (platform !== 'win32') {
-      assertLocated(row.command, { entry: row.entry, folders: m.folders, uses: row.uses, tail: row.tail });
+      assertLocated(row.command, {
+        entry: row.entry,
+        folders: m.folders,
+        uses: row.uses,
+        tail: row.tail,
+        printedWith: row.printedWith,
+      });
     } else {
       const words = wordsOf(row.command, 'win32');
       if (words !== null) assert.deepEqual(Object.keys(pinsOf(words)).sort(), [...row.uses].sort(), row.kind);
@@ -512,9 +594,10 @@ test('every kind of command a handoff names pins exactly the folders it declares
     } else check(posixShell(row.command, shell), 'sh');
     assertClean(shell);
   }
-  // Each row is run as soon as it is printed, as the person told to run it would.
-  const add = (kind, command, tail, uses, entry = CORE) => {
-    rows.push({ kind, command, tail, uses, entry });
+  // Each row is run as soon as it is printed, as the person told to run it would. Every row but `channels` is printed by
+  // the machine, with its environment.
+  const add = (kind, command, tail, uses, entry = CORE, printedWith = m.env) => {
+    rows.push({ kind, command, tail, uses, entry, printedWith });
     run(rows.at(-1));
   };
 
@@ -549,11 +632,12 @@ test('every kind of command a handoff names pins exactly the folders it declares
     );
   }
 
-  held_ = held(m.print(['update', '--later', '--json']));
+  // A level that updates less, held for the person as "not now" was before it was retired (design 2026-10-16, U2).
+  held_ = held(m.print(['update', '--level', 'never', '--json']));
   add(
     'update',
-    commandEndingWith(held_.hint, ['update', '--later', '--approval', held_.id], platform),
-    ['update', '--later', '--approval', held_.id],
+    commandEndingWith(held_.hint, ['update', '--level', 'never', '--approval', held_.id], platform),
+    ['update', '--level', 'never', '--approval', held_.id],
     FOUR_FOLDERS,
   );
 
@@ -592,7 +676,8 @@ test('every kind of command a handoff names pins exactly the folders it declares
     paths: m.folders,
     platform,
   });
-  add('channels', handoffText(handoffs.own(['channels'])), ['channels'], FOUR_FOLDERS);
+  // Located here, with no environment: nothing on a PATH is looked for.
+  add('channels', handoffText(handoffs.own(['channels'])), ['channels'], FOUR_FOLDERS, CORE, null);
 
   // Approvals: a person's `approve`, under `confirm` — set once the changes above, approved in the chat, have run.
   assert.equal(m.print(['policy', 'confirm']).status, 0);
@@ -624,9 +709,12 @@ test('every kind of command a handoff names pins exactly the folders it declares
     platform === 'win32',
     'prune removed the declared data’s runtime, where it can list what is running',
   );
-  assert.ok(
-    filesUnder(m.folders.stateDir).some((file) => /update/.test(file)),
-    `update --later is in the declared state: ${filesUnder(m.folders.stateDir)}`,
+  // The level the pasted `update --level never` set is in the declared configuration (it once wrote "not now" to the
+  // declared state; that is retired with the stop, design 2026-10-16).
+  assert.equal(
+    JSON.parse(readFileSync(join(m.folders.configDir, 'config.json'), 'utf8')).defaults?.updates,
+    'never',
+    'update --level is in the declared configuration',
   );
 });
 
@@ -682,7 +770,13 @@ test('a registration pasted into a fresh shell goes to the clients of the person
   const id = /approval (ap_[0-9A-Z]+)/.exec(asked.stdout)?.[1];
   const rerun = commandEndingWith(asked.stderr, [...tail, '--approval', id]);
   if (process.platform !== 'win32') {
-    assertLocated(rerun, { entry: CORE, folders: m.folders, tail: [...tail, '--approval', id] });
+    // Printed by the pasted command, run in the person's shell: this Node as that shell's PATH finds it.
+    assertLocated(rerun, {
+      entry: CORE,
+      folders: m.folders,
+      tail: [...tail, '--approval', id],
+      printedWith: shell.env,
+    });
   }
   const installed = run(rerun);
   assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
@@ -742,6 +836,16 @@ function managedRuntime(dataDir) {
     join(root, 'node_modules', '@agentcomms', 'core'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
+  // The lockfile npm writes, with the integrity of the tarball the test's verifier was shown signed: core holds a
+  // runtime already on disk to it before it registers on it (`provenance-fixture.ts`'s `tarballOf`).
+  const integrity = `sha512-${createHash('sha512').update(`@agentcomms/core@${VERSION}`).digest('base64')}`;
+  WRITES.writeFile(
+    join(root, 'package-lock.json'),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: { 'node_modules/@agentcomms/core': { version: VERSION, integrity } },
+    }),
+  );
 }
 
 /**
@@ -794,8 +898,13 @@ for (const launcher of ['managed', 'npx', 'local']) {
       fakeNpx(npxDir);
       m.env.PATH = [npxDir, m.nodeBin, strippedPath()].join(process.platform === 'win32' ? ';' : ':');
     }
+    // A managed install is core's, which verifies the runtime it registers on: through the CLI with the test's
+    // verifier, the same words and folders. Every other launcher, through the built CLI as before.
+    const installWords = ['mcp', 'install', '--client', 'cursor', '--launcher', launcher, '--no-verify', '--json'];
     const { id, hint } = held(
-      m.print(['mcp', 'install', '--client', 'cursor', '--launcher', launcher, '--no-verify', '--json']),
+      launcher === 'managed'
+        ? runNode([...VERIFIED_CORE, ...m.pinArgs, ...installWords], { env: m.env, cwd: m.cwd })
+        : m.print(installWords),
     );
     const install = commandEndingWith(hint, [
       'mcp',
@@ -808,21 +917,29 @@ for (const launcher of ['managed', 'npx', 'local']) {
       '--approval',
       id,
     ]);
-    assert.equal(runNode(argvOf(install).slice(1), m).status, 0);
+    const words = argvOf(install).slice(1);
+    // The approval run, as handed over: core's own command with the printing process's folders. For a managed
+    // install, the same words after core's CLI, through the CLI with the test's verifier.
+    const pinned = words.indexOf(PATH_OPTIONS.configDir);
+    assert.ok(pinned > 0 && /cli\.(?:mjs|ts)$/.test(words[pinned - 1]), `core's own CLI, then its pins: ${install}`);
+    assert.equal(runNode(launcher === 'managed' ? [...VERIFIED_CORE, ...words.slice(pinned)] : words, m).status, 0);
     const entry = JSON.parse(readFileSync(join(m.home, '.cursor', 'mcp.json'), 'utf8')).mcpServers.agentcomms;
     assert.deepEqual(pinsOf(entry.args), Object.fromEntries(FOUR_FOLDERS.map((key) => [key, m.folders[key]])));
     assert.ok(!entry.args.includes(PATH_OPTIONS.downloadsDir), 'downloads are a handoff’s, never a registration’s');
     assert.equal(entry.args.at(-1), 'mcp');
+    // A managed entry starts the stable launcher (design 2026-10-16, U6): the program itself on POSIX, so the pins come
+    // first; Node's first word on Windows, as a local entry's script is.
     assert.equal(
       entry.args.indexOf(PATH_OPTIONS.configDir),
-      launcher === 'npx' ? 2 : 1,
-      'the pins come after the entry or the package, before `mcp`',
+      launcher === 'npx' ? 2 : launcher === 'managed' && process.platform !== 'win32' ? 0 : 1,
+      'the pins come after the launcher, the entry or the package, before `mcp`',
     );
     assert.equal(m.print(['policy', 'confirm']).status, 0);
 
     // The client: every suite variable a decoy, its own PATH from the entry.
     const client = freshShell(join(m.root, 'client'));
-    const server = startMcpServer(entry.command, entry.args, { env: { ...client.env, ...entry.env }, cwd: client.cwd });
+    const serverEnv = { ...client.env, ...entry.env };
+    const server = startMcpServer(entry.command, entry.args, { env: serverEnv, cwd: client.cwd });
     t.after(() => server.close());
     const allowed = join(m.root, `allowed-${launcher}`);
     WRITES.mkdir(allowed);
@@ -830,7 +947,13 @@ for (const launcher of ['managed', 'npx', 'local']) {
     assert.equal(asked.approvalRequired, true, JSON.stringify(asked));
     const approve = commandEndingWith(asked.next, ['approve', asked.approvalId]);
     if (process.platform !== 'win32') {
-      assertLocated(approve, { entry: CORE, folders: m.folders, tail: ['approve', asked.approvalId] });
+      // Printed by the server the client started, with the client's environment and the registration's own.
+      assertLocated(approve, {
+        entry: CORE,
+        folders: m.folders,
+        tail: ['approve', asked.approvalId],
+        printedWith: serverEnv,
+      });
     }
     assert.ok(existsSync(join(m.folders.stateDir, 'approvals', `${asked.approvalId}.json`)), 'in the pinned state');
 
@@ -909,7 +1032,12 @@ test(
 
 // ── 8a, 8b: another product's command ────────────────────────────────────────────────────────────────────────────
 
-test('core hands over Gmail’s own command from a same-version registration, which runs from a fresh shell; Slack’s, run by npx, is not locatable and has no words to run (8a, 8b)', async () => {
+test('core hands over its own command to register Gmail or Slack again, which runs from a fresh shell on the printing store (8a, 8b)', async () => {
+  /*
+   * Doctor's repair for an entry from before the pins is core's own `mcp install --server <channel>` (re-review of
+   * 0.20.0, severity 3): a channel's own command registers the release it is, and the one found here may be the old
+   * one the entry still starts — and Slack, run only by npx, had no command of its own to name at all.
+   */
   const m = await machine();
   // Gmail registered as a checkout's built CLI, from before the pins; Slack only through npx.
   WRITES.mkdir(join(m.home, '.cursor'));
@@ -925,34 +1053,41 @@ test('core hands over Gmail’s own command from a same-version registration, wh
   const checks = envelope(m.print(['doctor', '--json'])).data.checks;
   const gmail = checks.find((check) => check.name === 'gmail server');
   const slack = checks.find((check) => check.name === 'slack server');
-  const tail = ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--force'];
+  const tail = ['mcp', 'install', '--server', 'gmail', '--client', 'cursor', '--launcher', 'local', '--force'];
   const command = commandEndingWith(gmail.fix, tail);
-  if (process.platform !== 'win32') assertLocated(command, { entry: GMAIL, folders: m.folders, tail });
+  if (process.platform !== 'win32')
+    assertLocated(command, { entry: CORE, folders: m.folders, tail, printedWith: m.env });
+  assert.ok(!gmail.fix.includes(GMAIL), `Gmail's own command: ${gmail.fix}`);
 
-  // No executable words for Slack: the product, the release it needs and why — never a bare name or an npx line.
-  assert.deepEqual(commandsIn(slack.fix), [], slack.fix);
-  assert.match(
-    slack.fix,
-    new RegExp(`Slack ${VERSION.replaceAll('.', '\\.')} \\(@agentcomms/slack\\) is not locatable here`),
-  );
-  assert.ok(!slack.fix.includes(process.execPath) && !/agent-slack|npx -y/.test(slack.fix), slack.fix);
+  // Slack's is core's too, with the launcher its entry has — never a bare name or an npx line.
+  const slackTail = ['mcp', 'install', '--server', 'slack', '--client', 'cursor', '--launcher', 'npx', '--force'];
+  const slackCommand = commandEndingWith(slack.fix, slackTail);
+  if (process.platform !== 'win32')
+    assertLocated(slackCommand, { entry: CORE, folders: m.folders, tail: slackTail, printedWith: m.env });
+  assert.ok(!/agent-slack|npx -y/.test(slack.fix), slack.fix);
   // Only the keychain probe of doctor itself was refused: no connection.
   assert.deepEqual(
     sealAttempts(m.sealLog).filter((attempt) => attempt.what !== 'keychain'),
     [],
   );
 
-  // Gmail's command, pasted: Gmail's own CLI, on the printing process's store.
+  // Gmail's repair, pasted: core's own CLI, on the printing process's store.
   const shell = shellUnder(m.root, 'shell');
   const check = (result, name) => {
     assert.equal(result.status, 10, `${name}: ${result.stdout}${result.stderr}`);
     const id = /approval (ap_[0-9A-Z]+)/.exec(`${result.stdout}${result.stderr}`)?.[1];
     assert.ok(id, `${name}: ${result.stdout}${result.stderr}`);
     assert.ok(existsSync(join(m.folders.stateDir, 'approvals', `${id}.json`)), `${name}: the printing store`);
-    // Gmail's own rerun, from Gmail's entry, on the same folders.
-    const rerun = commandEndingWith(result.stderr, [...tail, '--approval', id]);
+    // Core's own rerun, on the same folders: its words in the order core's `mcp install` gives them back.
+    const again = ['mcp', 'install', '--client', 'cursor', '--server', 'gmail', '--launcher', 'local', '--force'];
+    const rerun = commandEndingWith(result.stderr, [...again, '--approval', id]);
     if (process.platform !== 'win32')
-      assertLocated(rerun, { entry: GMAIL, folders: m.folders, tail: [...tail, '--approval', id] });
+      assertLocated(rerun, {
+        entry: CORE,
+        folders: m.folders,
+        tail: [...again, '--approval', id],
+        printedWith: shell.env,
+      });
   };
   if (process.platform === 'win32') inWindowsShells(command, shell, check);
   else check(posixShell(command, shell), 'sh');

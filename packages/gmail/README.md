@@ -6,7 +6,8 @@ approval the user gives at that moment**.
 This package is the `agent-gmail` command and the MCP server behind it. It is part of
 [agent-communications](https://github.com/crissmoldovan/agent-communications).
 
-Phase D's held local event daemon may call this package's internal read-only event operation. It adds no Gmail command
+The local event daemon, [`@agentcomms/events-daemon`](../events-daemon/README.md), may call this package's internal
+read-only event operation. It adds no Gmail command
 or MCP tool, and it cannot send.
 
 ## Why the sending rule exists
@@ -14,6 +15,31 @@ or MCP tool, and it cannot send.
 Every Gmail permission that lets an app write a draft also lets it send: there is no scope that separates the two.
 So "the agent may draft but not send" cannot be enforced by the grant, and is enforced here instead — one code path
 reaches Gmail's send endpoints, and it refuses without an approval that matches the exact message being sent.
+
+## Who a message appears to come from
+
+A draft an agent writes says so in its From line — `"Jo Example (agent)" <jo@example.com>` — so whoever receives it
+can tell the person's agent sent it, not the person ([design](../../docs/superpowers/specs/2026-10-15-agent-label-design.md),
+§5).
+
+- **The name** is the one Gmail holds for that address under "Send mail as"; when it has none, or one the label
+  cannot use, the label name set in the core (its CLI's `label name`, or `comms_label`); with neither, the draft is refused and says
+  how to set one. **The word** is `agent`, unless the person chose `assistant`, `twin`, `minion`, `bot`, `fake` or
+  `AI`.
+- **`--as me`** on `draft new`, `draft reply`, `draft update` and `send prepare` (`as: "me"` on their tools) writes it
+  as the person, unlabelled — for when they said so for that message. Their label rules decide otherwise, by mailbox,
+  by who it goes to (an address or `@domain`, matching only when every recipient does) and by kind (`send` for a new
+  message or a forward, `reply` for a reply); with no rule, a message is labelled.
+- **`send prepare` settles it again.** A draft whose From does not say who it will appear to come from — written in
+  Gmail, written before this release, or one a rule or `as` now places differently — has its From header rewritten
+  and nothing else: every other byte is the one Gmail held, and the preview says the From was rewritten. A draft from
+  an address the mailbox cannot send as is refused rather than relabelled.
+- **The preview's first line** says which it will be — for `me`, `Sent as you, with no label: it will look as if you
+  wrote it yourself` — and the approval binds the whole From, name and all: a From changed after the preview voids
+  it.
+
+Gmail does not document what it does with a From name sent through its API. Reports say it keeps the name as written;
+the design's live check (§10) is what settles it.
 
 ## Install
 

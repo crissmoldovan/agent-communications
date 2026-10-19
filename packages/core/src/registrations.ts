@@ -1,4 +1,12 @@
 import type { ChannelEntry } from './channel-manifest.ts';
+import {
+  launcherCanStartSync,
+  launcherCli,
+  launcherName,
+  launcherRuntimeVersion,
+  readPointerSync,
+  registeredLauncher,
+} from './launcher.ts';
 import { commandLinePackage, type RegisteredServer } from './mcp-clients.ts';
 import {
   isProductServer,
@@ -47,6 +55,8 @@ export function launcherOf(
   platform?: NodeJS.Platform,
 ): RegistrationLauncher {
   const fold = folding(platform);
+  // The stable launcher is what a managed install writes now (design 2026-10-16, U6).
+  if (stableLauncherOf(server, facts, platform) !== null) return 'managed';
   const parts = [server.command, ...server.args];
   if (parts.some((part) => managedRuntimeVersion(part, facts.packageName, platform) !== null)) return 'managed';
   if (server.args.some((arg) => fold(arg).startsWith(fold(`${facts.npxPackage}@`)))) return 'npx';
@@ -58,13 +68,52 @@ export function launcherOf(
   return 'other';
 }
 
-/** The version an entry pins — a managed runtime's or an npx spec's — or null for one that pins none. */
+/**
+ * The version an entry pins — a managed runtime's or an npx spec's — or null for one that pins none.
+ *
+ * An entry that starts the stable launcher names no version: it runs the release its launcher's pointer names, read
+ * here — null when the pointer is not there, cannot be read, or names a folder that is not a release.
+ */
 export function registrationVersion(
-  server: Pick<RegisteredServer, 'args'>,
+  server: Pick<RegisteredServer, 'args'> & Partial<Pick<RegisteredServer, 'command'>>,
   facts: Pick<RegistrationFacts, 'packageName' | 'npxPackage'>,
   platform?: NodeJS.Platform,
 ): string | null {
+  const stable = stableLauncherOf({ command: server.command ?? '', args: server.args }, facts, platform);
+  if (stable !== null) {
+    const current = pointedRuntime(stable.dataDir, stable.name);
+    return current === null ? null : launcherRuntimeVersion(current, stable.name);
+  }
   return server.args.map((arg) => pinnedVersion(arg, facts, platform)).find((found) => found !== null) ?? null;
+}
+
+/**
+ * The stable launcher of this product an entry starts, in the data directory the entry pins, or null: see
+ * `registeredLauncher`. Another product's launcher is not this one's.
+ */
+export function stableLauncherOf(
+  server: Pick<RegisteredServer, 'command' | 'args'>,
+  facts: Pick<RegistrationFacts, 'packageName'>,
+  platform?: NodeJS.Platform,
+): { dataDir: string; name: string; launcher: string } | null {
+  const stable = registeredLauncher(server, platform);
+  if (stable === null) return null;
+  let own: string;
+  try {
+    own = launcherName(facts.packageName);
+  } catch {
+    return null;
+  }
+  return folding(platform)(stable.name) === folding(platform)(own) ? { ...stable, name: own } : null;
+}
+
+/** The runtime a launcher's pointer names as current, or null when it has none that can be read. */
+function pointedRuntime(dataDir: string, name: string): string | null {
+  try {
+    return readPointerSync(dataDir, name)?.current ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const REGISTRATION_PATH_OPTIONS = PATH_OPTIONS.filter(({ key }) => key !== 'downloadsDir') as readonly {
@@ -108,6 +157,8 @@ export function startsProduct(
   facts: RegistrationFacts,
   platform?: NodeJS.Platform,
 ): boolean {
+  // The launcher is known by the data directory the entry pins, which the words below no longer have.
+  if (registeredLauncher(server, platform) !== null) return stableLauncherOf(server, facts, platform) !== null;
   const { words: args } = withoutPathOptions(server.args);
   const packageName = commandLinePackage(server.command, args);
   return isProductServer(
@@ -141,9 +192,30 @@ export function isNpxRegistration(
  */
 export function registrationFiles(
   server: Pick<RegisteredServer, 'command' | 'args'>,
-  facts: Pick<RegistrationFacts, 'binary' | 'bins'>,
+  facts: Pick<RegistrationFacts, 'binary' | 'bins'> & Partial<Pick<RegistrationFacts, 'packageName'>>,
   platform?: NodeJS.Platform,
 ): { scripts: string[]; command: string | null } {
+  /*
+   * The stable launcher is not the product's file: the CLI it starts is, in the runtime its pointer names — or, when
+   * that one cannot start, the previous one it falls back to. Neither is run here; the locator checks it as a file.
+   */
+  const { packageName } = facts;
+  const stable = packageName === undefined ? null : stableLauncherOf(server, { packageName }, platform);
+  if (stable !== null) {
+    let pointer: ReturnType<typeof readPointerSync>;
+    try {
+      pointer = readPointerSync(stable.dataDir, stable.name);
+    } catch {
+      return { scripts: [], command: null };
+    }
+    const runtime =
+      pointer === undefined
+        ? undefined
+        : launcherCanStartSync(pointer.current, stable.name) || pointer.previous === undefined
+          ? pointer.current
+          : pointer.previous;
+    return { scripts: runtime === undefined ? [] : [launcherCli(runtime, stable.name)], command: null };
+  }
   const { words } = withoutPathOptions(server.args);
   const sentinel = words.indexOf('--');
   const options = sentinel < 0 ? words : words.slice(0, sentinel);

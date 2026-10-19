@@ -1,0 +1,206 @@
+name: Desktop release
+
+# A `desktop-v*` tag: the desktop app's Windows and Linux files, unsigned, attached to a draft release of that tag
+# (desktop design DA8). The tag goes on the commit of the CLI release it ships with, `vX.Y.Z`; this workflow starts
+# only for `desktop-v*` tags, and `release.yml` only for `v*` ones, so neither starts the other.
+#
+# **What this does not do is sign anything, or make the release public.** The signed and notarised macOS DMG, the
+# updater's archive and `latest.json` come from the owner's Mac (`apps/desktop/scripts/release-desktop.sh`, then
+# `publish-desktop.sh`, which publishes the release once they are attached). No secret is used here: the release is
+# made and filled with this run's own token, scoped to this repository's contents. **The builds never hold it:** they
+# run every dependency's code, so they build with read-only access and hand their files on as artifacts, and only the
+# `attach` job, which checks nothing out and runs nothing it built, may write — and only to a draft. A release already
+# published is never written to again.
+#
+# **It never takes Latest.** GitHub's Latest release is the CLI's, which `release.yml` makes; every release command
+# here passes `--latest=false`. The app finds its updates among the `desktop-v*` releases through the GitHub API.
+#
+# Actions are pinned to the commit of the tag in each comment.
+
+on:
+  push:
+    tags: ['desktop-v*']
+
+permissions: {}
+
+# One run per tag at a time: moving a tag queues the second run behind the first rather than racing it.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-tag:
+    name: the tag is the app's version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: desktop-v plus the version in tauri.conf.json
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
+          if [ "$GITHUB_REF_NAME" != "desktop-v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not desktop-v$version, the version in apps/desktop/src-tauri/tauri.conf.json." >&2
+            exit 1
+          fi
+
+  verify:
+    needs: check-tag
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop.yml
+
+  # The draft both bundle legs attach to, made once, here, so the two legs cannot each make one: GitHub lets two drafts
+  # share a tag. `publish-desktop.sh` may have made it first, on the owner's Mac; then this finds it.
+  draft:
+    name: the draft release
+    needs: [check-tag, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: make the draft, unless the release exists
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#desktop-v}"
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            node apps/desktop/scripts/release-notes.mjs "$version" > "$RUNNER_TEMP/notes.md"
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --latest=false --title "Agent Comms $version" --notes-file "$RUNNER_TEMP/notes.md" \
+              || gh release view "$GITHUB_REF_NAME" > /dev/null
+          fi
+          # Only a draft is filled: a release already published is never written to again.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::$GITHUB_REF_NAME is already published; CI fills only a draft. Bump the version." >&2
+            exit 1
+          fi
+          # Exactly one release for the tag, or the legs' files and the owner's would land on different ones.
+          ids=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")
+          case "$ids" in
+            '' | *[!0-9]*)
+              echo "::error::expected one release for $GITHUB_REF_NAME, found: $(printf '%s' "$ids" | tr '\n' ' ')" >&2
+              exit 1
+              ;;
+          esac
+
+  bundle:
+    name: unsigned ${{ matrix.bundles }} (${{ matrix.os }})
+    needs: [check-tag, verify, draft]
+    runs-on: ${{ matrix.os }}
+    # Read-only: the build runs every dependency's code, so it holds no token that can write. Its files go on as an
+    # artifact, which `attach` uploads.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, bundles: nsis }
+          - { os: ubuntu-22.04, bundles: 'appimage,deb' }
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUNDLES: ${{ matrix.bundles }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Linux system packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb
+      - name: Rust toolchain, as apps/desktop/src-tauri/rust-toolchain.toml pins it
+        working-directory: apps/desktop/src-tauri
+        run: rustup toolchain install 1.94.1 --profile minimal --component rustfmt --component clippy
+      - name: Unsigned bundle
+        env:
+          # The AppImage tooling is itself an AppImage; this runs it without FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: pnpm --filter @agentcomms/desktop tauri build --ci --no-sign --bundles "$BUNDLES"
+      - name: name the files as the release does
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#desktop-v}"
+          bundle=apps/desktop/src-tauri/target/release/bundle
+          mkdir -p release-assets
+          # One file per kind, named without spaces, as the macOS files are.
+          collect() {
+            local found=("$bundle/$1"/*"$2")
+            if [ "${#found[@]}" -ne 1 ] || [ ! -f "${found[0]}" ]; then
+              echo "::error::expected one $2 in $bundle/$1, found ${#found[@]}" >&2
+              exit 1
+            fi
+            cp "${found[0]}" "release-assets/$3"
+          }
+          case "$RUNNER_OS" in
+            Windows) collect nsis .exe "Agent.Comms_${version}_x64-setup.exe" ;;
+            Linux)
+              collect appimage .AppImage "Agent.Comms_${version}_amd64.AppImage"
+              collect deb .deb "Agent.Comms_${version}_amd64.deb"
+              ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: desktop-${{ runner.os }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The one job that writes to the release: it downloads the files the builds made and uploads them to the draft. It
+  # checks nothing out and runs nothing it downloaded.
+  attach:
+    name: attach the unsigned files to the draft
+    needs: [check-tag, draft, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: attach to the draft, while it is still one
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#desktop-v}"
+          assets=(
+            "release-assets/Agent.Comms_${version}_x64-setup.exe"
+            "release-assets/Agent.Comms_${version}_amd64.AppImage"
+            "release-assets/Agent.Comms_${version}_amd64.deb"
+          )
+          for asset in "${assets[@]}"; do
+            [ -f "$asset" ] || { echo "::error::$asset was not built" >&2; exit 1; }
+          done
+          found=$(find release-assets -type f | wc -l | tr -d ' ')
+          if [ "$found" -ne "${#assets[@]}" ]; then
+            echo "::error::expected ${#assets[@]} files, found $found" >&2
+            exit 1
+          fi
+          # Only a draft is ever written to, and replaced files only there: a published release is never touched.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::$GITHUB_REF_NAME is already published; CI fills only a draft. Bump the version." >&2
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber

@@ -1,6 +1,27 @@
-import { CommsError, wholeNumber } from '@agentcomms/core';
+import type { AddressInfo } from 'node:net';
+import { createServer } from 'node:net';
+import {
+  type CliHandoffs,
+  CommsError,
+  type Config,
+  handoffSentence,
+  handoffSentenceToFill,
+  organisationsOf,
+  wholeNumber,
+} from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
-import { appManifestUrl, buildManifest, INSTALL_MODES, type InstallMode, type SlackManifest } from '../manifest.ts';
+import {
+  type AgentManifest,
+  appManifestUrl,
+  buildAgentManifest,
+  buildManifest,
+  chosenPortSentence,
+  INSTALL_MODES,
+  type InstallMode,
+  MANIFEST_MODES,
+  type ManifestMode,
+  type SlackManifest,
+} from '../manifest.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -23,6 +44,29 @@ export interface ManifestResult {
   readonly appId: string | null;
   /** Where that app's manifest is edited. Null unless both of the above are known. */
   readonly manifestUrl: string | null;
+  /**
+   * Where `port` came from: `given` by the caller, `recorded` when the named workspace signed in, or `chosen` by this
+   * call for a new app — free when asked, and no port another workspace here records.
+   */
+  readonly portFrom: 'given' | 'recorded' | 'chosen';
+  /**
+   * What to do with this manifest, in order, each step a sentence — the same words from the command and from the tool.
+   * A command in them is this installation's own, located, with this port; or, where there is none, what to use instead.
+   */
+  readonly steps: readonly string[];
+  /** Said beside the steps: why the app has to be a new one when PKCE is off, and whose a chosen port now is. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * An organisation's agent app (CUE-493): the bot-only manifest, the administrator's steps, and what they weigh before
+ * sharing one token. No port, redirect or workspace: nobody signs in through it.
+ */
+export interface AgentManifestResult {
+  readonly mode: 'agent';
+  readonly manifest: AgentManifest;
+  readonly steps: readonly string[];
+  readonly notes: readonly string[];
 }
 
 /**
@@ -56,34 +100,296 @@ export function modeWanted(value: unknown): InstallMode | undefined {
   throw new CommsError('USAGE', `"${String(value)}" is not a mode`, { hint: `One of: ${INSTALL_MODES.join(', ')}.` });
 }
 
+/** A mode `manifest` was asked for, checked as `modeWanted` checks one, with the agent app beside the two. */
+export function manifestModeWanted(value: unknown): ManifestMode | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && (MANIFEST_MODES as readonly string[]).includes(value)) return value as ManifestMode;
+  throw new CommsError('USAGE', `"${String(value)}" is not a mode`, { hint: `One of: ${MANIFEST_MODES.join(', ')}.` });
+}
+
+/** How many ports the system is asked for before giving up: each offer is a fresh one, so a few are plenty. */
+const PORT_TRIES = 20;
+
+/** A loopback port nothing holds now, from the system: bind 127.0.0.1 on port 0, read the port, and let it go. */
+async function askTheSystem(): Promise<number> {
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
+    });
+    return (server.address() as AddressInfo).port;
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+/**
+ * Every loopback port this configuration already gives a Slack app's redirect: each workspace's recorded one, and each
+ * organisation profile's. Any account's, whatever its platform, since only a Slack account keeps one.
+ */
+function portsRecorded(config: Config): Set<number> {
+  const ports = new Set<number>();
+  for (const account of Object.values(config.accounts ?? {})) {
+    if (typeof account.redirectPort === 'number') ports.add(account.redirectPort);
+  }
+  for (const record of Object.values(organisationsOf(config))) {
+    if (typeof record.slack?.redirectPort === 'number') ports.add(record.slack.redirectPort);
+  }
+  return ports;
+}
+
+/**
+ * A new app's port, chosen rather than asked for: one the system says is free, and never one another workspace here
+ * already redirects to — two apps on one port would each find the other's listener when both sign in at once.
+ */
+async function chooseLoopbackPort(taken: ReadonlySet<number>, probe: () => Promise<number>): Promise<number> {
+  const hint = 'Choose one with `--port` (`port` from a chat): it goes in the manifest, and the app keeps it.';
+  for (let tries = 0; tries < PORT_TRIES; tries++) {
+    let port: number;
+    try {
+      port = await probe();
+    } catch (error) {
+      throw new CommsError('UNEXPECTED', `no free loopback port could be found: ${(error as Error).message}`, {
+        hint,
+        cause: error,
+      });
+    }
+    if (!taken.has(port)) return port;
+  }
+  throw new CommsError('TRANSIENT', `no free loopback port could be found in ${PORT_TRIES} tries`, { hint });
+}
+
+/** What `manifestFor` takes: the same from the command and from the tool. */
+export interface ManifestOptions {
+  mode?: unknown;
+  port?: unknown;
+  workspace?: string | undefined;
+  pkce?: unknown;
+  probePort?: (() => Promise<number>) | undefined;
+}
+
+/**
+ * The Slack app to create or update, for `agent-slack manifest` and `slack_manifest` alike: an app a person signs in
+ * through (`appManifestFor`), or — `mode: "agent"` — an organisation's agent app (`agentManifestFor`).
+ */
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions & { mode: 'agent' },
+): Promise<AgentManifestResult>;
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions & { mode?: InstallMode | undefined },
+): Promise<ManifestResult>;
+export function manifestFor(
+  context: SlackContext,
+  options: ManifestOptions,
+): Promise<ManifestResult | AgentManifestResult>;
 export async function manifestFor(
   context: SlackContext,
-  options: { mode?: unknown; port?: unknown; workspace?: string | undefined },
+  options: ManifestOptions,
+): Promise<ManifestResult | AgentManifestResult> {
+  const mode = manifestModeWanted(options.mode);
+  if (mode === 'agent') return agentManifestFor(context, options);
+  return appManifestFor(context, { ...options, mode });
+}
+
+/**
+ * The agent app's manifest and steps. Refuses what only an app a person signs in through has — a port, a workspace whose
+ * app it would edit, a client secret — rather than ignore it: each says the person is making the other kind of app.
+ */
+function agentManifestFor(context: SlackContext, options: ManifestOptions): AgentManifestResult {
+  const given = (value: unknown) => value !== undefined && value !== null;
+  if (given(options.port)) {
+    throw new CommsError('USAGE', 'the agent app takes no port: it has no redirect, and nobody signs in through it', {
+      hint: 'Leave out the port. The agent app is installed once, with "Install to Workspace".',
+    });
+  }
+  if (options.workspace !== undefined) {
+    throw new CommsError('USAGE', "the agent app is a new app of the organisation's, not a workspace's own app", {
+      hint: 'Leave out the workspace: this manifest is for creating the agent app, not for editing the app a workspace signs in through.',
+    });
+  }
+  if (options.pkce !== undefined) {
+    throw new CommsError('USAGE', 'the agent app has no sign-in, so neither PKCE nor a client secret applies to it', {
+      hint: 'Leave out the client-secret option.',
+    });
+  }
+  return { mode: 'agent', manifest: buildAgentManifest(), ...agentAppSteps(context.handoffs) };
+}
+
+/**
+ * The administrator's four steps, and the notes beside them: the trade-offs of one shared token, the free plan's limit,
+ * and how to name the app in the profile so that `workspace bot` refuses any other app's token.
+ */
+function agentAppSteps(handoffs: CliHandoffs): { steps: string[]; notes: string[] } {
+  return {
+    steps: [
+      'Create the app from this manifest: open https://api.slack.com/apps, choose "Create New App" → "From a manifest", pick your organisation\'s workspace, and paste it. Change its "name" first to your organisation\'s, such as "RGC agent", then create the app.',
+      'On "OAuth & Permissions", press "Install to Workspace" and allow it. Once, for the whole organisation: members do not install it.',
+      'Copy the "Bot User OAuth Token" (it starts xoxb-) and share it with your members privately, as you would a password: never in the profile\'s repository, and never in a chat with an agent.',
+      handoffSentenceToFill(
+        handoffs.own(['workspace', 'bot']),
+        ['<organisation>/slack'],
+        (command) =>
+          `Each member who wants their agent's posts to appear as the app runs \`workspace bot <organisation>/slack\` once, in their own terminal on their own computer (on this one: ${command}), and pastes it: it is checked with Slack before it is kept. Their own connection is untouched, and a member who does nothing keeps posting as themselves, labelled.`,
+        {
+          instead:
+            "Each member who wants their agent's posts to appear as the app runs `workspace bot` once, in their own terminal, and pastes it. Their own connection is untouched.",
+        },
+      ),
+    ],
+    notes: [
+      'Token rotation is off, and has to stay off: a pasted token that rotates would stop working within twelve hours. The token lasts until it is revoked. When someone leaves, revoke it on "OAuth & Permissions", install the app again and share the new token; members paste it again. In between, the first act a member\'s agent makes with the old token is refused — nothing is posted under another identity — and the token is forgotten, so their agents\' posts go out as them, labelled, until they paste the new one.',
+      'Everyone who pastes it holds the same token, and Slack lets it post under any name, with the APP badge beside it. Posts made through these tools are always named after the member who approved them; the token itself is not bound to anyone, so share it only with members.',
+      "On Slack's free plan a workspace holds at most 10 apps, and this one counts toward them.",
+      handoffSentenceToFill(
+        handoffs.core(['org', 'update']),
+        ['<organisation>'],
+        (command) =>
+          `To have workspace bot refuse any other app's token, name this app in your organisation's profile: beside <name>.json, add <name>.agent-app.json with its kind "organisation-agent-app", version 1, the organisation, and the Slack workspace and the App ID from "Basic Information". Members pick it up with ${command}.`,
+        {
+          instead:
+            'To have workspace bot refuse any other app\'s token, name this app in your organisation\'s profile: beside <name>.json, add <name>.agent-app.json with its kind "organisation-agent-app", version 1, the organisation, and the Slack workspace and the App ID from "Basic Information". Members pick it up with org update.',
+        },
+      ),
+    ],
+  };
+}
+
+/** The manifest of an app a person signs in through, `read` or `send` — the one `workspace mode` needs too. */
+export async function appManifestFor(
+  context: SlackContext,
+  options: {
+    mode?: unknown;
+    port?: unknown;
+    workspace?: string | undefined;
+    /**
+     * `false` for the manifest of a new app that signs in with its client secret at a person's terminal, rather than
+     * PKCE (design 2026-10-15 S1, revised). Left out, PKCE is on, as for every app this package has made.
+     */
+    pkce?: unknown;
+    /**
+     * How a free port is asked of the system, for a new app given none: bind 127.0.0.1 on port 0, read it, close.
+     * A test hands in its own, to offer ports already taken; the command and the tool never pass it.
+     */
+    probePort?: (() => Promise<number>) | undefined;
+  },
 ): Promise<ManifestResult> {
   const mode = modeWanted(options.mode) ?? 'read';
+  if (options.pkce !== undefined && typeof options.pkce !== 'boolean') {
+    throw new CommsError('USAGE', '`pkce` is true or false', {
+      hint: 'Pass false for the manifest of a new app that signs in with its client secret.',
+    });
+  }
+  const config = await context.config();
   const found =
-    options.workspace === undefined
-      ? undefined
-      : requireWorkspace(await context.config(), options.workspace, context.handoffs);
+    options.workspace === undefined ? undefined : requireWorkspace(config, options.workspace, context.handoffs);
   /*
    * The port is decided here, before any sign-in exists.
    *
    * Slack stores redirect URLs on the app and matches them exactly, so it cannot be whichever port the OS hands out at
-   * sign-in time — which is what the Gmail side does, and why the two differ. For a workspace already connected the
-   * one it signed in with is the one its app names; for a new app, the caller chooses, and `workspace add --port` is
-   * then the same number by construction rather than by luck.
+   * sign-in time — which is what the Gmail side does, and why the two differ. A port given wins. For a workspace
+   * already connected the one it signed in with is the one its app names, and one that never recorded it is refused:
+   * its app already names a port, and a new one would be a redirect Slack does not know. For a new app it is chosen
+   * now, once — a free one, nobody else's here — and from then on it is that app's: the manifest carries it, the
+   * command printed with it carries it, and the sign-in records it, so `workspace add --port` is the same number by
+   * construction rather than by luck, and nobody has to pick one.
    */
-  const port = checkedPort(options.port, found?.account.redirectPort);
+  const given = options.port !== undefined && options.port !== null;
+  const portFrom: ManifestResult['portFrom'] = given ? 'given' : found ? 'recorded' : 'chosen';
+  const port =
+    portFrom === 'chosen'
+      ? await chooseLoopbackPort(portsRecorded(config), options.probePort ?? askTheSystem)
+      : checkedPort(options.port, found?.account.redirectPort);
   const redirectUrl = `http://localhost:${port}/slack/callback`;
   // Never guessed: without the recorded id there is no telling which of the person's apps this workspace uses.
   const appId = found?.account.appId ?? null;
+  const manifestUrl = appId === null ? null : appManifestUrl(appId);
+  const pkce = options.pkce !== false;
+  const workspace = found?.alias ?? null;
   return {
     mode,
     port,
     redirectUrl,
-    manifest: buildManifest(mode, redirectUrl),
-    workspace: found?.alias ?? null,
+    manifest: buildManifest(mode, redirectUrl, { pkce }),
+    workspace,
     appId,
-    manifestUrl: appId === null ? null : appManifestUrl(appId),
+    manifestUrl,
+    portFrom,
+    steps:
+      workspace === null ? newAppSteps(mode, port, pkce, context.handoffs) : existingAppSteps(workspace, manifestUrl),
+    notes: [
+      ...(pkce
+        ? []
+        : workspace === null
+          ? [
+              'It has to be a new app: this manifest has PKCE off, and that cannot be undone on an existing app — once an app has turned PKCE on, Slack never turns it off.',
+            ]
+          : [
+              'This manifest has PKCE off: it fits only an app that never turned PKCE on, since Slack never turns it off once it is on.',
+            ]),
+      ...(portFrom === 'chosen' ? [chosenPortSentence(port)] : []),
+    ],
   };
+}
+
+/**
+ * A new app's steps: create it from the manifest, take what the sign-in needs from its page, connect it.
+ *
+ * Two apps, two procedures. The PKCE app's sign-in needs only the Client ID, which is not a secret, so it connects from
+ * a terminal or a chat alike. The client-secret app's needs its Client Secret too, typed once at a hidden prompt — so
+ * its connect command carries `--with-client-secret`, and runs at the person's own terminal: no tool takes a secret,
+ * because a chat's transcript keeps whatever is pasted into it.
+ */
+function newAppSteps(mode: InstallMode, port: number, pkce: boolean, handoffs: CliHandoffs): string[] {
+  const create =
+    'open https://api.slack.com/apps, choose "Create New App" → "From a manifest", pick your workspace, paste it, and create the app';
+  if (pkce) {
+    return [
+      `Create the app from this manifest: ${create}. (Changing the mode of a workspace already connected? Edit its existing app's "App Manifest" instead — the same app, not a new one.)`,
+      'On "Basic Information", copy the Client ID. It is not a secret, and there is no client secret to copy: this signs in with PKCE, which replaces one.',
+      handoffSentence(
+        handoffs.own(['workspace', 'add', '<name>', '--client-id', '<the Client ID>', '--port', String(port)]),
+        (command) => `Connect it: ${command}, or slack_workspace_add from a chat, with the Client ID and port ${port}.`,
+        { instead: `Connect it with slack_workspace_add from a chat, with the Client ID and port ${port}.` },
+      ),
+    ];
+  }
+  return [
+    `Create a new app from this manifest: ${create}.`,
+    'On "Basic Information", copy the Client ID, and keep the Client Secret (under "App Credentials") to hand: it is typed once, at a hidden prompt, and never pasted into chat.',
+    handoffSentence(
+      handoffs.own([
+        'workspace',
+        'add',
+        '<name>',
+        ...(mode === 'send' ? ['--mode', 'send'] : []),
+        '--client-id',
+        '<the Client ID>',
+        '--port',
+        String(port),
+        '--with-client-secret',
+      ]),
+      (command) =>
+        `Connect it, in your own terminal: ${command}. It asks for the Client Secret there, without showing it; no tool takes it.`,
+      {
+        instead:
+          'Connect it in your own terminal, with `workspace add` and `--with-client-secret`, which asks for the Client Secret without showing it; no tool takes it.',
+      },
+    ),
+  ];
+}
+
+/** A connected workspace's: edit the app it signed in through — never a new one, which would change no installation. */
+function existingAppSteps(workspace: string, manifestUrl: string | null): string[] {
+  return [
+    manifestUrl === null
+      ? `Open https://api.slack.com/apps and the app "${workspace}" was connected through → "App Manifest". (It signed in before its app was recorded, so there is no direct link.)`
+      : `Open ${manifestUrl} — the manifest of the app "${workspace}" was connected through.`,
+    'Replace the manifest there with this one, and save — the same app, not a new one.',
+  ];
 }

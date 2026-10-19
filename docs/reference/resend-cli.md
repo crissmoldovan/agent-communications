@@ -22,7 +22,6 @@ Scripts should read these rather than parse output.
 | `0` | it worked |
 | `1` | unexpected failure |
 | `10` | a send or a change was refused or needs approval |
-| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -281,10 +280,11 @@ agent-resend send prepare [options]
 | `--in-reply-to <messageId>` | the Message-ID this replies to, to keep the thread | — |
 | `--references <messageId>` | an earlier Message-ID in the thread; repeat for more | `[]` |
 | `--scheduled-at <time>` | send later: an ISO 8601 time with a zone, at most 30 days ahead | — |
+| `--as <who>` | who it appears to come from: agent (From labelled) or me (From as given, only when the person said so) | — |
 
 ### `agent-resend send execute`
 
-send a prepared email, once. Refuses unless the approval, the content and the recipients all match
+send a prepared email by approval id; optional legacy expectations are checked exactly
 
 ```
 agent-resend send execute [options] <approvalId>
@@ -293,10 +293,10 @@ agent-resend send execute [options] <approvalId>
 | Option | What it does | Default |
 |---|---|---|
 | `--account <name>` | which account, as `organisation/resend` | — |
-| `--expect-to <addresses>` | the To list you believe it goes to, comma-separated, or none | — |
-| `--expect-cc <addresses>` | the Cc list, or none | — |
-| `--expect-bcc <addresses>` | the Bcc list, or none | — |
-| `--expect-subject <subject>` | the subject | — |
+| `--expect-to <addresses>` | legacy exact check: To list, comma-separated, or none | — |
+| `--expect-cc <addresses>` | legacy exact check: Cc list, or none | — |
+| `--expect-bcc <addresses>` | legacy exact check: Bcc list, or none | — |
+| `--expect-subject <subject>` | legacy exact check: subject | — |
 
 ### `agent-resend send status`
 

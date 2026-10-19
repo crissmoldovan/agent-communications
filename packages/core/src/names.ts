@@ -1,3 +1,4 @@
+import { behaviourRenamed, behaviourRulesMigrated } from './behaviour.ts';
 import { connectMailboxWords } from './channel-words.ts';
 import {
   type AccountConfig,
@@ -226,6 +227,9 @@ export function nameAvailable(config: Config, kind: NameKind, name: string, plat
  * Earlier records for the same account are pointed at the new name too, so `cue` → `cue/gmail` → `cue/gmail-main`
  * leaves `cue` naming `cue/gmail-main`, never another former name. The caller has checked `to` with
  * `nameAvailable`; the schema checks it again when this is written.
+ *
+ * The behaviour rules that hold the account are renamed with it (`behaviourRenamed`), so a rename, which needs no
+ * approval, never sheds one.
  */
 export function renameEntry<C extends Config>(config: C, kind: NameKind, from: string, to: string): C {
   const map = MAP[kind];
@@ -235,14 +239,15 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
   const renamed: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(entries)) if (key !== from) renamed[key] = value;
   renamed[to] = row;
-  if (!hasNames(config)) return { ...config, [map]: renamed };
+  const behaviour = config.behaviour === undefined ? {} : { behaviour: behaviourRenamed(config, row.id, from, to) };
+  if (!hasNames(config)) return { ...config, [map]: renamed, ...behaviour };
   const records: FormerNames[typeof map] = {};
   for (const [key, record] of Object.entries(config.formerNames[map])) {
     // Spread, so a field a newer release added to the record survives this one rewriting it.
     records[key] = record.id === row.id ? { ...record, name: to, id: row.id } : record;
   }
   records[from] = { name: to, id: row.id };
-  return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records } };
+  return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records }, ...behaviour };
 }
 
 /**
@@ -413,10 +418,14 @@ export function applyNamesMigration(config: PlainConfig, rows: readonly NamesMig
   };
   const inboxes = rename('inbox', config.inboxes);
   const accounts = rename('account', config.accounts);
+  // The behaviour rules that hold an account by its name go with it, as a rename takes them (`renameEntry`): a rule
+  // left under the old name would hold nothing, and that is a restriction a migration must never shed.
+  const behaviour = config.behaviour === undefined ? {} : { behaviour: behaviourRulesMigrated(config, rows) };
   const named = {
     inboxes: inboxes.renamed,
     accounts: accounts.renamed,
     formerNames: { inboxes: inboxes.former, accounts: accounts.former },
+    ...behaviour,
   };
   return config.version === 3 ? { ...config, ...named, naming: 2 } : { ...config, ...named, version: 2 };
 }

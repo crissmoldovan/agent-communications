@@ -8,7 +8,9 @@ agent-gmail doctor
 agent-gmail doctor --json | jq '.data.checks[] | select(.status != "ok")'
 ```
 
-It exits `0` when nothing is broken and `78` when something is, so CI can gate on it. Warnings do not fail it.
+It exits `0` when nothing is broken and `78` when something is, so CI can gate on it. Warnings do not fail it. With
+`--json`, every doctor — `agentcomms doctor` included — prints one envelope either way: the report, `ok`, with what is
+broken in its checks.
 
 ## Setting up
 
@@ -217,12 +219,15 @@ does not break that guarantee so much as stand beside it.
 From 0.13.1, every command a result hands you to run — an `approve`, a change run again with `--approval`, a
 repair — names the Node and the file of the installation that printed it, with the suite folders that command uses
 pinned: `--config-dir`, `--state-dir`, `--data-dir` and `--secrets-dir`, and `--downloads-dir` for one that saves
-files. It runs as pasted, from any folder, with nothing of this suite on your `PATH`. Two cases say so themselves:
+files. It runs as pasted, from any folder, with nothing of this suite on your `PATH`. From 0.21, a command a managed
+install prints names its stable launcher, `<data dir>/launch/<product>`, rather than that release's runtime under
+`<data dir>/runtime/`, so it still runs after an update has moved on and pruned that runtime. Where there is no
+launcher yet, it names your managed CLI shim when that starts the same file. Two cases say so themselves:
 
-- **Words to type.** Where one of its words cannot be written the same way for cmd.exe and both PowerShells, the
-  command comes as words to type: its words in JSON, with what to do — type them, each quoted for your shell. On
-  Windows that is the usual case when Node is installed under `C:\Program Files`, the default, because that path
-  needs quotes; Node from nvm-windows, Volta or a tool cache gives a line to paste.
+- **A PowerShell line, or words to type.** When the absolute Node path needs quotes — including the default
+  `C:\Program Files` install — the command begins with PowerShell's `&`, quotes each word for PowerShell, and labels
+  the line “PowerShell”. Where a word cannot be represented safely in that form, the command instead comes as inert
+  JSON with what to do: type the words, each quoted for your shell.
 - **None here.** A command of another product — Slack's, from core, say — is found among the servers registered
   with your MCP clients, at exactly this release, and never through npx. With no such registration there is no
   command: the result names the product and the release it needs, and says it is not locatable here. Install or
@@ -255,8 +260,14 @@ process resolved, and cannot show the variables or relative values that produced
 command, quoted for your shell. npx may not be installed; an old result may not name its Node; and skills are
 installed separately from the servers, so an agent's skills may still describe the old way.
 
-PATH shims — putting `agentcomms` and the `agent-*` commands on your `PATH` — are a separate follow-up. 0.13.1
-creates, changes and checks none.
+Current managed installs write a CLI shim to `~/.local/bin` on macOS and Linux. The install result says when that
+directory is not on `PATH` and gives a current-shell line to prepend it; it edits no shell profile. Updates repoint
+owned shims, prune removes them with their runtimes, and `doctor` reports a missing, stale or foreign shim. A file
+this installation did not write is never overwritten or removed, and a bin directory redirected during an operation
+is refused before the mutation. Windows shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse
+caller arguments, including shell metacharacters; use the result's full-path command or labelled PowerShell `&` line
+there. This does not repair a bare command printed by 0.13.0 or earlier: use one of the exact-release routes above
+first, then run a current managed install.
 
 ### The client does not see the tools
 
@@ -334,7 +345,11 @@ registering it.
 Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
 directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
 `<version>-gmail/` and `<version>-slack/`, or plain `<version>/` for a Gmail runtime an earlier release installed.
-`mcp prune` deletes the old ones, and only those it can show are unused. It keeps this release's; any runtime an
+`mcp prune` deletes the old ones, and only those it can show are unused. From 0.21 core's `mcp prune` with no
+`--server` goes through every managed server's runtimes and lists them by server; `--server <name>`, or a channel's
+own `mcp prune`, keeps to one. It keeps this release's; the runtime each stable launcher starts, and the one it keeps
+to fall back and roll back to; any runtime newer than this release or than what its launcher starts, which an update
+may be installing or checking; any runtime an
 entry names in a client config it reads; any runtime it printed an entry for (`--client json`, `--print`, or a
 client whose CLI was not on `PATH`), because it cannot see where that entry was pasted; and any runtime a running
 process started from. The configs it reads are Claude Code's `.claude.json` (under `CLAUDE_CONFIG_DIR` when that
@@ -346,22 +361,27 @@ another `CODEX_HOME`, is read even from a shell that does not set it, and a runt
 The record starts with 0.4.1, so an entry an earlier release registered there is not in it until it is registered
 again.
 If any of those is there and cannot be read, or the processes cannot be listed, it removes nothing at all and says
-which. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
+which. With no `--server`, a server whose own part cannot be checked — its stable launcher's pointer cannot be read,
+say — keeps all its runtimes while the others go ahead, and is named in the preview (`does not check the Slack
+runtimes…`), at the end of what the command prints, and in the result's `refusedServers`. The running processes are
+listed again for each server, just before it is decided. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
 anywhere else — a workspace `.vscode/mcp.json` or `.cursor/mcp.json`, say — or pasted from a `--print` that warned
 it could not record the entry; check `--dry-run` first if you have one. A runtime kept only because its entry was
 printed stays until you say that entry is gone: `mcp prune --include-printed` removes those too, and still keeps
 anything a config it reads or a running process names. Run it once the clients have been restarted:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp prune --dry-run
-npx -y @agentcomms/gmail@latest mcp prune
-npx -y @agentcomms/slack@latest mcp prune
+npx -y @agentcomms/core@latest mcp prune --dry-run         # every managed server's, listed by server
+npx -y @agentcomms/core@latest mcp prune
+npx -y @agentcomms/core@latest mcp prune --server gmail    # only Gmail's
 ```
 
 A dry run changes nothing and asks nobody. Removing is a change you approve, as the list of runtimes it would delete —
 a deleted runtime cannot be taken back — and it removes no more than that list, even if another becomes unused
 meanwhile. From an agent it exits `10` with the list and an approval id, for `mcp prune --approval <id>` after your
-yes.
+yes. From 0.21 a removal never runs beside an update: while `agentcomms update`, a rollback or the background run is
+installing, switching or pruning, `mcp prune` is refused at once and removes nothing — asked or approved — so run it
+again in a few minutes. A dry run still answers.
 
 ### The server starts but every call fails
 

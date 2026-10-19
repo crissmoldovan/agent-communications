@@ -22,7 +22,6 @@ Scripts should read these rather than parse output.
 | `0` | it worked |
 | `1` | unexpected failure |
 | `10` | a send was refused, or an approval is required |
-| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -405,6 +404,7 @@ agent-gmail draft new [options]
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | who it goes to | — |
 | `--subject <subject>` | the subject line | — |
@@ -427,6 +427,7 @@ agent-gmail draft reply [options] <messageId>
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--mode <mode>` | how to answer (choices: "reply", "reply_all", "forward") | — |
 | `--to <address...>` | who it goes to (a forward needs this; a reply computes it) | — |
@@ -474,6 +475,7 @@ agent-gmail draft update [options] <draftId>
 | `--no-signature` | leave the mailbox signature off | — |
 | `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
 | `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | replace the recipients | — |
 | `--subject <subject>` | replace the subject line | — |
@@ -509,23 +511,24 @@ agent-gmail send prepare [options] <draftId>
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
 
 ### `agent-gmail send execute`
 
-send it — only with an approval, and only to the recipients that approval names
+send it by approval id; legacy callers may also pass a draft id and --approval
 
 ```
-agent-gmail send execute [options] <draftId>
+agent-gmail send execute [options] <id>
 ```
 
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
-| `--approval <id>` | the approval from `send prepare` | — |
-| `--expect-to <address...>` | who you believe this goes to; `none` for nobody | — |
-| `--expect-subject <subject>` | the subject you believe it has; `none` for an empty one | — |
-| `--expect-cc <address...>` | who you believe is copied; `none` for nobody | `["none"]` |
-| `--expect-bcc <address...>` | who you believe is blind-copied; `none` for nobody | `["none"]` |
+| `--approval <id>` | legacy form: the approval when <id> is the draft id | — |
+| `--expect-to <address...>` | legacy exact check: To recipients; `none` for nobody | — |
+| `--expect-subject <subject>` | legacy exact check: subject; `none` for an empty one | — |
+| `--expect-cc <address...>` | legacy exact check: Cc recipients; `none` for nobody | — |
+| `--expect-bcc <address...>` | legacy exact check: Bcc recipients; `none` for nobody | — |
 
 ### `agent-gmail send list`
 

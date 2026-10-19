@@ -59,12 +59,18 @@ import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worke
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
-import { assertLiveEventAccount } from './account-fence.ts';
+import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
-import { projectB3Doctor } from './b3-doctor-projection.ts';
+import { projectE9Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
 import { type PendingTargetOrigin, verifyPendingTargetContext } from './b3-pending-activation-context.ts';
+import {
+  isPendingRuleJudgeTestSelector,
+  type PendingRuleJudgeTestOrigin,
+  type PendingRuleJudgeTestSelector,
+  verifyPendingRuleJudgeTestContext,
+} from './b3-pending-rule-judge-test.ts';
 import {
   createRetainedRuleTestControl,
   type RetainedRuleTestControl,
@@ -81,7 +87,9 @@ import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
+import { HoldResolver } from './holds.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
+import { JudgeTestControl } from './judge-test.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -98,6 +106,7 @@ import { EventScheduler } from './scheduler.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
+import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
@@ -341,20 +350,58 @@ interface OwnerB3ControlServiceOptions {
   readonly ports: B3ControlPorts;
   /** The production owner gives target resume the same fresh core account registry as disclosure fencing. */
   readonly config: Pick<ConfigStore, 'load'>;
-  readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>;
+  readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'> &
+    Partial<
+      Pick<
+        ActivationRuntime,
+        | 'prepareJudgeBudget'
+        | 'prepareJudgeKind'
+        | 'cancelForJudgeKindInTransaction'
+        | 'cancelForRevocationInTransaction'
+      >
+    >;
   readonly cipher: Pick<EventRecordCipher, 'encrypt'>;
   /** A B3 secret command writes only this content-free receipt-shaped audit record. */
   readonly audit?: Pick<AuditLog, 'append'> | undefined;
   readonly targetTestTransport?: FixedSyntheticTargetTransport | undefined;
   /** The production exact-projection reader is composed by the owner, never by a public adapter. */
   readonly retainedRuleTest?: Pick<RetainedRuleTestControl, 'test'> | undefined;
+  /** Task 9's fixed synthetic judge tester is composed by the owner alongside the real secret reader. */
+  readonly judgeTest?: (Pick<JudgeTestControl, 'test'> & Partial<Pick<JudgeTestControl, 'testPending'>>) | undefined;
+  readonly holdResolver?: Pick<HoldResolver, 'resolve'> | undefined;
   readonly now?: (() => number) | undefined;
 }
 
 /** Composes every Task 3/4 control behind the authenticated owner; public adapters never reach a runtime class. */
 export function createOwnerB3ControlService(options: OwnerB3ControlServiceOptions): B3OwnerService {
   const now = options.now ?? Date.now;
-  const operator = new B3OperatorControl({ store: options.store, ports: options.ports, now });
+  const judgeActivations =
+    typeof options.activations.prepareJudgeBudget === 'function' &&
+    typeof options.activations.prepareJudgeKind === 'function' &&
+    typeof options.activations.cancelForJudgeKindInTransaction === 'function' &&
+    typeof options.activations.cancelForRevocationInTransaction === 'function'
+      ? options.activations
+      : undefined;
+  const operator = new B3OperatorControl({
+    store: options.store,
+    ports: options.ports,
+    now,
+    ...(judgeActivations === undefined
+      ? {}
+      : {
+          activations: judgeActivations as Pick<
+            ActivationRuntime,
+            | 'prepareJudgeBudget'
+            | 'prepareJudgeKind'
+            | 'cancelForJudgeKindInTransaction'
+            | 'cancelForRevocationInTransaction'
+          >,
+        }),
+    // Only `test` reaches the operator control, still bound to its control: an unbound method loses `this` and its
+    // private store, and every CLI/MCP judge test then failed as a generic refusal.
+    ...(options.judgeTest === undefined ? {} : { judgeTest: { test: options.judgeTest.test.bind(options.judgeTest) } }),
+    ...(options.holdResolver === undefined ? {} : { holdResolver: options.holdResolver }),
+  });
   const target = (pendingOrigin?: PendingTargetOrigin) =>
     new B3TargetTestControl({
       store: options.store,
@@ -445,6 +492,30 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             targetId: requiredText(request.args.targetId, 'target id'),
             targetVersion: requiredVersion(request.args.targetVersion, 'target version'),
           });
+        case 'judgeTest': {
+          const selector = request.args;
+          if (!isPendingRuleJudgeTestSelector(selector)) return operator.handle(request);
+          if (options.judgeTest?.testPending === undefined)
+            throw new CommsError('CONFIG', 'judge test is not composed for this operator control');
+          const pendingOrigin = pendingRuleJudgeTestOrigin(request.origin);
+          if (pendingOrigin === undefined)
+            throw new CommsError(
+              'APPROVAL_VOID',
+              'a pending rule judge test is available only from the terminal approval flow or app approval screen',
+            );
+          const authority = await verifyPendingRuleJudgeTestContext({
+            database: options.store.database,
+            selector,
+            origin: pendingOrigin,
+            now,
+            approvalView: () => livePendingTargetChallenge(options.store, selector, pendingOrigin, now),
+          });
+          return options.judgeTest.testPending(authority);
+        }
+        case 'decideHeld':
+          if (request.origin !== B3_SECRET_TERMINAL_ORIGIN && request.origin !== 'app-approval-screen')
+            throw new CommsError('APPROVAL_REQUIRED', 'a held decision can be resolved only from a terminal or app');
+          return operator.handle(request);
         default:
           return operator.handle(request);
       }
@@ -525,6 +596,11 @@ function auditOwnerIdentity(
 }
 
 function pendingTargetOrigin(origin: string | undefined): PendingTargetOrigin | undefined {
+  if (origin === 'terminal-approval' || origin === 'app-approval-screen') return origin;
+  return undefined;
+}
+
+function pendingRuleJudgeTestOrigin(origin: string | undefined): PendingRuleJudgeTestOrigin | undefined {
   if (origin === 'terminal-approval' || origin === 'app-approval-screen') return origin;
   return undefined;
 }
@@ -689,6 +765,8 @@ async function approvalViewFromOwner(
 export interface TerminalApprovalStart {
   readonly challenge: string;
   readonly pendingTargetSelectors: readonly B3PendingTargetSelectorV1[];
+  /** Sidecar-only; never part of the pinned v1 approval-view result. */
+  readonly pendingRuleJudgeTestSelectors: readonly PendingRuleJudgeTestSelector[];
 }
 
 /**
@@ -712,6 +790,13 @@ export async function issueTerminalApprovalChallenge(input: {
   return {
     challenge,
     pendingTargetSelectors: pendingTargetSelectorsForApproval({
+      activationId: row.id,
+      approvalId: input.approvalId,
+      digest: row.digest,
+      challenge,
+      preview,
+    }),
+    pendingRuleJudgeTestSelectors: pendingRuleJudgeTestSelectorsForApproval({
       activationId: row.id,
       approvalId: input.approvalId,
       digest: row.digest,
@@ -742,6 +827,33 @@ function pendingTargetSelectorsForApproval(input: {
     digest: input.digest,
     challenge: input.challenge,
   }));
+}
+
+/** This approval-flow-only sidecar derives the exact judge selector from the same owner-held pending preview. */
+function pendingRuleJudgeTestSelectorsForApproval(input: {
+  readonly activationId: string;
+  readonly approvalId: string;
+  readonly digest: string;
+  readonly challenge: string;
+  readonly preview: ReturnType<typeof normaliseActivationDocument>;
+}): readonly PendingRuleJudgeTestSelector[] {
+  if (input.preview.kind !== 'rule' || !('rule' in input.preview)) return [];
+  const rule = input.preview.rule;
+  const agentic = rule.agentic;
+  if (agentic === undefined) return [];
+  return [
+    {
+      kind: 'pending-rule-judge-test',
+      activationId: input.activationId,
+      ruleId: rule.ruleId,
+      ruleVersion: rule.version,
+      judgeId: agentic.judge.judgeId,
+      judgeVersion: agentic.judge.version,
+      approvalId: input.approvalId,
+      digest: input.digest,
+      challenge: input.challenge,
+    },
+  ];
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -1151,7 +1263,8 @@ async function startOwnerWithLock(
         purpose: 'judge-key',
         cipher,
       });
-      return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      const current = generations.find((generation) => generation.lifecycle === 'current');
+      return current === undefined ? null : { generation: current.generation, material: current.material };
     },
     sourceWorkFor: async (scope) => {
       await runSourceOwnerWork(
@@ -1178,7 +1291,8 @@ async function startOwnerWithLock(
               purpose: 'judge-key',
               cipher,
             });
-            return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+            const current = generations.find((generation) => generation.lifecycle === 'current');
+            return current === undefined ? null : { generation: current.generation, material: current.material };
           },
         },
         scope,
@@ -1223,12 +1337,52 @@ async function startOwnerWithLock(
         whatsappVisibilityFence: whatsappComposition.visibilityFence,
         now,
       }),
+      judgeTest: new JudgeTestControl({
+        store: database,
+        now,
+        taint: {
+          record: (input) => recordEventTaint(core.taint, { ownAddresses: [], internalDomains: [] }, input),
+        },
+        hostedApiKeyFor: async ({ judgeId, judgeVersion }) => {
+          const row = database.database
+            .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+            .get(judgeId, judgeVersion) as { digest: string } | undefined;
+          if (row === undefined) return null;
+          const generations = await eventSecrets.readLiveGenerations({
+            owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+            purpose: 'judge-key',
+            cipher,
+          });
+          const current = generations.find((generation) => generation.lifecycle === 'current');
+          return current === undefined ? null : { generation: current.generation, material: current.material };
+        },
+      }),
+      holdResolver: new HoldResolver({
+        store: database,
+        cipher,
+        taint: {
+          record: (input) => recordEventTaint(core.taint, { ownAddresses: [], internalDomains: [] }, input),
+        },
+        accountLive: ({ source, accountId }) => assertLiveEventAccount(core.config, { source, accountId }),
+        authorise: ({ accountId, rule, switchGeneration }) =>
+          assertDisclosable({
+            database: database.database,
+            approvals: core.approvals,
+            config: core.config,
+            accountId,
+            boundary: 'dispatch',
+            ruleId: rule.ruleId,
+            ruleVersion: rule.version,
+            switchGeneration,
+          }),
+        whatsappVisibilityFence: whatsappComposition.visibilityFence,
+      }),
       now,
     });
   // Task 7 is a read-only projection over the same Task 2 control ports used by the mutating B3 control service.
   // It deliberately has no writer capability and never reads a decrypted cursor or provider response.
   const doctorReport = async () => {
-    return projectB3Doctor({
+    return projectE9Doctor({
       database: database.database,
       installationId: database.installationId,
       lifecycle: lifecycle.status(),
@@ -1307,6 +1461,7 @@ async function startOwnerWithLock(
           request,
           ownerB3Service,
           doctorReport,
+          () => connectedEventAccounts(core.config),
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1351,6 +1506,7 @@ async function handleControl(
   request: AuthenticatedControlRequest,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
+  connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1396,9 +1552,14 @@ async function handleControl(
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
     case OWNER_CONTROL_WIRES.sourcesList:
-      return sourceRows(database, sourceRegistry);
+      return sourceRows(database, sourceRegistry, await connectedAccounts());
     case OWNER_CONTROL_WIRES.sourceShow:
-      return sourceShow(database, sourceRegistry, requiredText(request.args.source, 'source'));
+      return sourceShow(
+        database,
+        sourceRegistry,
+        requiredText(request.args.source, 'source'),
+        await connectedAccounts(),
+      );
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow:
@@ -1511,9 +1672,15 @@ function createTarget(database: Awaited<ReturnType<typeof openEventDatabase>>, d
   return domain(() => new ImmutableVersions(database.database).createTarget(document as never));
 }
 
+/**
+ * Each source's accounts: the scopes active rules read, and every connected account a rule may name, which has no
+ * cursor scope until a rule reads it. Each carries the name it was connected under, so a person, or an agent writing
+ * a first rule, can tell `ibx_…` from `ibx_…` (CUE-474).
+ */
 function sourceRows(
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   sourceRegistry: LocalEventSourceRegistry,
+  connected: readonly ConnectedEventAccount[] = [],
 ): unknown[] {
   const rows = database.database
     .prepare("SELECT document FROM rule_versions WHERE state IN ('active', 'superseded')")
@@ -1544,9 +1711,16 @@ function sourceRows(
       }
     }
   }
-  const ordered = [...scopes.values()].sort((left, right) =>
-    `${left.source}\u0000${left.accountId}\u0000${left.cursorScope}`.localeCompare(
-      `${right.source}\u0000${right.accountId}\u0000${right.cursorScope}`,
+  const nameOf = new Map(connected.map((entry) => [`${entry.source}\u0000${entry.accountId}`, entry.account]));
+  const accounts: { source: string; accountId: string; account: string | null; cursorScope: string | null }[] = [
+    ...scopes.values(),
+  ].map((scope) => ({ ...scope, account: nameOf.get(`${scope.source}\u0000${scope.accountId}`) ?? null }));
+  for (const entry of connected)
+    if (!accounts.some((row) => row.source === entry.source && row.accountId === entry.accountId))
+      accounts.push({ source: entry.source, accountId: entry.accountId, account: entry.account, cursorScope: null });
+  const ordered = accounts.sort((left, right) =>
+    `${left.source}\u0000${left.accountId}\u0000${left.cursorScope ?? ''}`.localeCompare(
+      `${right.source}\u0000${right.accountId}\u0000${right.cursorScope ?? ''}`,
     ),
   );
   return sourceRegistry.sources().map((source) => ({
@@ -1559,13 +1733,14 @@ function sourceShow(
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   sourceRegistry: LocalEventSourceRegistry,
   source: string,
+  connected: readonly ConnectedEventAccount[] = [],
 ): unknown {
   if (!sourceRegistry.sources().includes(source as Parameters<LocalEventSourceRegistry['require']>[0]))
     throw new CommsError('NOT_FOUND', 'the requested source is not configured');
   return {
     source,
     accounts: (
-      sourceRows(database, sourceRegistry).find((row) => (row as { source: string }).source === source) as {
+      sourceRows(database, sourceRegistry, connected).find((row) => (row as { source: string }).source === source) as {
         accounts: unknown[];
       }
     ).accounts,

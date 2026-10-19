@@ -34,6 +34,7 @@ import { addActiveRuleTargetReferences } from '../src/runtime/target-version-ref
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
@@ -542,7 +543,7 @@ test('B3 rule test sends hostile catalogue and mapped values through the product
   const originalSubject = example.subject;
   try {
     try {
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -599,7 +600,7 @@ test('B3 rule test refuses an invalid rule document with its fixed domain reason
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     try {
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -1328,7 +1329,9 @@ test('B3 recovery completes a claimed activation left behind an issuing challeng
   }
 });
 
-test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable', { skip: WINDOWS_SKIP }, async () => {
+test('E9 owner exposes live judge inventories while retaining E2 and human-only boundaries', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await shortTempDir('events-b3-owner-unavailable-');
   const store = await openEventDatabase({ stateDir });
   try {
@@ -1343,23 +1346,11 @@ test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable',
       activations: { issueApprovalViewChallenge: async () => 'unused' },
       cipher: { encrypt: async () => Buffer.alloc(0) },
     });
-    for (const operation of [
-      'judgesList',
-      'addJudge',
-      'updateJudge',
-      'removeJudge',
-      'judgeTest',
-      'budgetShow',
-      'updateBudget',
-      'judgeKindsList',
-      'enableJudgeKind',
-      'disableJudgeKind',
-    ] as const)
-      assert.deepEqual(await service.handle({ operation, args: { kind: 'typesafe' } }), {
-        kind: 'unavailable',
-        code: 'E_REQUIRED',
-        phase: 'E',
-      });
+    assert.deepEqual(await service.handle({ operation: 'judgesList', args: {} }), []);
+    assert.deepEqual(await service.handle({ operation: 'budgetShow', args: {} }), {
+      activeVersion: null,
+      versions: [],
+    });
     for (const operation of ['judgeModelStatus', 'removeJudgeModel'] as const)
       assert.deepEqual(await service.handle({ operation, args: {} }), {
         kind: 'unavailable',
@@ -1372,13 +1363,9 @@ test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable',
       phase: 'E2',
     });
     assert.deepEqual(await service.handle({ operation: 'heldList', args: {} }), { kind: 'held-list', decisions: [] });
-    assert.deepEqual(
-      await service.handle({ operation: 'decideHeld', args: { decisionId: 'held-1', decision: 'accept' } }),
-      {
-        kind: 'unavailable',
-        code: 'HOLDS_UNAVAILABLE',
-        phase: 'E',
-      },
+    await assert.rejects(
+      () => service.handle({ operation: 'decideHeld', args: { decisionId: 'held-1', decision: 'accept' } }),
+      /terminal or app/u,
     );
     const writes = store.database
       .prepare(
@@ -1390,7 +1377,7 @@ test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable',
     assert.deepEqual(
       { judges: writes.judges, intents: writes.intents, charges: writes.charges },
       { judges: 0, intents: 0, charges: 0 },
-      'unavailable operations have no producer or network-capable state path',
+      'initial live inventories do not create network-capable state',
     );
   } finally {
     store.close();

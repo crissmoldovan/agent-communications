@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
-import type { ToolGate } from './update-gate.ts';
+import type { ToolNotice } from './update-gate.ts';
 
 /**
  * Tool arguments, held to the tool's schema — every key declared, every value what it says — and refused as `USAGE`
@@ -74,16 +74,17 @@ const TARGET = 'draft-2020-12';
  * `refuse` is handed a `USAGE` `CommsError` and returns the tool result, so the refusal is in the same envelope as
  * every other refusal that server makes.
  *
- * `gate` is asked next, with the checked arguments, before the handler: the daily update check's stop (design
- * 2026-09-28), which every server builds with `updateToolGate`. Here because this is the one place every tool of every
- * server already passes through, so no tool can be registered without it; given to the wrapper rather than built
- * in, because what it asks the registry with is each server's own — and WhatsApp's is nothing at all. A call it
- * answers reaches nothing, as a refused one does.
+ * `notice` is asked once the handler has answered: the update notice (design 2026-10-16, U1), which every server builds
+ * with `updateToolNotice`. Here because this is the one place every tool of every server already passes through, so no
+ * tool can be registered without it; given to the wrapper rather than built in, because what it asks the registry
+ * with is each server's own — and WhatsApp's is nothing at all. It never stops a call: a line it gives is carried
+ * beside the result (`withUpdateNotice`), and a tool's output schema is published with room for it
+ * (`withUpdateField`), so a client that checks a result against its schema takes the one that carries it.
  */
 export function strictToolArguments(
   server: object,
   refuse: RefuseToolCall,
-  gate?: ToolGate,
+  notice?: ToolNotice,
   retired: RetiredArguments = {},
 ): void {
   const target = server as { registerTool?: unknown; [APPLIED]?: true };
@@ -100,13 +101,21 @@ export function strictToolArguments(
     const declared = config.inputSchema !== undefined;
     const schema = strictSchemaOf(name, config.inputSchema);
     const published = schema['~standard'].jsonSchema.input({ target: TARGET }) as JsonSchema;
-    return register(name, { ...config, inputSchema: passThrough(schema) }, async (input: unknown, context: unknown) => {
-      const parsed = await schema.safeParseAsync(input ?? {});
-      if (!parsed.success) return refuse(refusal(name, published, input, parsed.error.issues, retired[name] ?? {}));
-      const stopped = gate ? await gate(name, parsed.data as Record<string, unknown>) : null;
-      if (stopped !== null) return stopped;
-      return declared ? handler(parsed.data, context) : handler(context);
-    });
+    const output = notice && config.outputSchema !== undefined ? withUpdateField(config.outputSchema) : null;
+    // A result may carry the notice in its structured content unless its schema has no room for the field.
+    const room = config.outputSchema === undefined || output !== null;
+    const registered = output === null ? config : { ...config, outputSchema: output };
+    return register(
+      name,
+      { ...registered, inputSchema: passThrough(schema) },
+      async (input: unknown, context: unknown) => {
+        const parsed = await schema.safeParseAsync(input ?? {});
+        if (!parsed.success) return refuse(refusal(name, published, input, parsed.error.issues, retired[name] ?? {}));
+        const result = await (declared ? handler(parsed.data, context) : handler(context));
+        const line = notice ? await notice(name, parsed.data).catch(() => null) : null;
+        return line === null ? result : withUpdateNotice(result, line, room);
+      },
+    );
   };
   Object.defineProperty(target, APPLIED, { value: true });
 }
@@ -164,6 +173,88 @@ function passThrough(schema: ObjectSchema): object {
       vendor: 'agentcomms',
       validate: (value: unknown) => ({ value }),
       jsonSchema: schema['~standard'].jsonSchema,
+    },
+  };
+}
+
+// ── The update notice ───────────────────────────────────────────────────────────────────────────────────────
+
+/** The field a result carries the update notice in, as every output schema publishes it. */
+const UPDATE_FIELD = 'update';
+const UPDATE_PROPERTY: JsonSchema = {
+  type: 'string',
+  description:
+    'Once per server process at most: a newer agent-communications release is out, or installed and waiting for a restart. Pass it on to the person; nothing was refused.',
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * A result with the notice beside it: a text block of its own after the result's — a client that shows the model only
+ * text reads it there — and, where the structured content is an object with room for it, its `update` field, which is
+ * all Claude Code and Codex show. Nothing of the result is changed or taken away.
+ */
+export function withUpdateNotice(result: unknown, line: string, room = true): unknown {
+  if (!isPlainObject(result)) return result;
+  const content = Array.isArray(result.content) ? result.content : [];
+  const next: Record<string, unknown> = { ...result, content: [...content, { type: 'text', text: line }] };
+  const structured = result.structuredContent;
+  if (room && isPlainObject(structured) && !Object.hasOwn(structured, UPDATE_FIELD)) {
+    next.structuredContent = { ...structured, [UPDATE_FIELD]: line };
+  }
+  return next;
+}
+
+/** A JSON Schema with the `update` field among its properties — each side of a union — or null with no room for it. */
+function publishedWithUpdate(json: JsonSchema): JsonSchema | null {
+  const alternatives = json.anyOf ?? json.oneOf;
+  if (Array.isArray(alternatives) && json.properties === undefined) {
+    const each = alternatives.map(publishedWithUpdate);
+    if (each.some((alternative) => alternative === null)) return null;
+    return { ...json, ...(json.anyOf ? { anyOf: each as JsonSchema[] } : { oneOf: each as JsonSchema[] }) };
+  }
+  const type = Array.isArray(json.type) ? json.type : [json.type];
+  if (!type.includes('object') || json.properties === undefined) return null;
+  if (Object.hasOwn(json.properties, UPDATE_FIELD)) return null;
+  return { ...json, properties: { ...json.properties, [UPDATE_FIELD]: UPDATE_PROPERTY } };
+}
+
+interface StandardSchemaLike {
+  '~standard': {
+    validate: (value: unknown) => unknown;
+    jsonSchema?: { input: (options: { target: string }) => unknown; output: (options: { target: string }) => unknown };
+  };
+}
+
+/**
+ * A tool's output schema, published with room for the `update` field: the same schema, with that one property added
+ * — a zod object publishes `additionalProperties: false`, and a client that checks a result against it would refuse
+ * the one carrying the notice — and checked as it always was, without the field. Null when the schema has no room for
+ * it: one that declares `update` itself, or is not an object; that tool's notice is a text block alone.
+ */
+function withUpdateField(outputSchema: unknown): object | null {
+  const schema = (
+    isPlainObject(outputSchema) && !('~standard' in outputSchema) && Object.values(outputSchema).every(isZodSchema)
+      ? z.object(outputSchema as z.ZodRawShape)
+      : outputSchema
+  ) as StandardSchemaLike;
+  const standard = schema?.['~standard'];
+  if (typeof standard?.validate !== 'function' || standard.jsonSchema === undefined) return null;
+  const { jsonSchema } = standard;
+  const input = publishedWithUpdate(jsonSchema.input({ target: TARGET }) as JsonSchema);
+  const output = publishedWithUpdate(jsonSchema.output({ target: TARGET }) as JsonSchema);
+  if (input === null || output === null) return null;
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'agentcomms',
+      validate: (value: unknown) => {
+        if (!isPlainObject(value) || !Object.hasOwn(value, UPDATE_FIELD)) return standard.validate(value);
+        const { [UPDATE_FIELD]: _notice, ...rest } = value;
+        return standard.validate(rest);
+      },
+      jsonSchema: { input: () => input, output: () => output },
     },
   };
 }

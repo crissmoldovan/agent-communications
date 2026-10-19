@@ -19,7 +19,7 @@ import {
 } from '../src/operations/signin.ts';
 import { assertNoBareCommand, slackInline } from './support/handoffs.ts';
 import { newHarness, slackOk, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
-import { fetchListener, running, stopListeners } from './support/listener.ts';
+import { fetchListener, LISTENER_COMMAND, running, stopListeners } from './support/listener.ts';
 
 /*
  * The listener entry, in the layout that breaks it.
@@ -41,19 +41,9 @@ afterEach(async () => {
   await stopListeners(started);
 });
 
+let nextManifestPort = 49_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  /*
-   * `localhost`, the same host the listener binds — not `127.0.0.1`.
-   *
-   * On this machine `localhost` resolves to `::1` first. Probing IPv4 and then binding IPv6 checks one address
-   * family and uses the other, so a port free on the first can already be held on the second by another test
-   * file running concurrently. It showed up as a rare, unrepeatable failure in two unrelated tests.
-   */
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 test('an own-app reauth cancelled before a pasted callback keeps its flow and prints the exact finish step', async () => {
@@ -329,10 +319,11 @@ test('a port already in use leaves no sign-in behind', async () => {
    * nothing will ever remove — `peek` only sweeps an id somebody asks about, and nobody will.
    */
   const harness = await newHarness();
-  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
-  const port = await freePort();
   const blocker = createServer();
-  await new Promise<void>((settle) => blocker.listen(port, 'localhost', () => settle()));
+  await new Promise<void>((settle) => blocker.listen(0, 'localhost', () => settle()));
+  const { port } = blocker.address() as { port: number };
+  const { AGENT_COMMS_TEST_SLACK_LISTENER_PORT: _testLoopbackPort, ...env } = harness.env;
+  const context = new SlackContext({ core: harness.core, env, exchange: (p) => harness.exchange(p) });
   try {
     await assert.rejects(
       startSignIn(context, {
@@ -344,6 +335,50 @@ test('a port already in use leaves no sign-in behind', async () => {
       }),
       (error: CommsError) => {
         assert.match(error.hint ?? '', new RegExp(String(port)), 'the message never names the port');
+        // The two ways out (2026-10-15): free the port, or make a new app, whose manifest chooses a free one.
+        assert.match(error.message, new RegExp(`port ${port} is already in use`));
+        assert.match(error.hint ?? '', /close whatever uses it/i);
+        assert.ok(
+          error.hint?.includes(`${slackInline(harness.core.paths, ['manifest'])} again`),
+          `names the manifest command to run again: ${error.hint}`,
+        );
+        assert.match(error.hint ?? '', /new app/);
+        return true;
+      },
+    );
+    assert.deepEqual(await context.flows.pending(), [], 'a sign-in with no listener was left on disk');
+  } finally {
+    await new Promise<void>((settle) => blocker.close(() => settle()));
+  }
+});
+
+test('a detached sign-in whose port is in use says so, and the same two ways out', async () => {
+  // `--start` and `slack_workspace_add`: the listener is a child, which ends before it is ready when the port is held.
+  const harness = await newHarness();
+  const blocker = createServer();
+  await new Promise<void>((settle) => blocker.listen(0, 'localhost', () => settle()));
+  const { port } = blocker.address() as { port: number };
+  const { AGENT_COMMS_TEST_SLACK_LISTENER_PORT: _testLoopbackPort, ...env } = harness.env;
+  const context = new SlackContext({ core: harness.core, env, exchange: (p) => harness.exchange(p) });
+  try {
+    await assert.rejects(
+      startSignIn(context, {
+        mode: 'send',
+        alias: 'acme',
+        clientId: TEST_CLIENT_ID,
+        port,
+        detached: true,
+        listenerCommand: LISTENER_COMMAND,
+        // A send connection a person approved, as `workspace add --mode send` claims one before it starts.
+        consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] },
+      }),
+      (error: CommsError) => {
+        assert.match(`${error.message} ${error.hint}`, new RegExp(`[Pp]ort ${port}`));
+        assert.match(error.hint ?? '', /close whatever uses it/i);
+        assert.ok(
+          error.hint?.includes(`${slackInline(harness.core.paths, ['manifest', '--mode', 'send'])} again`),
+          `names the manifest for this mode: ${error.hint}`,
+        );
         return true;
       },
     );

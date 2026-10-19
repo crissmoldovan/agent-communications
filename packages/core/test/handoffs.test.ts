@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +68,8 @@ const FOUR = [
   PATHS.secretsDir,
 ];
 const NODE: NodeRuntime = { version: 'v22.18.0', execArgv: [] };
+/** Core's own CLI here: its source, since the tests run core from source. */
+const CORE_CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 /** A checkout with Gmail built, and Gmail's handoffs as its built CLI makes them. */
 function gmailHandoffs(
@@ -532,3 +535,40 @@ test('a correction found from a Windows registration in another case names the l
   assert.doesNotMatch(hint, /Agent-Gmail\.CMD/i);
   assertNoBareCommand(hint);
 });
+
+const POSIX_LINKED_NODE =
+  process.platform === 'win32' ? { skip: 'WINDOWS_SKIP: a `node` on PATH that is a symlink is a POSIX layout' } : {};
+
+test(
+  'a printed command names this Node by the link PATH finds, never the file it resolves to (CUE-492)',
+  POSIX_LINKED_NODE,
+  () => {
+    // `~/.local/bin/node` a symlink into another tool's own Node: the command a person reads names the link, as the
+    // registration does, and never reads as though this suite depended on that tool.
+    const home = realTemp('home-');
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    const node = join(bin, 'node');
+    symlinkSync(process.execPath, node);
+    const real = realpathSync(process.execPath);
+    const env = { HOME: home, PATH: bin, AGENT_COMMS_CONFIG_DIR: join(home, 'config') };
+
+    // As core's server and CLI open core: from their environment.
+    const handoff = requireHandoffs(openCore({ env, caller: CORE_CALLER, platform: 'linux' })).own(['approve', 'ab12']);
+    assert.ok(isCommand(handoff), 'message' in handoff ? handoff.message : '');
+    assert.equal(handoff.words[0], node, 'the program is the link, as PATH has it');
+    const sentence = handoffSentence(handoff, (command) => `Run ${command} to approve it.`);
+    assert.ok(sentence.includes(` ${node} `) || sentence.includes(`\`${node} `), sentence);
+    assert.ok(!sentence.includes(real), `the sentence never names the file the link resolves to: ${sentence}`);
+
+    // And from core's own CLI, started by this process's own path: its usage error's command is located the same way.
+    const ran = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CORE_CLI, '--no-such-option'],
+      { env: { ...env, NO_COLOR: '1', AGENT_COMMS_UPDATE_CHECK: 'off' }, encoding: 'utf8' },
+    );
+    assert.equal(ran.status, 64, ran.stderr);
+    assert.ok(ran.stderr.includes(`\`${node} --experimental-strip-types ${CORE_CLI} --help\``), ran.stderr);
+    assert.ok(!ran.stderr.includes(real), `the CLI never names the file the link resolves to: ${ran.stderr}`);
+  },
+);

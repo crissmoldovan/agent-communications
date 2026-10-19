@@ -68,13 +68,15 @@ async function releaseFixture(): Promise<string> {
     await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(destination, 'package.json'));
   }
   await writeFile(join(root, 'scripts/packages.mjs'), "export const PACKAGES = []; export const SCOPE = '@fixture';\n");
+  // release.mjs imports both gates in-process, so each stand-in exports the function it calls: the first refuses, and
+  // the second throws only if it is ever reached.
   await writeFile(
     join(root, 'scripts/verify-events-phase-e-prerequisites.mjs'),
-    "console.error('fixture Phase-E gate refused'); process.exitCode = 1;\n",
+    "export async function verifyPhaseEPrerequisites() { return ['fixture Phase-E gate refused']; }\n",
   );
   await writeFile(
     join(root, 'scripts/verify-events-phase-e-tests.mjs'),
-    "throw new Error('second gate must not run');\n",
+    "export async function verifyPhaseETestManifest() { throw new Error('second gate must not run'); }\n",
   );
   return root;
 }
@@ -114,6 +116,7 @@ test('E3: release --publish --skip-verify stops at a failing Phase-E gate before
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
     assert.notEqual(result.code, 0);
     assert.match(output, /fixture Phase-E gate refused/u);
+    assert.doesNotMatch(output, /second gate must not run/u, 'the strict-test gate never runs after the first refuses');
     assert.doesNotMatch(output, /npm whoami|Publishing /u);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -192,6 +195,45 @@ test('E3: every B3 prerequisite drift refuses the E build/package/release gate b
     }
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('E3: the exact B3 capability inventory rejects a removed row and a stubbed operation', async () => {
+  for (const mutation of [
+    {
+      label: 'removed row',
+      change: (capabilities: { capabilities: Array<{ id: string }> }) => {
+        capabilities.capabilities = capabilities.capabilities.filter(
+          (row) => row.id !== 'events-daemon.judge-kind.disable',
+        );
+      },
+    },
+    {
+      label: 'stubbed operation',
+      change: (capabilities: { capabilities: Array<{ id: string; operation?: string }> }) => {
+        const row = capabilities.capabilities.find((entry) => entry.id === 'events-daemon.judge-kind.disable');
+        assert.ok(row, 'fixture contains the B3 capability row');
+        row.operation = 'stubbedDisableJudgeKind';
+      },
+    },
+  ] as const) {
+    const root = await prerequisiteFixture();
+    try {
+      const path = join(root, 'capabilities.json');
+      const capabilities = JSON.parse(await readFile(path, 'utf8')) as {
+        capabilities: Array<{ id: string; operation?: string }>;
+      };
+      mutation.change(capabilities);
+      await writeFile(path, `${JSON.stringify(capabilities, null, 2)}\n`);
+      const problems = await verifyPhaseEPrerequisites({ root });
+      assert.equal(
+        problems.includes('capabilities.json B3 projection matches the exact E-owned B3 capability inventory'),
+        true,
+        `${mutation.label} must fail the exact B3 inventory gate: ${problems.join('; ')}`,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 

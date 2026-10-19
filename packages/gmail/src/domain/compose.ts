@@ -1,5 +1,6 @@
 import { analyseOutboundHtml, CommsError, type ParsedAddress } from '@agentcomms/core';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
+import MimeNode from 'nodemailer/lib/mime-node/index.js';
 
 /**
  * Building the message that will be sent.
@@ -116,12 +117,31 @@ export function textToHtml(text: string): string {
     .join('\n');
 }
 
-/** Formats an address for a header, quoting a display name that needs it. */
+/**
+ * Formats an address for a header, quoting a display name that needs it.
+ *
+ * Parentheses are quoted too: unquoted, `Jo Example (agent) <jo@…>` is a name and an RFC 5322 comment, and the
+ * composer — like many mail clients — drops the comment, so the agent label (design 2026-10-15-agent-label, G1) went
+ * out as `Jo Example <jo@…>`.
+ */
 export function formatAddress(entry: ParsedAddress | string): string {
   if (typeof entry === 'string') return entry;
   if (!entry.name) return entry.address;
-  const name = /["\\,:;<>@[\]]/.test(entry.name) ? `"${entry.name.replace(/(["\\])/g, '\\$1')}"` : entry.name;
+  const name = /["\\,:;<>@[\]()]/.test(entry.name) ? `"${entry.name.replace(/(["\\])/g, '\\$1')}"` : entry.name;
   return `${name} <${entry.address}>`;
+}
+
+/**
+ * A From header field, folded and RFC 2047-encoded by the composer's own MIME writer, as a draft it composed would
+ * carry it: `From: "Jo Example (agent)" <jo@example.test>`, folded with CRLF when the name is long. For a header-only
+ * rewrite (design 2026-10-15-agent-label, G2).
+ */
+export function encodeFromField(from: string): string {
+  const node = new MimeNode('text/plain');
+  node.setHeader('From', from);
+  const field = /^From:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*/.exec(node.buildHeaders())?.[0];
+  if (field === undefined) throw new CommsError('UNEXPECTED', 'the composer wrote no From header');
+  return field;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { approvalView } from '../operations/approval-view.ts';
-import type { B3McpRegistrar } from '../operations/b3-contract.ts';
+import type { B3ControlOperation, B3McpRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
 import { disableAll } from '../operations/disable-all.ts';
@@ -38,6 +38,7 @@ import { stop } from '../operations/stop.ts';
 import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { VERSION } from '../version.ts';
 
 export interface EventsMcpServer {
   readonly server: McpServer;
@@ -58,9 +59,11 @@ function reply(data: unknown) {
   };
 }
 
-/** Creates the held local-event service's deliberately content-free MCP surface. */
+/** Creates the local event service's deliberately content-free MCP surface. */
 export async function createEventsMcpServer(options: EventsMcpOptions = {}): Promise<EventsMcpServer> {
-  const server = new McpServer({ name: 'agent-events', version: '0.14.1' });
+  const server = new McpServer({ name: 'agent-events', version: VERSION });
+  const b3 = (operation: B3ControlOperation, args: Record<string, unknown>, throughOwner: () => Promise<unknown>) =>
+    options.b3Registrar === undefined ? throughOwner() : options.b3Registrar.owner.handle({ operation, args });
 
   server.registerTool(
     'events_status',
@@ -127,7 +130,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   runtimeTool(
     'events_doctor',
     'Local event service doctor',
-    'Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health.',
+    'Reports content-free lineage, retry, recovery, judge authority, hold-clock and protocol health.',
     doctor,
     {
       destructiveHint: false,
@@ -255,72 +258,79 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     (args) => removeSubscriber(args.subscriberId as string, options),
     true,
   );
-  strictControlTool('events_judges_list', 'List judges', 'Returns the typed Phase-E unavailable result.', {}, () =>
+  strictControlTool('events_judges_list', 'List judges', 'Lists content-free immutable judge metadata.', {}, () =>
     judgesList(options),
   );
   strictControlTool(
     'events_judge_add',
     'Add judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates an immutable, initially inactive judge version.',
     { document: z.unknown() },
-    (args) => addJudge(args.document, options),
+    (args) => b3('addJudge', { document: args.document }, () => addJudge(args.document, options)),
     true,
   );
   strictControlTool(
     'events_judge_update',
     'Update judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates an immutable replacement judge version.',
     { document: z.unknown() },
-    (args) => updateJudge(args.document, options),
+    (args) => b3('updateJudge', { document: args.document }, () => updateJudge(args.document, options)),
     true,
   );
   strictControlTool(
     'events_judge_remove',
     'Remove judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Removes every live immutable version of one judge.',
     { judgeId: z.string().min(1) },
-    (args) => removeJudge(args.judgeId as string, options),
+    (args) => b3('removeJudge', { judgeId: args.judgeId }, () => removeJudge(args.judgeId as string, options)),
     true,
   );
   strictControlTool(
     'events_judge_test',
     'Test judge',
-    'Returns the typed Phase-E unavailable result.',
+    'Tests one active exact judge version with the daemon-fixed synthetic event.',
     { judgeId: z.string().min(1), version: z.number().int().positive() },
     (args) => judgeTest(args.judgeId as string, args.version as number, options),
   );
-  strictControlTool('events_budget_show', 'Show budget', 'Returns the typed Phase-E unavailable result.', {}, () =>
-    budgetShow(options),
+  strictControlTool(
+    'events_budget_show',
+    'Show budget',
+    'Lists immutable judge budgets and the active singleton.',
+    {},
+    () => budgetShow(options),
   );
   strictControlTool(
     'events_budget_update',
     'Update budget',
-    'Returns the typed Phase-E unavailable result.',
+    'Creates a pending immutable global budget and prepares its approval.',
     { document: z.unknown() },
-    (args) => updateBudget(args.document, options),
+    (args) => b3('updateBudget', { document: args.document }, () => updateBudget(args.document, options)),
     true,
   );
   strictControlTool(
     'events_judge_kinds_list',
     'List judge kinds',
-    'Returns the typed Phase-E unavailable result.',
+    'Lists disabled/enabled judge kinds and the typed Laya E2 seam.',
     {},
     () => judgeKindsList(options),
   );
   strictControlTool(
     'events_judge_kind_enable',
     'Enable judge kind',
-    'Returns the typed Phase-E or E2 unavailable result.',
+    'Prepares, but never approves or claims, judge-kind enablement.',
     { kind: z.string().min(1) },
-    (args) => enableJudgeKind(args.kind as string, options),
+    (args) => b3('enableJudgeKind', { kind: args.kind }, () => enableJudgeKind(args.kind as string, options)),
     true,
   );
   strictControlTool(
     'events_judge_kind_disable',
     'Disable judge kind',
-    'Returns the typed Phase-E or E2 unavailable result.',
+    'Immediately disables one available judge kind; Laya remains typed E2-unavailable.',
     { kind: z.string().min(1) },
-    (args) => disableJudgeKind(args.kind as string, options),
+    (args) => {
+      const kind = args.kind as string;
+      return b3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, options));
+    },
     true,
   );
   strictControlTool(
@@ -360,7 +370,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_held_list',
     'List held decisions',
-    'Returns the typed empty held-decision result before Phase E.',
+    'Lists content-free held-decision metadata; only a terminal/app may resolve one.',
     {},
     () => heldList(options),
   );

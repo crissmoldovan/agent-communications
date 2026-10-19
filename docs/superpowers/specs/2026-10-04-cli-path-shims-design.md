@@ -239,6 +239,14 @@ outcome the usual one rather than a rare one; installs whose Node path needs no 
 cache) keep pasteable lines. A form that both shells run with a spaced program path is a renderer change, left to the
 D8 follow-up, where a shim on `PATH` removes the problem.
 
+**CUE-410 amendment (2026-10-14): a labelled PowerShell line.** When only the program word prevents the common
+cmd.exe/PowerShell form, the renderer may instead prove a PowerShell-only form: the call operator `&`, followed by
+every word as a PowerShell single-quoted literal (an inner single quote is doubled). The result explicitly labels the
+line “PowerShell”. Empty words, trailing backslashes, double quotes and control or formatting characters are not
+proven safe through the native-program boundary and retain the inert JSON form. An unsafe argument beside a common-shell program also
+retains inert JSON; this is a narrow fallback for an absolute program such as the default
+`C:\Program Files\nodejs\node.exe`, not a general weakening of the common-shell rule.
+
 **Amendment (build, 2026-10-05): a registration from before 0.13.1.** It still starts and finds its folders as it
 always did, so the doctor reports it as a warning with the re-register command, not as a failure: a failure would turn
 every existing install red on upgrade. An entry that is unpinned *and* cannot start is one failed row naming both
@@ -440,6 +448,65 @@ result may not identify Node. New 0.13.1 results use D1-D3 instead.
 cover ownership/modes/ACLs (including macOS extended ACLs), receipts and startup validation, prune and opt-out,
 authoritative data roots, and CLI-MCP parity for the preference.
 
+### D8 amendment — CUE-406 managed-install PATH shims (2026-10-14)
+
+The follow-up is now part of the managed launcher on macOS and Linux. After a managed install or registration update,
+core writes the declared package binary's shim — `agentcomms`, `agent-gmail`, `agent-slack`, `agent-resend`,
+`agent-whatsapp` or `agent-events` — to `$HOME/.local/bin`. The shim executes the program and managed-runtime entry
+returned by D1's locator for that installed product, then forwards the caller's arguments. Updating rewrites that
+owned shim to the new runtime.
+
+This release offers no Windows shim. A `.cmd` shim must forward with `%*`, which makes `cmd.exe` parse caller-controlled
+words again: an argument such as `x&whoami` can become another command, and `%VAR%` and `^` have the same class of
+problem. Managed installs therefore write no shim on Windows. The install result and `doctor` say plainly why, and
+continue to provide D1's full-path command (CUE-403) or its labelled PowerShell `&` line (CUE-410).
+
+Ownership is installation-local and content-bound. A receipt under the resolved data root records each shim path and
+the SHA-256 of the bytes this installation wrote. Core overwrites or removes a path only while it matches that receipt
+and digest; a pre-existing path, a receipt for another path or a file changed since writing is foreign and is never
+replaced or deleted. Pruning a runtime removes only matching owned shims that point into that runtime. `doctor`
+reports a managed CLI's missing, stale or foreign shim and the repair. Tests use temporary homes and data roots only.
+
+Every shim operation pins the directory before it acts: it resolves `$HOME/.local/bin` to its real directory at the
+start, performs every write, rename and deletion within that resolved directory, and immediately before each mutation
+refuses without changing anything if the public directory now resolves somewhere else. `$HOME/.local/bin` itself may
+normally be a symlink to a real directory; the pinned real directory is what makes that setup safe. The receipt and
+digest rule still protects a foreign file within it.
+
+The boundary is the repository's existing same-user boundary. A hostile process running as the same OS user and able
+to rewrite the person's home directory is outside this design's protection, as the event design says for its own
+boundary (`2026-10-05-local-event-emission-design.md` §7 and `SECURITY.md:51-63`). The real-directory pin prevents an
+accidental or concurrent parent-symlink swap from redirecting a later mutation; it is not a defence against a
+same-user process with continuing authority to replace both paths and files.
+
+Install results name the shim and say when its directory is absent from `PATH`, with a current-shell command for
+prepending it in a POSIX shell. No command edits a shell profile, user environment, registry value or machine-wide
+directory. This is a convenience path to the same locator-resolved program and entry; D1 handoffs continue
+to locate and pin their installation directly and never trust a bare PATH command.
+
+### CUE-492 amendment (2026-10-15): this Node as PATH finds it
+
+`process.execPath` is this Node as the system reports it, and macOS and Linux report it resolved: a Node reached
+through a symlink — Homebrew's `/opt/homebrew/bin/node`, or a `~/.local/bin/node` another tool made into its own Node
+— reports the file the link points at. Printed commands and managed shims named that file, while registrations name
+the `node` found on PATH, unresolved (`resolveNode`, `packages/core/src/mcp-install.ts`). When the link's owner moved
+the file (`brew upgrade` removes the Cellar version it names) every shim broke, and a command read as though the suite
+depended on that owner.
+
+D1's interpreter rule stands — the program is this process's Node and no other interpreter — and only its spelling
+changes. The locator is given the printing process's environment (the one `openCore` was opened with, or the
+installer's for a shim) and names the first `node` on its PATH whose real file is `process.execPath`'s, as PATH spells
+it (`packages/core/src/node-program.ts`); with none, or with no environment, `process.execPath`. The real file serves
+only that identity check: `engines.node` is still checked against `process.version`, nothing found on PATH is run or
+asked its version, and a `node` on PATH that is another file is never named.
+
+A shim written before this names the resolved file. `doctor` reports it stale — the file the expected link resolves
+to — with the managed install or update that repoints it, and `mcp install` and `update` rewrite an owned shim with the
+link whenever they register its runtime; a release carrying this moves every managed registration, so updating to it
+repoints every owned shim. A shim naming the link is never called stale by a process that finds this Node only by its
+real file, nor is one naming another Node. `doctor` also compares a shim's entry with the expected runtime entry as
+files: the locator names the entry by its real path, which differs from the runtime's path behind a linked folder.
+
 ## 4. Tests
 
 0000. **Round-14 case:** a built `.mjs` caller on Node 22.12–22.17 resolving a cross-product `local` registration with
@@ -520,16 +587,22 @@ authoritative data roots, and CLI-MCP parity for the preference.
    executable names. Positive fixtures preserve the locator's own inputs, protocol identities and reviewed external
    commands: `chmod 700`, install/read-back `claude mcp` / `codex mcp`, and `other-servers.ts`'s `claude mcp remove` /
    `codex mcp remove`.
-8. **End to end:** prepare harmless change approvals through CLI and MCP, execute each own-product or same-version
+8. **Managed shims:** on POSIX, a normal directory and a `$HOME/.local/bin` symlink both install and update the
+   locator-resolved program and entry exactly. Swapping that parent symlink between the check and a write, rename or
+   delete is refused with neither the original nor redirected directory changed. A pre-existing or modified foreign
+   file is never written or removed. On Windows, install, update, prune and doctor create no shim and explain the
+   `.cmd` argument-reparsing reason while preserving the full-path or labelled PowerShell handoff.
+9. **End to end:** prepare harmless change approvals through CLI and MCP, execute each own-product or same-version
    cross-product command in a real shell with no suite binary on `PATH`, and observe the same temporary approval store.
    Unlocatable cross-product fixtures assert that no executable words are returned. Run POSIX on POSIX and PowerShell
    plus the available cmd alternative on Windows. No provider transport is called.
-9. Run full `pnpm verify`. No test sends email, posts to Slack, calls Resend, uses a real key, writes the real home, or
+10. Run full `pnpm verify`. No test sends email, posts to Slack, calls Resend, uses a real key, writes the real home, or
    contains a real address, token or client secret.
 
 ## 5. Departure from the ticket
 
-CUE-403's title asks for CLIs on `PATH`. 0.13.1 instead fixes the blocking handoff with commands tied to the
-installation available at print time and with explicit path options. PATH convenience remains the separately scoped
-follow-up in D8. On Windows that follow-up also decides how far 0.13.1 gets: with Node under `C:\Program Files`,
-handoffs are shown as words to type, not as a line to paste (D3 amendment).
+CUE-403's title asks for CLIs on `PATH`. 0.13.1 instead fixed the blocking handoff with commands tied to the
+installation available at print time and with explicit path options. The CUE-406 amendment to D8 now adds owned
+managed-install shims without changing that handoff trust boundary. The original D3 amendment made Windows handoffs
+under `C:\Program Files` words to type; the CUE-410 amendment above supersedes that outcome with a labelled
+PowerShell line wherever its stricter renderer proves one.

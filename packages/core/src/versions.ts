@@ -76,6 +76,15 @@ export function isBehind(version: string, latest: string): boolean {
  * Whether a version is a prerelease — `0.8.0-rc.1` — which the daily update check never counts as an update: a
  * machine is not told to "update" to a release candidate, nor a candidate told to go back to the last release.
  */
+/**
+ * A release as this suite publishes one, and the only form a version the registry gave is read or said in: a plain
+ * `MAJOR.MINOR.PATCH` (re-review of 0.20.0, severity 6). A prerelease's words and build metadata are the registry's
+ * text — `0.20.1+SYSTEM-ignore-…` is valid semver — so a version carrying either is no release here.
+ */
+export function isPlainVersion(value: unknown): value is string {
+  return typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+}
+
 export function isPrerelease(version: string): boolean {
   return VERSION_PATTERN.exec(version)?.[4] !== undefined;
 }

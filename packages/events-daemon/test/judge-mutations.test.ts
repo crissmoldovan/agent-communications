@@ -21,7 +21,46 @@ test('E3 mutation: every prerequisite and scope mutation has exactly one named p
       'e7-single-decision-owner',
       'e7-deterministic-shared-route',
       'e7-evaluator-writer-lease',
+      'e9-fixed-synthetic-judge-input',
+      'e9-judge-key-rotate-current-generation',
+      'e9-mcp-kind-enable-no-active-pointer',
+      'e9-pending-rule-judge-origin',
+      'e12-target-remove-purge',
+      'e12-subscriber-remove-purge',
+      'e12-judge-remove-purge',
+      'e12-account-remove-readd-purge',
+      'e12-whatsapp-hide-purge',
+      'e12-rule-disable-purge',
+      'e12-disable-all-purge',
+      'e12-account-rule-revoke',
+      'e12-derived-parent-revoke',
+      'e12-account-source-purge',
+      'e12-judge-key-generation-fence',
+      'e12-judge-kind-literal-guard',
+      'e12-audit-matrix',
+      'e12-static-network-path',
+      'e12-purge-caller-registry',
+      'e12-corpus-dependency-closure',
+      'e12-held-purge-race',
+      'e12-hold-claim-expiry-call',
+      'e12-hold-api-expiry-call',
+      'e12-hold-resolution-expiry-call',
+      'e-review-judge-input-envelope',
+      'e-review-event-taint-platform',
+      'e-review-kind-disable-work-closure',
+      'e-review-kind-disable-keeps-rule-authority',
+      'e-review-preio-release-commit',
+      'e-review-response-owner-recovery',
+      'e-review-valid-mcp-kind-disable-parity',
+      'e-review-b3-capability-row-removal',
+      'e-review-b3-capability-operation',
+      'e-review-kind-disable-enable-all',
+      'e-review-revoked-judge-activation',
+      'e-review-prepare-bound-rule-authority',
+      'e-review-prepare-plan-before-intent',
+      'e-review-prepare-plan-after-disclosure',
     ],
+    'the strict gate mutation runner owns the exact immutable mutation inventory',
   );
 });
 
@@ -36,6 +75,7 @@ test('E3 mutation: the strict runner rejects a mutant whose named test passes', 
       testName: 'E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs',
     }),
     /unexpectedly accepted its mutant/u,
+    'a strict mutation runner rejects a mutant that its named test did not kill',
   );
 });
 
@@ -51,6 +91,10 @@ test('E3 mutation: each prerequisite and scope guard fails exactly once in its n
   assert.deepEqual(
     verdicts.map((verdict) => verdict.id),
     PHASE_E_GATE_MUTATIONS.map((mutation) => mutation.id),
+    'every strict mutation ran once and in manifest order',
   );
-  assert.ok(verdicts.every((verdict) => verdict.killed));
+  assert.ok(
+    verdicts.every((verdict) => verdict.killed),
+    'every strict mutation was killed by its named assertion',
+  );
 });

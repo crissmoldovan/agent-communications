@@ -26,6 +26,7 @@ import { assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatcher } from './dispatcher.ts';
 import { EventEvaluator } from './evaluate.ts';
 import type { EventExpiry } from './expiry.ts';
+import type { HostedJudgeCredential } from './judge-transport.ts';
 import type { EventLifecycle } from './lifecycle.ts';
 import { requirePhaseDWhatsAppVisibilitySeam } from './phase-d-whatsapp-owner-composition.ts';
 import { recoverDeliveryLeases } from './recovery.ts';
@@ -59,7 +60,7 @@ export interface EventSchedulerOptions {
   readonly gmailSourceFor: (accountId: string) => Promise<GmailEventSource>;
   /** Owner-provided B3 secret reader, called only if an approved Gmail rule reaches a TypeSafe judge boundary. */
   readonly hostedJudgeKeyFor?:
-    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
     | undefined;
   /** Owner-built, read-only source work. Gmail keeps its existing worker; every other source enters through this seam. */
   readonly sourceWorkFor?:
@@ -439,6 +440,9 @@ export class EventScheduler {
         },
       },
       ...(this.#hostedJudgeKeyFor === undefined ? {} : { hostedJudgeKeyFor: this.#hostedJudgeKeyFor }),
+      // The scheduler's clock, as every other source's evaluator is given the owner's (`source-owner-work.ts`): a
+      // decision deadline is judged on the clock the projection's deadline was set by, never on another.
+      now: this.#now,
     });
     const fence = async (rule: GmailSourceRule): Promise<void> => {
       await assertDisclosable({

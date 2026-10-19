@@ -22,6 +22,8 @@ import { join } from 'node:path';
 // about Slack — a local release would have published three, confirmed three and reported success.
 import { PACKAGES, SCOPE } from './packages.mjs';
 import { isVisible } from './release-confirm.mjs';
+import { verifyPhaseEPrerequisites } from './verify-events-phase-e-prerequisites.mjs';
+import { verifyPhaseETestManifest } from './verify-events-phase-e-tests.mjs';
 
 function run(command, commandArgs, options = {}) {
   return execFileSync(command, commandArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options }).trim();
@@ -32,17 +34,14 @@ function runLoud(command, commandArgs) {
   execFileSync(command, commandArgs, { stdio: 'inherit' });
 }
 
+async function requirePhaseEGate(name, verify) {
+  const problems = await verify({ root: process.cwd() });
+  if (problems.length > 0) throw new Error(`${name} refused:\n${problems.map((problem) => `- ${problem}`).join('\n')}`);
+}
+
 // Release gates are safety boundaries; --skip-verify cannot make publishing reachable without them.
-runLoud(process.execPath, [
-  '--experimental-strip-types',
-  '--disable-warning=ExperimentalWarning',
-  'scripts/verify-events-phase-e-prerequisites.mjs',
-]);
-runLoud(process.execPath, [
-  '--experimental-strip-types',
-  '--disable-warning=ExperimentalWarning',
-  'scripts/verify-events-phase-e-tests.mjs',
-]);
+await requirePhaseEGate('Phase-E prerequisite gate', verifyPhaseEPrerequisites);
+await requirePhaseEGate('Phase-E strict-test gate', verifyPhaseETestManifest);
 
 const args = new Set(process.argv.slice(2));
 const publish = args.has('--publish');

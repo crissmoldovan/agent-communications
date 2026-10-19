@@ -1,11 +1,13 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ChannelEntry } from './channel-manifest.ts';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { normalizePathOptionWords } from './cli-runtime.ts';
 import { quoteCommand, quotedText } from './command-line.ts';
+import { launcherCanStartSync, launcherName, launcherPaths, readPointerSync } from './launcher.ts';
+import { managedShimStarting } from './managed-shims.ts';
 import type { RegisteredServer } from './mcp-clients.ts';
+import { nodeProgram } from './node-program.ts';
 import { isWithin, nearestPackage, readPackageManifest, realpathOfExisting, suiteCommandOf } from './package-roots.ts';
 import { type PathName, type PathOverrides, type ResolvedPaths, withoutPathOptions } from './paths.ts';
 import {
@@ -58,16 +60,19 @@ class PrintedCommand {
   readonly #entry: string;
   /** The words, as the program is to receive them: this Node, its flags, the entry, then the CLI's own words. */
   readonly words: readonly string[];
-  /** The line to paste; null when one of the words has no printing that every Windows shell passes on alike. */
+  /** The line to paste; null when no supported common or labelled shell rendering is safe. */
   readonly line: string | null;
   readonly platform: NodeJS.Platform;
+  readonly shell?: 'powershell' | undefined;
 
   constructor(gate: typeof GATE, words: readonly string[], platform: NodeJS.Platform, entry: string) {
     if (gate !== GATE) throw new TypeError('a printed command is made by locateCliCommand, and only there');
     this.#entry = entry;
     this.words = Object.freeze([...words]);
-    this.line = quoteCommand(this.words, platform).line;
+    const quoted = quoteCommand(this.words, platform);
+    this.line = quoted.line;
     this.platform = platform;
+    if (quoted.shell !== undefined) this.shell = quoted.shell;
     Object.freeze(this);
   }
 
@@ -102,10 +107,20 @@ export interface CliCommandCaller {
   readonly packageName: string;
 }
 
+/** The manifest facts the locator needs for any declared suite CLI, including a non-channel service. */
+export interface CliCommandTarget {
+  readonly packageName: string;
+  readonly manifest: {
+    readonly channel?: string | undefined;
+    readonly label: string;
+    readonly binary: string;
+  };
+}
+
 export interface CliCommandRequest {
   readonly caller: CliCommandCaller;
   /** The product whose CLI is to run, as core's snapshot of the manifests has it. */
-  readonly target: ChannelEntry;
+  readonly target: CliCommandTarget;
   /** The CLI's own words: its subcommand and arguments, never the program. */
   readonly words: readonly string[];
   /** The suite directories the command reads or writes, each pinned to its value in `paths`; no other is. */
@@ -123,9 +138,19 @@ export interface CliCommandRequest {
    * never read it.
    */
   readonly registrations?: readonly RegisteredServer[] | undefined;
+  /**
+   * The environment whose PATH this Node is named from (CUE-492): the printing process's own. The command names the
+   * first `node` there that is this very Node, as PATH spells it — a link such as `~/.local/bin/node` stays the link,
+   * as a registration names it — and otherwise `process.execPath`, which the system reports resolved. Left out,
+   * nothing is looked for and the command names `process.execPath`.
+   */
+  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
-/** The Node a command is located for: this process's, unless a test says otherwise. Its program is always this one's. */
+/**
+ * The Node a command is located for: this process's, unless a test says otherwise. Its program is always this Node —
+ * named as PATH finds it (`CliCommandRequest.env`), and checked to be this one's real file.
+ */
 export interface NodeRuntime {
   /** `process.version`, checked against the target's `engines.node`. */
   readonly version: string;
@@ -139,6 +164,9 @@ export interface NodeRuntime {
 }
 
 export type CliDirection = 'own' | 'channel-to-core' | 'cross-product';
+
+/** What a located command starts: a source CLI, a manifest's bin, or a managed runtime's stable launcher or shim. */
+export type EntryKind = 'source' | 'bin' | 'launcher' | 'shim';
 
 /** What a located command was decided from, so that a test, and a person reading a report, can see why. */
 export interface CliCommandBasis {
@@ -156,8 +184,11 @@ export interface CliCommandBasis {
   readonly targetWorkspace: string | null;
   /** Both are workspace packages of one checkout: always so for `own`, where they are one package; never for another. */
   readonly sameCheckout: boolean;
-  /** `src/cli.ts`, or the manifest's bin. */
-  readonly entryKind: 'source' | 'bin';
+  /**
+   * `src/cli.ts`, or the manifest's bin; or, for a managed runtime of this installation, the stable way in that starts
+   * that same release (`stableWayIn`): its stable launcher, else its managed CLI shim.
+   */
+  readonly entryKind: EntryKind;
   /** For another product: the registration it was found by. Never its command or arguments, which can hold a token. */
   readonly registration?: RegistrationUsed | undefined;
 }
@@ -256,14 +287,16 @@ interface Found {
 
 /** What a found package came to: a command, or the step that stopped it. */
 type Built =
-  | { ok: true; command: PrintedCommand; entryKind: 'source' | 'bin' }
+  | { ok: true; command: PrintedCommand; entryKind: EntryKind }
   | { ok: false; reason: 'engine' | 'bin' | 'entry'; detail: string; nodeRange?: string };
 
 /**
  * Locates the command that runs `request.target`'s CLI with `request.words`, or says why there is none.
  *
- * The program is always this process's Node (`process.execPath`), which must satisfy the target's `engines.node`; no
- * interpreter named anywhere else is run, or asked its version. A TypeScript entry gets `--experimental-strip-types`,
+ * The program is always this process's Node, which must satisfy the target's `engines.node`; no interpreter named
+ * anywhere else is run, or asked its version. It is named as PATH finds it — the first `node` on `request.env`'s PATH
+ * that is the same real file as `process.execPath` — and otherwise by `process.execPath` (CUE-492): the real file only
+ * identifies it, and `process.version` is that file's. A TypeScript entry gets `--experimental-strip-types`,
  * which Node 22.12–22.17 needs, and `--experimental-transform-types` only when this source run was started with it;
  * no other flag this process was started with is carried — debug, preload, condition and memory flags are not what the
  * CLI needs. The suite directories the command uses go between the entry and its words, one canonical option each,
@@ -314,6 +347,8 @@ export function locateCliCommand(
     return fail('caller', `${nearest.root} cannot be resolved`);
   }
   if (!isAbsolute(process.execPath)) return fail('interpreter', `this Node, ${process.execPath}, is not a full path`);
+  // This Node, as PATH finds it: a link stays the link, so a command or a shim outlives its owner's moving the file.
+  const program = nodeProgram(request.env);
 
   const pins: PathOverrides = {};
   for (const key of request.uses) pins[key] = request.paths[key];
@@ -323,7 +358,14 @@ export function locateCliCommand(
   } catch (error) {
     return fail('arguments', error instanceof Error ? error.message : String(error));
   }
-  const build = (found: Found) => buildCommand(target, found, words, runtime, callerSource, platform);
+  const build = (found: Found) =>
+    stableWayIn(buildCommand(target, found, words, runtime, callerSource, platform, program), found, target, {
+      paths: request.paths,
+      env: request.env,
+      words,
+      platform,
+      program,
+    });
   // What every located command was decided from; each direction adds its own.
   const located = (
     built: Built & { ok: true },
@@ -386,7 +428,14 @@ export function locateCliCommand(
   }
 
   // Another product: every registration of it, each checked as a file on disk; the best of those that pass.
-  const facts = registrationFactsOf(target);
+  const channelTarget = CHANNEL_SNAPSHOT.find((entry) => entry.packageName === target.packageName);
+  if (channelTarget === undefined) {
+    return fail(
+      'direction',
+      `${target.packageName} is not a channel package this locator can find through a registration`,
+    );
+  }
+  const facts = registrationFactsOf(channelTarget);
   const notUsed: RegistrationNotUsed[] = [];
   const usable: {
     server: RegisteredServer;
@@ -467,12 +516,13 @@ export function locateCliCommand(
  * CLI or the manifest's bin for the command it declares — as a readable file inside its package.
  */
 function buildCommand(
-  target: ChannelEntry,
+  target: CliCommandTarget,
   found: Found,
   words: readonly string[],
   runtime: NodeRuntime,
   callerSource: boolean,
   platform: NodeJS.Platform,
+  program: string,
 ): Built {
   const engines = found.manifest.engines;
   const range = typeof engines === 'object' && engines !== null ? (engines as Record<string, unknown>).node : undefined;
@@ -496,9 +546,7 @@ function buildCommand(
     // Exactly the source CLI, and never a build beside it: a checkout with no build, or a stale one, runs its source.
     entry = join(found.root, 'src', 'cli.ts');
   } else {
-    const declared = found.manifest.agentcomms;
-    const binary =
-      typeof declared === 'object' && declared !== null ? (declared as Record<string, unknown>).binary : undefined;
+    const binary = declaredBinary(found.manifest);
     const bin = found.manifest.bin;
     const path =
       binary === target.manifest.binary &&
@@ -522,13 +570,104 @@ function buildCommand(
   const flags = typescript
     ? [STRIP_TYPES, ...(callerSource && runtime.execArgv.includes(TRANSFORM_TYPES) ? [TRANSFORM_TYPES] : [])]
     : [];
-  const command = new PrintedCommand(
-    GATE,
-    [process.execPath, ...flags, checked.path, ...words],
-    platform,
-    checked.path,
-  );
+  const command = new PrintedCommand(GATE, [program, ...flags, checked.path, ...words], platform, checked.path);
   return { ok: true, command, entryKind: found.source ? 'source' : 'bin' };
+}
+
+/**
+ * A managed runtime's command, as its stable way in (0.21). A command naming `<data>/runtime/0.20.0-core/…/cli.mjs`
+ * stops working once that runtime is pruned — and the background job prunes old runtimes after each update — so a
+ * command printed from a managed runtime of this installation names what stays put instead:
+ *
+ * - **its stable launcher**, `<data>/launch/<name>` (`launcherPaths`), when it is there and its pointer names a runtime
+ *   holding this package at exactly this release, whose CLI can start: the launcher, then the words, as a registration
+ *   starts it — on Windows, where the launcher is a script Node runs, this Node first;
+ * - else **its managed CLI shim**, where shims are offered, when this installation's receipt records one that is
+ *   unchanged and starts this very entry (`managedShimStarting`): a release before the launcher wrote such shims, and
+ *   an update rewrites them;
+ * - else the runtime's entry, as before.
+ *
+ * Only for a package inside `<data>/runtime` of the folders this command pins: a checkout, an npx cache, a global
+ * install or another data folder's runtime is named as it always was. Checked when the command is printed (D6), as the
+ * entry is: a launcher switched later runs what it is then switched to, as every registration that starts it does.
+ */
+function stableWayIn(
+  built: Built,
+  found: Found,
+  target: CliCommandTarget,
+  printing: {
+    readonly paths: Readonly<ResolvedPaths>;
+    readonly env: NodeJS.ProcessEnv | undefined;
+    readonly words: readonly string[];
+    readonly platform: NodeJS.Platform;
+    readonly program: string;
+  },
+): Built {
+  if (!built.ok || found.source) return built;
+  const { paths, words, platform, program } = printing;
+  const runtimes = realpathOfExisting(join(paths.dataDir, 'runtime'));
+  if (runtimes === null || !isWithin(runtimes, found.root) || resolve(runtimes) === resolve(found.root)) return built;
+  const launcher = stableLauncher(paths.dataDir, target.packageName, found.manifest.version, platform);
+  if (launcher !== null) {
+    const command = new PrintedCommand(
+      GATE,
+      platform === 'win32' ? [program, launcher, ...words] : [launcher, ...words],
+      platform,
+      realpathOfExisting(launcher) ?? launcher,
+    );
+    return { ok: true, command, entryKind: 'launcher' };
+  }
+  const shim = managedShimStarting(
+    { env: printing.env ?? process.env, dataDir: paths.dataDir, platform },
+    target.manifest.binary,
+    built.command.entry,
+  );
+  if (shim === null) return built;
+  return {
+    ok: true,
+    command: new PrintedCommand(GATE, [shim, ...words], platform, realpathOfExisting(shim) ?? shim),
+    entryKind: 'shim',
+  };
+}
+
+/**
+ * This installation's stable launcher for `packageName`, when it starts that package at exactly `version`: the file is
+ * there (executable, where it is a shell script), its pointer is one the launcher reads, and the runtime it names holds
+ * the package at that version with a CLI the launcher can start. Null otherwise — a pointer that cannot be read too.
+ */
+function stableLauncher(
+  dataDir: string,
+  packageName: string,
+  version: unknown,
+  platform: NodeJS.Platform,
+): string | null {
+  if (typeof version !== 'string') return null;
+  try {
+    const name = launcherName(packageName);
+    const { launcher } = launcherPaths(dataDir, name);
+    if (!statSync(launcher).isFile()) return null;
+    accessSync(launcher, platform === 'win32' ? constants.R_OK : constants.X_OK);
+    const pointer = readPointerSync(dataDir, name);
+    if (pointer === undefined || !launcherCanStartSync(pointer.current, name)) return null;
+    const started = readPackageManifest(join(pointer.current, 'node_modules', ...packageName.split('/')));
+    return started?.name === packageName && started.version === version ? launcher : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The command a package declares for itself: a channel's in its `agentcomms` field, a service's in `agentcommsPackage`
+ * (D14). A library declares none, and no package declares both: the registry refuses one that does.
+ */
+function declaredBinary(manifest: Record<string, unknown>): unknown {
+  const channel = manifest.agentcomms;
+  if (typeof channel === 'object' && channel !== null) return (channel as Record<string, unknown>).binary;
+  const service = manifest.agentcommsPackage;
+  if (typeof service === 'object' && service !== null && (service as Record<string, unknown>).kind === 'service') {
+    return (service as Record<string, unknown>).binary;
+  }
+  return undefined;
 }
 
 /**
@@ -538,7 +677,7 @@ function buildCommand(
  */
 function registeredPackage(
   files: { scripts: readonly string[]; command: string | null },
-  target: ChannelEntry,
+  target: CliCommandTarget,
   facts: RegistrationFacts,
 ): Found | null {
   for (const script of files.scripts) {
@@ -572,7 +711,7 @@ function registeredPackage(
 /** The target's package that `file` is in — directly, or through the product's server wrapper, which depends on it. */
 function packageAround(
   file: string,
-  target: ChannelEntry,
+  target: CliCommandTarget,
   facts: RegistrationFacts,
 ): { root: string; manifest: Record<string, unknown> } | null {
   const real = realpathOfExisting(file);
@@ -630,7 +769,7 @@ function notRegistered(notUsed: readonly RegistrationNotUsed[], version: string)
 }
 
 function notLocated(
-  target: ChannelEntry,
+  target: CliCommandTarget,
   version: string,
   reason: CliNotLocatedReason,
   detail: string,

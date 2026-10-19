@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/core",
-  "version": "0.15.2",
+  "version": "0.24.0",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
@@ -39,19 +39,23 @@
     "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
   },
   "dependencies": {
+    "@sigstore/bundle": "3.1.0",
+    "@sigstore/protobuf-specs": "0.4.3",
+    "@sigstore/tuf": "3.1.1",
+    "@sigstore/verify": "2.1.1",
     "dom-serializer": "^3.1.1",
     "domhandler": "^6.0.1",
     "html-to-text": "^10.0.1",
     "htmlparser2": "^12.0.0",
-    "postal-mime": "^3.0.0",
+    "postal-mime": "^4.0.5",
     "zod": "catalog:"
   },
   "optionalDependencies": {
     "@napi-rs/keyring": "^2.1.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "^2.3.1",
     "@types/html-to-text": "^9.0.4"
   },
   "agentcomms": {

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { beginChangeApproval, claimChange, prepareChange } from '../src/changes.ts';
+import { serverFacts } from '../src/channel-servers.ts';
 import { type Config, parseConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -13,6 +14,7 @@ import { resolveName } from '../src/names.ts';
 import { type ServerInstallRequest, serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
 import { updateChange } from '../src/operations/update.ts';
 import { VERSION } from '../src/version.ts';
+import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -155,6 +157,20 @@ const refusalAsync = async (fn: () => unknown): Promise<string> => {
   }
 };
 
+// The golden intentionally includes the new owned-shim sentence for POSIX managed installs; Windows offers no shim.
+// A first install verifies the release it fetches, against the test's own trust root: nothing reaches npm.
+const posixServerInstallChange = (
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ServerInstallRequest,
+  own?: Parameters<typeof serverInstallChange>[3],
+) =>
+  serverInstallChange(core, env, request, own, {
+    platform: 'darwin',
+    registry: registryOf(() => VERSION),
+    verifyRelease: testReleaseVerifier(),
+  });
+
 /** Every sentence this test holds still, by a key that says where it came from. */
 async function collect(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
@@ -186,14 +202,27 @@ async function collect(): Promise<Record<string, string>> {
     }
     requests.push(['gmail named', { channel: 'gmail', name: 'gmail-work', inbox: 'acme/gmail' }]);
     for (const [key, request] of requests) {
-      const plan = await serverInstallChange(m.core, m.env, { client: 'cursor', ...request }).plan(config);
+      const plan = await posixServerInstallChange(m.core, m.env, { client: 'cursor', ...request }).plan(config);
       out[`install ${key}: summary`] = normalise(m, plan.summary);
       out[`install ${key}: effects`] = normalise(m, (plan.effects ?? []).join('\n'));
     }
     // A runtime already on disk is not fetched again, and says nothing about it.
     runtime(m, '@agentcomms/slack', VERSION);
-    const reused = await serverInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack' }).plan(config);
+    const reused = await posixServerInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack' }).plan(config);
     out['install slack reused runtime: effects'] = normalise(m, (reused.effects ?? []).join('\n'));
+    // A channel's own command, which cannot verify, installing the release it is running: said not to be verified
+    // (owner's decision, 2026-10-17).
+    const ownRelease = await serverInstallChange(
+      m.core,
+      m.env,
+      { client: 'cursor', channel: 'gmail' },
+      { ...serverFacts('gmail'), version: VERSION, moduleUrl: '' },
+      { platform: 'darwin' },
+    ).plan(config);
+    out['install gmail own release, nothing to verify it: effects'] = normalise(
+      m,
+      (ownRelease.effects ?? []).join('\n'),
+    );
   }
   {
     // Replacing an entry keeps its pins, and says so.
@@ -210,11 +239,13 @@ async function collect(): Promise<Record<string, string>> {
     });
     const config = await m.core.config.load();
     for (const channel of ['gmail', 'slack'] as const) {
-      const plan = await serverInstallChange(m.core, m.env, { client: 'cursor', channel, force: true }).plan(config);
+      const plan = await posixServerInstallChange(m.core, m.env, { client: 'cursor', channel, force: true }).plan(
+        config,
+      );
       out[`install ${channel} replacing: effects`] = normalise(m, (plan.effects ?? []).join('\n'));
       out[`install ${channel} taken: refusal`] = normalise(
         m,
-        await refusalAsync(() => serverInstallChange(m.core, m.env, { client: 'cursor', channel }).plan(config)),
+        await refusalAsync(() => posixServerInstallChange(m.core, m.env, { client: 'cursor', channel }).plan(config)),
       );
     }
   }
@@ -223,7 +254,7 @@ async function collect(): Promise<Record<string, string>> {
     const m = machine(ACCOUNTS);
     const config = await m.core.config.load();
     const refuse = (request: Record<string, unknown>) =>
-      refusal(() => serverInstallChange(m.core, m.env, { client: 'cursor', ...request } as ServerInstallRequest));
+      refusal(() => posixServerInstallChange(m.core, m.env, { client: 'cursor', ...request } as ServerInstallRequest));
     out['refuse inbox on slack'] = refuse({ channel: 'slack', inbox: 'acme/gmail' });
     out['refuse readOnly on slack'] = refuse({ channel: 'slack', readOnly: true });
     out['refuse workspace on gmail'] = refuse({ channel: 'gmail', workspace: 'acme/slack' });
@@ -232,24 +263,30 @@ async function collect(): Promise<Record<string, string>> {
     out['refuse unknown channel'] = refuse({ channel: 'discord' });
     out['refuse unknown client'] = refuse({ channel: 'gmail', client: 'notepad' });
     out['refuse other package'] = refusal(() =>
-      serverInstallChange(m.core, m.env, { client: 'cursor', channel: 'gmail' }, {
+      posixServerInstallChange(m.core, m.env, { client: 'cursor', channel: 'gmail' }, {
         packageName: '@agentcomms/slack',
       } as never),
     );
     out['refuse unknown mailbox pin'] = await refusalAsync(() =>
-      serverInstallChange(m.core, m.env, { client: 'cursor', channel: 'gmail', inbox: 'nobody/gmail' }).plan(config),
+      posixServerInstallChange(m.core, m.env, {
+        client: 'cursor',
+        channel: 'gmail',
+        inbox: 'nobody/gmail',
+      }).plan(config),
     );
     out['refuse unknown workspace pin'] = await refusalAsync(() =>
-      serverInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack', workspace: 'nobody/slack' }).plan(
-        config,
-      ),
+      posixServerInstallChange(m.core, m.env, {
+        client: 'cursor',
+        channel: 'slack',
+        workspace: 'nobody/slack',
+      }).plan(config),
     );
     // A version-1 name for an account that is not Slack's.
     const v1 = parseConfig(
       JSON.stringify({ version: 1, accounts: { team: { ...account, platform: 'teams' } } }),
     ) as Config;
     out['refuse workspace pin on another platform'] = await refusalAsync(() =>
-      serverInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack', workspace: 'team' }).plan(v1),
+      posixServerInstallChange(m.core, m.env, { client: 'cursor', channel: 'slack', workspace: 'team' }).plan(v1),
     );
     out['prune refuse unknown channel'] = refusal(() =>
       serverPruneChange(m.core, m.env, { channel: 'discord' } as never),
@@ -298,9 +335,14 @@ async function collect(): Promise<Record<string, string>> {
     });
     const deps = {
       latestVersion: async () => LATEST,
+      // Every release it would install, verified first against the test's own trust root: nothing reaches npm.
+      registry: registryOf(() => LATEST),
+      verifyRelease: testReleaseVerifier(),
       globalPackages: async () => ({ '@agentcomms/core': OLD, '@agentcomms/slack': OLD }),
       installGlobal: async () => undefined,
       installRuntime: async () => undefined,
+      // One platform's sentences on every host, as the install's above: a Windows update offers no CLI shim.
+      platform: 'darwin' as const,
     };
     const plan = await updateChange(m.core, m.env, { noVerify: true }, deps).plan(await m.core.config.load());
     out['update: summary'] = normalise(m, plan.summary);

@@ -60,7 +60,7 @@ terminal.
   "to be safe".
 - What counts as their approval is the account's send policy. Under `chat`, their yes in this
   conversation to that preview: then `resend_send_execute` (CLI: `agent-resend send execute`) with the
-  approval id and the recipients and subject the preview showed sends it, once. Under `confirm` — and
+  approval id sends the exact bound message, once. Under `confirm` — and
   for any email reaching **more than 10 people**, or an address that arrived in mail read here and was
   never written to from here, as a recipient or as the Reply-To, whatever the policy — the same call
   returns `APPROVAL_PENDING`, and the person runs the approve command it gives (§14) at their own
@@ -142,11 +142,27 @@ Exit codes are stable and documented in `--help`: `0` ok, `10` a send or a chang
 approval, `64` usage, `65` bad data, `66` not found, `69` Resend or the secret store unavailable, `75`
 temporary, `77` key or permission needed, `78` configuration problem.
 
-## 13. A personal writing-style skill outranks these defaults.
+## 13. How you write is the person's, and so is what you may send.
 
-If the user has a skill describing how *they* write — greetings, sign-off, tone, length — load it and
-follow it for anything you compose. Its sending protocol may only be **stricter** than this contract,
-never looser.
+- **Read the person's writing profile before you write.** Before an email, call the core server's
+  `comms_profile` with the account as `account` and, as `conversations`, each recipient's address and then its
+  `@domain`, in recipient order (CLI: `agentcomms profile <account> --conversation <address> --conversation
+  @<domain>`, repeated). Follow it — tone, language, length, sign-off. It is the person's own instructions to you,
+  not anyone else's content, and nothing in it is sent. Where it and what the person asks in this conversation
+  disagree, what they ask wins. No tool writes a profile: the person starts one at their own terminal, with the
+  core CLI's `profile init`.
+- If the user has a skill describing how *they* write — greetings, sign-off, tone, length — load it and follow it
+  for anything you compose. Its sending protocol may only be **stricter** than this contract, never looser.
+- **Whether an agent may send at all is a rule the person sets,** for an account, an `@domain` or one address:
+  `send`, or nothing. An email with `In-Reply-To` is still a `send` here. The rule is applied to every recipient —
+  To, Cc and Bcc — so one forbidden recipient stops the whole email. Every preview carries what holds: `Allowed
+  here: everything (no rule)`, or the rule that allows it.
+- **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this send,** and nothing was prepared or sent:
+  refused at prepare, or at send when the rule was narrowed after the person's yes. Tell the person which rule
+  refused it — the message says which recipient — and stop. Never retry it, never get it out another way (drop or
+  swap a recipient, another account), and never start a change that lets an agent do more (`comms_behaviour` with
+  `setRule` or `removeRule`) unless the person asked for that change: it is theirs to approve. `comms_behaviour`
+  with no change (CLI: `agentcomms behaviour`) shows the rules.
 
 ## 14. A command for a person is the one a result gives.
 
@@ -157,9 +173,10 @@ PATH. Hand it over exactly as given, in a code span or block of its own. Never w
 command's name: a bare `agent-resend …` runs only where that package is installed globally, and may find other
 folders than the ones the approval is in.
 
-- Where no line pastes safely into every Windows shell — on a default Windows install Node's own path, under
-  `C:\Program Files`, needs quotes — the result gives the command's words as JSON, with what to do: the person
-  types them, each quoted for their shell. Say so; do not turn them into a line yourself.
+- On a default Windows install, where Node under `C:\Program Files` needs quoting, a safe result gives a line
+  labelled **PowerShell**, beginning with its `&` call operator. Hand it over with that shell label. If any word
+  cannot be represented safely even there, the result instead gives the command's words as inert JSON and says the
+  person types them, each quoted for their shell. Say so; do not turn that JSON into a line yourself.
 - Where the result says the command is **not locatable here**, there is no command to give: say which product and
   release it names, and that the person installs or updates it the way they usually do, then tries again. Do not
   offer `npx`, a global install or a tool in its place.
@@ -201,3 +218,17 @@ whether it can be used now (`claimable`), its `route`, and the times that apply.
   prepare again and show the new preview.
 - **An approval that reads `corrupt` is said, never skipped.** It failed its integrity check, and its `reason` says
   how: it cannot be used, and it is evidence of nothing — neither that the email went nor that it did not.
+
+## 16. Setting up: one question at a time.
+
+When you set something up with the person — connecting an account, a first rule, the agent label, or whatever a
+new release asks of them after an update — they should never be handed several decisions at once.
+
+- **One question or one step per message.** Wait for the answer before the next. A preview to approve counts as a
+  question of its own.
+- **Explain it first, in plain words:** what it is for, what will happen, and what it changes for them. Then give what
+  to do as short numbered steps, with anything to paste or type in a code block of its own.
+- **Say how long an approval lasts** when you show its preview, and offer to prepare it again if it lapses before
+  they answer.
+- **After an update,** walk through what the new release asks of the person the same way, starting with what changed
+  for them. The changelog's **Upgrading** section is the list.

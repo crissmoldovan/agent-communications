@@ -1,9 +1,23 @@
 import { createInterface } from 'node:readline/promises';
-import { agentMarker, CommsError, canPrompt, escapeForDisplay, isCommsError, isDangerous } from '@agentcomms/core';
+import {
+  agentMarker,
+  CommsError,
+  canPrompt,
+  escapeForDisplay,
+  isCommsError,
+  isDangerous,
+  resolvePaths,
+} from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
-import { approve, disclosureChallenge, pendingTargetTest, type TerminalApprovalStart } from '../operations/approve.ts';
+import {
+  approve,
+  disclosureChallenge,
+  pendingRuleJudgeTest,
+  pendingTargetTest,
+  type TerminalApprovalStart,
+} from '../operations/approve.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
   type B3CliRegistrar,
@@ -61,7 +75,9 @@ import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } fr
 import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
+import { VERSION } from '../version.ts';
 
 export interface EventsCliStreams {
   readonly stdin: NodeJS.ReadableStream & { readonly isTTY?: boolean };
@@ -109,12 +125,26 @@ export function renderApprovalViewForTerminal(result: unknown): string {
   return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);
 }
 
+/**
+ * An optional test the owner refused is reported and the approval goes on to its challenge (CUE-475): declining the
+ * test was always allowed, so a test that could not run must not end the approval for the person.
+ */
+async function optionalTest(label: Record<string, number>, test: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await test();
+  } catch (error) {
+    if (!isCommsError(error)) throw error;
+    return { ...label, test: 'not run', reason: error.message };
+  }
+}
+
 /** Runs the only interactive terminal approval path; the owner, not this client, made every pending-target selector. */
 export async function runTerminalApprovalFlow(input: {
   readonly approvalId: string;
   readonly terminal: { question(prompt: string): Promise<string> };
   readonly start: (approvalId: string) => Promise<TerminalApprovalStart>;
   readonly testPendingTarget: (selector: B3PendingTargetSelectorV1) => Promise<unknown>;
+  readonly testPendingRuleJudge?: ((selector: PendingRuleJudgeTestSelector) => Promise<unknown>) | undefined;
   readonly approve: (approvalId: string, answer: string) => Promise<unknown>;
   readonly print: (result: unknown) => void;
 }): Promise<void> {
@@ -125,7 +155,18 @@ export async function runTerminalApprovalFlow(input: {
     const answer = await input.terminal.question(
       `Test pending target ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
-    if (/^\s*(?:y|yes)\s*$/iu.test(answer)) input.print(await input.testPendingTarget(selector));
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer))
+      input.print(await optionalTest({ pendingTarget: index + 1 }, () => input.testPendingTarget(selector)));
+  }
+  for (let index = 0; index < start.pendingRuleJudgeTestSelectors.length; index += 1) {
+    const selector = start.pendingRuleJudgeTestSelectors[index];
+    if (selector === undefined) continue;
+    const answer = await input.terminal.question(
+      `Test pending rule judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
+    );
+    const testPendingRuleJudge = input.testPendingRuleJudge;
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer) && testPendingRuleJudge !== undefined)
+      input.print(await optionalTest({ pendingRuleJudge: index + 1 }, () => testPendingRuleJudge(selector)));
   }
   const answer = await input.terminal.question(
     `Type this approval challenge: ${escapeForDisplay(start.challenge)}\n> `,
@@ -146,13 +187,21 @@ export function renderDryRunRecordForTerminal(record: Parameters<typeof renderDr
 /** Runs the intentionally small Task B1 command surface. */
 export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Promise<number> {
   const streams = deps.streams ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
+  // The program's version is CLI metadata, not an operation. It is answered only as the sole argument: a program-wide
+  // Commander `--version` would swallow the subcommands' own `--version <n>`, and positional parsing would break the
+  // trailing `--json` every command documents.
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
+    streams.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
   const env = deps.env ?? process.env;
   const program = new Command();
+  runEnvironment.set(program, env);
   let ran = false;
 
   program
     .name('agent-events')
-    .description('The held local event-emission service with one foreground owner and local control clients.')
+    .description('The local event-emission service: one foreground owner and local control clients.')
     .option('--json', 'write machine-readable output')
     .option('--no-color', 'never colour the output')
     .option('--config-dir <dir>', 'pin the configuration directory for this run')
@@ -192,7 +241,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ['enable-all', 'report the standing approval required before collection can be enabled', enableAll],
     [
       'doctor',
-      'report content-free lineage validation, pending source retry health, recovery and global switch health',
+      'report content-free lineage, retry, recovery, judge authority, hold-clock and global switch health',
       doctor,
     ],
   ] as const) {
@@ -218,7 +267,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       : deps.b3Registrar.owner.handle({
           operation,
           args,
-          ...(isB3SecretOperation(operation) ? { origin: B3_SECRET_TERMINAL_ORIGIN } : {}),
+          ...(isB3SecretOperation(operation) || operation === 'decideHeld'
+            ? { origin: B3_SECRET_TERMINAL_ORIGIN }
+            : {}),
         });
   const assertHuman = (): void => assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
   const hidden = async (prompt: string): Promise<string> =>
@@ -274,7 +325,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       if (program.opts<EventsCliOptions>().json) print(result);
       else streams.stdout.write(`${renderApprovalViewForTerminal(result)}\n`);
     });
-  const catalogue = program.command('catalogue').description('inspect the held local event catalogue');
+  const catalogue = program.command('catalogue').description('inspect the local event catalogue');
   catalogue.command('list').action(async () => {
     ran = true;
     print(await catalogueList(controlOptions(program)));
@@ -496,23 +547,25 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       });
   }
 
-  const judges = program.command('judges').description('inspect typed pre-Phase-E judge controls');
+  const judges = program.command('judges').description('inspect immutable content-free judge metadata');
   judges.command('list').action(async () => {
     ran = true;
     print(await judgesList(controlOptions(program)));
   });
-  const judge = program.command('judge').description('use typed unavailable judge controls until Phase E');
+  const judge = program.command('judge').description('manage immutable judges and run fixed synthetic tests');
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
-    print(await addJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'judge document');
+    print(await humanB3('addJudge', { document: parsed }, () => addJudge(parsed, controlOptions(program))));
   });
   judge.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'judge document');
+    print(await humanB3('updateJudge', { document: parsed }, () => updateJudge(parsed, controlOptions(program))));
   });
   judge.command('remove <judge-id>').action(async (judgeId: string) => {
     ran = true;
-    print(await removeJudge(judgeId, controlOptions(program)));
+    print(await humanB3('removeJudge', { judgeId }, () => removeJudge(judgeId, controlOptions(program))));
   });
   judge
     .command('test <judge-id>')
@@ -521,30 +574,33 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       print(await judgeTest(judgeId, parseVersion(options.version as string), controlOptions(program)));
     });
-  const budget = program.command('budget').description('use typed unavailable budget controls until Phase E');
+  const budget = program.command('budget').description('inspect or prepare the immutable global judge budget');
   budget.command('show').action(async () => {
     ran = true;
     print(await budgetShow(controlOptions(program)));
   });
   budget.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateBudget(jsonArgument(document, 'budget document'), controlOptions(program)));
+    const parsed = jsonArgument(document, 'budget document');
+    print(await humanB3('updateBudget', { document: parsed }, () => updateBudget(parsed, controlOptions(program))));
   });
-  const judgeKinds = judge.command('kinds').description('list typed unavailable judge kinds until Phase E');
+  const judgeKinds = judge.command('kinds').description('list disabled/enabled kinds and the typed Laya E2 seam');
   judgeKinds.command('list').action(async () => {
     ran = true;
     print(await judgeKindsList(controlOptions(program)));
   });
-  const judgeKind = judge.command('kind').description('use typed unavailable judge kind controls until Phase E');
+  const judgeKind = judge.command('kind').description('prepare enablement or immediately disable one judge kind');
   judgeKind.command('enable <kind>').action(async (kind: string) => {
     ran = true;
-    print(await enableJudgeKind(kind, controlOptions(program)));
+    print(await humanB3('enableJudgeKind', { kind }, () => enableJudgeKind(kind, controlOptions(program))));
   });
   judgeKind.command('disable <kind>').action(async (kind: string) => {
     ran = true;
-    print(await disableJudgeKind(kind, controlOptions(program)));
+    print(await humanB3('disableJudgeKind', { kind }, () => disableJudgeKind(kind, controlOptions(program))));
   });
-  const judgeModel = judge.command('model').description('use typed unavailable Laya model controls until Phase E2');
+  const judgeModel = judge
+    .command('model')
+    .description('local Laya model controls, which answer that Laya is not available yet');
   judgeModel.command('status').action(async () => {
     ran = true;
     print(await judgeModelStatus(controlOptions(program)));
@@ -638,6 +694,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           terminal,
           start: (id) => disclosureChallenge(id, controlOptions(program)),
           testPendingTarget: (selector) => pendingTargetTest(selector, controlOptions(program)),
+          testPendingRuleJudge: (selector) => pendingRuleJudgeTest(selector, controlOptions(program)),
           approve: (id, answer) => approve(id, answer, controlOptions(program)),
           print,
         });
@@ -684,10 +741,20 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
 }
 
+/**
+ * The state directory a control client looks in: the one pinned for this run, or the one the environment this CLI was
+ * given resolves to. A caller that passes its own `env` to `run` reaches its own owner, never the one the process
+ * environment names.
+ */
 function controlOptions(program: Command): { stateDir?: string } {
   const { stateDir } = program.opts<EventsCliOptions>();
-  return stateDir === undefined ? {} : { stateDir };
+  if (stateDir !== undefined) return { stateDir };
+  const env = runEnvironment.get(program);
+  return env === undefined ? {} : { stateDir: resolvePaths({ env }).stateDir };
 }
+
+/** The environment each program was made with, read by `controlOptions` outside `run`'s closure. */
+const runEnvironment = new WeakMap<Command, NodeJS.ProcessEnv>();
 
 function parseVersion(value: string): number {
   const version = Number(value);

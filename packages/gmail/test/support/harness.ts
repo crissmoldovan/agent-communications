@@ -1,7 +1,8 @@
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after } from 'node:test';
+import { join, relative } from 'node:path';
+import { after, afterEach, beforeEach } from 'node:test';
 import {
   type ClientConfig,
   type Config,
@@ -18,6 +19,8 @@ import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';
 import { capabilitiesOf, SCOPES } from '../../src/auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../../src/auth/session.ts';
 import { GMAIL_CALLER } from '../../src/caller.ts';
+import { GmailContext } from '../../src/context.ts';
+import { LISTENER_TEST_FILE_ENV, LISTENER_TEST_NAME_ENV, stopRegisteredListeners } from './detached-listeners.ts';
 import { type FakeGoogle, type FakeGoogleOptions, startFakeGoogle } from './fake-google.ts';
 
 export const TEST_CLIENT_ID = 'test-client.apps.googleusercontent.com';
@@ -66,6 +69,48 @@ export interface Harness {
   }): Promise<InboxConfig>;
 }
 
+const harnesses = new Set<Harness>();
+let activeTest: { file: string; name: string } | undefined;
+
+beforeEach((context) => {
+  const invoked = process.argv[1];
+  const file = invoked ? relative(process.cwd(), invoked).replaceAll('\\', '/') : '<unknown test file>';
+  activeTest = { file, name: context.name };
+  process.env[LISTENER_TEST_FILE_ENV] = file;
+  process.env[LISTENER_TEST_NAME_ENV] = context.name;
+});
+
+async function stopHarnessListeners(harness: Harness): Promise<void> {
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const names = await readdir(context.flows.directory).catch(() => []);
+  for (const name of names) {
+    if (!name.endsWith('.json') || name.endsWith('.outcome.json')) continue;
+    const flowId = name.slice(0, -'.json'.length);
+    try {
+      const flow = await context.flows.get(flowId);
+      // By PID and flow: a listener that finished may have handed its PID on, and that process is not stopped.
+      if (flow.listenerPid && flow.listenerPid !== process.pid) {
+        await stopRegisteredListeners([{ pid: flow.listenerPid, flowId }]);
+      }
+      await context.flows.discard(flowId);
+    } catch {
+      // A finish or expiry removed it before cleanup reached it.
+    }
+  }
+}
+
+afterEach(async () => {
+  try {
+    const made = [...harnesses];
+    harnesses.clear();
+    await Promise.all(made.map(stopHarnessListeners));
+  } finally {
+    activeTest = undefined;
+    delete process.env[LISTENER_TEST_FILE_ENV];
+    delete process.env[LISTENER_TEST_NAME_ENV];
+  }
+});
+
 /** A config directory, a file secret store and a fake Google, torn down when the test file ends. */
 export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harness> {
   const configDir = tempDir();
@@ -89,6 +134,7 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     // The daily update check, off: no test asks the real npm registry, and no call stops for a release the tests did
     // not make. The gate's own tests turn it back on, with a registry and a clock of their own (design 2026-09-28).
     AGENT_COMMS_UPDATE_CHECK: 'off',
+    ...(activeTest ? { [LISTENER_TEST_FILE_ENV]: activeTest.file, [LISTENER_TEST_NAME_ENV]: activeTest.name } : {}),
   };
   const core = openCore({ env, caller: GMAIL_CALLER });
   /*
@@ -177,7 +223,26 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     });
   };
 
-  return { configDir, core, google, endpoints, env, addInbox, connectInbox };
+  const harness = { configDir, core, google, endpoints, env, addInbox, connectInbox };
+  harnesses.add(harness);
+  return harness;
+}
+
+/** Every `agentLabel` path a change to the label settings can loosen (design 2026-10-15-agent-label, L5). */
+const AGENT_LABEL_PATHS = ['agentLabel.word', 'agentLabel.name', 'agentLabel.rules', 'agentLabel.slackIcons'];
+
+/**
+ * Sets the person's label settings, `agentLabel`, with the consent a person's change to them carries.
+ *
+ * A fixture whose second mailbox signs in as the fake's first account (`connectInbox` consents as that one) has no
+ * send-as entry for the second mailbox's address, so its drafts have no Gmail name to label: such a fixture gives the
+ * person a `label name`, as a person whose send-as name is empty would.
+ */
+export async function setAgentLabel(harness: Harness, settings: Record<string, unknown>): Promise<void> {
+  const added = { agentLabel: settings };
+  await harness.core.config.update((config): Config => ({ ...config, ...added }), {
+    consent: { kind: 'loosening-consent', paths: AGENT_LABEL_PATHS },
+  });
 }
 
 /**

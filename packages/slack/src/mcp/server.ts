@@ -4,7 +4,6 @@ import {
   CommsError,
   changeToolResult,
   checkForUpdates,
-  DOWNLOAD_CLAIM,
   type GatedChange,
   gatedChange,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
@@ -12,7 +11,7 @@ import {
   retiredOutHint,
   strictToolArguments,
   toCommsError,
-  updateToolGate,
+  updateToolNotice,
   waitCallOptions,
   waitForApproval,
 } from '@agentcomms/core';
@@ -23,7 +22,8 @@ import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/
 import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
-import { INSTALL_MODES } from '../manifest.ts';
+import { INSTALL_MODES, MANIFEST_MODES } from '../manifest.ts';
+import { ack } from '../operations/ack.ts';
 import {
   CHANGE_POLICIES,
   connectWorkspace,
@@ -40,6 +40,7 @@ import {
 import { runDoctor } from '../operations/doctor.ts';
 import { createDraft, deleteOwnDraft, listDrafts, showDraft, updateDraft } from '../operations/drafts.ts';
 import { downloadFiles, downloadSelection, type FileDownloader } from '../operations/files.ts';
+import { makeAgentIcon } from '../operations/icon.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
 import {
@@ -63,7 +64,9 @@ import {
 } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
+import { prepareStandingAdd } from '../operations/standing.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
+import { standingNarrowedView, standingPreparedView } from '../standing-views.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -249,22 +252,18 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
 
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
   // in the envelope above — before its handler runs. See `strictToolArguments`.
-  // Then the daily update check's stop (design 2026-09-28): an update that is out stops every tool but this server's
-  // doctor, and the check itself runs in the background, never delaying a call. A download carrying the id of the
-  // question the person just answered goes past it, as a claimed approval does; the answer alone does not.
+  // Then the update notice (design 2026-10-16, U1): nothing is refused for being behind; the first result of this
+  // process that finds a newer release carries one line beside it, and the check runs in the background.
   // `out` is refused with what replaced it: the person chooses where a download is saved now.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-slack',
       channel: 'slack',
       running: VERSION,
       exempt: ['slack_doctor'],
-      // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-      approvals: { slack_file_download: DOWNLOAD_CLAIM, slack_approval_wait: { lookup: true } },
       refresh: () => checkForUpdates(context.core, context.env),
     }),
     { slack_file_download: { out: retiredOutHint('mcp') } },
@@ -373,6 +372,15 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
    * the operation's, in the same words at both surfaces.
    */
   const oneOfWords = (values: readonly string[]) => z.string().meta({ enum: [...values] });
+  /*
+   * Who an act appears to come from (design 2026-10-15 L3): the person's word for this one message, and nothing an agent
+   * chooses for itself. Checked by the operation, so the tool refuses what the command refuses.
+   */
+  const identityArg = oneOfWords(['agent', 'me'])
+    .optional()
+    .describe(
+      'who it appears to come from: `agent` (the default, labelled as your agent) or `me` (as you, with no label). Pass `me` only when the person said so for this message',
+    );
   /**
    * Local files to post, by path. The limits and the folders are the operation's to check — `recordFiles` — so a path
    * outside them is refused in the words the command refuses it with, not by the schema.
@@ -448,6 +456,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             offline: args.offline === true,
             workspace: await resolveOptional(args.workspace),
             probe,
+            session: slackDeps,
           }),
         );
       } catch (error) {
@@ -461,15 +470,25 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'The Slack app manifest',
       description:
-        'The manifest for a Slack app in `read` or `send` mode, for a loopback port. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
+        'The manifest for a Slack app in `read` or `send` mode, for a loopback port, with the `steps` to follow and `notes` to say beside them. With `mode: "agent"`, an organisation\'s bot-only agent app instead: no user scope, no redirect, token rotation off, and an administrator\'s steps — create it, install it once, share its bot token privately, and each member pastes it with `workspace bot` at their own terminal (never in the chat) — with no port, workspace or `pkce`. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. For a new app given no port, it chooses a free one (`portFrom: "chosen"`), which is then that app’s: every later sign-in uses it. With `pkce: false` the app signs in with its client secret, and its last step is a command for the person’s own terminal, which asks for that secret at a hidden prompt — never ask for it in the chat. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the steps, the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
       inputSchema: {
         workspace: z.string().optional().describe('a workspace already connected, as `organisation/slack`'),
-        mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
+        mode: oneOfWords(MANIFEST_MODES)
+          .optional()
+          .describe("`read` when left out; `agent` for an organisation's bot-only agent app"),
         port: z
           .number()
           .int()
           .optional()
-          .describe('the loopback port its redirect uses; a connected workspace’s own when left out'),
+          .describe(
+            'the loopback port its redirect uses; left out, a connected workspace’s own, or a free one for a new app',
+          ),
+        pkce: z
+          .boolean()
+          .optional()
+          .describe(
+            '`false` for the manifest of a new app that signs in without PKCE, at a person’s terminal; PKCE cannot be turned off on an existing app. On when left out',
+          ),
       },
       annotations: readsLocal,
     },
@@ -480,6 +499,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             mode: args.mode,
             port: args.port,
             workspace: await resolveOptional(args.workspace),
+            ...(args.pkce === undefined ? {} : { pkce: args.pkce }),
           }),
         );
       } catch (error) {
@@ -621,6 +641,26 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
   );
 
   server.registerTool(
+    'slack_icon_make',
+    {
+      title: 'Make the agent emoji',
+      description:
+        'Make the person’s agent emoji: their own Slack profile photo with a small robot badge on its lower right, as a square PNG under 128 KB, saved in this machine’s data folder. It reads Slack with their token and fetches the photo with none; it uploads nothing and changes nothing in Slack or in the configuration, so it asks nobody. Returns the file’s `path`, the workspace’s emoji page (`emojiPage`, null when Slack did not say where the workspace is), a `suggestedName` such as `:sam-agent:`, and the `steps`: show them to the person, who uploads the file there under that name themselves. Once they have, record the name for the account with `comms_label`, so the app’s posts for their agent show it.',
+      inputSchema: { ...workspaceArg },
+      // It writes one file on this machine, as `slack_file_download` does, and reads Slack: no approval, any mode.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args, ctx) => {
+      try {
+        const name = await resolve(args.workspace);
+        return reply(await makeAgentIcon(context, await session(name), { signal: ctx.mcpReq.signal }));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
     'slack_files',
     {
       title: 'List files',
@@ -737,6 +777,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
         broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; needs a person'),
         files: filesArg().describe(`${FILES_HELP}, for a new message; with files, \`text\` is optional`),
+        as: identityArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -755,6 +796,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               mentionUsers: args.mentionUsers,
               broadcast: args.broadcast,
               files: args.files,
+              as: args.as,
             },
             slackDeps,
           ),
@@ -987,12 +1029,14 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       title: 'React to a message',
       description:
         'Add a reaction or remove your reaction. Say which emoji on which message first, and wait for a yes. Under the workspace’s `chat` policy this does it at once, through a single-use approval. Under `confirm` it adds nothing: it returns APPROVAL_PENDING with an approval id and the approve command the person runs at their own terminal — you cannot approve it yourself. Once they have, call slack_react_send with that approval id. Under `never` it refuses.',
-      inputSchema: { ...workspaceArg, ...reactionArgs },
+      inputSchema: { ...workspaceArg, ...reactionArgs, as: identityArg },
       annotations: outward,
     },
     async (args) => {
       try {
-        return reply(await react(context, await resolve(args.workspace), reactionOf(args), undefined, slackDeps));
+        return reply(
+          await react(context, await resolve(args.workspace), reactionOf(args), undefined, slackDeps, args.as),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -1013,6 +1057,105 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         const name = await resolve(args.workspace);
         await ownApproval(args.approvalId, 'send');
         return reply(await react(context, name, reactionOf(args), args.approvalId, slackDeps));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8 and §8.1): `agent-slack standing add`. It only
+   * prepares — it takes no `approvalId` — because a standing approval lets acts happen with nobody asked, so it is
+   * approved only by the person, at their own terminal, with its code: never in a chat, never through a client's form.
+   */
+  server.registerTool(
+    'slack_standing_add',
+    {
+      title: 'Prepare a standing approval',
+      description:
+        'Prepare a standing approval — acknowledgements your agent may later send without asking — for the person to approve at their own terminal with its code. Only when the person asked for one. **Nothing is sent, and nothing is approved here**: it returns `approvalRequired` with a preview that says an agent proposed it, each content in full with its digest, each place with its member count and sharing, the limits and the expiry. Show it in full, then tell the person to run the approve command `next` names in their terminal — you cannot approve it yourself, and their yes in this chat does not approve it. `reactions` are standard emoji names (eyes alone when no content is given); `replies` fixed plain texts of at most 200 characters; `places` is `threads-i-am-in` or channel and DM ids. With `replaces`, one that only narrows that standing approval applies at once; anything wider asks again. The same as the command line’s `standing add`.',
+      inputSchema: {
+        ...workspaceArg,
+        reactions: z.array(z.string()).optional().describe('standard emoji names, without colons, at most 5'),
+        replies: z.array(z.string()).optional().describe('fixed replies, plain text on one line, at most 5'),
+        places: z
+          .union([z.literal('threads-i-am-in'), z.array(z.string())])
+          .describe('`threads-i-am-in`, or channel and DM ids: C…, G…, D…'),
+        perThread: z.number().optional().describe('acts per thread, across every standing approval: 1 to 3'),
+        perHour: z.number().optional().describe('acts an hour: 1 to 30'),
+        perDay: z.number().optional().describe('acts a day: 1 to 100'),
+        perSender: z
+          .number()
+          .optional()
+          .describe('acts a day on messages from any one person, across every standing approval: 1 to 10'),
+        expiresDays: z.number().optional().describe('days it lasts once approved: 1 to 30'),
+        replaces: z.string().optional().describe('the standing approval this replaces'),
+      },
+      // It writes a pending record on this machine and reads Slack for the places; nothing reaches anyone.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        // The operation `standing add` runs: see `prepareStandingAdd`. An agent proposes it, always, from here.
+        const outcome = await prepareStandingAdd(
+          context,
+          await resolve(args.workspace),
+          {
+            reactions: args.reactions,
+            replies: args.replies,
+            places: args.places,
+            perThread: args.perThread,
+            perHour: args.perHour,
+            perDay: args.perDay,
+            perSender: args.perSender,
+            expiresDays: args.expiresDays,
+            replaces: args.replaces,
+          },
+          slackDeps,
+          { proposedBy: 'agent' },
+        );
+        return reply(
+          outcome.status === 'narrowed' ? standingNarrowedView(outcome.record) : standingPreparedView(outcome.prepared),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): `agent-slack ack`. It names the message and the
+   * content by its digest, and nothing else — no draft, no words, no removal — so the gate builds the payload, and every
+   * check a person would otherwise have made is the gate's.
+   */
+  server.registerTool(
+    'slack_ack',
+    {
+      title: 'Acknowledge under a standing approval',
+      description:
+        'Acknowledge, without asking, a message that has just arrived from another person — with a reaction or a reply the person wrote in advance and approved at their terminal as a standing approval. Use it only on a message that just arrived, the newest from someone else in its thread or channel, and only with a content digest comms_standing shows for that standing approval: you never write the words. It goes out as your agent — the app, or labelled — 5 to 30 seconds after you call, by a pause the gate draws, and the person is told on their screen. Without a standing approval that covers it, ask the person instead. STANDING_REFUSED or STANDING_LIMIT means it does not cover this act: stop and ask the person, and do not try again. The same as the command line’s `ack`.',
+      inputSchema: {
+        ...workspaceArg,
+        standingId: z.string().describe('the standing approval, as comms_standing lists it'),
+        channel: z.string().describe('the conversation the message is in: C…, G… or D…'),
+        ts: z.string().describe('the message, by its ts as a read returned it'),
+        content: z.string().describe('the content, by the digest comms_standing shows for it: 64 hex characters'),
+      },
+      annotations: outward,
+    },
+    async (args) => {
+      try {
+        const name = await resolve(args.workspace);
+        await ownApproval(args.standingId, 'standing');
+        // The operation `ack` runs: see `ack`.
+        return reply(
+          await ack(
+            context,
+            name,
+            { standingId: args.standingId, channel: args.channel, ts: args.ts, content: args.content },
+            slackDeps,
+          ),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -1053,6 +1196,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .array(z.string())
           .optional()
           .describe('ids of the message’s own files to take off (F…), as a read lists them'),
+        as: identityArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -1071,6 +1215,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               broadcast: args.broadcast,
               files: args.files,
               removeFiles: args.removeFiles,
+              as: args.as,
             },
             slackDeps,
           ),
@@ -1180,7 +1325,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     'slack_approval_wait',
     {
       title: 'Wait for an approval',
-      description: `Wait for an approval — a post, a reaction, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being posted, used, failed, unknown, expired, revoked, corrupt, or answered for a question. \`waitSeconds\` is 30 when left out, ${MAX_APPROVAL_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or posts. Ended still waiting, wait again — never prepare it again while it is pending or being posted. The same as \`approval wait\` in the Slack CLI.`,
+      description: `Wait for an approval — a post, a reaction, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being posted, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends \`active\` once the person has approved it — slack_ack uses it, nothing claims it — and \`standing\` says pending, active or ended, with why. \`waitSeconds\` is 30 when left out, ${MAX_APPROVAL_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or posts. Ended still waiting, wait again — never prepare it again while it is pending or being posted. The same as \`approval wait\` in the Slack CLI.`,
       inputSchema: {
         approvalId: z.string().describe('the approval to wait for'),
         waitSeconds: z

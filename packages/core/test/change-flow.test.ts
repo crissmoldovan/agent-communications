@@ -6,7 +6,13 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { stateOf } from '../src/approval-stored.ts';
-import { changeToolResult, type GatedChange, gatedChange, gatedChangeAtTerminal } from '../src/change-flow.ts';
+import {
+  approveChangeAtTerminal,
+  changeToolResult,
+  type GatedChange,
+  gatedChange,
+  gatedChangeAtTerminal,
+} from '../src/change-flow.ts';
 import { inlineCommand, type Streams } from '../src/cli-runtime.ts';
 import type { AccountConfig, SendPolicy } from '../src/config.ts';
 import { openCore } from '../src/core.ts';
@@ -88,6 +94,8 @@ test('a loosening is prepared the first time and applied once on the second, wit
   assert.equal(first.status, 'approval-required');
   if (first.status !== 'approval-required') return;
   assert.match(first.prepared.preview, /send policy: never → chat/);
+  // From a chat, the yes is the person's in the chat.
+  assert.match(first.prepared.preview, /^CHANGE PREVIEW · approval ap_\w+ · approved by a yes in the chat · /);
   assert.equal(await policyNow(core), 'never', 'preparing changed nothing');
 
   const second = await gatedChange(core, change, {
@@ -186,6 +194,9 @@ test('at the CLI an agent gets the preview and the approval id, and exits 10; --
     (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING',
   );
   assert.match(plain.shown(), /send policy: never → chat/);
+  // An agent's preview is for the person it shows it to, who says yes in the chat: that header is as it was.
+  assert.match(plain.shown(), /· approved by a yes in the chat ·/);
+  assert.doesNotMatch(plain.shown(), /at this terminal/);
 
   // An agent is refused even where a terminal is attached: the approval is the person's, and a terminal is not one.
   await assert.rejects(
@@ -341,6 +352,43 @@ test('--mcp-approval is generated before an existing sentinel and positional loo
   );
 });
 
+test('`approve <id>` for a change prepared under chat says its code is typed here, never "a yes in the chat"', async () => {
+  // A change an agent prepared under `chat` may still be approved at a terminal with `approve <id>`: the screen shows
+  // the preview and asks for the code. Its header was drawn from the record's policy alone, so it said "approved by a
+  // yes in the chat" right above a request for a code.
+  const core = coreWith('never', 'chat');
+  const asked = await gatedChange(core, setSendPolicy(core, 'chat'), { channel: 'core', surface: 'mcp' });
+  assert.equal(asked.status, 'approval-required');
+  if (asked.status !== 'approval-required') return;
+  assert.match(asked.prepared.preview, /· approved by a yes in the chat ·/, 'the chat still says the chat');
+  const stdin = Object.assign(new PassThrough(), { isTTY: true });
+  const stdout = Object.assign(new PassThrough(), { isTTY: true });
+  const stderr = new PassThrough();
+  let shown = '';
+  stdout.on('data', (chunk) => {
+    shown += String(chunk);
+  });
+  stderr.on('data', (chunk) => {
+    const code = /Type (\S+) to approve this change/.exec(String(chunk))?.[1];
+    if (code !== undefined) stdin.write(`${code}\n`);
+  });
+  const outcome = await approveChangeAtTerminal(core, asked.prepared.approvalId, {}, { color: false }, {
+    stdin,
+    stdout,
+    stderr,
+  } as unknown as Streams);
+  assert.equal(outcome.state, 'approved');
+  assert.match(shown, /^CHANGE PREVIEW · approval ap_\w+ · approved by a code typed here, at this terminal · /m);
+  assert.doesNotMatch(shown, /approved by a yes in the chat/);
+  // And the change it approved applies when it is claimed.
+  const done = await gatedChange(core, setSendPolicy(core, 'chat'), {
+    channel: 'core',
+    surface: 'mcp',
+    approvalId: asked.prepared.approvalId,
+  });
+  assert.equal(done.status, 'applied');
+});
+
 test('at the CLI a person at a terminal approves there: yes applies, anything else cancels and revokes', async () => {
   const yes = coreWith('never');
   const person = terminal('yes');
@@ -353,6 +401,12 @@ test('at the CLI a person at a terminal approves there: yes applies, anything el
   });
   assert.equal(applied, 'chat');
   assert.match(person.shown(), /send policy: never → chat/, 'the person saw what they agreed to');
+  // The yes is typed here, at this terminal, under the `chat` policy too: the header says so, not "in the chat".
+  assert.match(
+    person.shown(),
+    /^CHANGE PREVIEW · approval ap_\w+ · approved by a yes typed here, at this terminal · /m,
+  );
+  assert.doesNotMatch(person.shown(), /approved by a yes in the chat/);
 
   const no = coreWith('never');
   await assert.rejects(

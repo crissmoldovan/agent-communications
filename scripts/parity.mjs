@@ -119,8 +119,8 @@ const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
  *
  * A row repeats another when it names the same command and tool *and* runs them with the same `argv` and `args`. One
  * command and one tool can be several capabilities, each reached by a flag and an argument of its own —
- * `agentcomms update --later` and `comms_update` with `later: true` put the update off, while the same pair with
- * `--auto off` and `auto: "off"` turns the daily check off — and each such row is driven with its own words to the
+ * `agentcomms update --pause` and `comms_update` with `pause: true` hold the update notice, while the same pair with
+ * `--level never` and `level: "never"` changes the level — and each such row is driven with its own words to the
  * operation it names, so telling them apart by those words checks every one of them.
  */
 export function checkParity(table, registries, { strict = false } = {}) {
@@ -320,10 +320,20 @@ export function checkParity(table, registries, { strict = false } = {}) {
         problems.push(`${at} has "expect" but no "operation"; "expect" is what that exception operation receives`);
       }
     } else if (STATUSES.includes(row.status)) {
+      // A flag of a command other rows name — `update --background` beside the `update` rows — is a capability of its
+      // own, and its words are what tell it apart from theirs: an exception may carry those, and nothing else here.
+      const flagOfShared =
+        row.status === 'exception' &&
+        cli !== null &&
+        rows.some((other) => other !== row && other?.package === row.package && other?.cli === cli);
       for (const key of OPERATION_FIELDS) {
-        if (row[key] !== undefined) {
-          problems.push(`${at} is "${row.status}" but carries "${key}"; only a "both" row has two sides to compare`);
-        }
+        if (row[key] === undefined || (key === 'argv' && flagOfShared)) continue;
+        problems.push(`${at} is "${row.status}" but carries "${key}"; only a "both" row has two sides to compare`);
+      }
+      if (flagOfShared && Array.isArray(row.argv) && row.argv.length === 0) {
+        problems.push(
+          `${at}: an exception's "argv" names the words that tell it apart from the other rows of its command, so it cannot be empty`,
+        );
       }
     }
 
@@ -344,11 +354,15 @@ export function checkParity(table, registries, { strict = false } = {}) {
   for (const row of valid.filter((r) => r.status === 'exception')) {
     for (const other of valid) {
       if (other === row) continue;
+      // An exception with words of its own says only that command with those words has no counterpart.
       const clash = row.cli
-        ? other.package === row.package && other.cli === row.cli
+        ? other.package === row.package &&
+          other.cli === row.cli &&
+          (row.argv === undefined || JSON.stringify(other.argv ?? null) === JSON.stringify(row.argv))
         : Boolean(row.mcp) && other.mcp === row.mcp;
       if (clash) {
-        const name = row.cli ? command(row.package, row.cli) : row.mcp;
+        const words = Array.isArray(row.argv) && row.argv.length > 0 ? ` ${row.argv.join(' ')}` : '';
+        const name = row.cli ? command(row.package, `${row.cli}${words}`) : row.mcp;
         problems.push(`row "${row.id}" says ${name} has no counterpart, but row "${other.id}" names it too`);
       }
     }

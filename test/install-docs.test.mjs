@@ -58,29 +58,28 @@ test('every declared CLI/MCP surface has generated reference destinations', () =
   }
 });
 
-test('the held local event service README states the B1, B2 and Phase-D boundaries', async () => {
+test('the local event service README states its boundaries for the person using it', async () => {
   const readme = await readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8');
   const prose = readme.replace(/\s+/g, ' ');
-  assert.match(prose, /foreground owner only/i);
-  assert.match(prose, /macOS and Linux only/i);
-  assert.match(prose, /Windows refuses/i);
+  assert.match(prose, /foreground owner/i);
+  assert.match(prose, /no background service or autostart/i);
+  assert.match(prose, /macOS or Linux/i);
+  assert.match(prose, /Windows is refused/i);
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
-  assert.match(prose, /B1 accepts the local .*dry-run target/i);
-  assert.match(prose, /reads are terminal-only/i);
-  assert.match(prose, /Gmail, Slack, Resend and WhatsApp.*one owner/i);
-  assert.match(prose, /Slack scans history and thread replies.*reply barrier/i);
-  assert.match(prose, /Resend resolves received mail through its detail operation.*sent-mail status/i);
-  assert.match(prose, /Unicode-validated and bounded.*local throttle/i);
-  assert.match(prose, /WhatsApp reads the local checked copy only through the current live chat lists/i);
-  assert.match(prose, /hidden chat reaches no dry-run, stream or dead letter/i);
-  assert.match(prose, /Phase D adds no command or MCP tool beyond the `source show` rows for the new sources/i);
   assert.match(
     prose,
-    /stream and dead-letter handling is registered into Phase D's single list-change and retention transaction/i,
+    /Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal/i,
   );
-  assert.match(prose, /Every Phase D test uses fakes, never a real provider/i);
-  assert.match(prose, /held from publication throughout B1, B2 and Phase D/i);
-  assert.match(prose, /A B1, B2 or Phase D merge publishes neither package/i);
+  assert.match(prose, /dry-run log you read at your terminal/i);
+  assert.match(prose, /only a person at a terminal can read/i);
+  assert.match(prose, /Gmail, Slack, Resend and WhatsApp/i);
+  assert.match(prose, /Slack messages and thread replies/i);
+  assert.match(prose, /Resend received mail and sent-mail status/i);
+  assert.match(prose, /hidden chat never reaches a target/i);
+  assert.match(prose, /never sends mail or messages through them/i);
+  assert.match(prose, /An agent can never/i);
+  assert.match(prose, /Every judge kind is off until you enable it, at your terminal/i);
+  assert.match(prose, /runs the Laya model inside the daemon\. It is not available yet/i);
 });
 
 test('the Phase-D channel README notes keep event operations internal and read-only', async () => {
@@ -93,7 +92,11 @@ test('the Phase-D channel README notes keep event operations internal and read-o
 
   for (const { channel, text } of readmes) {
     const prose = text.replace(/\s+/g, ' ');
-    assert.match(prose, /held local event daemon may call this package's internal read-only event operation/i, channel);
+    assert.match(
+      prose,
+      /local event daemon, \[`@agentcomms\/events-daemon`\]\(\.\.\/events-daemon\/README\.md\), may call this package's internal read-only event operation/i,
+      channel,
+    );
     assert.match(prose, new RegExp(`adds no ${channel} command or MCP tool`, 'i'), channel);
   }
 });
@@ -220,7 +223,8 @@ test('no document promises that prune keeps whatever any client registers', asyn
 
 test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, at that exact release and never latest (CUE-403)', async () => {
   // Design 2026-10-04, D7: what a person can do with a command 0.13.0 or earlier printed by its bare name, and what
-  // that cannot recover. And D8 and §5: PATH shims are a follow-up, and on Windows a default Node gives words to type.
+  // that cannot recover. CUE-406 adds current managed-install shims, and CUE-410 labels the PowerShell line used for
+  // a default Windows Node; neither changes how a command from 0.13.0 or earlier is recovered.
   const page = await readFile(join(ROOT, 'docs', 'troubleshooting.md'), 'utf8');
   const start = page.indexOf('### A command a result gave you is not found');
   assert.notEqual(start, -1, 'the section is there');
@@ -228,7 +232,7 @@ test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, a
   const section = page.slice(start, end === -1 ? undefined : end);
   const prose = section.replace(/\s+/g, ' ');
 
-  // 0.13.1: the command, the words to type, or none here.
+  // Current results: the command, the inert words fallback, or none here.
   assert.match(prose, /names the Node and the file of the installation that printed it/);
   assert.match(prose, /not locatable here/);
   assert.match(prose, /C:\\Program Files/);
@@ -248,9 +252,14 @@ test('troubleshooting gives 0.13.0’s bare commands a best-effort way to run, a
   assert.match(prose, /`comms_paths`.*cannot/);
   assert.match(prose, /npx may not be installed/i);
   assert.match(prose, /may not name its Node/);
-  // PATH shims are not part of this.
-  assert.match(prose, /PATH shims/);
-  assert.match(prose, /follow-up/);
+  // Current managed installs provide shims, without claiming they repair a result from an older release.
+  assert.match(prose, /CLI shim/, 'the guide names the current managed CLI shim');
+  assert.match(prose, /managed install/, 'the guide says which install owns current shims');
+  assert.match(
+    prose,
+    /does not repair a bare command printed by 0\.13\.0 or earlier/,
+    'the current shim does not pretend to repair an old result',
+  );
 });
 
 test('no guide hands a person a bare approve command: they run the one the result gives (CUE-403)', async () => {

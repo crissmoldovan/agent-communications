@@ -16,9 +16,11 @@
 export interface QuotedCommand {
   /** The words, as the program is to receive them. */
   readonly words: readonly string[];
-  /** The line to paste; null when one of `words` has no printing that every Windows shell passes on alike. */
+  /** The line to paste; null when no supported shell-specific rendering is safe. */
   readonly line: string | null;
   readonly platform: NodeJS.Platform;
+  /** Present when `line` is deliberately for one shell rather than the Windows common subset. */
+  readonly shell?: 'powershell' | undefined;
 }
 
 /**
@@ -30,8 +32,8 @@ export interface QuotedCommand {
  * Everywhere but Windows that shell is a POSIX one, and a word goes in single quotes, inside which nothing is special
  * but the quote itself. Windows has two shells, and neither reads single quotes that way: cmd.exe does not take them
  * as quotes at all, so `'C:\Profiles\First Last\outgoing'` reached the command as two words, quote marks and all, and
- * PowerShell does, but escapes a quote inside them by doubling it rather than as `'\''`. A command printed on Windows
- * has to be safe in both, because nothing says which one it will be pasted into (CUE-306) — and safe is not enough:
+ * PowerShell does, but escapes a quote inside them by doubling it rather than as `'\''`. A common line printed on
+ * Windows has to be safe in both — and safe is not enough:
  * the program has to receive the same words from either. Three readers stand between the line and the program. cmd.exe
  * hands the program the line as it is, and the program's own parser (the C runtime's, Node's) splits it. PowerShell
  * reads the line itself, a double-quoted word with its backslashes as plain characters, and then writes a new command
@@ -58,15 +60,17 @@ export interface QuotedCommand {
  *   backslash, which the C runtime reads with the closing quote as `\"` — and doubled for it, PowerShell 7 passes both
  *   backslashes on where cmd.exe and Windows PowerShell pass one; and a word with `& | < > ^ ( )` but no whitespace,
  *   which PowerShell passes to a `.cmd` script unquoted, for cmd.exe to run `&whoami` from or to split at `|`.
- * - With any other word in it, no line is printed at all (`line` is null), and the printers show the command's words
+ * - With any other word in it, the common renderer has no line, and the printers show the command's words
  *   as JSON instead, saying it has to be typed. Not a line with the word left out: a placeholder in its place was
  *   still a command that ran — `claude mcp remove NAME` removed whatever entry was called `NAME`, and an install
  *   hint's `--force` replaced it — and before that, a word quoted for PowerShell's single quotes, which cmd.exe reads
  *   as characters, ran `whoami` from a server named `$x&whoami&`. See `commandAsJson` for why the JSON runs nothing.
  *
- * - The program itself has to be left as it is. Quoted, it is a string to PowerShell rather than a command — PowerShell
- *   runs a quoted program only after `&`, which cmd.exe reads as the end of a command — so a program whose path needs
- *   quotes, as `C:\Program Files\nodejs\node.exe` does, leaves the command with no line either (CUE-403).
+ * - The program itself has to be left as it is in the common form. Quoted, it is a string to PowerShell rather than a
+ *   command. When its path needs quoting, CUE-410 may emit a labelled PowerShell line: `&`, then every word in single
+ *   quotes, with an inner single quote doubled. Empty words, trailing backslashes, double quotes and control or
+ *   formatting characters retain the inert-JSON fallback because their native-program boundary cannot be proved
+ *   across the supported PowerShell versions.
  *
  * Everywhere else there is always a line: single quotes make any word safe.
  *
@@ -78,7 +82,14 @@ export function quoteCommand(words: readonly string[], platform: NodeJS.Platform
   if (platform !== 'win32') return { words, line: words.map(posixShellWord).join(' '), platform };
   const printed = words.map(windowsShellWord);
   const programBare = words.length === 0 || printed[0] === words[0];
-  return { words, line: printed.includes(null) || !programBare ? null : printed.join(' '), platform };
+  if (!printed.includes(null) && programBare) return { words, line: printed.join(' '), platform };
+  if (!programBare && printed.slice(1).every((word) => word !== null)) {
+    const powershell = words.map(powerShellWord);
+    if (!powershell.includes(null)) {
+      return { words, line: `& ${powershell.join(' ')}`, platform, shell: 'powershell' };
+    }
+  }
+  return { words, line: null, platform };
 }
 
 /**
@@ -90,6 +101,10 @@ export function quotedLineWithWordsToFill(command: QuotedCommand, ...toFill: rea
   if (command.line === null) return null;
   const sentinel = command.words.indexOf('--');
   if (sentinel < 0) return [command.line, ...toFill].join(' ');
+  if (command.shell === 'powershell') {
+    const printed = command.words.map((each) => powerShellWord(each) as string);
+    return `& ${[...printed.slice(0, sentinel), ...toFill, ...printed.slice(sentinel)].join(' ')}`;
+  }
   const word = command.platform === 'win32' ? windowsShellWord : posixShellWord;
   // The command has a line, so every word in it has a printed form.
   const printed = command.words.map((each) => word(each) as string);
@@ -102,8 +117,12 @@ function programNeedsQuotes(command: QuotedCommand): boolean {
   return command.platform === 'win32' && program !== undefined && windowsShellWord(program) !== program;
 }
 
+/**
+ * One word for a POSIX shell: as it is when nothing in it is special, otherwise in single quotes. A word that starts
+ * with `=` or `~` is quoted too: zsh reads `=ls` as the path of `ls`, and `~` as a home.
+ */
 function posixShellWord(word: string): string {
-  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
+  return /^(?![=~])[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -116,6 +135,14 @@ function windowsShellWord(word: string): string | null {
   if (/["$`%!\u201C-\u201E]|[\p{C}\p{Zl}\p{Zp}]/u.test(word)) return null;
   if (/[&|<>^()]/.test(word) && !/\s/.test(word)) return null;
   return `"${word}"`;
+}
+
+/** One native-command word in a PowerShell single-quoted literal, or null when a one-line call is not provable. */
+function powerShellWord(word: string): string | null {
+  // Windows PowerShell cannot reliably forward an empty native argument, and a trailing slash can escape the quote
+  // it reconstructs for the C runtime. Controls and formatting characters can end or visually rewrite the line.
+  if (word === '' || word.endsWith('\\') || /["\u201C-\u201E]|[\p{C}\p{Zl}\p{Zp}]/u.test(word)) return null;
+  return `'${word.replaceAll("'", "''")}'`;
 }
 
 /**
@@ -152,7 +179,7 @@ const TO_TYPE =
 
 /** What is said beside a command shown as JSON because its program's path needs quotes. */
 const TO_TYPE_PROGRAM =
-  "the command's words, written as JSON: the program's path needs quotes, and PowerShell runs a quoted program only after `&`, which cmd.exe does not accept, so type the command yourself, with each word quoted for the shell you use and, in PowerShell, `&` before the program";
+  "the command's words, written as JSON: the program's path needs quoting and at least one word cannot be represented safely in a one-line PowerShell call, so type the command yourself, with each word quoted for the shell you use and, in PowerShell, `&` before the program";
 
 function toType(command: QuotedCommand): string {
   return programNeedsQuotes(command) ? TO_TYPE_PROGRAM : TO_TYPE;
@@ -160,12 +187,14 @@ function toType(command: QuotedCommand): string {
 
 /** Quoted words in backticks, for a sentence — as words in JSON, saying it has to be typed, when there is no line. */
 export function inlineQuoted(command: QuotedCommand): string {
-  return command.line === null ? `\`${commandAsJson(command.words)}\` (${toType(command)})` : `\`${command.line}\``;
+  if (command.line === null) return `\`${commandAsJson(command.words)}\` (${toType(command)})`;
+  return `\`${command.line}\`${command.shell === 'powershell' ? ' (PowerShell)' : ''}`;
 }
 
 /** Quoted words as text of their own — a list's line, a field's value — or as words in JSON, saying to type them. */
 export function quotedText(command: QuotedCommand): string {
-  return command.line === null ? `${commandAsJson(command.words)} (${toType(command)})` : command.line;
+  if (command.line === null) return `${commandAsJson(command.words)} (${toType(command)})`;
+  return command.shell === 'powershell' ? `PowerShell:\n${command.line}` : command.line;
 }
 
 /**

@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import {
+  AGENT_LABEL_WORDS,
   analyseOutboundHtml,
+  type BehaviourAct,
   type CliHandoffs,
   CommsError,
   canonicalAddress,
@@ -14,6 +16,7 @@ import {
   homeDirectory,
   isControl,
   isInvisible,
+  type MessageIdentity,
   safeFilename,
   sha256Hex,
 } from '@agentcomms/core';
@@ -91,6 +94,8 @@ export interface OutboundMessage {
 
 export interface BuiltMessage {
   message: OutboundMessage;
+  /** The name the caller put in From, or empty for a bare address: what an agent label is made from (L1). */
+  fromName: string;
   /** Every link in the message, with its full query string. */
   links: string[];
   /** Things a person should see before approving that are not refusals. */
@@ -109,7 +114,7 @@ function bad(message: string, hint?: string): CommsError {
 function address(value: string, field: string): string {
   const trimmed = value.trim();
   if (!ADDRESS.test(trimmed)) {
-    throw bad(`${field}: "${[...trimmed].slice(0, 80).join('')}" is not an email address`, 'Give bare addresses.');
+    throw bad(`${field} contains a value that is not a bare email address`, 'Give bare addresses.');
   }
   return canonicalAddress(trimmed);
 }
@@ -136,16 +141,33 @@ function headerText(value: string, field: string, max: number): string {
   return trimmed;
 }
 
-function parseFrom(raw: string): { from: string; fromAddress: string; fromDomain: string } {
+function parseFrom(raw: string): { from: string; fromAddress: string; fromDomain: string; name: string } {
   const value = raw.trim();
   const angled = /^(.*)<([^<>]+)>$/.exec(value);
   const bare = angled ? (angled[2] ?? '') : value;
   const fromAddress = address(bare, 'from');
   const fromDomain = domainOf(fromAddress) ?? '';
-  if (!angled) return { from: fromAddress, fromAddress, fromDomain };
+  if (!angled) return { from: fromAddress, fromAddress, fromDomain, name: '' };
   const name = headerText((angled[1] ?? '').trim().replace(/^"(.*)"$/, '$1'), 'the From name', 100);
   if (/[<>"@,;]/.test(name)) throw bad('the From name may not contain < > " @ , or ;');
-  return { from: name ? `${name} <${fromAddress}>` : fromAddress, fromAddress, fromDomain };
+  return { from: name ? `${name} <${fromAddress}>` : fromAddress, fromAddress, fromDomain, name };
+}
+
+/**
+ * The From an agent's send carries (design 2026-10-15-agent-label, R1): L1's phrase, quoted — unquoted, `(agent)` is
+ * an RFC 5322 comment, which a mail client may drop — then the address. `parseFrom` never writes a quote, so a quoted
+ * From is always one this package labelled.
+ */
+export function labelledFrom(phrase: string, fromAddress: string): string {
+  return `"${phrase}" <${fromAddress}>`;
+}
+
+/** Who a prepared From says the email comes from: the label this package wrote, with its phrase, or the person. */
+export function identityOfFrom(from: string): { identity: MessageIdentity; phrase?: string } {
+  const phrase = /^"(.+)" <[^<>]+>$/.exec(from)?.[1];
+  return phrase !== undefined && AGENT_LABEL_WORDS.some((word) => phrase.endsWith(` (${word})`))
+    ? { identity: 'agent', phrase }
+    : { identity: 'me' };
 }
 
 /** A body: controls other than newline and tab are refused, invisible characters are counted for a warning. */
@@ -224,7 +246,7 @@ export async function buildMessage(
   options: { now: Date; attach: AttachPolicyInput },
 ): Promise<BuiltMessage> {
   const warnings: string[] = [];
-  const { from, fromAddress, fromDomain } = parseFrom(input.from);
+  const { from, fromAddress, fromDomain, name: fromName } = parseFrom(input.from);
   const to = list(input.to, 'to');
   const cc = list(input.cc, 'cc');
   const bcc = list(input.bcc, 'bcc');
@@ -336,6 +358,7 @@ export async function buildMessage(
       references,
       scheduledAt,
     },
+    fromName,
     links,
     warnings,
   };
@@ -344,6 +367,26 @@ export async function buildMessage(
 /** Everyone the email reaches, once each — BCC included. */
 export function uniqueRecipients(message: Pick<OutboundMessage, 'to' | 'cc' | 'bcc'>): string[] {
   return [...new Set([...message.to, ...message.cc, ...message.bcc])];
+}
+
+/**
+ * What the behaviour rules are asked about a send (design 2026-10-19-agent-behaviour-rules, B2, B4): the act, and the
+ * places it lands. Prepare stores it beside the message and the digest binds it, so execute asks again exactly what
+ * the person approved.
+ */
+export interface BehaviourCheck {
+  acts: BehaviourAct[];
+  places: string[][];
+}
+
+/**
+ * A send as the rules see it: the act is `send` — Resend has no threads here, so a message with In-Reply-To is one too
+ * (B2) — and every recipient, To, Cc and Bcc, is a place of its own, lower-cased, so one a rule forbids refuses the
+ * whole send (B4). The Reply-To is no place: it receives nothing.
+ */
+export function behaviourCheckOf(message: Pick<OutboundMessage, 'to' | 'cc' | 'bcc'>): BehaviourCheck {
+  const places = [...new Set(uniqueRecipients(message).map((address) => address.toLowerCase()))];
+  return { acts: ['send'], places: places.map((address) => [address]) };
 }
 
 /**
@@ -367,11 +410,17 @@ function imagesIn(html: string, urls: readonly { where: string; url: string }[])
   return elements + urls.filter((entry) => SHOWN_ON_OPEN.test(entry.where)).length;
 }
 
-/** The digest an approval is bound to: everything a recipient can see or that decides who receives it. */
-export function digestOf(message: OutboundMessage): string {
+/**
+ * The digest an approval is bound to: everything a recipient can see or that decides who receives it — and, from this
+ * release, what the behaviour rules are asked about it (`BehaviourCheck`), as prepare stored it. Version 1 is a message
+ * an earlier release prepared, which stored none: its digest is as it was, so its approval still matches.
+ */
+export function digestOf(message: OutboundMessage, behaviour?: BehaviourCheck | undefined): string {
   return sha256Hex(
     canonicalJson({
-      v: 1,
+      v: behaviour === undefined ? 1 : 2,
+      // As stored, whatever it holds: a check changed after the preview is a digest the approval does not match.
+      ...(behaviour === undefined ? {} : { behaviour }),
       from: message.from,
       to: message.to,
       cc: message.cc,

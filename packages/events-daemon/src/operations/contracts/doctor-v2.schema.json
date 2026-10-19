@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/events-doctor-v2.schema.json",
+  "title": "Phase E event daemon doctor report",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "owner",
+    "switch",
+    "lineages",
+    "superseded",
+    "points",
+    "awaitingReapproval",
+    "activationIntents",
+    "sources",
+    "recovery",
+    "judgeBoundary",
+    "judge",
+    "whatsapp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "doctor-v2" },
+    "owner": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/owner" },
+    "switch": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/switch" },
+    "lineages": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/lineage" }
+    },
+    "superseded": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/superseded" }
+    },
+    "points": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/point" }
+    },
+    "awaitingReapproval": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/awaiting" }
+    },
+    "activationIntents": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/intent" }
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/sourceHealth" }
+    },
+    "recovery": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/recovery" },
+    "judgeBoundary": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "code", "phase"],
+        "properties": {
+          "kind": { "const": "laya" },
+          "code": { "const": "E2_REQUIRED" },
+          "phase": { "const": "E2" }
+        }
+      }
+    },
+    "whatsapp": {
+      "type": "array",
+      "items": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/whatsapp" }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kinds", "budget", "reservations", "holds"],
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "state", "version"],
+                "properties": {
+                  "kind": { "enum": ["typesafe", "local-endpoint"] },
+                  "state": { "enum": ["disabled", "enabled"] },
+                  "version": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] }
+                },
+                "oneOf": [
+                  {
+                    "properties": { "state": { "const": "disabled" }, "version": { "type": "null" } }
+                  },
+                  {
+                    "properties": {
+                      "state": { "const": "enabled" },
+                      "version": { "type": "integer", "minimum": 1 }
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "state", "code"],
+                "properties": {
+                  "kind": { "const": "laya" },
+                  "state": { "const": "unavailable" },
+                  "code": { "const": "E2_REQUIRED" }
+                }
+              }
+            ]
+          },
+          "allOf": [
+            {
+              "contains": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "typesafe" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "local-endpoint" } }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "laya" } } },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["activeVersion"],
+          "properties": { "activeVersion": { "type": ["integer", "null"] } }
+        },
+        "reservations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "count"],
+            "properties": {
+              "state": { "enum": ["reserved", "in-flight", "settled", "released"] },
+              "count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "holds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "oldestCreatedAt", "nextExpiresAt"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "oldestCreatedAt": { "type": ["integer", "null"] },
+            "nextExpiresAt": { "type": ["integer", "null"] }
+          }
+        }
+      }
+    }
+  }
+}

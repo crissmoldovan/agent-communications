@@ -388,7 +388,12 @@ test('a post Slack accepted with no ts says exactly that it was sent and the pro
     );
     const [record] = await audited(harness);
     assert.equal(record?.outcome, 'ok', what);
-    assert.deepEqual(record?.ids, { channel: 'C1' }, `${what}: the audit holds an id Slack never gave`);
+    // No ts: only the channel, and whom it was posted for (design 2026-10-19-standing-approvals).
+    assert.deepEqual(
+      record?.ids,
+      { channel: 'C1', user: 'U0001', team: 'T0001' },
+      `${what}: the audit holds an id Slack never gave`,
+    );
     assert.match(record?.reason ?? '', /^accepted without an id/, what);
   }
 });

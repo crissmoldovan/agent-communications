@@ -1400,11 +1400,18 @@ test('only guarded transports send requests to Slack', async () => {
       (node) => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'send',
     ),
   );
+  /*
+   * `operations/identity.ts` and `operations/bot-token.ts` each make one `auth.test` with a closed permit, because what
+   * they need is Slack's `x-oauth-scopes` header, which `callSlack` does not return: doctor's drift check, and the
+   * check that a pasted bot token has exactly the send app's four bot scopes before it is kept (agent label design, S1).
+   */
   assert.deepEqual(sending.map((file) => file.path).sort(), [
+    'api/avatar.ts',
     'api/call.ts',
     'api/download.ts',
     'api/upload.ts',
     'context.ts',
+    'operations/bot-token.ts',
     'operations/identity.ts',
   ]);
   for (const file of sending) {
@@ -1785,5 +1792,20 @@ test('only the upload transport opens an upload grant', async () => {
       .filter((file) => file.path !== 'api/guard.ts' && reachOf('uploadWith', file.text).length > 0)
       .map((file) => [file.path, reachOf('uploadWith', file.text)]),
     [['api/upload.ts', ['names it in an import or export', 'calls it or reads it off an object']]],
+  );
+});
+
+test('only the photo transport opens a photo grant', async () => {
+  /*
+   * The grant is what makes Slack's photo host reachable at all, so the question is who can open one. One module:
+   * `api/avatar.ts`, which opens it only for the photo `users.info` named, checked and rebuilt on the photo host, and
+   * sends it no credential. Anything else that reached it could fetch from that host whatever it liked.
+   */
+  const files = await sources();
+  assert.deepEqual(
+    files
+      .filter((file) => file.path !== 'api/guard.ts' && reachOf('avatarWith', file.text).length > 0)
+      .map((file) => [file.path, reachOf('avatarWith', file.text)]),
+    [['api/avatar.ts', ['names it in an import or export', 'calls it or reads it off an object']]],
   );
 });

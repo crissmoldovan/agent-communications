@@ -33,8 +33,8 @@ content and produced an approval record, and then only:
 - against the same content digest — a SHA-256 over sender, recipients, `Reply-To`, subject, thread
   and threading headers, the visible text, the SHA-256 of the raw HTML and text parts, and the
   filename, type, size and SHA-256 of every attachment's **bytes**;
-- with recipients and subject that match what the draft says, because the send call must pass them
-  back and `sameExpectation` compares them;
+- with the recipients and subject bound in the approval; legacy callers may pass them again, and
+  `sameExpectation` still refuses any mismatch;
 - from the same mailbox, and the same Google account: the record stores the account id (`sub`), and
   a claim naming a different one — or naming none at all — is refused rather than trusted. A mailbox
   imported from a legacy setup has no account id until its first re-consent, so for those the check

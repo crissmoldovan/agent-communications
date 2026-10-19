@@ -2,7 +2,6 @@ import {
   agentMarker,
   answerDownloadAtTerminal,
   approvalHint,
-  approvalsOf,
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
@@ -10,11 +9,10 @@ import {
   cliHandoffs,
   colorEnabled,
   commandPathOf,
-  DOWNLOAD_CLAIM,
   describeFenceReport,
   downloadAtTerminal,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChange,
   gatedChangeAtTerminal,
@@ -34,7 +32,6 @@ import {
   paint,
   pathOverridesFromCliOptions,
   profileSourcePath,
-  publicApproval,
   refuseRetiredOut,
   refuseUnclaimedApproval,
   renderApprovalWait,
@@ -48,7 +45,7 @@ import {
   terminalUpdateHooks,
   toCommsError,
   UPDATE_CHECK_CHILD_COMMAND,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   waitForApproval,
   wholeNumber,
   withoutOptionsBeforeSentinel,
@@ -59,6 +56,7 @@ import type { RegistrationIntent } from '../auth/flows.ts';
 import { TIERS } from '../auth/scopes.ts';
 import { GMAIL_CALLER } from '../caller.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
+import { gmailApprovalView } from '../domain/untrusted-fields.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import {
@@ -197,8 +195,7 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
     .addHelpText(
       'after',
       `
-Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 11 an update is out:
-update first, or put it off (the stop names both commands) · 64 usage · 65 bad data ·
+Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 usage · 65 bad data ·
 66 not found · 69 provider or secret store unavailable · 75 temporary (retry later) ·
 77 sign-in or permission needed · 78 configuration problem.`,
     )
@@ -255,46 +252,26 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
   let softExit: number | null = null;
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
     // `oauth-listen` too: it is the listener a sign-in started, not a command anybody types, and stopping it would
     // break the sign-in the person is in the middle of. So is the update check a command handed on (#48).
-    if (exemptFromUpdateGate(path, ['oauth-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
+    if (exemptFromUpdateNotice(path, ['oauth-listen', UPDATE_CHECK_CHILD_COMMAND])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-gmail',
-          channel: 'gmail',
-          running: VERSION,
-          output: output(),
-          noInput: globals().noInput,
-          streams,
-          approvals: approvalsOf(command),
-          // A download's `--choice` is the question the person just answered: held to that kind, as the tool's is.
-          // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-          approvalClaim:
-            path.join(' ') === 'attachments download'
-              ? DOWNLOAD_CLAIM
-              : path.join(' ') === 'send wait'
-                ? { lookup: true }
-                : undefined,
-          ...terminalUpdateHooks(core, env, { channel: 'gmail', output: output(), streams }),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'gmail',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+      ...terminalUpdateHooks(core, env),
+    });
   });
 
   const act =
@@ -302,10 +279,6 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       const core = coreForInvocation();
       const context = new GmailContext({ ...deps, core, env, pathOverrides: core.pathOverrides, surface: 'cli' });
       exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
@@ -385,13 +358,7 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     return text;
   };
 
-  /**
-   * An `--expect-*` list as the caller meant it. `none` is the explicit empty list.
-   *
-   * Explicit, because an omitted flag and an empty one look the same on a command line, and the difference here is
-   * "I know there are no Bcc recipients" versus "I did not think about Bcc" — which is the difference between a
-   * check and a formality.
-   */
+  /** An optional legacy `--expect-*` list as the caller meant it. `none` is the explicit empty list. */
   const expected = (value: unknown): string[] => {
     const list = (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String);
     return list.length === 1 && list[0] === 'none' ? [] : list;
@@ -407,7 +374,11 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
       .option('--attach <path...>', 'attach these local files')
       .option('--no-signature', 'leave the mailbox signature off')
       .option('--no-quote', 'do not quote the original (a reply only; a forward needs it)')
-      .option('--profile', 'include the mailbox writing profile in the result', false);
+      .option('--profile', 'include the mailbox writing profile in the result', false)
+      .option(
+        '--as <who>',
+        'who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so)',
+      );
 
   const draftInput = async (
     options: Options,
@@ -421,6 +392,7 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     attach: options.attach as string[] | undefined,
     signature: options.signature !== false,
     includeProfile: Boolean(options.profile),
+    as: options.as === undefined ? undefined : String(options.as),
   });
 
   /**
@@ -1277,9 +1249,15 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     .command('prepare <draftId>')
     .description('show exactly what would be sent, and record an approval for it')
     .requiredOption('--inbox <alias>', 'which mailbox')
+    .option(
+      '--as <who>',
+      'who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so)',
+    )
     .action(
       act(async (context, globalOptions, draftId: string, options: Options) => {
-        const result = await prepareSend(context, String(options.inbox), draftId);
+        const result = await prepareSend(context, String(options.inbox), draftId, {
+          as: options.as === undefined ? undefined : String(options.as),
+        });
         writeResult(
           result,
           output(),
@@ -1290,27 +1268,38 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     );
 
   send
-    .command('execute <draftId>')
-    .description('send it — only with an approval, and only to the recipients that approval names')
+    .command('execute <id>')
+    .description('send it by approval id; legacy callers may also pass a draft id and --approval')
     .requiredOption('--inbox <alias>', 'which mailbox')
-    .requiredOption('--approval <id>', 'the approval from `send prepare`')
-    .requiredOption('--expect-to <address...>', 'who you believe this goes to; `none` for nobody')
-    .requiredOption('--expect-subject <subject>', 'the subject you believe it has; `none` for an empty one')
-    .option('--expect-cc <address...>', 'who you believe is copied; `none` for nobody', ['none'])
-    .option('--expect-bcc <address...>', 'who you believe is blind-copied; `none` for nobody', ['none'])
+    .option('--approval <id>', 'legacy form: the approval when <id> is the draft id')
+    .option('--expect-to <address...>', 'legacy exact check: To recipients; `none` for nobody')
+    .option('--expect-subject <subject>', 'legacy exact check: subject; `none` for an empty one')
+    .option('--expect-cc <address...>', 'legacy exact check: Cc recipients; `none` for nobody')
+    .option('--expect-bcc <address...>', 'legacy exact check: Bcc recipients; `none` for nobody')
     .action(
-      act(async (context, globalOptions, draftId: string, options: Options) => {
-        const expectSubject = String(options.expectSubject);
+      act(async (context, globalOptions, id: string, options: Options) => {
+        const hasExpect = [options.expectTo, options.expectCc, options.expectBcc, options.expectSubject].some(
+          (value) => value !== undefined,
+        );
+        if (hasExpect && (options.expectTo === undefined || options.expectSubject === undefined)) {
+          throw new CommsError('USAGE', '--expect-to and --expect-subject must be given together');
+        }
+        const expectSubject = options.expectSubject === undefined ? undefined : String(options.expectSubject);
+        const legacy = options.approval !== undefined;
         const result = await (deps.executeSend ?? executeSend)(context, String(options.inbox), {
-          draftId,
-          approvalId: String(options.approval),
-          expect: {
-            to: expected(options.expectTo),
-            cc: expected(options.expectCc),
-            bcc: expected(options.expectBcc),
-            subject: expectSubject,
-          },
-          expectSubjectNone: expectSubject === 'none',
+          ...(legacy ? { draftId: id } : {}),
+          approvalId: legacy ? String(options.approval) : id,
+          ...(hasExpect
+            ? {
+                expect: {
+                  to: expected(options.expectTo),
+                  cc: expected(options.expectCc),
+                  bcc: expected(options.expectBcc),
+                  subject: expectSubject as string,
+                },
+                expectSubjectNone: expectSubject === 'none',
+              }
+            : {}),
         });
         writeResult(result, output(), (data) => renderSent(data, globalOptions.color), streams);
       }),
@@ -1356,8 +1345,10 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
     .action(
       act(async (context, _globalOptions, approvalId: string) => {
         const stored = await revokeApproval(context, approvalId);
-        // Its public object, as `send wait` shows it: what a sender wrote only inside the envelope (design §D8).
-        const result = publicApproval(stored, await context.core.approvals.outcomeOf(stored));
+        const config = await context.config();
+        const aliases = new Map(Object.entries(config.inboxes).map(([alias, inbox]) => [inbox.id, alias]));
+        // Its public object, through the same Gmail field helpers as `send list` (design §D8; CUE-413).
+        const { approval: result } = gmailApprovalView(stored, await context.core.approvals.outcomeOf(stored), aliases);
         writeResult(
           result,
           output(),
@@ -1931,7 +1922,7 @@ update first, or put it off (the stop names both commands) · 64 usage · 65 bad
         const profilePath = options.profile
           ? profileSourcePath(String(options.profile), context.env, context.cwd, context.handoffs)
           : undefined;
-        const incomingProfile = profilePath ? await loadSetupProfile(profilePath) : undefined;
+        const incomingProfile = profilePath ? await loadSetupProfile(profilePath, context.handoffs) : undefined;
         const incomingProfileHasGmail = incomingProfile?.profile.gmail !== undefined;
         /*
          * The client step is decided for the mailbox this run is adding only when a Gmail profile participates in

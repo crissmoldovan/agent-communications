@@ -1,0 +1,61 @@
+{
+  "word": "agent",
+  "words": ["agent", "assistant", "twin", "minion", "bot", "fake", "AI"],
+  "name": "Jo Example",
+  "rules": [
+    {
+      "rule": {
+        "account": "example/gmail",
+        "as": "me"
+      },
+      "text": "example/gmail: sent as Jo Example",
+      "matches": true
+    }
+  ],
+  "accounts": [
+    {
+      "account": "example/gmail",
+      "platform": "gmail",
+      "channel": "Gmail",
+      "phrase": "Jo Example (agent)",
+      "kinds": [
+        {
+          "kind": "send",
+          "identity": "me",
+          "source": "rule",
+          "rule": "example/gmail: sent as Jo Example",
+          "appearsAs": "as you, with no label"
+        },
+        {
+          "kind": "reply",
+          "identity": "me",
+          "source": "rule",
+          "rule": "example/gmail: sent as Jo Example",
+          "appearsAs": "as you, with no label"
+        }
+      ],
+      "conversations": []
+    },
+    {
+      "account": "example/slack",
+      "platform": "slack",
+      "channel": "Slack",
+      "phrase": "Jo Example (agent)",
+      "kinds": [
+        {
+          "kind": "post",
+          "identity": "agent",
+          "source": "default",
+          "appearsAs": "Jo Example (agent)"
+        }
+      ],
+      "conversations": [],
+      "icon": {
+        "emoji": "robot_face"
+      },
+      "style": "app",
+      "appRoute": true
+    }
+  ],
+  "ignored": []
+}

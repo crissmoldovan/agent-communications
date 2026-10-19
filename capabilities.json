@@ -156,6 +156,245 @@
       "reason": "A deny entry taken away widens what can be attached, so it is a change the person approves; the built-in list cannot be removed."
     },
     {
+      "id": "core.label",
+      "package": "core",
+      "cli": "label",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelReport",
+      "reason": "How what an agent sends is labelled: the word, the name, every rule, and who each kind of message on each account appears to come from. `comms_label` with no change is this report."
+    },
+    {
+      "id": "core.label.word",
+      "package": "core",
+      "cli": "label word",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["twin"],
+      "args": { "word": "twin" },
+      "expect": {
+        "request.word": "twin",
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null,
+        "request.style.style": null
+      },
+      "reason": "A new word changes how the label looks, so it is a change the person approves; the preview shows the phrase recipients will see."
+    },
+    {
+      "id": "core.label.name",
+      "package": "core",
+      "cli": "label name",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["Parity Person"],
+      "args": { "name": "Parity Person" },
+      "expect": {
+        "request.word": null,
+        "request.name": "Parity Person",
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null,
+        "request.style.style": null
+      },
+      "reason": "A new name changes how the label looks, so it is a change the person approves; `--clear` and `name: null` take it away the same way."
+    },
+    {
+      "id": "core.label.rule.add",
+      "package": "core",
+      "cli": "label rule add",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "--as", "me"],
+      "args": { "addRule": { "account": "parity/slack", "as": "me" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.account": "parity/slack",
+        "request.addRule.as": "me",
+        "request.removeRule.as": null,
+        "request.icon.emoji": null,
+        "request.style.style": null
+      },
+      "reason": "A rule `as: me` sends a kind of message unlabelled, so it is approved first; a rule `as: agent` labels more and applies at once."
+    },
+    {
+      "id": "core.label.rule.remove",
+      "package": "core",
+      "cli": "label rule remove",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "--as", "me"],
+      "args": { "removeRule": { "account": "parity/slack", "as": "me" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.account": "parity/slack",
+        "request.removeRule.as": "me",
+        "request.icon.emoji": null,
+        "request.style.style": null
+      },
+      "reason": "Removing an `agent` rule can leave a message unlabelled, so it is approved first; removing a `me` rule labels more and applies at once."
+    },
+    {
+      "id": "core.label.icon",
+      "package": "core",
+      "cli": "label icon",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", ":parity:"],
+      "args": { "icon": { "account": "parity/slack", "emoji": ":parity:" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.account": "parity/slack",
+        "request.icon.emoji": ":parity:",
+        "request.style.style": null
+      },
+      "reason": "The icon of the app's Slack posts changes how the label looks, so it is a change the person approves; `--clear` and `emoji: null` go back to the person's photo the same way."
+    },
+    {
+      "id": "core.label.style",
+      "package": "core",
+      "cli": "label style",
+      "mcp": "comms_label",
+      "status": "both",
+      "operation": "labelChange",
+      "argv": ["parity/slack", "labelled"],
+      "args": { "style": { "account": "parity/slack", "style": "labelled" } },
+      "expect": {
+        "request.word": null,
+        "request.name": null,
+        "request.addRule.as": null,
+        "request.removeRule.as": null,
+        "request.icon.emoji": null,
+        "request.style.account": "parity/slack",
+        "request.style.style": "labelled"
+      },
+      "reason": "A Slack workspace's style `labelled` trades Slack's own APP tag, which no one can fake, for words in the message, so it is a change the person approves; `app`, the default, applies at once."
+    },
+    {
+      "id": "core.behaviour",
+      "package": "core",
+      "cli": "behaviour",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourReport",
+      "reason": "What an agent may do: every rule, whether its account is still connected, and what each account allows, across it and in each conversation a rule names. `comms_behaviour` with no change is this report."
+    },
+    {
+      "id": "core.behaviour.allow",
+      "package": "core",
+      "cli": "behaviour allow",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourChange",
+      "argv": ["parity/slack", "reply,reaction"],
+      "args": { "setRule": { "account": "parity/slack", "acts": ["reply", "reaction"] } },
+      "expect": {
+        "request.setRule.account": "parity/slack",
+        "request.removeRule.account": null
+      },
+      "reason": "A rule that lets an agent do more anywhere — an act added, a conversation allowed more than its account — is a change the person approves; one that only narrows what is allowed applies at once."
+    },
+    {
+      "id": "core.behaviour.clear",
+      "package": "core",
+      "cli": "behaviour clear",
+      "mcp": "comms_behaviour",
+      "status": "both",
+      "operation": "behaviourChange",
+      "argv": ["parity/slack"],
+      "args": { "removeRule": { "account": "parity/slack" } },
+      "expect": {
+        "request.setRule.account": null,
+        "request.removeRule.account": "parity/slack"
+      },
+      "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
+    },
+    {
+      "id": "core.standing.list",
+      "package": "core",
+      "cli": "standing list",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingReport",
+      "reason": "What an agent may send without asking: each standing approval's contents by digest, places, limits and end, its uses in the last day and its last 10 acts. `comms_standing` with no change is this report (design 2026-10-19-standing-approvals, S10)."
+    },
+    {
+      "id": "core.standing.narrow",
+      "package": "core",
+      "cli": "standing narrow",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "argv": ["ap_00000000000000000000000000", "--per-hour", "5"],
+      "args": { "narrow": { "id": "ap_00000000000000000000000000", "limits": { "perHour": 5 } } },
+      "expect": {
+        "request.narrow.id": "ap_00000000000000000000000000",
+        "request.revoke.id": null,
+        "request.off": null
+      },
+      "reason": "A narrowing keeps fewer contents or places, lowers a limit or ends it sooner, so it applies at once and asks nobody; one that would allow more is refused, naming Slack's standing add, which a person approves at a terminal (S8, §8.2)."
+    },
+    {
+      "id": "core.standing.revoke",
+      "package": "core",
+      "cli": "standing revoke",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "argv": ["ap_00000000000000000000000000"],
+      "args": { "revoke": { "id": "ap_00000000000000000000000000" } },
+      "expect": {
+        "request.narrow.id": null,
+        "request.revoke.id": "ap_00000000000000000000000000",
+        "request.off": null
+      },
+      "reason": "Ending one standing approval, and every unused act of it, only takes away, so it applies at once and asks nobody (S8, §8.5)."
+    },
+    {
+      "id": "core.standing.off",
+      "package": "core",
+      "cli": "standing off",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "args": { "off": true },
+      "expect": {
+        "request.narrow.id": null,
+        "request.revoke.id": null,
+        "request.off": true
+      },
+      "reason": "Ending every standing approval at once raises the standing epoch each record and each unused act is bound to, so loosening anything later revives none; it only takes away, so it asks nobody (S8)."
+    },
+    {
+      "id": "core.profile",
+      "package": "core",
+      "cli": "profile",
+      "mcp": "comms_profile",
+      "status": "both",
+      "operation": "profileView",
+      "reason": "The writing profile for one place — the account and its conversations — and every file it would read, which an agent reads before it writes there. It only reads, and needs no approval (design 2026-10-19-agent-behaviour-rules, B6)."
+    },
+    {
+      "id": "core.profile.init",
+      "package": "core",
+      "cli": "profile init",
+      "mcp": null,
+      "status": "exception",
+      "reason": "A writing profile is the person's own instructions to their agents: a tool that wrote one would let something an agent read change how every later message is written. So only the person starts one, at a terminal, from a starter that never overwrites a file; over MCP comms_profile only reads (design 2026-10-19-agent-behaviour-rules, B6)."
+    },
+    {
       "id": "core.channels",
       "package": "core",
       "cli": "channels",
@@ -202,7 +441,7 @@
       "operation": "orgUpdateChange",
       "argv": ["parity"],
       "args": { "organisation": "parity" },
-      "reason": "Reading a profile again: a changed profile, a new source and serving other addresses are approved first; repairing drift, and turning other addresses off, apply at once (design 2026-10-02 §D8)."
+      "reason": "Reading a profile again: a changed profile, a new source, a looser update cap and serving other addresses are approved first; repairing drift, a tighter update cap and turning other addresses off apply at once (design 2026-10-02 §D8, 2026-10-19 X6)."
     },
     {
       "id": "core.org.remove",
@@ -225,27 +464,93 @@
       "reason": "One change for every step: each registration registered again at the latest release with its own name, client, scope, launcher and pins, the runtimes that needs, and the global packages. `update --check` and `check: true` are `updateCheck`, the read both sides run instead, which asks nobody."
     },
     {
-      "id": "core.update.later",
+      "id": "core.update.level",
       "package": "core",
       "cli": "update",
       "mcp": "comms_update",
       "status": "both",
-      "operation": "updateLaterChange",
-      "argv": ["--later"],
-      "args": { "later": true },
-      "reason": "Not now: the daily update check's stop put off until local midnight, for the whole machine — a change the person approves, so an agent cannot clear the stop by itself (design 2026-09-28)."
+      "operation": "updateLevelChange",
+      "argv": ["--level", "never"],
+      "args": { "level": "never" },
+      "expect": { "level": "never" },
+      "reason": "How this machine updates — auto, every-14-days or never — in config.json: a level that updates less is a loosening the person approves, one that updates more applies at once (design 2026-10-16, U2)."
     },
     {
-      "id": "core.update.auto",
+      "id": "core.update.pause",
       "package": "core",
       "cli": "update",
       "mcp": "comms_update",
       "status": "both",
-      "operation": "updateAutoChange",
-      "argv": ["--auto", "off"],
-      "args": { "auto": "off" },
+      "operation": "updatePause",
+      "argv": ["--pause"],
+      "args": { "pause": true },
+      "reason": "Holds every update notice on this machine for 1, 7 or 14 days, 7 by default: a plain answer with no approval, since nothing is stopped any more, and never for a security fix (design 2026-10-16, U3)."
+    },
+    {
+      "id": "core.update.resume",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateResume",
+      "argv": ["--resume"],
+      "args": { "resume": true },
+      "reason": "Ends a pause at once, with no approval (design 2026-10-16, U3)."
+    },
+    {
+      "id": "core.update.rollback",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateRollbackChange",
+      "argv": ["--rollback"],
+      "args": { "rollback": true },
+      "reason": "Back to the release before: every stable launcher's pointer switched back to the runtime it started before its last switch — a change the person approves, one effect a launcher, which edits no client configuration (design 2026-10-16, U6)."
+    },
+    {
+      "id": "core.update.background-job.on",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateJobChange",
+      "argv": ["--background-job", "on"],
+      "args": { "backgroundJob": "on" },
+      "expect": { "setting": "on" },
+      "reason": "Setting up the per-user job that installs verified releases in the background: an effect the person approves, its preview naming the job file and what it runs, when it runs, what macOS shows and how to remove it (design 2026-10-16 U4)."
+    },
+    {
+      "id": "core.update.background-job.off",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateJobChange",
+      "argv": ["--background-job", "off"],
+      "args": { "backgroundJob": "off" },
       "expect": { "setting": "off" },
-      "reason": "The daily update check on or off for this machine, in config.json: off is a loosening the person approves, on applies at once (design 2026-09-28)."
+      "reason": "Removing the background update job: it only makes this machine do less, so it applies at once and takes no approval (design 2026-10-16 U4)."
+    },
+    {
+      "id": "core.update.background",
+      "package": "core",
+      "cli": "update",
+      "mcp": null,
+      "status": "exception",
+      "argv": ["--background"],
+      "reason": "One background run, as the per-user job starts it once a day with no terminal and no agent: a verified release past its hold, installed, checked and switched to; --dry-run only says what it would do. It is the job's entry, not a tool: an agent in a conversation updates with comms_update, whose preview a person approves, and this run exists so that no conversation waits for an update (design 2026-10-16 U4, U5)."
+    },
+    {
+      "id": "core.update.status",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateStatus",
+      "argv": ["--status"],
+      "args": { "status": true },
+      "reason": "Where updates stand here, read from local files, asking npm nothing (desktop design DA13)."
     },
     {
       "id": "core.approve",
@@ -282,9 +587,44 @@
       "mcp": "comms_server_prune",
       "status": "both",
       "operation": "serverPruneChange",
+      "expect": { "request.channel": null },
+      "reason": "`agentcomms mcp prune` with no `--server` prunes every managed server's runtimes, listed by server; comms_server_prune with no `channel` is this command. Each passes no server to the shared prune operation, which takes every server the channel registry declares."
+    },
+    {
+      "id": "core.mcp.prune.core",
+      "package": "core",
+      "cli": "mcp prune",
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "operation": "serverPruneChange",
+      "argv": ["--server", "core"],
       "args": { "channel": "core" },
       "expect": { "request.channel": "core" },
-      "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
+      "reason": "`agentcomms mcp prune --server core` prunes the core's own runtimes; comms_server_prune with `channel: \"core\"` is this command."
+    },
+    {
+      "id": "core.mcp.install.events",
+      "package": "core",
+      "cli": "mcp install",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "operation": "serverInstallChange",
+      "argv": ["--client", "claude-code", "--server", "events"],
+      "args": { "channel": "events", "client": "claude-code" },
+      "expect": { "request.channel": "events" },
+      "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared registration operation."
+    },
+    {
+      "id": "core.mcp.prune.events",
+      "package": "core",
+      "cli": "mcp prune",
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "operation": "serverPruneChange",
+      "argv": ["--server", "events"],
+      "args": { "channel": "events" },
+      "expect": { "request.channel": "events" },
+      "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared prune operation."
     },
 
     {
@@ -1190,6 +1530,14 @@
       "operation": "listPeople"
     },
     {
+      "id": "slack.icon.make",
+      "package": "slack",
+      "cli": "icon make",
+      "mcp": "slack_icon_make",
+      "status": "both",
+      "operation": "makeAgentIcon"
+    },
+    {
       "id": "slack.draft.create",
       "package": "slack",
       "cli": "draft create",
@@ -1284,6 +1632,24 @@
       "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
     },
     {
+      "id": "slack.standing.add",
+      "package": "slack",
+      "cli": "standing add",
+      "mcp": "slack_standing_add",
+      "status": "both",
+      "operation": "prepareStandingAdd",
+      "reason": "Prepares a standing approval, reading each place's name, member count and sharing for its preview (design 2026-10-19-standing-approvals, §8.1). Neither side approves it: only the person's code at a terminal does, through `approve`."
+    },
+    {
+      "id": "slack.ack",
+      "package": "slack",
+      "cli": "ack",
+      "mcp": "slack_ack",
+      "status": "both",
+      "operation": "ack",
+      "reason": "Sends one acknowledgement under a standing approval (design 2026-10-19-standing-approvals, S9): the message and a content digest, no draft. Its one-shot child is claimed through the same path as every Slack act."
+    },
+    {
       "id": "slack.edit.prepare",
       "package": "slack",
       "cli": "edit prepare",
@@ -1370,6 +1736,14 @@
       "mcp": null,
       "status": "exception",
       "reason": "Needs an app configuration token, which must never pass through chat: the transcript would keep it. From chat, slack_manifest returns the manifest and the app's manifest page to paste it into (design §4, §6.4)."
+    },
+    {
+      "id": "slack.workspace.bot",
+      "package": "slack",
+      "cli": "workspace bot",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Takes the send app's bot token at a hidden prompt, from a person at a terminal: an agent never handles a secret, and a token typed into a chat stays in the transcript. From chat the answer is the command for the person to run (design 2026-10-15 S1, revised)."
     },
     {
       "id": "slack.app.create",
@@ -1797,9 +2171,9 @@
       "mcp": "events_target_test",
       "status": "both",
       "operation": "targetTest",
-      "argv": ["target-1", "--version", "1"],
-      "args": { "targetId": "target-1", "targetVersion": 1 },
-      "expect": { "targetId": "target-1", "targetVersion": 1 }
+      "argv": ["target-1", "--version", "2"],
+      "args": { "targetId": "target-1", "targetVersion": 2 },
+      "expect": { "targetId": "target-1", "targetVersion": 2 }
     },
     {
       "id": "events-daemon.target.resume",
@@ -1866,8 +2240,22 @@
       "mcp": "events_judge_add",
       "status": "both",
       "operation": "addJudge",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"judgeId\":\"judge-parity\",\"version\":1,\"kind\":\"local-endpoint\",\"provider\":\"ollama\",\"model\":\"parity-model\",\"endpoint\":\"http://127.0.0.1:11434/v1/systemone\",\"approvedAddressSet\":[\"127.0.0.1\"],\"promptTemplate\":\"local-noul-v1\",\"protocol\":\"noul\"}"
+      ],
+      "args": {
+        "document": {
+          "judgeId": "judge-parity",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "parity-model",
+          "endpoint": "http://127.0.0.1:11434/v1/systemone",
+          "approvedAddressSet": ["127.0.0.1"],
+          "promptTemplate": "local-noul-v1",
+          "protocol": "noul"
+        }
+      }
     },
     {
       "id": "events-daemon.judge.update",
@@ -1876,8 +2264,22 @@
       "mcp": "events_judge_update",
       "status": "both",
       "operation": "updateJudge",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"judgeId\":\"judge-parity\",\"version\":2,\"kind\":\"local-endpoint\",\"provider\":\"ollama\",\"model\":\"parity-model-v2\",\"endpoint\":\"http://127.0.0.1:11434/v1/systemone\",\"approvedAddressSet\":[\"127.0.0.1\"],\"promptTemplate\":\"local-noul-v1\",\"protocol\":\"noul\"}"
+      ],
+      "args": {
+        "document": {
+          "judgeId": "judge-parity",
+          "version": 2,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "parity-model-v2",
+          "endpoint": "http://127.0.0.1:11434/v1/systemone",
+          "approvedAddressSet": ["127.0.0.1"],
+          "promptTemplate": "local-noul-v1",
+          "protocol": "noul"
+        }
+      }
     },
     {
       "id": "events-daemon.judge.remove",
@@ -1897,9 +2299,9 @@
       "mcp": "events_judge_test",
       "status": "both",
       "operation": "judgeTest",
-      "argv": ["judge-1", "--version", "1"],
-      "args": { "judgeId": "judge-1", "version": 1 },
-      "expect": { "judgeId": "judge-1", "version": 1 }
+      "argv": ["judge-1", "--version", "2"],
+      "args": { "judgeId": "judge-1", "version": 2 },
+      "expect": { "judgeId": "judge-1", "version": 2 }
     },
     {
       "id": "events-daemon.budget.show",
@@ -1916,8 +2318,24 @@
       "mcp": "events_budget_update",
       "status": "both",
       "operation": "updateBudget",
-      "argv": ["{}"],
-      "args": { "document": {} }
+      "argv": [
+        "{\"budgetId\":\"judge-budget\",\"version\":1,\"global\":{\"callsPerRollingHour\":11,\"inputTokensPerRolling30Days\":1100,\"concurrency\":2},\"providers\":[{\"provider\":\"typesafe\",\"callsPerRollingHour\":7,\"inputTokensPerRolling30Days\":700,\"concurrency\":1}]}"
+      ],
+      "args": {
+        "document": {
+          "budgetId": "judge-budget",
+          "version": 1,
+          "global": { "callsPerRollingHour": 11, "inputTokensPerRolling30Days": 1100, "concurrency": 2 },
+          "providers": [
+            {
+              "provider": "typesafe",
+              "callsPerRollingHour": 7,
+              "inputTokensPerRolling30Days": 700,
+              "concurrency": 1
+            }
+          ]
+        }
+      }
     },
     {
       "id": "events-daemon.judge-kinds.list",
@@ -1934,9 +2352,9 @@
       "mcp": "events_judge_kind_enable",
       "status": "both",
       "operation": "enableJudgeKind",
-      "argv": ["basic"],
-      "args": { "kind": "basic" },
-      "expect": { "kind": "basic" }
+      "argv": ["typesafe"],
+      "args": { "kind": "typesafe" },
+      "expect": { "kind": "typesafe" }
     },
     {
       "id": "events-daemon.judge-kind.disable",
@@ -1945,9 +2363,9 @@
       "mcp": "events_judge_kind_disable",
       "status": "both",
       "operation": "disableJudgeKind",
-      "argv": ["basic"],
-      "args": { "kind": "basic" },
-      "expect": { "kind": "basic" }
+      "argv": ["typesafe"],
+      "args": { "kind": "typesafe" },
+      "expect": { "kind": "typesafe" }
     },
     {
       "id": "events-daemon.judge-model.status",

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, test } from 'node:test';
@@ -149,13 +148,10 @@ async function cliError(harness: Harness, argv: string[], read?: FakeFetch): Pro
   return envelope.error as Failure;
 }
 
-/** A port nothing is listening on right now — on `localhost`, the host the listener binds. */
+/** Deterministic manifest ports; the test harness binds listeners to OS-assigned port 0. */
+let nextManifestPort = 43_000;
 async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((settle) => server.close(() => settle()));
-  return port;
+  return nextManifestPort++;
 }
 
 let strays: number[] = [];
@@ -750,9 +746,11 @@ test('a word that is not one is refused with USAGE by the operation, and the sch
     };
     assert.deepEqual(enumOf('slack_workspace_policy', 'sendPolicy'), ['chat', 'confirm', 'never']);
     assert.deepEqual(enumOf('slack_workspace_policy', 'changePolicy'), ['chat', 'confirm']);
-    for (const tool of ['slack_mode_set', 'slack_workspace_add', 'slack_workspace_reauth', 'slack_manifest']) {
+    for (const tool of ['slack_mode_set', 'slack_workspace_add', 'slack_workspace_reauth']) {
       assert.deepEqual(enumOf(tool, 'mode'), ['read', 'send'], tool);
     }
+    // A manifest can also be an organisation's agent app (CUE-493), which no workspace is connected in.
+    assert.deepEqual(enumOf('slack_manifest', 'mode'), ['read', 'send', 'agent']);
     assert.deepEqual(enumOf('slack_post_prepare', 'broadcast'), ['here', 'channel', 'everyone']);
   } finally {
     await close();
@@ -1303,36 +1301,57 @@ test('`draft show` and `draft list` show a hidden character escaped, as the prev
   try {
     const text = 'Approve invoice 1\u200b0\u202e00 now';
     const escaped = 'Approve invoice 1<U+200B>0<U+202E>00 now';
+    const hidden = /\u200b|\u200d|\u202e|\u2060/;
+    /*
+     * A channel or a thread with a hidden character in it is no conversation id and no message ts (review of spec 2,
+     * findings 8 and 9): no draft is written with either, and each refusal shows the character it found, escaped.
+     */
+    for (const [flag, value, reason, shownAs] of [
+      ['--channel', 'C1\u2060', 'not-a-conversation', '"C1<U+2060>"'],
+      ['--thread', '1700000000.000100\u200d', 'not-a-ts', '"1700000000.000100<U+200D>"'],
+    ] as const) {
+      const refused = await cliError(harness, [
+        'draft',
+        'create',
+        '--workspace',
+        'acme',
+        '--channel',
+        'C1',
+        '--text',
+        text,
+        flag,
+        value,
+      ]);
+      assert.equal(refused.code, 'USAGE', flag);
+      assert.equal(refused.details?.reason, reason, flag);
+      assert.ok(refused.message.includes(shownAs), refused.message);
+      assert.doesNotMatch(refused.message, hidden, flag);
+    }
     const { draftId } = await cliData<{ draftId: string }>(harness, [
       'draft',
       'create',
       '--workspace',
       'acme',
       '--channel',
-      'C1\u2060',
+      'C1',
       '--text',
       text,
       '--thread',
-      '1700000000.000100\u200d',
+      '1700000000.000100',
     ]);
-    const hidden = /\u200b|\u200d|\u202e|\u2060/;
 
     const shown = await printed(harness, ['draft', 'show', draftId, '--workspace', 'acme']);
     assert.ok(shown.includes(escaped), shown);
-    assert.ok(shown.includes('C1<U+2060>'), shown);
-    assert.ok(shown.includes('1700000000.000100<U+200D>'), shown);
     const listed = await printed(harness, ['draft', 'list', '--workspace', 'acme']);
     assert.ok(listed.includes(escaped), listed);
-    assert.ok(listed.includes('C1<U+2060>'), listed);
     for (const [where, words] of Object.entries({ 'draft show': shown, 'draft list': listed })) {
       assert.doesNotMatch(words, hidden, `${where} prints no hidden character as it is`);
       assert.doesNotMatch(words, /invoice 1000/, `${where} does not drop one either`);
     }
 
-    // The preview at a terminal shows the same text, and the same thread, the same way.
+    // The preview at a terminal shows the same text the same way.
     const preview = await printed(harness, ['post', 'prepare', '--workspace', 'acme', '--draft', draftId]);
     assert.ok(preview.includes(escaped), preview);
-    assert.ok(preview.includes('1700000000.000100<U+200D>'), preview);
 
     // Over MCP: the preview's body is the text as it is, unflagged, and the draft tools give that text.
     const prepared = ok<{ preview: { body: string; warnings?: string[] } }>(
@@ -1345,6 +1364,32 @@ test('`draft show` and `draft list` show a hidden character escaped, as the prev
     assert.equal(draft.problem, undefined);
     const { drafts } = ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' }));
     assert.deepEqual(drafts, [draft]);
+
+    // A draft file whose channel was written by hand with one is shown with it escaped, by both commands.
+    await handEdit(harness, draftId, (file) => {
+      (file.payload as Record<string, unknown>).channel = 'C1\u2060';
+    });
+    for (const [where, words] of Object.entries({
+      'draft show': await printed(harness, ['draft', 'show', draftId, '--workspace', 'acme']),
+      'draft list': await printed(harness, ['draft', 'list', '--workspace', 'acme']),
+    })) {
+      assert.ok(words.includes('C1<U+2060>'), `${where}: ${words}`);
+      assert.doesNotMatch(words, hidden, `${where} prints no hidden character as it is`);
+    }
+    // And one whose thread was is refused where it is shown or prepared, in words that show it escaped.
+    await handEdit(harness, draftId, (file) => {
+      (file.payload as Record<string, unknown>).thread_ts = '1700000000.000100\u200d';
+    });
+    for (const argv of [
+      ['draft', 'show', draftId, '--workspace', 'acme'],
+      ['post', 'prepare', '--workspace', 'acme', '--draft', draftId],
+    ]) {
+      const refused = await cliError(harness, argv);
+      assert.equal(refused.code, 'BAD_DATA', argv.join(' '));
+      assert.equal(refused.details?.reason, 'not-a-ts', argv.join(' '));
+      assert.ok(refused.message.includes('"1700000000.000100<U+200D>"'), refused.message);
+      assert.doesNotMatch(refused.message, hidden);
+    }
   } finally {
     await close();
   }

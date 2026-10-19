@@ -26,7 +26,7 @@ import { createGmailMcpServer } from '../../src/mcp/server.ts';
 import { createDraft } from '../../src/operations/drafts.ts';
 import { beginApproval, finishApproval, prepareSend } from '../../src/operations/send.ts';
 import { DRAFT_SEND_PATH, type FakeMessage } from './fake-google.ts';
-import { type Harness, newHarness, tempDir } from './harness.ts';
+import { type Harness, newHarness, setAgentLabel, tempDir } from './harness.ts';
 
 /*
  * Gmail's sends in the D2 matrix (CUE-404 Task 24): `test/approval-matrix.test.mjs` runs this as its own program,
@@ -51,7 +51,6 @@ interface World {
   clock: MatrixClock;
   draftId: string;
   approvalId: string;
-  expect: { to: string[]; cc: string[]; bcc: string[]; subject: string };
   notFound(action: string): Promise<ReadonlyArray<readonly [string, string]>>;
   fault(): void;
   asked(): number;
@@ -78,6 +77,8 @@ async function world(row: string): Promise<World> {
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: route });
   await harness.connectInbox({ alias: 'home', email: 'kim@home.test', sub: 'sub-2', sendPolicy: 'chat' });
+  // `home` signs in as the first account, whose send-as list has no name for its address: the label's comes from here.
+  await setAgentLabel(harness, { name: 'Kim Example' });
   // No escalation from what was read — each row's route is its policy's — and one client trusted with forms.
   await harness.core.config.update(
     (config) => ({
@@ -171,7 +172,6 @@ async function world(row: string): Promise<World> {
     clock,
     draftId: draft.draftId,
     approvalId: prepared.approvalId,
-    expect: prepared.expect,
     // What each surface must not find: a claim names its mailbox, a pinned server has one, the terminal is Gmail's
     // and approves a send, and an unpinned wait answers for any approval on this machine (D2: unpinned surfaces show
     // every record), so only an id nobody prepared is not found there.
@@ -245,9 +245,7 @@ async function draftSend(w: World, approvalId: string, options: Parameters<typeo
     const before = sendsOf(w);
     const result = await client.call('gmail_draft_send', {
       ...(options.pinned ? {} : { inbox: 'work' }),
-      draftId: w.draftId,
       approvalId,
-      expect: w.expect,
     });
     return observeTool(result, sendsOf(w) - before);
   } finally {
@@ -262,32 +260,16 @@ async function execute(w: World, approvalId: string): Promise<Observation> {
     stdout += String(chunk);
   });
   const before = sendsOf(w);
-  const exit = await run(
-    [
-      'send',
-      'execute',
-      w.draftId,
-      '--inbox',
-      'work',
-      '--approval',
-      approvalId,
-      '--expect-to',
-      ...w.expect.to,
-      '--expect-subject',
-      w.expect.subject,
-      '--json',
-    ],
-    {
-      core: w.harness.core,
-      env: w.harness.env,
-      platform: 'darwin',
-      streams: {
-        stdout: Object.assign(out, { isTTY: false }),
-        stderr: Object.assign(new PassThrough(), { isTTY: false }),
-        stdin: Object.assign(new PassThrough(), { isTTY: false }),
-      },
+  const exit = await run(['send', 'execute', approvalId, '--inbox', 'work', '--json'], {
+    core: w.harness.core,
+    env: w.harness.env,
+    platform: 'darwin',
+    streams: {
+      stdout: Object.assign(out, { isTTY: false }),
+      stderr: Object.assign(new PassThrough(), { isTTY: false }),
+      stdin: Object.assign(new PassThrough(), { isTTY: false }),
     },
-  );
+  });
   const envelope = JSON.parse(stdout) as {
     ok: boolean;
     data?: Record<string, unknown>;

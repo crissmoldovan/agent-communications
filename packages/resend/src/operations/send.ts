@@ -1,28 +1,44 @@
 import { readFile } from 'node:fs/promises';
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
+  actNotAllowed,
+  agentLabelOf,
+  allowedAct,
+  allowedHereLine,
   approveAndWaitSentence,
+  behaviourRefusalHint,
   type CliHandoffs,
   CommsError,
+  type Config,
   canonicalAddress,
+  DEFAULT_AGENT_LABEL_WORD,
   type Expectation,
   ensureSendEpochConfig,
   fenceOrStop,
   handoffSentence,
   handoffSentenceToFill,
   integrityRefusal,
+  isBehaviourAct,
   type LegacyDrainReport,
+  labelPhrase,
+  type MessageIdentity,
   type MessagePreview,
+  newBoundary,
   ownerOf,
   type PublicApprovalView,
   publicApproval,
   renderMessagePreview,
+  resolveIdentity,
   type SendPolicy,
+  securityNotice,
   sendEpochOf,
   sha256Hex,
   stateOf,
   stricterPolicy,
+  truncateDisplay,
+  UNLABELLED_PREVIEW_LINE,
   type UsedSaid,
   withApproval,
   withSendingLease,
@@ -30,10 +46,15 @@ import {
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
 import { resendRequest, sendThrottleOf, throttledRefusal, type WriteOutcome } from '../api/client.ts';
 import { APPROVAL_TAG, closedPermit, type FetchLike, spendOn } from '../api/guard.ts';
+import { addressField, type Envelope, wrapField } from '../compose/inbound.ts';
 import {
+  type BehaviourCheck,
   type BuiltMessage,
+  behaviourCheckOf,
   buildMessage,
   digestOf,
+  identityOfFrom,
+  labelledFrom,
   newPreparedId,
   type OutboundMessage,
   REACH_CONFIRM_THRESHOLD,
@@ -42,6 +63,7 @@ import {
 } from '../compose/message.ts';
 import { type PreparedMessage, PreparedStore, SendRecords, type SendSummary } from '../compose/store.ts';
 import type { ResendContext } from '../context.ts';
+import { VERSION } from '../version.ts';
 import { type CurrentOutcome, outcomeOf, outcomeUnavailable } from './last-event.ts';
 
 /**
@@ -52,14 +74,16 @@ import { type CurrentOutcome, outcomeOf, outcomeUnavailable } from './last-event
  * the request builder. Everything before it exists to make one promise true — nothing leaves that a person has not
  * seen in the form it will arrive in:
  *
- * 1. **Prepare** builds the message (`compose/message.ts`), refuses a From on a domain that is not verified for sending
- *    before any approval exists, stores the message, and records an approval bound to its digest. The preview lists
+ * 1. **Prepare** builds the message (`compose/message.ts`), refuses a send the behaviour rules forbid at any one of its
+ *    recipients and a From on a domain that is not verified for sending before any approval exists, stores the message
+ *    with what the rules were asked, and records an approval bound to the digest of both. The preview lists
  *    every recipient, BCC included, and the reach — unique recipients. Above `REACH_CONFIRM_THRESHOLD`, or to an
  *    address that arrived in mail read in the last seven days and never written to from here, the send needs a
  *    person at a terminal whatever the policy says.
  * 2. **Approval** is the account's send policy: under `chat` the person's yes in the conversation; under `confirm`
  *    this CLI's `approve <id>` and a typed code; under `never` nothing.
- * 3. **Execute** re-reads the stored message and its attachments, claims the approval once (a lock and an O_EXCL
+ * 3. **Execute** re-reads the stored message and its attachments, asks the rules again what prepare asked them —
+ *    a rule tightened since the yes stops it, the approval untouched — claims the approval once (a lock and an O_EXCL
  *    marker), reserves a slot under the rate caps, records the attempt **before** the request leaves, and sends with
  *    `Idempotency-Key` = the approval id and the tag `agentcomms_approval=<id>` — only while its claim still holds the
  *    send (the fence, design 2026-10-05 §D1). It never retries. An outcome it cannot know — a dropped connection, a
@@ -72,6 +96,12 @@ export interface SendPreparation {
   account: string;
   /** Show it verbatim; do not summarise it. */
   preview: string;
+  /**
+   * Who the email appears to come from (design 2026-10-15-agent-label, L3), bound by the approval with the From that
+   * says it: `agent`, labelled `"<name> (<word>)"`, or `me`, the From as the caller gave it. The preview's first line
+   * says which.
+   */
+  identity: MessageIdentity;
   policy: SendPolicy;
   effectivePolicy: SendPolicy;
   riskFlags: string[];
@@ -123,11 +153,46 @@ export interface SendResult {
 }
 
 /**
+ * A caller may hand back the canonical expectation it kept, or the display-safe `expect` that prepare returned. The
+ * latter is accepted only when it is byte-for-byte this approval's field rendering under the boundary it carries, the
+ * way Gmail accepts its own; then the claim compares the raw binding. Anything else is passed on as given, so an
+ * invented or edited envelope still mismatches and the send is refused.
+ */
+function canonicalSuppliedExpectation(
+  supplied: Expectation,
+  bound: Expectation,
+  account: string,
+  id: string,
+): Expectation {
+  const boundary = /^<untrusted-content boundary="([A-Za-z0-9_-]+)" field="subject"/.exec(supplied.subject)?.[1];
+  if (boundary === undefined) return supplied;
+  const displayed = expectationFields(bound, { boundary, account, id });
+  const same = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+  return displayed.subject === supplied.subject &&
+    same(displayed.to, supplied.to) &&
+    same(displayed.cc, supplied.cc) &&
+    same(displayed.bcc, supplied.bcc)
+    ? bound
+    : supplied;
+}
+
+/**
  * A used approval, as Resend's own surfaces refuse it (design 2026-10-05 §D2, the used-send row): Resend accepted the
  * email — which is not that it went, since one may be scheduled, bounce or be cancelled — and never "sent". The words
  * `resend_send_wait` shows for it too, core's for every provider.
  */
 const ACCEPTED_BY_RESEND: UsedSaid = (usedAt) => `accepted by Resend at ${usedAt}`;
+
+/** A send's recipients and subject as Resend may return them: display-safe, never the raw approval binding. */
+function expectationFields(expect: Expectation, envelope: Envelope): Expectation {
+  return {
+    to: expect.to.map((address) => addressField(address, 'to', envelope)),
+    cc: expect.cc.map((address) => addressField(address, 'cc', envelope)),
+    bcc: expect.bcc.map((address) => addressField(address, 'bcc', envelope)),
+    subject: wrapField(expect.subject, 'subject', envelope),
+  };
+}
 
 /**
  * A send's approval as the one account that may use it, classified under its lock as the claim would classify it
@@ -172,6 +237,67 @@ function approveCommand(handoffs: CliHandoffs, approvalId: string) {
 /** Resend's own `send status` for this send, located: how a send whose outcome is not known is checked. */
 function statusCommand(handoffs: CliHandoffs, approvalId: string, name: string) {
   return handoffs.own(['send', 'status', approvalId, '--account', name]);
+}
+
+/**
+ * Where a refusal by the behaviour rules points: core's report of them, located from here (design
+ * 2026-10-19-agent-behaviour-rules, B4). Never a command that loosens one: that is the person's to start.
+ */
+function behaviourHint(handoffs: CliHandoffs): string {
+  return behaviourRefusalHint(handoffs);
+}
+
+/** What the rules in `config` decide for this account's send, as `check` puts it. */
+function decideSend(config: Config, named: NamedAccount, check: BehaviourCheck): ActDecision {
+  return allowedAct(config, {
+    accountId: named.account.id,
+    account: named.name,
+    places: check.places,
+    acts: check.acts,
+  });
+}
+
+/**
+ * B4, at prepare and at execute alike: the send `check` describes, allowed by the rules in `config` at every recipient,
+ * or `ACT_NOT_ALLOWED` naming the first recipient a rule forbids it at. Returns what the preview's line is made from.
+ */
+function requireAllowed(
+  context: ResendContext,
+  config: Config,
+  named: NamedAccount,
+  check: BehaviourCheck,
+): Extract<ActDecision, { allowed: true }> {
+  const decision = decideSend(config, named, check);
+  if (!decision.allowed) {
+    throw actNotAllowed(decision, { account: named.name, place: null }, behaviourHint(context.handoffs));
+  }
+  return decision;
+}
+
+/** B4's preview line: what is allowed where this send lands, and the rule that says so. */
+function allowedHere(decision: ActDecision, named: NamedAccount): string {
+  return allowedHereLine(decision, { account: named.name, place: null });
+}
+
+function isBehaviourCheck(value: unknown): value is BehaviourCheck {
+  if (typeof value !== 'object' || value === null) return false;
+  const { acts, places } = value as { acts?: unknown; places?: unknown };
+  return (
+    Array.isArray(acts) &&
+    acts.every(isBehaviourAct) &&
+    Array.isArray(places) &&
+    places.every((place) => Array.isArray(place) && place.every((alias) => typeof alias === 'string'))
+  );
+}
+
+/**
+ * What execute asks the rules: what prepare stored beside the message, which the digest binds — so one changed since
+ * is an approval the claim refuses — or, for a message an earlier release prepared, which stored none, the same worked
+ * out from its recipients, which its digest binds.
+ */
+function boundCheckOf(prepared: PreparedMessage): BehaviourCheck {
+  const bound: unknown = prepared.behaviour;
+  return isBehaviourCheck(bound) ? bound : behaviourCheckOf(prepared.message);
 }
 
 /**
@@ -309,6 +435,10 @@ function previewOf(options: {
   effective: SendPolicy;
   flags: readonly string[];
   handoffs: CliHandoffs;
+  /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
+  allowedHere: string;
+  /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
+  security?: string | null | undefined;
 }): string {
   const { message } = options.built;
   const reach = uniqueRecipients(message);
@@ -364,7 +494,77 @@ function previewOf(options: {
     warnings,
     policy: describePolicy(options.effective, options.approvalId, options.flags, options.handoffs),
   };
-  return renderMessagePreview(preview);
+  // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
+  // appears to come from, read from the From the approval binds: the terminal's approval says what the prepare said
+  // (L3); then what the behaviour rules allow where it lands (B4).
+  const security = options.security ? `${options.security}\n` : '';
+  return `${security}${identityLine(identityOfFrom(message.from))}\n${options.allowedHere}\n${renderMessagePreview(preview)}`;
+}
+
+/** L3: the first line of a preview — the label recipients will see, or that there is none. */
+function identityLine(identity: { readonly identity: MessageIdentity; readonly phrase?: string | undefined }): string {
+  if (identity.identity === 'me' || identity.phrase === undefined) return UNLABELLED_PREVIEW_LINE;
+  return `Sent as ${truncateDisplay(identity.phrase, 120)}: labelled in the From line, so whoever receives it can tell your agent sent it`;
+}
+
+/** What `prepareSend` takes: the email, and who it appears to come from. */
+export interface PrepareInput extends SendInput {
+  /**
+   * `me` or `agent`: what the person said for this email (L3). Left out, the rules and then `agent` decide. Checked
+   * here, so a word that is not one is refused alike from either surface.
+   */
+  as?: string | undefined;
+}
+
+/** The longest an agent's From name may be, label and all: Resend's name limit (design 2026-10-15-agent-label, L2). */
+export const RESEND_LABEL_LIMIT = 100;
+
+/**
+ * R1: who the email appears to come from, and its From. For `agent`, L1's phrase from the caller's From name, or the
+ * core's `agentLabel.name` when the caller gave a bare address, refused when there is neither or it does not fit; for
+ * `me`, the From as the caller gave it.
+ */
+function labelled(
+  config: object,
+  account: string,
+  accountId: string,
+  built: BuiltMessage,
+  requested: string | undefined,
+): { message: OutboundMessage; identity: MessageIdentity } {
+  if (requested !== undefined && requested !== 'agent' && requested !== 'me') {
+    throw new CommsError('USAGE', `"${requested}" is not who an email appears to come from`, {
+      hint: 'Use agent or me.',
+    });
+  }
+  const settings = agentLabelOf(config as { readonly agentLabel?: unknown });
+  const decision = resolveIdentity(settings, {
+    account,
+    accountId,
+    kind: 'send',
+    requested,
+    mail: { recipients: uniqueRecipients(built.message) },
+  });
+  if (decision.identity === 'me') return { message: built.message, identity: 'me' };
+  const name = built.fromName !== '' ? built.fromName : settings.name;
+  if (name === undefined) {
+    throw new CommsError('USAGE', 'this email is to be labelled as sent by your agent, and there is no name to label', {
+      hint: 'Give From a name, `Name <you@example.com>`, or set one with `label name`.',
+    });
+  }
+  let phrase: string;
+  try {
+    phrase = labelPhrase(name, settings.word ?? DEFAULT_AGENT_LABEL_WORD, RESEND_LABEL_LIMIT);
+  } catch (error) {
+    if (!(error instanceof CommsError) || error.hint !== undefined) throw error;
+    throw new CommsError(error.code, error.message, {
+      hint: 'Give From a name the label can use, or set one with `label name` and give From a bare address.',
+      cause: error,
+    });
+  }
+  return {
+    message: { ...built.message, from: labelledFrom(phrase, built.message.fromAddress) },
+    identity: 'agent',
+  };
 }
 
 async function attachPolicy(context: ResendContext) {
@@ -383,7 +583,7 @@ async function attachPolicy(context: ResendContext) {
  * Step one. Builds and checks the message, refuses a From on an unverified domain, and records an approval bound to
  * this exact content. Nothing is sent; preparing twice is free.
  */
-export async function prepareSend(context: ResendContext, name: string, input: SendInput): Promise<SendPreparation> {
+export async function prepareSend(context: ResendContext, name: string, input: PrepareInput): Promise<SendPreparation> {
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const named = await context.accounts.require(name);
@@ -398,12 +598,19 @@ export async function prepareSend(context: ResendContext, name: string, input: S
       ),
     });
   }
-  const built = await buildMessage(input, { now: context.now(), attach: await attachPolicy(context) });
-  const domainNote = await checkFromDomain(context, named, built.message.fromDomain);
+  const { as: requested, ...email } = input;
+  const composed = await buildMessage(email, { now: context.now(), attach: await attachPolicy(context) });
+  // What the behaviour rules allow, at every recipient, before Resend is asked anything or an approval exists (B4).
+  const check = behaviourCheckOf(composed.message);
+  const allowed = requireAllowed(context, config, named, check);
+  const domainNote = await checkFromDomain(context, named, composed.message.fromDomain);
+  // Who it appears to come from, and the From that says so (R1): settled before the digest, which binds it.
+  const { message: outbound, identity } = labelled(config, named.name, named.account.id, composed, requested);
+  const built: BuiltMessage = { ...composed, message: outbound };
   const study = await studyRecipients(context, named, built.message, config.defaults.riskEscalation);
   const requiredPolicy: SendPolicy = study.flags.length > 0 ? 'confirm' : 'chat';
   const effective = stricterPolicy(livePolicy, requiredPolicy);
-  const digest = digestOf(built.message);
+  const digest = digestOf(built.message, check);
   const preparedId = newPreparedId();
 
   const record = await context.core.approvals.create({
@@ -424,6 +631,7 @@ export async function prepareSend(context: ResendContext, name: string, input: S
     preparedId,
     accountId: named.account.id,
     message: built.message,
+    behaviour: check,
     digest,
     links: built.links,
     warnings: [domainNote, ...built.warnings],
@@ -441,9 +649,18 @@ export async function prepareSend(context: ResendContext, name: string, input: S
   });
 
   const reach = uniqueRecipients(built.message).length;
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = await securityNotice({
+    core: context.core,
+    env: context.env,
+    running: VERSION,
+    act: 'send',
+    approvalId: record.approvalId,
+  });
   return {
     approvalId: record.approvalId,
     account: name,
+    identity,
     preview: previewOf({
       name,
       approvalId: record.approvalId,
@@ -453,12 +670,18 @@ export async function prepareSend(context: ResendContext, name: string, input: S
       effective,
       flags: study.flags,
       handoffs: context.handoffs,
+      allowedHere: allowedHere(allowed, named),
+      security,
     }),
     policy: livePolicy,
     effectivePolicy: effective,
     riskFlags: study.flags,
     reach,
-    expect: record.expect,
+    expect: expectationFields(record.expect, {
+      boundary: newBoundary(),
+      account: name,
+      id: record.approvalId,
+    }),
     expiresAt: record.expiresAt,
     nextStep:
       effective === 'confirm'
@@ -472,8 +695,8 @@ export async function prepareSend(context: ResendContext, name: string, input: S
                 wait === undefined ? '' : `; learn when they have with ${wait}`
               }.`,
             { instead: 'Show the preview to the user; they approve it at their own terminal.' },
-          )} You cannot approve this yourself. Then execute it with the same approval id and the recipients and subject shown.`
-        : 'Show the preview to the user verbatim and wait for an explicit yes. Then execute it with the same approval id and the recipients and subject shown above.',
+          )} You cannot approve this yourself. Then execute it with the same approval id.`
+        : 'Show the preview to the user verbatim and wait for an explicit yes. Then execute it with the same approval id.',
     approval: await context.core.approvals.approvalOf(record),
     ...(legacyDrain === undefined ? {} : { legacyDrain }),
   };
@@ -502,7 +725,7 @@ async function reload(
     contents.push(bytes);
     attachments.push({ ...attachment, size: bytes.byteLength, sha256: sha256Hex(bytes) });
   }
-  return { prepared, digest: digestOf({ ...prepared.message, attachments }), contents };
+  return { prepared, digest: digestOf({ ...prepared.message, attachments }, prepared.behaviour), contents };
 }
 
 /** The request body, built from the stored message and nothing else. */
@@ -660,7 +883,7 @@ function acceptedSaid(withId: boolean, scheduledAt: string | null): string {
 export async function executeSend(
   context: ResendContext,
   name: string,
-  options: { approvalId: string; expect: Expectation },
+  options: { approvalId: string; expect?: Expectation | undefined },
 ): Promise<SendResult> {
   // First, as every claim does: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
@@ -694,7 +917,7 @@ async function claimAndSend(
   context: ResendContext,
   named: NamedAccount,
   name: string,
-  options: { approvalId: string; expect: Expectation },
+  options: { approvalId: string; expect?: Expectation | undefined },
   known: ApprovalRecord,
   _seen: ApprovalObject,
   legacyDrain: LegacyDrainReport | undefined,
@@ -702,6 +925,9 @@ async function claimAndSend(
   const config = await context.config();
   const livePolicy = named.account.sendPolicy ?? config.defaults.sendPolicy;
   const { prepared, digest, contents } = await reload(context, known);
+  // What the behaviour rules allow now, asked as prepare asked them (B4): a rule tightened since the person's yes stops
+  // the send here, before the approval is spent or Resend is asked anything.
+  requireAllowed(context, config, named, boundCheckOf(prepared));
   // Everything that can refuse without sending does so before the approval is spent: the key, and a stop Resend asked for.
   const permit = closedPermit();
   const transport = await context.transport(named, permit);
@@ -724,7 +950,10 @@ async function claimAndSend(
       contentDigest: digest,
       inboxId: named.account.id,
       inboxSub: named.account.userId,
-      expect: options.expect,
+      expect:
+        options.expect === undefined
+          ? known.expect
+          : canonicalSuppliedExpectation(options.expect, known.expect, name, known.approvalId),
     },
     {
       pendingHint: `${approveAndWaitSentence(
@@ -784,11 +1013,21 @@ async function claimAndSend(
     /*
      * A refusal Resend gave before acting that says "later" waits and tries again, within core's pacing (design
      * 2026-10-08 §R1, §R2). The message cannot change underneath: it was reloaded and held to its digest before the
-     * claim. So each attempt repeats the fence, and nothing else (§R3).
+     * claim. So each attempt repeats the rules and the fence, and nothing else (§R3).
      */
     const pacing = context.sendPacing();
     let resendId: string | undefined;
     for (;;) {
+      /*
+       * The rules as they are now, read afresh before every attempt, as Gmail's are (design
+       * 2026-10-19-agent-behaviour-rules, B4): a rule tightened while a throttle was waited out stops the send before
+       * Resend is asked again. Nothing has been sent before any attempt — a retry follows only a refusal that proves it.
+       */
+      try {
+        requireAllowed(context, await context.config(), named, boundCheckOf(prepared));
+      } catch (error) {
+        throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
+      }
       /*
        * The fence (design 2026-10-05 §D1), the last thing before the one request that sends: while this claim still
        * holds a `sending` record its lease is renewed and the request may leave. Once another caller has found the lease
@@ -953,10 +1192,11 @@ async function claimAndSend(
       state: message.scheduledAt ? 'scheduled' : 'sent',
       scheduledAt: message.scheduledAt,
       said: acceptedSaid(resendId !== undefined, message.scheduledAt),
-      to: claimed.expect.to,
-      cc: claimed.expect.cc,
-      bcc: claimed.expect.bcc,
-      subject: claimed.expect.subject,
+      ...expectationFields(claimed.expect, {
+        boundary: newBoundary(),
+        account: name,
+        id: options.approvalId,
+      }),
       ...(unrecorded.length > 0 ? { note: unrecorded.join('; ') } : {}),
       approval: approval ?? (await approvalNow(context, options.approvalId, named.account.id, claimedApproval)),
       ...(legacyDrain === undefined ? {} : { legacyDrain }),
@@ -988,6 +1228,16 @@ export interface SendStatus {
   outcome: CurrentOutcome | null;
   /** The answer, in words. */
   verdict: string;
+}
+
+/** A stored send as a result may show it: canonical recipients stay addresses; its subject is always prose. */
+function sendSummaryFields(summary: SendSummary | null, envelope: Envelope): SendSummary | null {
+  if (summary === null) return null;
+  return {
+    ...summary,
+    recipients: summary.recipients.map((address) => addressField(address, 'recipient', envelope)),
+    ...(summary.subject === undefined ? {} : { subject: wrapField(summary.subject, 'subject', envelope) }),
+  };
 }
 
 const CANNOT_READ = 'this key can only send, so it cannot read what Resend did with the email';
@@ -1036,9 +1286,17 @@ export async function sendStatus(context: ResendContext, name: string, approvalI
       throw error;
     });
   const stored = seen?.stored ?? null;
+  const envelope = { boundary: newBoundary(), account: name, id: approvalId };
   // Shown as the look classified it, what a sender wrote only inside its envelope (design 2026-10-05 §D8).
-  const approval = seen ? publicApproval(seen.stored, seen.outcome) : null;
-  const base = { account: name, approvalId, approval, local };
+  const approval = seen
+    ? publicApproval(seen.stored, seen.outcome, {
+        wrap: (text, field) =>
+          field === 'subject' || field === 'filename'
+            ? wrapField(text, field, envelope)
+            : addressField(text, field, envelope),
+      })
+    : null;
+  const base = { account: name, approvalId, approval, local: sendSummaryFields(local, envelope) };
   if (!local) {
     return {
       ...base,
@@ -1252,6 +1510,14 @@ export async function beginSendApproval(context: ResendContext, approvalId: stri
     });
   }
   const config = await context.config();
+  // The rules as they are now, as Gmail's approval screen asks them (B4): a person is never asked to approve what a
+  // rule tightened since the prepare would refuse to send. Refused, the approval is as it was.
+  let allowed: Extract<ActDecision, { allowed: true }>;
+  try {
+    allowed = requireAllowed(context, config, named, boundCheckOf(prepared));
+  } catch (error) {
+    throw withApproval(error, await context.core.approvals.approvalOf(record));
+  }
   const study = await studyRecipients(context, named, prepared.message, config.defaults.riskEscalation);
   const live = named.account.sendPolicy ?? config.defaults.sendPolicy;
   const effective = stricterPolicy(live, record.requiredPolicy);
@@ -1270,6 +1536,8 @@ export async function beginSendApproval(context: ResendContext, approvalId: stri
       effective,
       flags: record.riskFlags,
       handoffs: context.handoffs,
+      // As the rules stand now: what they allow where this send lands.
+      allowedHere: allowedHere(allowed, named),
     }),
     challenge,
   };

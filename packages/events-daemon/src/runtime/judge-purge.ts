@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { JudgeKind } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
-import { type JudgeRecoveryResult, recoverJudgeWork } from './judge-recovery.ts';
+import { purgeHeldDecisionsInTransaction } from './holds.ts';
+import { type JudgeRecoveryResult, recoverJudgeWork, recoverRevokedJudgeVersions } from './judge-recovery.ts';
 
 /**
  * The sole judge participant for a caller's already-open immediate transaction. It deliberately performs no
@@ -18,23 +19,40 @@ export class JudgePurgeParticipant {
   }
 
   all(): JudgeRecoveryResult {
-    return recoverJudgeWork({ database: this.#database, now: this.#now(), selector: { scope: 'all' } });
+    const result = recoverJudgeWork({ database: this.#database, now: this.#now(), selector: { scope: 'all' } });
+    purgeHeldDecisionsInTransaction(this.#database, { scope: 'all' });
+    this.#database.prepare('UPDATE decisions SET encrypted_record = NULL WHERE encrypted_record IS NOT NULL').run();
+    return result;
   }
 
   kind(judgeKind: JudgeKind): JudgeRecoveryResult {
-    return recoverJudgeWork({
+    const result = recoverJudgeWork({
       database: this.#database,
       now: this.#now(),
       selector: { scope: 'judge-kind', judgeKind },
     });
+    purgeHeldDecisionsInTransaction(this.#database, { scope: 'judge-kind', judgeKind });
+    return result;
+  }
+
+  /** Judge removal is version-exact and delegates each durable identity to the single recovery transition. */
+  judge(input: { readonly judgeId: string; readonly versions: readonly number[] }): JudgeRecoveryResult {
+    return recoverRevokedJudgeVersions({
+      database: this.#database,
+      now: this.#now(),
+      judgeId: input.judgeId,
+      versions: input.versions,
+    });
   }
 
   account(input: { readonly source: SourceOptions['channel']; readonly accountId: string }): JudgeRecoveryResult {
-    return recoverJudgeWork({
+    const result = recoverJudgeWork({
       database: this.#database,
       now: this.#now(),
       selector: { scope: 'source-account', source: input.source, accountId: input.accountId },
     });
+    purgeHeldDecisionsInTransaction(this.#database, { scope: 'source-account', ...input });
+    return result;
   }
 
   event(input: {
@@ -46,7 +64,7 @@ export class JudgePurgeParticipant {
   }): JudgeRecoveryResult {
     if ((input.ruleId === undefined) !== (input.ruleVersion === undefined))
       throw new Error('a rule-bound judge event purge needs both rule id and version');
-    return recoverJudgeWork({
+    const result = recoverJudgeWork({
       database: this.#database,
       now: this.#now(),
       selector:
@@ -61,6 +79,23 @@ export class JudgePurgeParticipant {
               ruleVersion: input.ruleVersion as number,
             },
     });
+    if (input.ruleId === undefined)
+      purgeHeldDecisionsInTransaction(this.#database, {
+        scope: 'source-event',
+        source: input.source,
+        accountId: input.accountId,
+        eventId: input.eventId,
+      });
+    else
+      purgeHeldDecisionsInTransaction(this.#database, {
+        scope: 'source-event-rule',
+        source: input.source,
+        accountId: input.accountId,
+        eventId: input.eventId,
+        ruleId: input.ruleId,
+        ruleVersion: input.ruleVersion as number,
+      });
+    return result;
   }
 
   /**
@@ -130,6 +165,50 @@ export class JudgePurgeParticipant {
       released += result.released;
       settled += result.settled;
     }
+    const synthetic = this.#database
+      .prepare(
+        `SELECT DISTINCT test_work_id
+           FROM judge_budget_reservations
+          WHERE work_scope = 'synthetic-test' AND test_work_id IS NOT NULL
+            AND test_authority_rule_id = ?
+            AND test_authority_rule_version IN (${versions.map(() => '?').join(', ')})`,
+      )
+      .all(input.ruleId, ...versions) as Array<{ test_work_id: string }>;
+    for (const row of synthetic) {
+      const result = recoverJudgeWork({
+        database: this.#database,
+        now: this.#now(),
+        selector: { scope: 'synthetic-test', testWorkId: row.test_work_id },
+      });
+      released += result.released;
+      settled += result.settled;
+    }
+    // Holds have no reservation row once the judge response settled, so enumerate their immutable source/account
+    // identities independently. Never give a broad rule purge an account-less delete predicate.
+    const held = this.#database
+      .prepare(
+        `SELECT DISTINCT json_extract(rule.document, '$.source.channel') AS source, decision.account_id,
+                         decision.event_id, decision.rule_version
+           FROM decisions AS decision
+           JOIN rule_versions AS rule ON rule.rule_id = decision.rule_id AND rule.version = decision.rule_version
+          WHERE decision.outcome = 'hold' AND decision.rule_id = ?
+            AND decision.rule_version IN (${versions.map(() => '?').join(', ')})`,
+      )
+      .all(input.ruleId, ...versions) as Array<{
+      source: SourceOptions['channel'];
+      account_id: string;
+      event_id: string;
+      rule_version: number;
+    }>;
+    for (const row of held)
+      purgeHeldDecisionsInTransaction(this.#database, {
+        scope: 'source-event-rule',
+        source: row.source,
+        accountId: row.account_id,
+        eventId: row.event_id,
+        ruleId: input.ruleId,
+        ruleVersion: row.rule_version,
+      });
     return { released, settled };
   }
 }

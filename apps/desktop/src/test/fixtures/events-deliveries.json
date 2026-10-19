@@ -1,0 +1,34 @@
+[
+  {
+    "deliveryId": "dlv_example_1",
+    "accountId": "acc_01EXAMPLE000000000000000",
+    "ruleId": "rule_example",
+    "ruleVersion": 2,
+    "targetId": "target_example",
+    "targetVersion": 1,
+    "subscriberId": null,
+    "subscriberVersion": null,
+    "attempts": 1,
+    "nextAt": null,
+    "expiresAt": 1760947200000,
+    "state": "delivered",
+    "switchGeneration": 3,
+    "deadLetterExpiresAt": null
+  },
+  {
+    "deliveryId": "dlv_example_2",
+    "accountId": "acc_01EXAMPLE000000000000000",
+    "ruleId": "rule_example",
+    "ruleVersion": 2,
+    "targetId": "target_example",
+    "targetVersion": 1,
+    "subscriberId": "sub_example",
+    "subscriberVersion": 1,
+    "attempts": 3,
+    "nextAt": 1760864400000,
+    "expiresAt": 1760950800000,
+    "state": "retryable",
+    "switchGeneration": 3,
+    "deadLetterExpiresAt": null
+  }
+]

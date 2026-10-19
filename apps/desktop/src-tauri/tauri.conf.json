@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "version": "0.24.0",
+  "productName": "Agent Comms",
+  "identifier": "com.cueplusplus.agentcomms",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'sha256-wLkmBKemGb0dgFM5hke0n98F0sY24defqs04ByLzfv8='; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'sha256-wLkmBKemGb0dgFM5hke0n98F0sY24defqs04ByLzfv8=' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'",
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
+    "category": "DeveloperTool",
+    "createUpdaterArtifacts": false,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
+    },
+    "windows": { "nsis": { "installMode": "currentUser" } },
+    "linux": { "deb": { "depends": ["libayatana-appindicator3-1"] } }
+  },
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["agentcomms"] } },
+    "updater": { "pubkey": "", "endpoints": [], "requireSignedVersion": true }
+  }
+}

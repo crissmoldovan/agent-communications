@@ -9,7 +9,8 @@ npm install -g @agentcomms/resend    # or run it with npx @agentcomms/resend <co
 
 New in 0.7.0.
 
-Phase D's held local event daemon may call this package's internal read-only event operation. It adds no Resend command
+The local event daemon, [`@agentcomms/events-daemon`](../events-daemon/README.md), may call this package's internal
+read-only event operation. It adds no Resend command
 or MCP tool, and it cannot send.
 
 ## What it promises, and who enforces it
@@ -27,6 +28,14 @@ with `resend_send_wait`. Above ten recipients, or to an address that arrived in 
 approves, whatever the policy. The approval id is the request's `Idempotency-Key` and an `agentcomms_approval` tag; a
 send whose outcome is unknown (`SEND_OUTCOME_UNKNOWN`) is never repeated, only checked, and a scheduled one is
 "accepted", never "sent", until Resend's own last event for it says so.
+
+**An agent's email says so in its From.** Prepare labels it `"Acme (agent)" <hello@acme.test>`: the name the From
+gave, or, for a bare address, the label name the person set in the core (its CLI's `label name`, or `comms_label`), then their word —
+`agent` unless they chose another ([design](../../docs/superpowers/specs/2026-10-15-agent-label-design.md), §6). With
+neither name, or a label over Resend's 100 characters, prepare refuses. `--as me` (`as: "me"` on
+`resend_send_prepare`) sends the From exactly as given, for when the person said so for that email; their label rules
+decide otherwise, and with none an email is labelled. The preview's first line says which, and the approval binds the
+whole From.
 
 **The key is typed by a person, at a terminal.** `agent-resend account add` reads it from a hidden prompt, or from
 `RESEND_API_KEY` in that terminal, and stores it in the system keychain. No MCP tool accepts a key: a key typed into

@@ -22,7 +22,6 @@ Scripts should read these rather than parse output.
 | `0` | it worked |
 | `1` | unexpected failure |
 | `10` | a post or a change was refused or needs approval, or a sign-in is still waiting |
-| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -45,13 +44,16 @@ Scripts should read these rather than parse output.
 | [`search`](#agent-slack-search) | Slack’s own search, in Slack’s syntax, over this workspace |
 | [`files`](#agent-slack-files) | files shared in this workspace |
 | [`people`](#agent-slack-people) | the members of this workspace |
+| [`icon`](#agent-slack-icon) | your agent’s emoji: your Slack photo with a robot badge |
 | [`draft`](#agent-slack-draft) | compose and keep messages locally; nothing reaches Slack |
 | [`post`](#agent-slack-post) | take a draft through the approval gate |
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
+| [`standing`](#agent-slack-standing) | acknowledgements your agent may send without asking, once you approve them here with a code |
+| [`ack`](#agent-slack-ack) | acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent |
 | [`edit`](#agent-slack-edit) | change the words of a message this account posted, through the gate |
 | [`delete`](#agent-slack-delete) | delete a message this account posted, through the gate |
 | [`approval`](#agent-slack-approval) | where an approval stands |
-| [`approve`](#agent-slack-approve) | approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved |
+| [`approve`](#agent-slack-approve) | approve a post, a reaction, an edit, a deletion, a change or a standing approval at this terminal: read it, then type the code back — or answer where a download is saved |
 | [`mcp`](#agent-slack-mcp) | run the MCP server on stdio, for a coding agent to connect to |
 
 ### `agent-slack manifest`
@@ -64,9 +66,10 @@ agent-slack manifest [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
-| `--port <port>` | the loopback port its redirect will use | — |
+| `--mode <mode>` | how much access to ask Slack for; `agent` for an organisation's bot-only agent app, whose token members paste (choices: "read", "send", "agent", default: "read") | — |
+| `--port <port>` | the loopback port its redirect will use; left out, a connected workspace’s own, or a free one for a new app | — |
 | `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
+| `--with-client-secret` | the manifest of a new app that signs in with its client secret: PKCE off, which cannot be undone on an existing app | — |
 
 ### `agent-slack app`
 
@@ -128,6 +131,7 @@ agent-slack workspace add [options] [alias]
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
 | `--client-id <id>` | use your own app’s Client ID; also requires --port | — |
+| `--with-client-secret` | sign in with your own app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace list`
@@ -162,6 +166,14 @@ agent-slack workspace mode [options] <alias> [mode]
 | `--no-browser` | print the link instead of opening it | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
+### `agent-slack workspace bot`
+
+keep the send app's bot token, pasted once from the app's page, so an agent's posts appear as the app. A person's command, at a terminal
+
+```
+agent-slack workspace bot [options] <alias>
+```
+
 ### `agent-slack workspace remove`
 
 disconnect a workspace from this machine, once a person approves it
@@ -191,6 +203,7 @@ agent-slack workspace reauth [options] <alias>
 | `--wait <seconds>` | with --finish, how long to wait for the browser | `"60"` |
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
+| `--with-client-secret` | sign in with the app's client secret rather than PKCE, typed at a hidden prompt: for an app that never enabled PKCE, so the send app's bot token comes too | — |
 | `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved at a terminal with `approve` | — |
 
 ### `agent-slack workspace policy`
@@ -325,6 +338,22 @@ agent-slack people [options]
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--limit <n>` | how many | `"200"` |
 
+### `agent-slack icon`
+
+your agent’s emoji: your Slack photo with a robot badge
+
+```
+agent-slack icon [options] [command]
+```
+
+### `agent-slack icon make`
+
+make the emoji as a PNG in the data folder, and say where to upload it; changes nothing in Slack
+
+```
+agent-slack icon make [options] <workspace>
+```
+
 ### `agent-slack draft`
 
 compose and keep messages locally; nothing reaches Slack
@@ -427,6 +456,7 @@ agent-slack post prepare [options]
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--draft <draftId>` | the draft to prepare | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack post send`
 
@@ -459,6 +489,52 @@ agent-slack react [options]
 | `--emoji <name>` | the emoji name, without colons | — |
 | `--remove` | remove your reaction instead | `false` |
 | `--approval <approvalId>` | the approval a person gave with `approve`, under `confirm` | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
+
+### `agent-slack standing`
+
+acknowledgements your agent may send without asking, once you approve them here with a code
+
+```
+agent-slack standing [options] [command]
+```
+
+### `agent-slack standing add`
+
+prepare a standing approval: fixed contents, places and limits. Approved only with the code at a terminal
+
+```
+agent-slack standing add [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--reactions <names>` | standard emoji names, comma-separated; eyes alone when no content is given | — |
+| `--replies-file <file>` | a file of fixed replies, one per line, each at most 200 characters | — |
+| `--places <places>` | threads-i-am-in, or channel and DM ids, comma-separated | — |
+| `--per-thread <n>` | acts per thread, across every standing approval: 1 to 3, 1 when left out | — |
+| `--per-hour <n>` | acts an hour: 1 to 30, 10 when left out | — |
+| `--per-day <n>` | acts a day: 1 to 100, 30 when left out | — |
+| `--per-sender <n>` | acts a day on messages from any one person, across every standing approval: 1 to 10, 3 when left out | — |
+| `--expires <days>` | how long it lasts once approved, as 7d: 1d to 30d, 7d when left out | — |
+| `--replaces <id>` | the standing approval this replaces: narrower applies at once, wider asks for a code | — |
+
+### `agent-slack ack`
+
+acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent
+
+```
+agent-slack ack [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--standing <id>` | the standing approval, as standing list shows it | — |
+| `--channel <id>` | the conversation the message is in | — |
+| `--ts <ts>` | the message | — |
+| `--content <digest>` | the content, by the digest standing list shows for it | — |
 
 ### `agent-slack edit`
 
@@ -482,6 +558,7 @@ agent-slack edit prepare [options]
 | `--draft <draftId>` | the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own | — |
 | `--ts <ts>` | the message to edit | — |
 | `--remove-file <fileId...>` | take this file of the message off it, by id; it stays in Slack, shared nowhere | — |
+| `--as <identity>` | who it appears to come from: agent (labelled, the default) or me (as you, with no label) — me only when you said so for this one (choices: "agent", "me") | — |
 
 ### `agent-slack edit send`
 
@@ -558,7 +635,7 @@ agent-slack approval wait [options] <approvalId>
 
 ### `agent-slack approve`
 
-approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved
+approve a post, a reaction, an edit, a deletion, a change or a standing approval at this terminal: read it, then type the code back — or answer where a download is saved
 
 ```
 agent-slack approve [options] <approvalId>

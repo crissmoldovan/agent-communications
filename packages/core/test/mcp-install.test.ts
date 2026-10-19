@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,9 +15,12 @@ import { stat } from 'node:fs/promises';
 import { basename, delimiter, dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { CHANNEL_SERVERS } from '../src/channel-servers.ts';
+import { CHANNEL_SERVERS, serverFacts } from '../src/channel-servers.ts';
+import { locateCliCommand } from '../src/cli-command.ts';
 import { ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { handoffSentence } from '../src/handoffs.ts';
+import { launcherPaths, readPointer } from '../src/launcher.ts';
+import { managedShimsSupported, writeManagedShim } from '../src/managed-shims.ts';
 import { knownClientConfigs } from '../src/mcp-clients.ts';
 import {
   clientCliDirectories,
@@ -27,6 +32,7 @@ import {
   installRemedyOf,
   installTarget,
   isProductServer,
+  listManagedRuntimes,
   type McpProduct,
   managedRuntimeDir,
   managedRuntimeEntry,
@@ -39,6 +45,7 @@ import {
   runningCommandLines,
   whichExecutable,
 } from '../src/mcp-install.ts';
+import { withManagedShim } from '../src/operations/servers.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { renderInstall } from '../src/render.ts';
 import { coreHandoffs } from './helpers/handoffs.ts';
@@ -79,17 +86,27 @@ function registrationPins(context: InstallContext): string[] {
   return ['--config-dir', configDir, '--state-dir', stateDir, '--data-dir', dataDir, '--secrets-dir', secretsDir];
 }
 
+/**
+ * A managed entry as the installer writes it (design 2026-10-16, U6): the product's stable launcher with `words` —
+ * the program on POSIX, Node's first word on Windows — never a versioned runtime.
+ */
+function launcherEntry(dataDir: string, name: string, node: string, words: readonly string[]) {
+  const { launcher } = launcherPaths(dataDir, name);
+  return process.platform === 'win32'
+    ? { command: node, args: [launcher, ...words] }
+    : { command: launcher, args: [...words] };
+}
+
 test('managed and local entries pin all four suite roots before mcp, without a downloads pin or config env', async () => {
   const data = tempDir();
   const home = tempDir();
   const installing = context(data, home);
   const product = pinnedProduct();
   const managed = await mcpInstall(installing, product, { client: 'json', apply: false, noVerify: true });
-  assert.deepEqual(managed.entry.args, [
-    managedRuntimeEntry(data, product.packageName, product.version),
-    ...registrationPins(installing),
-    'mcp',
-  ]);
+  assert.deepEqual(
+    { command: managed.entry.command, args: managed.entry.args },
+    launcherEntry(data, 'example', process.execPath, [...registrationPins(installing), 'mcp']),
+  );
   assert.equal(managed.entry.env.AGENT_COMMS_CONFIG_DIR, undefined);
   assert.ok(!managed.entry.args.includes('--downloads-dir'));
 
@@ -105,12 +122,32 @@ test('managed and local entries pin all four suite roots before mcp, without a d
   assert.ok(!local.entry.args.includes('--downloads-dir'));
 });
 
+/**
+ * The events service's own declaration and bin, read from its package: a runtime that made up an `agentcomms` field
+ * for it hid a locator that could not read the service's real `agentcommsPackage` one.
+ */
+const EVENTS_MANIFEST = JSON.parse(
+  readFileSync(new URL('../../events-daemon/package.json', import.meta.url), 'utf8'),
+) as { agentcommsPackage: unknown; bin: Record<string, string> };
+
 /** A runtime as `installManagedRuntime` leaves one: the package inside, and a manifest pinning it. */
 function makeRuntime(root: string, packageName: string, version: string, pin: string = version): void {
   const packageDir = join(root, 'node_modules', ...packageName.split('/'));
+  const unscoped = packageName.split('/').at(-1) ?? packageName;
+  const binary = unscoped === 'core' ? 'agentcomms' : `agent-${unscoped}`;
   mkdirSync(join(packageDir, 'dist'), { recursive: true });
   writeFileSync(join(packageDir, 'dist', 'cli.mjs'), '');
-  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: packageName, version }));
+  writeFileSync(
+    join(packageDir, 'package.json'),
+    JSON.stringify({
+      name: packageName,
+      version,
+      engines: { node: '>=22.12.0' },
+      ...(unscoped === 'events-daemon'
+        ? { agentcommsPackage: EVENTS_MANIFEST.agentcommsPackage, bin: EVENTS_MANIFEST.bin }
+        : { agentcomms: { binary }, bin: { [binary]: './dist/cli.mjs' } }),
+    }),
+  );
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: pin } }));
 }
 
@@ -193,11 +230,283 @@ test('--print builds the managed entry without installing anything', async () =>
     narrowingOf: () => ({}),
   };
   const result = await mcpInstall(context(data, home), product, { client: 'json', apply: false });
-  assert.equal(result.entry.args[0], managedRuntimeEntry(data, product.packageName, '0.0.1'));
-  // Only the record of what was handed out, which `prune` reads: no runtime.
+  assert.deepEqual(
+    { command: result.entry.command, args: result.entry.args },
+    launcherEntry(data, 'no-such-package-for-tests', process.execPath, [
+      ...registrationPins(context(data, home)),
+      'mcp',
+    ]),
+  );
+  // Only the record of what was handed out, which `prune` reads: no runtime, and no launcher or pointer either.
   assert.deepEqual(readdirSync(data), [basename(handedOutRuntimesPath(data))], 'nothing was installed');
   assert.equal(result.verified, false);
   assert.match(result.verifyDetail ?? '', /--print installs nothing/);
+});
+
+/** Managed CLI shims are POSIX-only: on Windows the install writes none, which its own test below shows. */
+const POSIX_SHIMS =
+  process.platform === 'win32' ? { skip: 'WINDOWS_SKIP: managed CLI shims are offered on macOS and Linux only' } : {};
+
+test(
+  'an applied managed install writes its CLI shim and reports PATH without touching a profile',
+  POSIX_SHIMS,
+  async () => {
+    const data = tempDir();
+    const home = tempDir();
+    const installing = context(data, home);
+    const product = pinnedProduct();
+    makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+    const result = await withManagedShim(
+      installing,
+      product,
+      await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+    );
+    const shim = result.shim;
+    assert.equal(result.applied, true, 'the temporary Cursor config was registered');
+    assert.equal(shim?.status, 'created', 'the applied managed install creates its package CLI shim');
+    assert.equal(
+      shim?.path,
+      join(home, '.local', 'bin', product.binary),
+      'the install reports the user-local shim path',
+    );
+    assert.equal(shim?.onPath, false, 'the fixture keeps the shim directory off PATH');
+    assert.match(shim?.pathNotice ?? '', /export PATH=/, 'the install result explains how to add it for this shell');
+    assert.match(shim?.pathNotice ?? '', /No shell profile was edited/, 'the install result promises no profile edit');
+
+    const printed = await mcpInstall(installing, product, {
+      client: 'json',
+      apply: false,
+      noVerify: true,
+    });
+    assert.equal(
+      printed.shim,
+      undefined,
+      'the installer writes no shim of its own: the operation does, and not for --print',
+    );
+  },
+);
+
+test('a managed events install writes its agent-events shim from the service declaration', POSIX_SHIMS, async () => {
+  const data = tempDir();
+  const home = tempDir();
+  const installing = context(data, home);
+  const product: McpProduct = { ...serverFacts('events'), version: '0.0.1', moduleUrl: '' };
+  makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+  const result = await withManagedShim(
+    installing,
+    product,
+    await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+  );
+  assert.equal(result.shimFailure, undefined, 'the locator reads the service declaration, so the shim can be written');
+  assert.equal(result.shim?.status, 'created', 'the events service gets its CLI shim');
+  assert.equal(result.shim?.path, join(home, '.local', 'bin', 'agent-events'), 'named for the binary it declares');
+  // It starts the events service's stable launcher, as the entry does, and that starts the events runtime.
+  const { launcher } = launcherPaths(data, 'events-daemon');
+  assert.equal(readFileSync(result.shim?.path ?? '', 'utf8').split('\n')[2], `exec '${launcher}' "$@"`);
+  assert.equal(
+    (await readPointer(data, 'events-daemon'))?.current,
+    managedRuntimeDir(data, product.packageName, product.version),
+    'and the launcher starts the CLI of the events runtime this install put in place',
+  );
+});
+
+test(
+  'a managed shim starts the stable launcher, which executes exactly the program and entry the CLI locator resolves',
+  process.platform === 'win32'
+    ? { skip: 'WINDOWS_SKIP: this test creates a POSIX PATH executable and shell shim' }
+    : {},
+  async () => {
+    const data = tempDir();
+    const home = tempDir();
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    const pathNode = join(bin, 'node');
+    writeFileSync(pathNode, `#!${process.execPath}\nprocess.exit(0);\n`);
+    chmodSync(pathNode, 0o755);
+    const installing = context(data, home);
+    installing.env.PATH = bin;
+    const product = pinnedProduct();
+    const runtime = managedRuntimeDir(data, product.packageName, product.version);
+    makeRuntime(runtime, product.packageName, product.version);
+    const packageDir = join(runtime, 'node_modules', ...product.packageName.split('/'));
+    writeFileSync(
+      join(packageDir, 'package.json'),
+      JSON.stringify({
+        name: product.packageName,
+        version: product.version,
+        engines: { node: '>=22.12.0' },
+        agentcomms: { binary: product.binary },
+        bin: { [product.binary]: './dist/cli.mjs' },
+      }),
+    );
+
+    writeFileSync(
+      join(packageDir, 'dist', 'cli.mjs'),
+      'process.stdout.write("ran " + process.argv.slice(2).join(" "));\n',
+    );
+
+    const result = await withManagedShim(
+      installing,
+      product,
+      await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+    );
+    const entry = managedRuntimeEntry(data, product.packageName, product.version);
+    const located = locateCliCommand({
+      caller: { url: pathToFileURL(entry).href, packageName: product.packageName },
+      target: {
+        packageName: product.packageName,
+        manifest: { channel: 'example', label: 'example', binary: product.binary },
+      } as never,
+      words: [],
+      uses: [],
+      paths: { ...installing.core.paths, downloadsDir: join(home, 'downloads') },
+      platform: 'linux',
+    });
+    assert.equal(located.ok, true, 'the managed runtime locates its own declared CLI');
+    if (!located.ok) return;
+    const quote = (word: string) => `'${word.replaceAll("'", `'"'"'`)}'`;
+    const { launcher } = launcherPaths(data, 'example');
+    const execLine = readFileSync(result.shim?.path ?? '', 'utf8').split('\n')[2];
+    assert.equal(execLine, `exec ${quote(launcher)} "$@"`, 'the shim starts the launcher the registration starts');
+    // From the runtime the launcher starts, the locator names the launcher itself (0.21): a command printed there
+    // outlives the runtime once an update prunes it.
+    assert.deepEqual(located.command.words, [launcher], 'the locator names the stable launcher, not the runtime');
+    assert.equal(located.basis.entryKind, 'launcher');
+    // The Node the locator names a runtime's own CLI with: this one, as no `node` on PATH is this very Node.
+    const program = process.execPath;
+    assert.match(
+      readFileSync(launcher, 'utf8'),
+      new RegExp(`^node=${quote(program).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      'the launcher runs the locator’s program, not the PATH-visible Node stand-in',
+    );
+    assert.notEqual(
+      program,
+      pathNode,
+      'the fixture proves the PATH-visible node and the locator program are different',
+    );
+    const pointer = await readPointer(data, 'example');
+    assert.equal(
+      realpathSync(join(pointer?.current ?? '', 'node_modules', ...product.packageName.split('/'), 'dist', 'cli.mjs')),
+      realpathSync(entry),
+      'and the CLI the launcher starts is the runtime entry the locator checked',
+    );
+    assert.equal(
+      spawnSync(result.shim?.path ?? '', ['a', 'b c'], { encoding: 'utf8' }).stdout,
+      'ran a b c',
+      'run, the shim starts that CLI with that program and the words it was given — the stand-in would print nothing',
+    );
+  },
+);
+
+test(
+  'a managed shim execs the link to this Node that PATH finds, as the registration names it, not its target (CUE-492)',
+  POSIX_SHIMS,
+  async () => {
+    /*
+     * `~/.local/bin/node` a symlink into another tool's private Node, or Homebrew's `/opt/homebrew/bin/node` into a
+     * Cellar version `brew upgrade` deletes: a shim naming the file the link resolves to breaks when its owner moves
+     * it, while the registration beside it names the link and keeps working.
+     */
+    const data = tempDir();
+    const home = tempDir();
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    const link = join(bin, 'node');
+    symlinkSync(process.execPath, link);
+    const real = realpathSync(process.execPath);
+    const installing = context(data, home);
+    installing.env.PATH = bin;
+    const product = pinnedProduct();
+    makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+    const result = await withManagedShim(
+      installing,
+      product,
+      await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+    );
+    // The registration and the shim both start the stable launcher, and the launcher names the link PATH finds.
+    const { launcher } = launcherPaths(data, 'example');
+    assert.equal(result.entry.command, launcher, 'the registration starts the launcher');
+    const source = readFileSync(result.shim?.path ?? '', 'utf8');
+    assert.equal(
+      source.split('\n')[2],
+      `exec '${launcher}' "$@"`,
+      'the shim starts the launcher the registration does',
+    );
+    const started = readFileSync(launcher, 'utf8');
+    assert.match(started, new RegExp(`^node='${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`, 'm'));
+    assert.ok(!source.includes(real), `the shim never names the file the link resolves to: ${source}`);
+    assert.ok(!started.includes(real), `nor does the launcher: ${started}`);
+  },
+);
+
+test('a managed Windows install writes no shim and explains why Windows shims are not offered yet', async () => {
+  const data = tempDir();
+  const home = tempDir();
+  const installing = { ...context(data, home), platform: 'win32' as const };
+  const product = pinnedProduct();
+  makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+  const result = await withManagedShim(
+    installing,
+    product,
+    await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+  );
+
+  assert.equal(result.shim, undefined, 'Windows managed installs do not write a .cmd or another shim');
+  assert.match(
+    result.shimNotice ?? '',
+    /not offered on Windows yet.*cmd\.exe.*re-parses.*arguments/i,
+    'the install result names the cmd.exe argument-reparsing reason',
+  );
+  assert.equal(existsSync(join(data, 'bin')), false, 'the Windows install creates no shim directory');
+  assert.match(
+    renderInstall(result, false),
+    /not offered on Windows yet/i,
+    'the human install rendering includes the Windows shim notice',
+  );
+});
+
+test('a shim failure after registration is reported as partial success with repair guidance', POSIX_SHIMS, async () => {
+  const data = tempDir();
+  const home = tempDir();
+  const installing = {
+    ...context(data, home),
+    writeShim: async () => {
+      throw new Error('test-shim-denied');
+    },
+  };
+  const product = pinnedProduct();
+  makeRuntime(managedRuntimeDir(data, product.packageName, product.version), product.packageName, product.version);
+
+  const result = await withManagedShim(
+    installing,
+    product,
+    await mcpInstall(installing, product, { client: 'cursor', noVerify: true }),
+  );
+  assert.equal(result.applied, true, 'the temporary client registration remains an acknowledged success');
+  assert.match(result.shimFailure ?? '', /test-shim-denied/, 'the result reports why the CLI shim failed');
+  assert.match(
+    result.warnings.join('\n'),
+    /registration succeeded.*managed install again with `--force`/i,
+    'the result gives a command option that can replace the matching registration and repair its shim',
+  );
+  assert.match(
+    readFileSync(join(home, '.cursor', 'mcp.json'), 'utf8'),
+    /launch[\\/]+example/,
+    'the result reflects that the client config was already written',
+  );
+
+  const retrying = context(data, home);
+  const repaired = await withManagedShim(
+    retrying,
+    product,
+    await mcpInstall(retrying, product, { client: 'cursor', noVerify: true, force: true }),
+  );
+  assert.equal(repaired.applied, true, 'following the documented forced retry succeeds against the owned entry');
+  assert.equal(repaired.shim?.status, 'created', 'the documented retry creates the previously failed CLI shim');
 });
 
 test('the installer refuses a server name that is not plain, whoever calls it', async () => {
@@ -234,6 +543,31 @@ test('the installer refuses a server name that is not plain, whoever calls it', 
   assert.equal(plain.name, 'x'.repeat(64));
 });
 
+test('a runtime that only carries a package as a dependency is not that package’s runtime (CUE-473)', async () => {
+  const data = tempDir();
+  const at = (name: string) => join(data, 'runtime', name);
+  // The events service's runtime installs core, Gmail, Slack, Resend and WhatsApp beside its own package.
+  makeRuntime(at('0.0.9-events-daemon'), '@agentcomms/events-daemon', '0.0.9');
+  for (const dependency of ['@agentcomms/core', '@agentcomms/slack', '@agentcomms/resend']) {
+    const dir = join(at('0.0.9-events-daemon'), 'node_modules', ...dependency.split('/'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: dependency, version: '0.0.9' }));
+  }
+  // Slack's own runtime carries core the same way.
+  makeRuntime(at('0.0.9-slack'), SLACK.packageName, '0.0.9');
+  mkdirSync(join(at('0.0.9-slack'), 'node_modules', '@agentcomms', 'core'), { recursive: true });
+  // Gmail's old layout has no name suffix: its own pin manifest is what makes it Gmail's.
+  makeRuntime(at('0.0.1'), GMAIL.packageName, '0.0.1');
+
+  const versions = async (packageName: string) =>
+    (await listManagedRuntimes(data, packageName)).map((runtime) => basename(runtime.path));
+  assert.deepEqual(await versions(SLACK.packageName), ['0.0.9-slack'], 'Slack has its own runtime and no other');
+  assert.deepEqual(await versions('@agentcomms/resend'), [], 'Resend has none: the events runtime only carries it');
+  assert.deepEqual(await versions('@agentcomms/core'), [], 'core has none: Slack and events only carry it');
+  assert.deepEqual(await versions('@agentcomms/events-daemon'), ['0.0.9-events-daemon'], 'events has its own');
+  assert.deepEqual(await versions(GMAIL.packageName), ['0.0.1'], 'the old Gmail layout is Gmail’s by its pin');
+});
+
 test('prune removes only unused runtimes of this product, and nothing else in the directory', async () => {
   const data = tempDir();
   const home = tempDir();
@@ -261,6 +595,22 @@ test('prune removes only unused runtimes of this product, and nothing else in th
   );
   const running = [`node ${managedRuntimeEntry(data, SLACK.packageName, '0.0.3')} mcp`, 'ps -A -o args='];
   const product = { packageName: SLACK.packageName, version: '0.0.9' };
+  const installing = context(data, home);
+  // Shims exist on macOS and Linux only; on Windows prune has none to remove, and says so.
+  const shims = managedShimsSupported();
+  const ownedShim = shims
+    ? await writeManagedShim(
+        { env: installing.env, dataDir: installing.core.paths.dataDir, platform: installing.platform },
+        {
+          binary: 'agent-slack',
+          command: [process.execPath, managedRuntimeEntry(data, SLACK.packageName, '0.0.1')],
+          entry: managedRuntimeEntry(data, SLACK.packageName, '0.0.1'),
+        },
+      )
+    : undefined;
+  if (ownedShim !== undefined) {
+    assert.equal(ownedShim.status, 'created', 'the prune fixture owns a shim into the unused runtime');
+  }
 
   // Nothing is removed when the processes cannot be listed: "unused" cannot be shown.
   const blind = await pruneManagedRuntimes(context(data, home), product, { processes: async () => null });
@@ -274,14 +624,28 @@ test('prune removes only unused runtimes of this product, and nothing else in th
   assert.deepEqual(
     dry.removed.map((item) => item.version),
     ['0.0.1'],
+    'the dry run finds only the unused Slack runtime',
   );
+  if (ownedShim !== undefined) {
+    assert.deepEqual(dry.shims.removed, [ownedShim.path], 'the dry run previews removing its owned CLI shim');
+    assert.equal(existsSync(ownedShim.path), true, 'the dry run leaves the owned shim in place');
+  } else {
+    assert.deepEqual(dry.shims, { removed: [], kept: [] }, 'a Windows dry run has no CLI shim to remove');
+  }
   await stat(at('0.0.1-slack'));
 
   const pruned = await pruneManagedRuntimes(context(data, home), product, { processes: async () => running });
   assert.deepEqual(
     pruned.removed.map((item) => item.path),
     [at('0.0.1-slack')],
+    'prune removes only the unused runtime it previewed',
   );
+  if (ownedShim !== undefined) {
+    assert.deepEqual(pruned.shims.removed, [ownedShim.path], 'prune reports the owned CLI shim it removed');
+    assert.equal(existsSync(ownedShim.path), false, 'prune removes the unchanged owned CLI shim');
+  } else {
+    assert.deepEqual(pruned.shims, { removed: [], kept: [] }, 'a Windows prune removes no CLI shim');
+  }
   assert.deepEqual(Object.fromEntries(pruned.kept.map((item) => [item.version, item.reason])), {
     '0.0.2': 'registered with claude-code as "slack"',
     '0.0.3': 'a running process uses it',
@@ -398,7 +762,11 @@ test('prune keeps a runtime it printed an entry for, because where that entry we
   };
   // `--client json` prints; the entry is pasted wherever the person keeps it, which no scan reaches.
   const printed = await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
-  assert.equal(printed.entry.args[0], managedRuntimeEntry(data, SLACK.packageName, '0.0.1'));
+  assert.deepEqual(
+    { command: printed.entry.command, args: printed.entry.args },
+    launcherEntry(data, 'slack', process.execPath, [...registrationPins(context(data, home)), 'mcp']),
+    'what is printed starts the launcher; the runtime it was printed for is kept by the record',
+  );
 
   const result = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
   assert.deepEqual(result.removed, []);
@@ -464,8 +832,23 @@ test(
     };
     const installed = await mcpInstall(installing, slack, { client: 'claude-code', noVerify: true });
     assert.equal(installed.method, 'cli');
-    assert.match(readFileSync(config, 'utf8'), /0\.0\.1-slack/, 'the stand-in wrote the entry where it was told');
+    assert.match(readFileSync(config, 'utf8'), /launch[\\/]+slack/, 'the stand-in wrote the entry where it was told');
+    // That entry starts the stable launcher, which starts the runtime: kept, whichever configs this shell reads.
+    const launched = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+    assert.deepEqual(launched.removed, []);
+    assert.equal(launched.kept.find((item) => item.version === '0.0.1')?.reason, 'the stable launcher starts it');
 
+    // An entry from a release before the launcher names its runtime by path, and no launcher points there: the config
+    // the install recorded is read for it all the same.
+    writeFileSync(
+      config,
+      JSON.stringify({
+        mcpServers: {
+          slack: { command: 'node', args: [managedRuntimeEntry(data, SLACK.packageName, '0.0.1'), 'mcp'] },
+        },
+      }),
+    );
+    rmSync(launcherPaths(data, 'slack').pointer);
     const kept = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
     assert.deepEqual(kept.removed, [], 'a runtime the work account still starts was removed');
     const reason = kept.kept.find((item) => item.version === '0.0.1')?.reason ?? '';

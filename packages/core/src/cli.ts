@@ -2,7 +2,9 @@
 import { parseArgs } from 'node:util';
 import { approveAndWaitSentence } from './approval-handoffs.ts';
 import type { PublicApprovalView } from './approval-outcome.ts';
+import { kindOf } from './approval-stored.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
+import type { BehaviourAct } from './behaviour.ts';
 import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
 import type { PreparedChange } from './changes.ts';
 import {
@@ -11,6 +13,7 @@ import {
   type OutputOptions,
   pathOverridesFromCliOptions,
   runCommand,
+  type Streams,
   writeError,
   writeResult,
 } from './cli-runtime.ts';
@@ -25,6 +28,7 @@ import {
   handoffSentenceToFill,
   handoffText,
 } from './handoffs.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
@@ -38,12 +42,26 @@ import {
   attachReport,
 } from './operations/attach-settings.ts';
 import {
+  type BehaviourChangeRequest,
+  type BehaviourChangeResult,
+  type BehaviourReport,
+  behaviourChange,
+  behaviourReport,
+} from './operations/behaviour.ts';
+import {
   type ChangePolicyReport,
   changePolicyChange,
   changePolicyReport,
   isChangePolicy,
   refuseApprovalWithoutChange,
 } from './operations/change-policy.ts';
+import {
+  type LabelChangeRequest,
+  type LabelChangeResult,
+  type LabelReport,
+  labelChange,
+  labelReport,
+} from './operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from './operations/maintenance.ts';
 import { namesDryRun, namesMigration } from './operations/names-migrate.ts';
 import {
@@ -56,25 +74,60 @@ import {
   orgShow,
   orgUpdateChange,
 } from './operations/organisations.ts';
+import { type ProfileInitResult, type ProfileView, profileInit, profileView } from './operations/profile.ts';
 import { migrationLeftoversError, secretsMigration } from './operations/secrets-migrate.ts';
 import {
   type ChannelsReport,
   channelsAvailable,
+  installVerification,
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
-import { updateChange, updateCheck } from './operations/update.ts';
 import {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type StandingChangeRequest,
+  type StandingReport,
+  type StandingView,
+  standingChange,
+  standingReport,
+} from './operations/standing.ts';
+import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
+import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
+import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
+import {
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
-import { profileSourcePath, shownPath } from './organisations.ts';
+import { updateStatus } from './operations/update-status.ts';
+import { profileSourcePath, shownPath, shownText } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
-import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
+import {
+  escapeForDisplay,
+  renderDoctor,
+  renderInstall,
+  renderPrune,
+  renderUpdate,
+  renderUpdateCheck,
+  renderUpdateStatus,
+  truncateDisplay,
+} from './render.ts';
+import { type ExactPlace, parseExpiry } from './standing.ts';
+import { approveStandingAtTerminal } from './standing-flow.ts';
+import { neutralise } from './untrusted.ts';
+import {
+  type BackgroundDeps,
+  type BackgroundOutcome,
+  type BackgroundRunResult,
+  runBackgroundUpdate,
+} from './update-background.ts';
 import { runUpdateCheckChild, terminalUpdateHooks, UPDATE_CHECK_CHILD_COMMAND } from './update-check.ts';
-import { CHANGE_CLAIM, exemptFromUpdateGate, updateGateAtTerminal } from './update-gate.ts';
+import { exemptFromUpdateNotice, updateNoticeAtTerminal } from './update-gate.ts';
+import type { UpdateJobDeps } from './update-job.ts';
+import { stateReleaseVerifier } from './update-provenance.ts';
+import { npmRegistry } from './update-release.ts';
 import { VERSION } from './version.ts';
 
 /**
@@ -102,7 +155,8 @@ Usage — run these with this CLI, each as the words after its program:
   approval wait <approvalId> [--wait-seconds <n>]
                                 wait for an approval to be usable or finished, and say where it stands:
                                 30 seconds when left out, 300 at most, 0 for its status now
-  approve <approvalId>          approve a configuration change at this terminal: read it, type the code
+  approve <approvalId>          approve a configuration change or a standing approval at this terminal:
+                                read it, type the code
   policy [--account <name> | --inbox <name>] [chat|confirm] [--approval <id>]
                                 report or set the change policy: how a loosening is approved;
                                 confirm applies at once, chat is approved first
@@ -114,7 +168,7 @@ Usage — run these with this CLI, each as the words after its program:
   attach deny add <path>        never attach files from a path: applies at once
   attach deny remove <path> [--approval <id>]
                                 take one of your own deny entries away: approved first
-  channels                      which channel servers exist, which are installed, and where they are registered
+  channels                      which declared servers exist, which are installed, and where they are registered
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -123,36 +177,104 @@ Usage — run these with this CLI, each as the words after its program:
   org update <organisation> [--source <file>] [--for-other-addresses on|off] [--adopt <client>]
                                 [--store keychain|file] [--approval <id>]
                                 read a profile again and repair drift: a changed profile, a new
-                                source and --for-other-addresses on are approved first
+                                source, a looser update cap and --for-other-addresses on are
+                                approved first; a tighter cap applies at once
   org remove <organisation> [--approval <id>]
                                 forget a profile and the clients it made: approved first
+  label                         how what an agent sends is labelled — "Jo Example (agent)" — and who
+                                each kind of message appears to come from on each account
+  label word <word> [--approval <id>]
+                                the word after your name: agent, assistant, twin, minion, bot, fake or
+                                AI; approved first
+  label name <name>|--clear [--approval <id>]
+                                your name, for where a channel has none of its own: approved first
+  label rule add <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--approval <id>]
+                                who a kind of message appears to come from: --as me sends it as you,
+                                unlabelled, and is approved first; --as agent applies at once
+  label rule remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--approval <id>]
+                                take a rule away, as it is listed: an agent rule is approved first,
+                                a me rule applies at once
+  label icon <account> <:emoji:>|--clear [--approval <id>]
+                                the workspace emoji the app's Slack posts show: approved first
+  label style <account> app|labelled [--approval <id>]
+                                how an agent's Slack messages look there: app, the default, posts as the
+                                app with Slack's APP tag where it can; labelled posts every one as you,
+                                labelled in its words, and is approved first; app applies at once
+  behaviour                     what an agent may do: every rule, and what each account allows, across it
+                                and in each conversation a rule names
+  behaviour allow <account> <act,…|none> [--conversation <id>] [--approval <id>]
+                                let an agent start only these acts there — post, reply, reaction, edit,
+                                delete, file, send — or none: one that allows more is approved first,
+                                one that only narrows applies at once
+  behaviour clear <account> [--conversation <id>] [--approval <id>]
+                                take a rule away, so the wider one holds there: approved first when that
+                                allows more
+  standing list                 the standing approvals — what an agent may send without asking: each one's
+                                contents by digest, places, limits and end, its uses in the last day and
+                                its last acts
+  standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>]
+                                [--per-day <n>] [--per-sender <n>] [--expires <n>d]
+                                keep fewer contents or places, lower a limit, or end it sooner: applies
+                                at once, and never allows more
+  standing revoke <id>          end one standing approval at once, and every act of it not yet sent
+  standing off                  end every standing approval at once; loosening anything later revives none
+  profile [<account>] [--conversation <id>…]
+                                the writing profile an agent reads before it writes there: the files it
+                                joins, in order, and which are written; --conversation repeats, one per
+                                mail recipient and its @domain, or a DM's D… and the person's U…
+  profile init [<account>] [--conversation <id>]
+                                start the missing profile file for that place from a starter, and print
+                                its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
-  mcp install --client <client> [--name <name>] [--launcher managed|npx|local] [--force]
+  mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
+                                [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
-                                register the core MCP server with a client, and prove it starts
-  mcp prune [--dry-run] [--include-printed] [--approval <id>]
-                                remove the core's managed runtimes that nothing uses
+                                register the core server, or another declared server, and prove it starts
+  mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
+                                remove the managed runtimes that nothing uses: every managed server's,
+                                listed by server, or with --server that one's
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
-  update --later [--approval <id>]
-                                not now: nothing stops for the update until midnight
-  update --auto on|off [--approval <id>]
-                                turn the daily update check on or off for this machine
+  update --status               where updates stand here: level, pause, last check, latest and
+                                running versions, and the background job; asks npm nothing
+  update --level auto|every-14-days|never [--approval <id>]
+                                how this machine updates: a level that updates less is approved
+                                first; one that updates more applies at once
+  update --pause [1|7|14]       hold every update notice on this machine for that many days (7);
+                                asks nobody, and never holds a security fix
+  update --resume               end a pause at once
+  update --rollback [--approval <id>]
+                                switch every stable launcher back to the release before; edits no client config
+  update --background-job on|off [--approval <id>]
+                                set up the per-user job that installs verified releases in the
+                                background, approved first; off removes it at once
+  update --background [--dry-run]
+                                one background run, as the job starts it: a verified release past its
+                                hold, installed, checked and switched to; --dry-run says what it would
+                                do and why, and changes nothing
   secrets migrate --to keychain|file [--approval <id>]
   names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
-install and prune, update, secrets and names migrate, org add, update and remove — is shown before it happens. At a
-terminal you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again
-with --approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
-\`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add — applies at once and asks nobody,
-and a --dry-run changes nothing.
+install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
+rule add --as me, label rule remove --as agent and label style labelled — is shown before it happens. At a terminal
+you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again with
+--approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
+\`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule
+remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
+may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
+once when it only narrows.
 
-Once a day this machine asks npm whether a newer release is out. When one is, every command but update, doctor,
-paths, approve and approvals stops first: at a terminal it asks "Update now, later today, or cancel?"; anywhere else
-it exits 11 and names the commands for update and update --later. Putting it off (--later) and turning the check
-off (--auto off) are changes a person approves. CI, and AGENT_COMMS_UPDATE_CHECK=off, skip it.
+A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
+places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the
+code it shows, at a terminal, whatever the change policy. standing narrow, revoke and off only take away, so each
+applies at once and asks nobody.
+
+On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
+once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
+day for the machine, and runs; nothing is stopped for being behind. CI, AGENT_COMMS_UPDATE_CHECK=off and
+AGENT_COMMS_UPDATES=never switch it all off for one process.
 
 Options:
   --config-dir <dir>     use this configuration directory for this run
@@ -165,7 +287,7 @@ Options:
   -h, --help    show this help
   -v, --version show the version
 
-Exit codes: 0 ok · 1 unexpected · 10 approval required · 11 an update is out: update first, or put it off
+Exit codes: 0 ok · 1 unexpected, or a profile that needs a later release · 10 approval required
             64 usage · 65 bad data · 66 not found · 69 provider unavailable · 75 transient
             77 auth or scope missing · 78 config error
 `;
@@ -207,6 +329,8 @@ function parse(argv: string[]) {
       version: { type: 'boolean', short: 'v', default: false },
       inbox: { type: 'string' },
       account: { type: 'string' },
+      workspace: { type: 'string' },
+      'read-only': { type: 'boolean', default: false },
       since: { type: 'string' },
       limit: { type: 'string' },
       state: { type: 'string' },
@@ -218,6 +342,7 @@ function parse(argv: string[]) {
       yes: { type: 'boolean', default: false },
       approval: { type: 'string' },
       client: { type: 'string' },
+      server: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -225,13 +350,35 @@ function parse(argv: string[]) {
       'no-verify': { type: 'boolean', default: false },
       'include-printed': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
+      status: { type: 'boolean', default: false },
+      level: { type: 'string' },
+      pause: { type: 'boolean', default: false },
+      resume: { type: 'boolean', default: false },
+      // Retired with the stop (design 2026-10-16): kept so that each is refused with what replaced it.
       later: { type: 'boolean', default: false },
       auto: { type: 'string' },
+      rollback: { type: 'boolean', default: false },
+      'background-job': { type: 'string' },
+      background: { type: 'boolean', default: false },
       // A flag on `org add`, and on `org update` the flag and the word after it — `on` or `off` — read from the tokens.
       'for-other-addresses': { type: 'boolean', default: false },
       adopt: { type: 'string' },
       store: { type: 'string' },
       source: { type: 'string' },
+      // `label rule add|remove` and `label name|icon --clear`; refused on every other command but those that share it
+      // (`LABEL_OPTIONS_SHARED`): `behaviour`, and `profile`, which takes it repeated, read from the tokens.
+      conversation: { type: 'string' },
+      kinds: { type: 'string' },
+      as: { type: 'string' },
+      clear: { type: 'boolean', default: false },
+      // `standing narrow`; refused on every other command (`refuseStandingOptionsElsewhere`).
+      keep: { type: 'string' },
+      places: { type: 'string' },
+      'per-thread': { type: 'string' },
+      'per-hour': { type: 'string' },
+      'per-day': { type: 'string' },
+      'per-sender': { type: 'string' },
+      expires: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -268,11 +415,6 @@ const CLIENT_NAMES = ['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemin
  * `mcp install`, `mcp prune`, `names migrate`, `secrets migrate` and `update` — where it is how the second run claims
  * that change. Every one of them is a change, so what it claims is a change approval.
  */
-/** Whether a command is a wait for an approval: `approval wait <approvalId>`, a look-up past the update's stop. */
-function waitsFor(command: string | undefined, sub: string | undefined): boolean {
-  return command === 'approval' && sub === 'wait';
-}
-
 function takesApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
     case 'policy':
@@ -287,6 +429,9 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return true;
     case 'org':
       return sub === 'add' || sub === 'update' || sub === 'remove';
+    case 'label':
+    case 'behaviour':
+      return sub !== undefined;
     default:
       return false;
   }
@@ -295,8 +440,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
 /**
  * Refuses `--approval` on a command that takes none, as USAGE.
  *
- * Parsed as one option for every command, it was carried to the update check's stop whatever the command, and the
- * stop lets a command claiming an approval through (§2): `agentcomms channels --approval <id>`, with an old "not now"
+ * Parsed as one option for every command, it was once carried to the update check's stop whatever the command, and
+ * the stop let a command claiming an approval through: `agentcomms channels --approval <id>`, with an old "not now"
  * the person had turned down, ran past it. Over MCP the same calls are refused an `approvalId` their tools do not
  * declare, and every channel's command is refused an option it does not take, before anything runs. So is this one.
  */
@@ -307,8 +452,93 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
+}
+
+/**
+ * The other commands that take one of `label`'s options, and which: `behaviour` names a rule's place as it does, and
+ * `profile` the places a message goes to — `--conversation` repeated, read from the tokens (`conversationsGiven`).
+ */
+const LABEL_OPTIONS_SHARED: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  behaviour: ['conversation'],
+  profile: ['conversation'],
+});
+
+/**
+ * Refuses `label`'s own options on any other command, as USAGE, before anything runs — as `org`'s are, and for the
+ * same reason: an option a command does not read is refused rather than quietly doing nothing. Those another command
+ * shares (`LABEL_OPTIONS_SHARED`) are refused there only by that command's own words.
+ */
+function refuseLabelOptionsElsewhere(
+  command: string | undefined,
+  values: { conversation?: string; kinds?: string; as?: string; clear?: boolean },
+  help: Handoff,
+): void {
+  if (command === 'label') return;
+  const shared =
+    command !== undefined && Object.hasOwn(LABEL_OPTIONS_SHARED, command) ? LABEL_OPTIONS_SHARED[command] : [];
+  const given = labelOptionsGiven(values).filter((flag) => !shared?.includes(flag));
+  if (given.length === 0) return;
+  const owners = (flag: string) => [
+    'label',
+    ...Object.entries(LABEL_OPTIONS_SHARED)
+      .filter(([, flags]) => flags.includes(flag))
+      .map(([owner]) => owner),
+  ];
+  const commands = [...new Set(given.flatMap(owners))];
+  const named = commands.length === 1 ? commands[0] : `${commands.slice(0, -1).join(', ')} and ${commands.at(-1)}`;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the ${named} ${commands.length === 1 ? 'command' : 'commands'} only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+/**
+ * Every `--conversation` given, in order. `parseArgs` keeps only the last of an option that is not `multiple`, and
+ * `label` takes one; `profile` takes several — one per mail recipient — so they are read from the tokens.
+ */
+function conversationsGiven(parsed: ReturnType<typeof parse>): string[] {
+  return (parsed.tokens ?? []).flatMap((token) =>
+    token.kind === 'option' && token.name === 'conversation' && token.value !== undefined ? [token.value] : [],
+  );
+}
+
+function labelOptionsGiven(values: { conversation?: string; kinds?: string; as?: string; clear?: boolean }): string[] {
+  return [
+    ...(values.conversation !== undefined ? ['conversation'] : []),
+    ...(values.kinds !== undefined ? ['kinds'] : []),
+    ...(values.as !== undefined ? ['as'] : []),
+    ...(values.clear ? ['clear'] : []),
+  ];
+}
+
+/** `standing narrow`'s own options, as typed. */
+const STANDING_OPTIONS = ['keep', 'places', 'per-thread', 'per-hour', 'per-day', 'per-sender', 'expires'] as const;
+
+function standingOptionsGiven(values: Partial<Record<(typeof STANDING_OPTIONS)[number], unknown>>): string[] {
+  return STANDING_OPTIONS.filter((flag) => values[flag] !== undefined);
+}
+
+/**
+ * Refuses `standing narrow`'s options on any other command, as USAGE, before anything runs — as `label`'s are: an
+ * option a command does not read is refused rather than quietly doing nothing, and `--expires` read by nothing would
+ * look like a limit that held.
+ */
+function refuseStandingOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof STANDING_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'standing') return;
+  const given = standingOptionsGiven(values);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the standing narrow command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
 }
 
 /**
@@ -351,6 +581,17 @@ export async function main(
           platform: NodeJS.Platform;
         }) => Promise<void>)
       | undefined;
+    /**
+     * The runner the background update job's commands go through, its user, its random minute and its clock: injected
+     * so a test never loads, schedules or removes a real job.
+     */
+    updateJob?: UpdateJobDeps | undefined;
+    /** What one background run reads and runs — registry, attestations, installer, self-check, clock — for a test. */
+    updateBackground?: BackgroundDeps | undefined;
+    /** What `update` and `update --check` read and run — the registry, the verifier, the installers — for a test. */
+    update?: UpdateDeps | undefined;
+    /** The terminal `approve` asks at: the process's own unless a test brings one. */
+    streams?: Streams | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -390,6 +631,8 @@ export async function main(
   try {
     refuseApprovalNotTaken(command, sub, values.approval);
     refuseOrgOptionsElsewhere(command, values, help);
+    refuseLabelOptionsElsewhere(command, values, help);
+    refuseStandingOptionsElsewhere(command, values, help);
   } catch (error) {
     return writeError(error as CommsError, output);
   }
@@ -410,34 +653,26 @@ export async function main(
   }
 
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
-  // stopped by the gate it is part of — it is run before the gate, as the server is.
+  // given the notice it is part of — it is run before the notice, as the server is.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
-    return runCommand(output, () => runUpdateCheckChild(core, env, sub));
+    return runCommand(output, () =>
+      runUpdateCheckChild(core, env, sub, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
+    );
   }
 
-  // The daily update check (design 2026-09-28 §3): before any command but the exempt ones, an update that is out
-  // stops it — a person is asked, anything else ends with UPDATE_REQUIRED. One carrying an approval the person
-  // already gave goes ahead, as the same call over MCP does: only a command that takes one carries it, and every one
-  // of those claims a change.
-  if (!exemptFromUpdateGate(positionals.slice(0, 2))) {
-    let ended: number | null = null;
-    const gated = await runCommand(output, async () => {
-      ended = await updateGateAtTerminal({
-        core,
-        env,
-        binary: 'agentcomms',
-        channel: 'core',
-        running: VERSION,
-        output,
-        streams: defaultStreams,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        approvals: takesApproval(command, sub) ? [values.approval] : waitsFor(command, sub) ? [arg] : [],
-        approvalClaim: waitsFor(command, sub) ? { lookup: true } : CHANGE_CLAIM,
-        ...terminalUpdateHooks(core, env, { channel: 'core', output, streams: defaultStreams }),
-      });
+  // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for
+  // about three seconds at most, and — when a newer release is out and no command here said so today — one line on
+  // stderr. It never stops the command.
+  if (!exemptFromUpdateNotice(positionals.slice(0, 2))) {
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'core',
+      running: VERSION,
+      output,
+      streams: defaultStreams,
+      ...terminalUpdateHooks(core, env, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
     });
-    if (gated !== EXIT_CODES.OK) return gated;
-    if (ended !== null) return ended;
   }
 
   const code = await runCommand(output, async () => {
@@ -450,10 +685,17 @@ export async function main(
         );
         return;
       case 'doctor': {
-        const report = await doctor(core, env, { platform });
+        const report = await doctor(core, env, {
+          platform,
+          ...(deps.updateJob === undefined ? {} : { updateJob: deps.updateJob }),
+        });
         writeResult(report, output, renderDoctor);
-        if (!report.ok)
-          throw new CommsError('CONFIG', 'doctor found problems', { hint: 'Apply the fixes listed above.' });
+        if (!report.ok) {
+          // `--json` promises one envelope on stdout: the report is it, its `ok` false, and the exit status says the
+          // rest — as Gmail's and Slack's doctors do (desktop design DA13). An error envelope after it made two.
+          if (output.json) softExit = EXIT_CODES.CONFIG;
+          else throw new CommsError('CONFIG', 'doctor found problems', { hint: 'Apply the fixes listed above.' });
+        }
         return;
       }
       case 'audit': {
@@ -500,7 +742,21 @@ export async function main(
       }
       case 'approve': {
         if (!sub || arg !== undefined) throw usage('usage: approve <approvalId>');
-        const result = await approveChangeAtTerminal(core, sub, env, output);
+        const streams = deps.streams ?? defaultStreams;
+        // A standing approval is approved with its own preview and code (design 2026-10-19-standing-approvals, S8);
+        // anything else here is a change, as it always was. Decided by the record's kind, read and trusted only from
+        // a record whose binding verifies; each approval then refuses an id of the other kind as not found.
+        const stored = APPROVAL_ID_PATTERN.test(sub) ? await core.approvals.get(sub).catch(() => null) : null;
+        if (kindOf(stored) === 'standing') {
+          const standing = await approveStandingAtTerminal(core, sub, env, output, streams);
+          writeResult(standing, output, (r) =>
+            r.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking. End it at any time with the standing commands.'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          );
+          return;
+        }
+        const result = await approveChangeAtTerminal(core, sub, env, output, streams);
         writeResult(result, output, (r) =>
           r.state === 'approved'
             ? 'Approved. The agent can make the change now — this command approves; it changes nothing itself.'
@@ -672,6 +928,216 @@ export async function main(
         }
         throw usage('usage: org add|list|show|update|remove');
       }
+      case 'label': {
+        const [, , ...rest] = positionals;
+        const taking = (taken: readonly string[]) => {
+          const wrong = labelOptionsGiven(values).filter((flag) => !taken.includes(flag));
+          if (wrong.length > 0) {
+            throw usage(
+              `the ${['label', ...positionals.slice(1, sub === 'rule' ? 3 : 2)].join(' ')} command takes no --${wrong.join(', --')}`,
+            );
+          }
+        };
+        if (sub === undefined) {
+          taking([]);
+          // Reporting takes no --approval: refused with the rest, before the update check's stop.
+          writeResult(await labelReport(core), output, renderLabel);
+          return;
+        }
+        let request: LabelChangeRequest;
+        let rerun: string[];
+        if (sub === 'word') {
+          taking([]);
+          const [word, ...extra] = rest;
+          if (word === undefined || extra.length > 0) throw usage('usage: label word <word>');
+          request = { word };
+          rerun = ['label', 'word', word];
+        } else if (sub === 'name') {
+          taking(['clear']);
+          const [name, ...extra] = rest;
+          if (extra.length > 0) throw usage('usage: label name <name>|--clear — quote a name with spaces in it');
+          if ((name === undefined) === !values.clear) throw usage('usage: label name <name>|--clear');
+          request = { name: values.clear ? null : (name as string) };
+          rerun = values.clear ? ['label', 'name', '--clear'] : ['label', 'name', name as string];
+        } else if (sub === 'rule') {
+          taking(['conversation', 'kinds', 'as']);
+          const [action, account, ...extra] = rest;
+          if ((action !== 'add' && action !== 'remove') || account === undefined || extra.length > 0) {
+            throw usage(
+              'usage: label rule add|remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me',
+            );
+          }
+          if (values.as === undefined) throw usage('say who the messages appear to come from: --as agent or --as me');
+          const kinds = values.kinds?.split(',').map((kind) => kind.trim());
+          const rule = {
+            account,
+            ...(values.conversation === undefined ? {} : { conversation: values.conversation }),
+            ...(kinds === undefined ? {} : { kinds }),
+            as: values.as,
+          };
+          request = action === 'add' ? { addRule: rule } : { removeRule: rule };
+          rerun = [
+            'label',
+            'rule',
+            action,
+            account,
+            ...(values.conversation === undefined ? [] : ['--conversation', values.conversation]),
+            ...(values.kinds === undefined ? [] : ['--kinds', values.kinds]),
+            '--as',
+            values.as,
+          ];
+        } else if (sub === 'icon') {
+          taking(['clear']);
+          const [account, emoji, ...extra] = rest;
+          if (account === undefined || extra.length > 0 || (emoji === undefined) === !values.clear) {
+            throw usage('usage: label icon <account> <:emoji:>|--clear');
+          }
+          request = { icon: { account, emoji: values.clear ? null : (emoji as string) } };
+          rerun = values.clear ? ['label', 'icon', account, '--clear'] : ['label', 'icon', account, emoji as string];
+        } else if (sub === 'style') {
+          taking([]);
+          const [account, style, ...extra] = rest;
+          if (account === undefined || style === undefined || extra.length > 0) {
+            throw usage('usage: label style <account> app|labelled');
+          }
+          request = { style: { account, style } };
+          rerun = ['label', 'style', account, style];
+        } else {
+          throw usage('usage: label [word|name|rule add|rule remove|icon|style]');
+        }
+        const result = await gatedChangeAtTerminal(core, labelChange(core, request, 'cli'), { ...approval, rerun });
+        writeResult(result, output, renderLabelChange);
+        return;
+      }
+      case 'behaviour': {
+        // label's other options were refused before anything ran (`refuseLabelOptionsElsewhere`): only --conversation.
+        const [, , account, acts, ...extra] = positionals;
+        if (sub === undefined) {
+          if (values.conversation !== undefined) throw usage('the behaviour command takes no --conversation');
+          // Reporting takes no --approval: refused with the rest, before the update check's stop.
+          writeResult(await behaviourReport(core), output, renderBehaviour);
+          return;
+        }
+        const where = values.conversation === undefined ? [] : ['--conversation', values.conversation];
+        const place = {
+          account: account as string,
+          ...(values.conversation === undefined ? {} : { conversation: values.conversation }),
+        };
+        let request: BehaviourChangeRequest;
+        let rerun: string[];
+        if (sub === 'allow') {
+          if (account === undefined || acts === undefined || extra.length > 0) {
+            throw usage('usage: behaviour allow <account> <act,…|none> [--conversation <id>]');
+          }
+          // Checked by the operation, as the tool's are: an act it does not know is refused there, in its words.
+          const listed = acts === 'none' ? [] : acts.split(',').map((act) => act.trim());
+          request = { setRule: { ...place, acts: listed as BehaviourAct[] } };
+          rerun = ['behaviour', 'allow', account, acts, ...where];
+        } else if (sub === 'clear') {
+          if (account === undefined || acts !== undefined) {
+            throw usage('usage: behaviour clear <account> [--conversation <id>]');
+          }
+          request = { removeRule: place };
+          rerun = ['behaviour', 'clear', account, ...where];
+        } else {
+          throw usage('usage: behaviour [allow|clear]');
+        }
+        const result = await gatedChangeAtTerminal(core, behaviourChange(core, request, 'cli'), { ...approval, rerun });
+        writeResult(result, output, renderBehaviourChange);
+        return;
+      }
+      case 'standing': {
+        // Every change here only takes away, so none is gated: each applies at once, and none takes --approval.
+        const [, , id, ...extra] = positionals;
+        const taking = (taken: readonly string[]) => {
+          const wrong = standingOptionsGiven(values).filter((flag) => !taken.includes(flag));
+          if (wrong.length > 0) throw usage(`the standing ${sub} command takes no --${wrong.join(', --')}`);
+        };
+        const report = (head?: string) => (shown: StandingReport) =>
+          [...(head === undefined ? [] : [head, '']), renderStanding(shown, handoffs)].join('\n');
+        if (sub === 'list') {
+          if (id !== undefined) throw usage('usage: standing list');
+          taking([]);
+          writeResult(await standingReport(core), output, report());
+          return;
+        }
+        if (sub === 'narrow') {
+          if (id === undefined || extra.length > 0) {
+            throw usage(
+              'usage: standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>] [--per-day <n>] [--per-sender <n>] [--expires <n>d]',
+            );
+          }
+          taking(STANDING_OPTIONS);
+          const listOf = (text: string | undefined) =>
+            text
+              ?.split(',')
+              .map((item) => item.trim())
+              .filter((item) => item !== '');
+          // Checked as typed here; whether each is low enough, by the operation, in the words the tool gets too.
+          const limits = Object.fromEntries(
+            Object.entries({
+              perThread: wholeNumber(values['per-thread'], { name: '--per-thread', min: 0 }),
+              perHour: wholeNumber(values['per-hour'], { name: '--per-hour', min: 0 }),
+              perDay: wholeNumber(values['per-day'], { name: '--per-day', min: 0 }),
+              perSender: wholeNumber(values['per-sender'], { name: '--per-sender', min: 0 }),
+              expiresDays: values.expires === undefined ? undefined : parseExpiry(values.expires),
+            }).filter(([, value]) => value !== undefined),
+          );
+          const keep = listOf(values.keep);
+          const places = listOf(values.places);
+          const request: StandingChangeRequest = {
+            narrow: {
+              id,
+              ...(keep === undefined ? {} : { keep }),
+              ...(places === undefined ? {} : { places }),
+              ...(Object.keys(limits).length === 0 ? {} : { limits }),
+            },
+          };
+          const result = await standingChange(core, request, { surface: 'cli' });
+          writeResult(result, output, report(`Narrowed ${id}: it applies now, and allows nothing more.`));
+          return;
+        }
+        if (sub === 'revoke') {
+          if (id === undefined || extra.length > 0) throw usage('usage: standing revoke <id>');
+          taking([]);
+          const result = await standingChange(core, { revoke: { id } }, { surface: 'cli' });
+          writeResult(result, output, report(`${id} has ended: nothing more is sent under it.`));
+          return;
+        }
+        if (sub === 'off') {
+          if (id !== undefined) throw usage('usage: standing off');
+          taking([]);
+          const result = await standingChange(core, { off: true }, { surface: 'cli' });
+          writeResult(
+            result,
+            output,
+            report(
+              'Every standing approval has ended: nothing more is sent under any of them, and loosening anything later revives none.',
+            ),
+          );
+          return;
+        }
+        throw usage('usage: standing list|narrow|revoke|off');
+      }
+      case 'profile': {
+        const conversations = conversationsGiven(parsed);
+        if (sub === 'init') {
+          const [, , account, ...extra] = positionals;
+          if (extra.length > 0 || conversations.length > 1) {
+            throw usage('usage: profile init [<account>] [--conversation <id>] — one file at a time');
+          }
+          writeResult(await profileInit(core, { account, conversation: conversations[0] }), output, renderProfileInit);
+          return;
+        }
+        const [, account, ...extra] = positionals;
+        if (extra.length > 0) throw usage('usage: profile [<account>] [--conversation <id>…]');
+        const view = await profileView(core, {
+          account,
+          conversations: conversations.length === 0 ? undefined : conversations,
+        });
+        writeResult(view, output, (shown) => renderProfile(shown, handoffs, account));
+        return;
+      }
       case 'channels': {
         if (sub !== undefined) throw usage('usage: channels');
         writeResult(await channelsAvailable(core, env), output, renderChannels);
@@ -691,21 +1157,36 @@ export async function main(
             throw usage(`--client must be one of: ${CLIENT_NAMES.join(', ')}`);
           }
           const words = ['mcp', 'install', '--client', values.client];
+          if (values.server) words.push('--server', values.server);
           if (values.name) words.push('--name', values.name);
+          if (values.account) words.push('--account', values.account);
+          if (values.inbox) words.push('--inbox', values.inbox);
+          if (values.workspace) words.push('--workspace', values.workspace);
+          if (values['read-only']) words.push('--read-only');
           if (values.launcher) words.push('--launcher', values.launcher);
           if (values.force) words.push('--force');
           if (values['no-verify']) words.push('--no-verify');
           const result = await gatedChangeAtTerminal(
             core,
-            serverInstallChange(core, env, {
-              channel: 'core',
-              client: values.client as SupportedClient,
-              name: values.name,
-              launcher: values.launcher as Launcher | undefined,
-              force: values.force,
-              print: values.print,
-              noVerify: values['no-verify'],
-            }),
+            serverInstallChange(
+              core,
+              env,
+              {
+                channel: values.server ?? 'core',
+                client: values.client as SupportedClient,
+                name: values.name,
+                account: values.account,
+                inbox: values.inbox,
+                workspace: values.workspace,
+                readOnly: values['read-only'],
+                launcher: values.launcher as Launcher | undefined,
+                force: values.force,
+                print: values.print,
+                noVerify: values['no-verify'],
+              },
+              undefined,
+              installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+            ),
             { ...approval, rerun: words },
           );
           // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
@@ -716,11 +1197,13 @@ export async function main(
         }
         if (sub === 'prune') {
           const words = ['mcp', 'prune'];
+          if (values.server) words.push('--server', values.server);
           if (values['include-printed']) words.push('--include-printed');
           const result = await gatedChangeAtTerminal(
             core,
             serverPruneChange(core, env, {
-              channel: 'core',
+              // No server named: every managed server's runtimes, as an update leaves them behind.
+              channel: values.server,
               dryRun: values['dry-run'],
               includePrinted: values['include-printed'],
             }),
@@ -732,43 +1215,131 @@ export async function main(
         throw usage('usage: mcp [install|prune]');
       }
       case 'update': {
-        if (sub !== undefined) {
-          throw usage('usage: update [--check | --later | --auto on|off] [--no-verify] [--approval <id>]');
-        }
-        const modes = [values.check, values.later, values.auto !== undefined].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && (values.later || values.auto !== undefined))) {
-          throw usage('--check, --later and --auto are one at a time, and --no-verify is for the update itself');
-        }
         if (values.later) {
-          const result = await gatedChangeAtTerminal(core, updateLaterChange(core), {
-            ...approval,
-            rerun: ['update', '--later'],
+          throw new CommsError('USAGE', '--later no longer exists: nothing is stopped for an update any more', {
+            hint: 'To hold the update notice, use --pause [1|7|14] — it asks nobody — and --resume to end it.',
           });
-          writeResult(result, output, renderLater);
-          return;
         }
         if (values.auto !== undefined) {
-          if (values.auto !== 'on' && values.auto !== 'off') throw usage('--auto takes on or off');
-          const result = await gatedChangeAtTerminal(core, updateAutoChange(core, values.auto), {
-            ...approval,
-            rerun: ['update', '--auto', values.auto],
+          throw new CommsError('USAGE', '--auto no longer exists: the daily check is now one of three levels', {
+            hint: 'Use --level auto, --level every-14-days or --level never.',
           });
-          writeResult(result, output, renderAuto);
+        }
+        // `--pause` takes the days after it as a word of its own: `update --pause 14`.
+        const days = values.pause ? sub : undefined;
+        if ((sub !== undefined && !values.pause) || positionals.length > 2) {
+          throw usage(
+            'usage: update [--check | --status | --level <level> | --pause [1|7|14] | --resume | --rollback | --background-job on|off | --background [--dry-run]] [--no-verify] [--approval <id>]',
+          );
+        }
+        const job = values['background-job'];
+        // One mode at a time, every mode counted: only the update itself, with none of them, takes --no-verify.
+        const settings = [
+          values.level !== undefined,
+          values.pause,
+          values.resume,
+          values.rollback,
+          job !== undefined,
+          values.background,
+        ];
+        const modes = [values.check, values.status, ...settings].filter(Boolean).length;
+        // `--status` only reads, so --no-verify has no update to be about there either.
+        if (modes > 1 || (values['no-verify'] && (settings.some(Boolean) || values.status))) {
+          throw usage(
+            '--check, --status, --level, --pause, --resume, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
+          );
+        }
+        if (values['dry-run'] && !values.background) {
+          throw usage(
+            '--dry-run is for --background; the update itself shows every step and asks before it changes anything',
+          );
+        }
+        if (values.status) {
+          // Where updates stand, from local files: no change, so nothing for an approval to be for (DA13).
+          if (values.approval !== undefined) throw usage('--status only reads, so it takes no --approval');
+          const status = await updateStatus(core, env, { platform, job: deps.updateJob, now: deps.update?.now });
+          writeResult(status, output, renderUpdateStatus);
+          return;
+        }
+        if (values.background) {
+          // The job's own run: it prepares no change, so there is nothing for an approval to be for.
+          if (values.approval !== undefined) throw usage('--background approves nothing, so it takes no --approval');
+          const result = await runBackgroundUpdate(
+            core,
+            env,
+            { dryRun: values['dry-run'] },
+            {
+              platform,
+              ...(deps.updateJob === undefined ? {} : { job: deps.updateJob }),
+              ...deps.updateBackground,
+            },
+          );
+          softExit = backgroundExit(result.outcome);
+          writeResult(result, output, renderBackground);
+          return;
+        }
+        if (values.rollback) {
+          const result = await gatedChangeAtTerminal(core, updateRollbackChange(core), {
+            ...approval,
+            rerun: ['update', '--rollback'],
+          });
+          // A launcher that did not go back is not a success to a script, as for the update it undoes.
+          softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
+          writeResult(result, output, renderRollback);
+          return;
+        }
+        if (job !== undefined) {
+          if (job !== 'on' && job !== 'off') throw usage('--background-job takes on or off');
+          const result = await gatedChangeAtTerminal(
+            core,
+            updateJobChange(core, env, job, { platform, deps: deps.updateJob, surface: 'cli' }),
+            { ...approval, rerun: ['update', '--background-job', job] },
+          );
+          writeResult(result, output, renderUpdateJob);
+          return;
+        }
+        if (values.level !== undefined) {
+          const result = await gatedChangeAtTerminal(
+            core,
+            updateLevelChange(core, values.level, { env, platform, job: deps.updateJob }),
+            { ...approval, rerun: ['update', '--level', values.level] },
+          );
+          writeResult(result, output, renderLevel);
+          return;
+        }
+        if (values.pause || values.resume) {
+          refuseUnclaimedApproval(values.approval, {
+            message: '--pause and --resume ask nobody, so they take no --approval',
+            hint: 'Run it without --approval: it applies at once.',
+          });
+          if (values.resume) {
+            writeResult(await updateResume(core), output, renderResume);
+            return;
+          }
+          if (days !== undefined && !/^\d+$/.test(days)) throw usage('--pause takes 1, 7 or 14 days');
+          const result = await updatePause(core, { days: days === undefined ? undefined : Number(days) });
+          writeResult(result, output, renderPause);
           return;
         }
         if (values.check) {
           if (values.approval !== undefined) {
             throw usage('--check only reads, so it takes no --approval; leave out --check to update');
           }
-          writeResult(await updateCheck(core, env), output, (report) => renderUpdateCheck(report, handoffs));
+          writeResult(await updateCheck(core, env, deps.update ?? coreUpdateDeps(core)), output, (report) =>
+            renderUpdateCheck(report, handoffs),
+          );
           return;
         }
         const words = ['update'];
         if (values['no-verify']) words.push('--no-verify');
-        const result = await gatedChangeAtTerminal(core, updateChange(core, env, { noVerify: values['no-verify'] }), {
-          ...approval,
-          rerun: words,
-        });
+        const result = await gatedChangeAtTerminal(
+          core,
+          updateChange(core, env, { noVerify: values['no-verify'] }, deps.update ?? coreUpdateDeps(core)),
+          {
+            ...approval,
+            rerun: words,
+          },
+        );
         // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
         softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
         writeResult(result, output, (r) => renderUpdate(r, output.color));
@@ -896,6 +1467,166 @@ function renderPolicy(report: ChangePolicyReport): string {
   return lines.join('\n');
 }
 
+/** A name someone in Slack chose, or a link Slack gave: made safe to print, and cut. */
+const shownWords = (text: string, width: number) => truncateDisplay(neutralise(text).text, width);
+
+/**
+ * One exact place: its id, and — when it has one — its name as the report gives it, in its untrusted-content envelope,
+ * on lines of its own: someone in Slack chose it, and an agent reading this output reads it there, as quoted data.
+ */
+function standingPlaceLines(place: ExactPlace): string[] {
+  if (place.name === null) return [`    ${place.id}`];
+  return [
+    `    ${place.id}, ${place.id.startsWith('D') ? 'the direct message with' : 'named'}:`,
+    // Already neutralised inside its envelope: made one line each and cut, never neutralised again, which would
+    // defuse the envelope's own tags.
+    ...place.name.split('\n').map((line) => `      ${truncateDisplay(line, 240)}`),
+  ];
+}
+
+/** One standing approval as a person reads it: what is in force, its uses, and its last acts, newest first. */
+function renderStandingView(view: StandingView): string {
+  const status =
+    view.state === 'active'
+      ? `ends ${view.expiresAt}`
+      : view.state === 'pending'
+        ? 'waits for the person to approve it at a terminal, with its code'
+        : view.reason === undefined
+          ? ''
+          : `(${shownWords(view.reason, 160)})`;
+  const lines = [`${view.id}  ${view.state}  ${view.workspace}  ${status}`.trimEnd()];
+  for (const content of view.contents) {
+    lines.push(
+      content.kind === 'reaction'
+        ? `  reaction :${content.text}:  ${content.digest}`
+        : `  reply "${escapeForDisplay(content.text)}"  ${content.digest}`,
+    );
+  }
+  if (view.places.kind === 'threads-i-am-in') lines.push('  in threads where you posted yourself in the last 14 days');
+  else lines.push('  in', ...view.places.places.flatMap(standingPlaceLines));
+  const { perThread, perHour, perDay, perSender, expiresDays } = view.limits;
+  lines.push(
+    `  limits ${perThread} per thread, ${perHour} an hour, ${perDay} a day, ${perSender} a day from any one person, for ${expiresDays} days`,
+  );
+  lines.push(`  ${view.usesToday} ${view.usesToday === 1 ? 'use' : 'uses'} in the last day`);
+  for (const act of view.lastActs) {
+    // When it was decided, and — after the pause that follows — when it went, where that was recorded.
+    lines.push(
+      `    ${act.at}${act.actAt === undefined ? '' : ` (went ${act.actAt})`}  ${act.act}  ${act.contentDigest.slice(0, 12)}  ${act.channel} ${act.ts}  ${act.outcome}${
+        act.link === undefined ? '' : `  ${shownWords(act.link, 200)}`
+      }`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Every standing approval, and how to end one or all of them while any is live. */
+function renderStanding(report: StandingReport, handoffs: CliHandoffs): string {
+  // What `off` could not do, though every one has ended: said first, so it is not missed below the list.
+  const partial = (report.partial ?? []).map((line) => `Note: ${line}`);
+  const body = renderStandingList(report, handoffs);
+  return partial.length === 0 ? body : [...partial, '', body].join('\n');
+}
+
+function renderStandingList(report: StandingReport, handoffs: CliHandoffs): string {
+  if (report.approvals.length === 0) return 'No standing approvals.';
+  const live = report.approvals.some((view) => view.state !== 'ended');
+  const ending = handoffSentenceToFill(handoffs.core(['standing', 'revoke']), ['<id>'], (revoke) =>
+    handoffSentence(
+      handoffs.core(['standing', 'off']),
+      (off) => `End one with ${revoke}, or every one at once with ${off}.`,
+      { instead: `End one with ${revoke}.` },
+    ),
+  );
+  return [report.approvals.map(renderStandingView).join('\n\n'), ...(live ? ['', ending] : [])].join('\n');
+}
+
+/** The label as a person reads it: the word and the name, then each account and who its messages appear from. */
+function renderLabel(report: LabelReport): string {
+  const lines = [
+    `Word: ${report.word}  (one of ${report.words.join(', ')})`,
+    `Name: ${report.name ?? 'not set'} — used where a channel has no name of its own for you`,
+  ];
+  for (const ignored of report.ignored) lines.push(`Ignored: ${ignored}`);
+  for (const account of report.accounts) {
+    lines.push('', `${account.account} (${account.channel})`);
+    if (account.note !== undefined) lines.push(`  ${account.note}`);
+    for (const kind of account.kinds) {
+      lines.push(`  ${kind.kind.padEnd(9)}${kind.appearsAs}${kind.rule === undefined ? '' : `  (rule ${kind.rule})`}`);
+    }
+    for (const conversation of account.conversations) lines.push(`  in one conversation: ${conversation}`);
+    if (account.icon !== undefined) {
+      lines.push(
+        `  icon     ${'emoji' in account.icon ? account.icon.emoji : 'your Slack photo, until an agent emoji is set'}`,
+      );
+    }
+    if (account.style !== undefined) {
+      lines.push(
+        account.style === 'labelled'
+          ? '  style    labelled — every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
+          : account.appRoute === false
+            ? '  style    app — but its app cannot post from this machine, so every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
+            : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
+      );
+    }
+  }
+  const stray = report.rules.filter((rule) => !rule.matches);
+  if (stray.length > 0) {
+    lines.push('', 'Rules naming no account connected now — they match nothing:');
+    for (const rule of stray) lines.push(`  ${rule.text}`);
+  }
+  return lines.join('\n');
+}
+
+function renderLabelChange(result: LabelChangeResult): string {
+  return [result.note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderLabel(result)].join('\n');
+}
+
+/** What a level allows, as a person reads it: everything where no rule holds, nothing for an empty list. */
+function allowedText(allowed: readonly string[] | 'all'): string {
+  return allowed === 'all' ? 'everything (no rule)' : allowed.length === 0 ? 'nothing' : allowed.join(', ');
+}
+
+/**
+ * What an agent may do, as a person reads it: each account and what it allows, then what holds by name or not at all.
+ * A rule's account and conversation there are the file's own words, which a hand edit may have made anything — an
+ * address may hold an escape sequence the conversation grammar lets through — so every one is shown made safe.
+ */
+function renderBehaviour(report: BehaviourReport): string {
+  const lines: string[] = [];
+  if (report.rules.length === 0 && report.unreadable.length === 0) {
+    lines.push('No rules: an agent may start any act, and each one still waits for your yes.');
+  }
+  for (const account of report.accounts) {
+    lines.push('', shownText(account.account, 64), `  ${allowedText(account.allowed)}`);
+    for (const { conversation, allowed } of account.conversations) {
+      lines.push(`  in ${shownText(conversation, 120)}: ${allowedText(allowed)}`);
+    }
+  }
+  const orphans = report.rules.filter((rule) => rule.orphan);
+  if (orphans.length > 0) {
+    lines.push('', 'Rules whose account is not connected now — each still holds, by name:');
+    for (const rule of orphans) {
+      const account = shownText(rule.account, 64);
+      const place = rule.conversation === undefined ? account : `${account} in ${shownText(rule.conversation, 120)}`;
+      lines.push(`  ${place}: ${allowedText(rule.acts)}`);
+    }
+  }
+  if (report.unreadable.length > 0) {
+    lines.push('', 'Rules this release cannot read — each holds its account to nothing until it is corrected:');
+    for (const entry of report.unreadable) {
+      lines.push(`  ${entry.account === null ? 'every account' : shownText(entry.account, 64)}: ${entry.reason}`);
+    }
+  }
+  return lines.join('\n').replace(/^\n/, '');
+}
+
+function renderBehaviourChange(result: BehaviourChangeResult): string {
+  // A note names the rules it replaced, in the file's own words: made safe as the report is.
+  const note = result.note === null ? undefined : shownText(result.note, 400);
+  return [note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
+}
+
 /** `attach roots add` and the rest, by their words. */
 const ATTACH_KINDS: Readonly<Record<string, AttachChangeKind>> = {
   'roots add': 'rootsAdd',
@@ -909,6 +1640,40 @@ function renderAttachEntries(entries: readonly AttachEntry[]): string[] {
   return entries.map((entry) =>
     entry.real === null || entry.real === entry.path ? `  ${entry.path}` : `  ${entry.path}  (${entry.real})`,
   );
+}
+
+/**
+ * `profile`: the profile as an agent is handed it, then which files it read and which it would read once written,
+ * and the command that starts one.
+ */
+function renderProfile(view: ProfileView, handoffs: CliHandoffs, account: string | undefined): string {
+  const read = view.sections.map((section) => (section.source === 'built-in' ? '(built in)' : section.source));
+  const missing = view.candidates.filter((path) => !view.sections.some((section) => section.source === path));
+  return [
+    view.text,
+    '',
+    'Read, in this order — each refines the ones before it:',
+    ...read.map((source) => `  ${source}`),
+    ...(missing.length === 0
+      ? []
+      : [
+          '',
+          'Not written yet, or empty:',
+          ...missing.map((path) => `  ${path}`),
+          '',
+          handoffSentence(handoffs.own(['profile', 'init', ...(account === undefined ? [] : [account])]), (command) =>
+            account === undefined
+              ? `To start your own from a starter: ${command}; name an account for its own file.`
+              : `To start this account's from a starter: ${command}; add --conversation <id> for one conversation's.`,
+          ),
+        ]),
+  ].join('\n');
+}
+
+function renderProfileInit(result: ProfileInitResult): string {
+  return result.created
+    ? `Started ${result.path} from the starter: change each line to say how you write there.`
+    : `${result.path} is already there, and was left as it is: edit it to say how you write there.`;
 }
 
 /** Exported for its test, which asks for Windows' quoting by name. */
@@ -1014,6 +1779,8 @@ function renderOrg(view: OrganisationView): string {
         `    ${role.padEnd(12)} ${app ? `client id ${app.clientId}${app.appId ? `, app id ${app.appId}` : ''}` : 'none'}`,
       );
     }
+    // Named only when the organisation names one: members paste its bot token with Slack's `workspace bot`.
+    if (view.slack.apps.agent) lines.push(`    ${'agent'.padEnd(12)} app id ${view.slack.apps.agent.appId}`);
   }
   if (view.accounts.length > 0) lines.push(`  accounts     ${view.accounts.join(', ')}`);
   for (const drift of view.drift) lines.push(`  ! ${drift.detail}. ${drift.fix}`);
@@ -1034,7 +1801,10 @@ function renderOrgList(views: readonly OrganisationView[], handoffs: CliHandoffs
 function renderOrgChange(result: OrgChangeResult): string {
   const lines = [result.changed ? 'Done.' : `Nothing to change: ${result.organisation} matches its profile.`];
   for (const line of result.applied) lines.push(`  - ${line}`);
-  if (result.reported.length > 0) lines.push('', 'Left as it is:', ...result.reported.map((line) => `  - ${line}`));
+  // What the profile's own notes say below — an extension not applied here — is said there once, not here as well.
+  const below = new Set(result.profile.notes);
+  const reported = result.reported.filter((line) => !below.has(line));
+  if (reported.length > 0) lines.push('', 'Left as it is:', ...reported.map((line) => `  - ${line}`));
   lines.push('', renderOrg(result.profile));
   return lines.join('\n');
 }
@@ -1051,18 +1821,110 @@ function renderOrgRemove(result: OrgRemoveResult): string {
   return lines.join('\n');
 }
 
-function renderLater(result: UpdateLaterResult): string {
-  if (result.snoozedUntil === null) return 'Nothing was put off: no update has been found on this machine.';
-  const what = result.latest ? `The update to ${result.latest} is` : 'The daily update check is';
-  return `${what} put off until ${new Date(result.snoozedUntil).toString()}${result.changed ? '' : ' (it already was)'}: nothing stops for it until then, and the first command after asks again.`;
+function renderLevel(result: UpdateLevelResult): string {
+  const words = {
+    auto: 'auto: a check every day, and installs in the background once that is set up',
+    'every-14-days': 'every-14-days: a check at most once every 14 days, and installs only with your yes',
+    never: 'never: nothing on this machine asks npm for a newer release; update by hand',
+  } as const;
+  const capped = result.cappedAt
+    ? ` ${result.cappedAt.organisation}'s profile caps it at ${result.cappedAt.level}, so that is how it updates while the cap stands.`
+    : '';
+  return `This machine updates ${words[result.level]}${result.changed ? '' : ' (it already did)'}.${capped}`;
 }
 
-function renderAuto(result: UpdateAutoResult): string {
-  const state =
-    result.updateCheck === 'on'
-      ? 'on: once a day this machine asks npm for a newer release, and stops until it is updated or put off'
-      : 'off: nothing on this machine asks npm for a newer release, and nothing stops for one';
-  return `The daily update check is ${state}${result.changed ? '' : ' (it already was)'}.`;
+function renderPause(result: UpdatePauseResult): string {
+  const lines = [
+    `Update notices are paused until ${new Date(result.pausedUntil).toString()} (${result.days} day${result.days === 1 ? '' : 's'}). A security fix is not held.`,
+  ];
+  if (result.security !== null) lines.push(`A security fix is out now (${result.security}): update soon.`);
+  return lines.join('\n');
+}
+
+function renderResume(result: UpdateResumeResult): string {
+  return result.resumed ? 'The pause is over: update notices are back.' : 'Nothing was paused.';
+}
+
+function renderRollback(result: UpdateRollbackResult): string {
+  const lines: string[] = [];
+  for (const step of result.steps) {
+    lines.push(
+      step.outcome === 'switched'
+        ? `Switched the stable launcher ${step.launcher} back from ${step.from ?? 'its runtime'} to ${step.to ?? step.runtime}: no client configuration was changed.`
+        : `Could not switch the stable launcher ${step.launcher} back: ${step.detail ?? 'no reason given'}`,
+    );
+  }
+  if (result.status === 'nothing') lines.push('Nothing was changed: no stable launcher here has a release before.');
+  for (const left of result.left) lines.push(`Left as it is: ${left.launcher}: ${left.reason}.`);
+  if (result.next) lines.push('', result.next);
+  if (result.holdFailed) {
+    lines.push(
+      `The background update run was not told to hold this release back (${result.holdFailed}): its next run may install it again.`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Core's update deps: its own verifier, since core carries sigstore-js; the rest the update's defaults. */
+function coreUpdateDeps(core: { paths: { stateDir: string } }): UpdateDeps {
+  return { verifyRelease: stateReleaseVerifier(core.paths.stateDir) };
+}
+
+/** A run that could not do its work is not a success to the job's log; one with nothing to do yet is. */
+function backgroundExit(outcome: BackgroundOutcome): number {
+  if (outcome === 'refused') return EXIT_CODES.CONFIG;
+  if (outcome === 'failed' || outcome === 'unavailable') return EXIT_CODES.UNAVAILABLE;
+  if (outcome === 'busy') return EXIT_CODES.TRANSIENT;
+  return EXIT_CODES.OK;
+}
+
+function renderBackground(result: BackgroundRunResult): string {
+  const lines = [
+    `${result.dryRun ? 'Dry run: ' : ''}${result.outcome}: ${result.reason}.`,
+    `Runs ${result.current ?? 'nothing known'}; the registry's latest is ${result.latest ?? 'not known'}.`,
+  ];
+  if (result.release) {
+    const { release } = result;
+    lines.push(
+      `${release.version} came out ${release.publishedAt ?? 'at a time the registry does not give'}${release.security ? ', a security fix' : ''}; it may install ${release.holdHours} hours after, at ${release.installableAt ?? 'a time not known'}.`,
+    );
+  }
+  for (const item of result.packages) {
+    const done = [
+      item.provenance
+        ? `provenance verified: ${item.provenance.identity}, issued by ${item.provenance.issuer}, built on a ${item.provenance.runner} runner from ${item.provenance.repository} at ${item.provenance.ref}, SHA-512 ${item.provenance.sha512.slice(0, 16)}…${item.provenance.logIndex === null ? '' : `, transparency-log entry ${item.provenance.logIndex}`}`
+        : '',
+      item.installed ? 'installed' : '',
+      item.checked ? 'checked' : '',
+      item.switched ? 'switched to' : '',
+    ].filter(Boolean);
+    lines.push(
+      `- ${item.package} ${item.from ?? 'no release'} → ${item.to}: ${done.join('; ') || 'nothing done'}${item.detail ? ` (${item.detail})` : ''}`,
+    );
+  }
+  for (const gone of result.pruned) lines.push(`- removed the unused runtime ${gone.version} at ${gone.path}`);
+  if (result.jobRemoved) lines.push('The background update job was removed.');
+  if (result.notice)
+    lines.push(
+      '',
+      `${result.dryRun ? 'The next session would be told' : 'The next session is told'}: ${result.notice}`,
+    );
+  if (result.dryRun) lines.push('', 'Nothing was changed: this was a dry run.');
+  return lines.join('\n');
+}
+
+function renderUpdateJob(result: UpdateJobResult): string {
+  if (result.backgroundJob === 'on') {
+    const remove = result.remove === undefined ? '' : `\nTo remove it: ${result.remove}`;
+    return result.changed
+      ? `The background update job is set up: ${result.where} runs ${result.command.join(' ')}, ${result.schedule}.${remove}`
+      : `The background update job is already set up: ${result.where}, ${result.schedule}.${remove}`;
+  }
+  const left =
+    result.foreign === undefined
+      ? ''
+      : ` ${result.foreign.where} was left as it is: this installation did not write it (${result.foreign.reason}).`;
+  return `${result.changed ? `The background update job is removed (${result.where}).` : 'There is no background update job of this installation to remove.'}${left}`;
 }
 
 function renderChannels(report: ChannelsReport): string {

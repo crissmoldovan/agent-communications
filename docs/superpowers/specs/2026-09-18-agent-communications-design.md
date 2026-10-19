@@ -888,13 +888,13 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   `{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`; lists also support
   `--jsonl`. Data to stdout, messages to stderr. Colour off when not a TTY, with `NO_COLOR`, `TERM=dumb` or
   `--no-color`. Prompts only when stdin and stdout are TTYs, never with `--json`, `--no-input` or `CI`.
-- **Exit codes:** 0 ok · 1 unexpected · 10 send refused / approval required · 64 usage · 65 bad data ·
+- **Exit codes:** 0 ok · 1 unexpected, or a document this release is too old for · 10 send refused / approval required · 64 usage · 65 bad data ·
   66 not found · 69 provider or store unavailable · 75 transient, Google-side (rate limits, backend errors) ·
   77 auth or scope missing · 78 config error. Documented in `--help`. Error codes map to them as follows:
 
   | Error code | Exit |
   |---|---|
-  | `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`, `APPROVAL_VOID`, `POLICY_NEVER`, `RATE_CAPPED`, `UNSENDABLE_HTML`, `LOOSENING_REFUSED` | 10 |
+  | `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`, `APPROVAL_VOID`, `POLICY_NEVER`, `RATE_CAPPED`, `UNSENDABLE_HTML`, `LOOSENING_REFUSED`, `ACT_NOT_ALLOWED` (a behaviour rule does not allow this act here — [behaviour rules design](2026-10-19-agent-behaviour-rules-design.md), B4), `STANDING_REFUSED` (a standing approval does not cover this act; `details.reason` says why — [standing approvals design](2026-10-19-standing-approvals-design.md), §8.3), `STANDING_LIMIT` (a standing approval's limit is reached; `details.limit`, `details.allowed`, `details.freesAt` — S6) | 10 |
   | `USAGE`, `CURSOR_MISMATCH` (bad flags, a cursor from another query, malformed ids) | 64 |
   | `BAD_DATA`, `REPLY_INVALID` | 65 |
   | `NOT_FOUND` | 66 |
@@ -902,6 +902,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   | `TRANSIENT`, `KEYCHAIN_APPROVAL_PENDING`, `LOCK_TIMEOUT` | 75 |
   | `AUTH_REQUIRED`, `SCOPE_MISSING` | 77 |
   | `CONFIG` | 78 |
+  | `NEEDS_NEWER_RELEASE` (an organisation profile this release is too old for: update first, then run it again — [extensions design](2026-10-19-organisation-profile-extensions-design.md), X3), `UNEXPECTED` | 1 |
 
   `error.code` in the JSON envelope is always the specific code; the registry in core (code, exit, retryable,
   summary) is the single source, and the docs table is generated from it.

@@ -138,9 +138,10 @@ command's name: a bare `agent-whatsapp …` runs only where that package is inst
 other folders than the ones the approval is in. WhatsApp's CLI needs Node 22.16 or newer: under an older Node
 the result says so, and gives no command.
 
-- Where no line pastes safely into every Windows shell — on a default Windows install Node's own path, under
-  `C:\Program Files`, needs quotes — the result gives the command's words as JSON, with what to do: the person
-  types them, each quoted for their shell. Say so; do not turn them into a line yourself.
+- On a default Windows install, where Node under `C:\Program Files` needs quoting, a safe result gives a line
+  labelled **PowerShell**, beginning with its `&` call operator. Hand it over with that shell label. If any word
+  cannot be represented safely even there, the result instead gives the command's words as inert JSON and says the
+  person types them, each quoted for their shell. Say so; do not turn that JSON into a line yourself.
 - Where the result says the command is **not locatable here**, there is no command to give: say which product and
   release it names, and that the person installs or updates it the way they usually do, then tries again. Do not
   offer `npx`, a global install or a tool in its place.
@@ -158,3 +159,17 @@ Registering the server (§9) is a change, and so is anything else the core asks 
 - **When the person says no, revoke it at once:** `comms_approval_revoke` (CLI: `agentcomms approvals revoke <id>`).
   The server cannot hear a "no" said in this conversation: until you revoke it, a `chat` change can still be claimed
   for the rest of its ten minutes.
+
+## 13. Setting up: one question at a time.
+
+When you set something up with the person — connecting an account, a first rule, the agent label, or whatever a
+new release asks of them after an update — they should never be handed several decisions at once.
+
+- **One question or one step per message.** Wait for the answer before the next. A preview to approve counts as a
+  question of its own.
+- **Explain it first, in plain words:** what it is for, what will happen, and what it changes for them. Then give what
+  to do as short numbered steps, with anything to paste or type in a code block of its own.
+- **Say how long an approval lasts** when you show its preview, and offer to prepare it again if it lapses before
+  they answer.
+- **After an update,** walk through what the new release asks of the person the same way, starting with what changed
+  for them. The changelog's **Upgrading** section is the list.

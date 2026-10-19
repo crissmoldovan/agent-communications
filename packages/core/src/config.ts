@@ -3,7 +3,22 @@ import { chmod, open, readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  type AgentLabelLoosening,
+  type AgentLabelRule,
+  agentLabelOf,
+  classifyAgentLabelChange,
+} from './agent-label.ts';
 import type { ChangeBinding } from './approvals.ts';
+import {
+  type BehaviourAct,
+  type BehaviourDelta,
+  behaviourAccountsOf,
+  behaviourRulesMigrated,
+  classifyBehaviourChange,
+  type RuleRef,
+  readBehaviourSettings,
+} from './behaviour.ts';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { CONVERSION_HOOKS, type ConversionHooks } from './config-hooks.ts';
 import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
@@ -12,7 +27,14 @@ import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { type CliHandoffs, handoffSentence, requiredHandoffs } from './handoff-text.ts';
 import { namesItsPlace } from './jail.ts';
 import { withCredentialsLock, withFileLock } from './lock.ts';
-import { NAME_MESSAGE, NAME_PATTERN, ORGANISATION_PATTERN, parseName, parseOrganisation } from './name-grammar.ts';
+import {
+  NAME_MESSAGE,
+  NAME_PATTERN,
+  ORGANISATION_PATTERN,
+  PLAIN_NAME_PATTERN,
+  parseName,
+  parseOrganisation,
+} from './name-grammar.ts';
 import { expandHome } from './paths.ts';
 import { namesMigrationEnabled } from './release-gate.ts';
 
@@ -32,7 +54,7 @@ export const READABLE_CONFIG_VERSIONS: readonly ConfigVersion[] = [1, 2, 3];
 
 export { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
 
-export const ALIAS_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const ALIAS_PATTERN: RegExp = PLAIN_NAME_PATTERN;
 const ALIAS_MESSAGE = 'names must be 1–32 lowercase letters, digits or hyphens, starting with a letter or digit';
 
 export type SendPolicy = 'chat' | 'confirm' | 'never';
@@ -44,8 +66,20 @@ export type SendPolicy = 'chat' | 'confirm' | 'never';
  * way to change it, and that passes no gate at all.
  */
 export type ChangePolicy = 'chat' | 'confirm';
-/** Whether this machine checks for a newer release once a day, and stops until it is updated or put off. */
+/** 0.18's switch for the daily update check: what `defaults.updates` reads from until a level is set. */
 export type UpdateCheckSetting = 'on' | 'off';
+
+/**
+ * How this machine updates (design 2026-10-16, U2), from the most updating to the least: `auto` — the default — checks
+ * daily and installs in the background once its job is set up; `every-14-days` checks at most once every 14 days and
+ * installs only with the person's yes; `never` asks the registry nothing.
+ */
+export const UPDATE_LEVELS = ['auto', 'every-14-days', 'never'] as const;
+export type UpdateLevel = (typeof UPDATE_LEVELS)[number];
+
+export function isUpdateLevel(value: unknown): value is UpdateLevel {
+  return typeof value === 'string' && (UPDATE_LEVELS as readonly string[]).includes(value);
+}
 export type StoreKind = 'keychain' | 'file';
 
 export interface ClientConfig {
@@ -117,6 +151,16 @@ export interface Defaults {
    * it is what keeps a machine from quietly falling behind a release — so it is approved like one; on applies at once.
    */
   updateCheck?: UpdateCheckSetting | undefined;
+  /**
+   * How this machine updates (design 2026-10-16, U2): `auto`, `every-14-days` or `never`. Absent reads from
+   * `updateCheck` — `on` as `auto`, `off` as `never` — and both absent as `auto`. A word this release does not know
+   * reads as `auto`, and the file stays readable: a later release may add a level.
+   *
+   * Moving to a level that updates less is a loosening, approved like one; moving back applies at once. Every write of
+   * a level writes `updateCheck` beside it, `off` for `never` and `on` otherwise, so a release before 0.20 sharing the
+   * file checks, or does not, as the person chose.
+   */
+  updates?: string | undefined;
 }
 
 /**
@@ -233,6 +277,26 @@ interface ConfigBody {
   /** Superseded rotating credentials which still need conclusive per-token cleanup. */
   pendingRevocations?: PendingRevocation[] | undefined;
   defaults: Defaults;
+  /**
+   * How what an agent sends is labelled (design 2026-10-15-agent-label, L5): the word, the name, the rules that say
+   * who a message appears to come from, and each Slack account's agent emoji.
+   *
+   * `unknown` here, on purpose: it is read only through `agentLabelOf`, which reads a value it does not understand
+   * as the stricter one — an unknown word as `agent`, a rule list it cannot read as no rules — so a hand edit or a
+   * later release's key can only tighten. Kept through every write as the schemas keep every key they do not name, and
+   * judged by `classifyChange`.
+   */
+  agentLabel?: unknown;
+  /**
+   * What an agent may do (design 2026-10-19-agent-behaviour-rules, B3): `{ rules: [...] }`, each rule the acts allowed
+   * in one account or one of its conversations.
+   *
+   * `unknown` here, as `agentLabel` is, and for the same reason the other way round: it is read only through
+   * `readBehaviourSettings`, which reads a value it does not understand as allowing less — an unknown act dropped, a
+   * rule it cannot read as its account allowing nothing — never as no rules. Kept through every write as the schemas
+   * keep every key they do not name, so older releases keep it too, and judged by `classifyChange`.
+   */
+  behaviour?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -283,6 +347,27 @@ export interface OrganisationSlackApp {
 }
 
 /**
+ * An organisation's update caps, as the file beside its profile names them (design 2026-10-16, U8), and the SHA-256 of
+ * that file, so `org update` can tell the organisation changing them from the record drifting. A `max` word this release
+ * does not know reads as `never`, the strictest it could mean: caps only ever tighten.
+ */
+export interface OrganisationUpdates {
+  max?: string | undefined;
+  background?: boolean | undefined;
+  sha256: string;
+}
+
+/**
+ * The organisation's bot-only agent app, as its profile's agent-app file names it (CUE-493): the app's id, and the
+ * SHA-256 of that file, so `org update` can tell the organisation changing it from the record drifting. No client id:
+ * nobody signs in through it — its administrator installs it once and its members paste its bot token.
+ */
+export interface OrganisationAgentApp {
+  appId: string;
+  sha256: string;
+}
+
+/**
  * What this machine records of one organisation profile: never its bytes and never its secret — where it was read
  * from, the SHA-256 of what was read and when, the generations of its Google client, and its Slack apps.
  */
@@ -302,9 +387,33 @@ export interface OrganisationRecord {
         workspace: string;
         workspaceName: string;
         redirectPort: number;
-        apps: { read?: OrganisationSlackApp | undefined; send?: OrganisationSlackApp | undefined };
+        apps: {
+          read?: OrganisationSlackApp | undefined;
+          send?: OrganisationSlackApp | undefined;
+          agent?: OrganisationAgentApp | undefined;
+        };
       }
     | undefined;
+  /** The organisation's update caps, from the file beside its profile; absent when it names none. */
+  updates?: OrganisationUpdates | undefined;
+  /**
+   * The entries of the profile's `extensions` this release did not know and skipped, being optional (design 2026-10-19,
+   * X3): the release that first understands each, and the SHA-256 of the entry's canonical JSON — as
+   * `Record<string, OrganisationIgnoredExtension>`. Kept in step with the profile. Absent when none was skipped.
+   *
+   * Held as the file holds it, whatever its shape, and read only through `ignoredListOf`, which keeps the well-formed
+   * entries and names the rest: 0.21.0 is the first release to read it, so a shape a later release or a hand gave it
+   * must never make the whole configuration unreadable, nor be dropped by an unrelated write. Losing it is safe: a
+   * later release that understands an entry judges applying it by its classifier whether or not the list names it —
+   * a tightening at once, anything else approved first, never a repair of drift (X4).
+   */
+  ignoredExtensions?: unknown;
+}
+
+/** One skipped extension, as the record keeps it (design 2026-10-19, X3). */
+export interface OrganisationIgnoredExtension {
+  since: string;
+  sha256: string;
 }
 
 export interface ConfigV2 extends ConfigBody {
@@ -340,6 +449,12 @@ export interface LegacyDrain {
 interface Version3Fields {
   /** Each owner's send epoch by id; absent reads as 0. Raised by every write that turns its send policy to `never`. */
   sendEpochs?: Record<string, number> | undefined;
+  /**
+   * The standing epoch (design 2026-10-19-standing-approvals, S8); absent reads as 0. Raised by `standing off` and by
+   * every write that turns a change policy from `chat` to `confirm`, and never lowered: a standing approval made under
+   * an earlier one has ended.
+   */
+  standingEpoch?: number | undefined;
   /** Present while records from an earlier release are being retired. */
   legacyDrain?: LegacyDrain | undefined;
 }
@@ -501,6 +616,7 @@ const defaultsSchema = z.looseObject({
   timezone: z.string().default('system'),
   confirm: z.looseObject({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
   updateCheck: z.enum(['on', 'off']).optional(),
+  updates: z.string().min(1).optional(),
 });
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
@@ -579,6 +695,7 @@ const generationSchema = z.looseObject({
   addedAt: z.string(),
 });
 const slackAppRecordSchema = z.looseObject({ clientId: z.string().min(1), appId: z.string().min(1).optional() });
+const agentAppRecordSchema = z.looseObject({ appId: z.string().min(1), sha256: z.string().min(1) });
 const organisationRecordSchema = z.looseObject({
   label: z.string(),
   source: z.looseObject({ kind: z.string().min(1), path: z.string().min(1) }),
@@ -594,9 +711,20 @@ const organisationRecordSchema = z.looseObject({
       workspace: z.string().min(1),
       workspaceName: z.string(),
       redirectPort: z.number().int().min(1).max(65535),
-      apps: z.looseObject({ read: slackAppRecordSchema.optional(), send: slackAppRecordSchema.optional() }).default({}),
+      apps: z
+        .looseObject({
+          read: slackAppRecordSchema.optional(),
+          send: slackAppRecordSchema.optional(),
+          agent: agentAppRecordSchema.optional(),
+        })
+        .default({}),
     })
     .optional(),
+  updates: z
+    .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
+    .optional(),
+  // Any shape: read through `ignoredListOf`, so one malformed entry never makes config.json unreadable (X3).
+  ignoredExtensions: z.unknown().optional(),
 });
 
 const formerNameSchema = z.looseObject({ name: nameSchema, id: z.string().min(1) });
@@ -691,6 +819,7 @@ const LEGACY_DRAIN_OUTCOMES = ['revoked', 'expired', 'used', 'failed', 'sending'
 /** What version 3 adds, loose as the rest of the file is: a later release's keys inside them are kept. */
 const v3Shape = {
   sendEpochs: z.record(z.string().min(1), z.number().int().min(0)).optional(),
+  standingEpoch: z.number().int().min(0).optional(),
   legacyDrain: z
     .looseObject({
       since: absoluteTimeSchema,
@@ -923,9 +1052,31 @@ export function governingChangePolicy(
   return governing.includes('confirm') ? 'confirm' : 'chat';
 }
 
-/** Whether this machine's daily update check is on: `defaults.updateCheck`, absent reading as `on`. */
+/** 0.18's switch, as written: `defaults.updateCheck`, absent reading as `on`. */
 export function updateCheckSetting(config: Config): UpdateCheckSetting {
   return config.defaults.updateCheck ?? 'on';
+}
+
+/**
+ * The level this machine's configuration sets (design 2026-10-16, U2): `defaults.updates`, else 0.18's switch read as a
+ * level — `on` as `auto`, `off` as `never`. A word this release does not know reads as `auto`, the default.
+ */
+export function updateLevelOf(config: Config): UpdateLevel {
+  const set = config.defaults.updates;
+  if (set !== undefined) return isUpdateLevel(set) ? set : 'auto';
+  return updateCheckSetting(config) === 'off' ? 'never' : 'auto';
+}
+
+/**
+ * How much a level updates, for `classifyChange`: `auto` 2, `every-14-days` 1, `never` 0. A word this release does not
+ * know is judged as the most updating on the side it leaves and the least on the side it arrives on, as an account's
+ * mode is — an unknown word can cost a person a question, never skip one.
+ */
+function updateRank(config: Config, side: 'before' | 'after'): number {
+  const set = config.defaults.updates;
+  const level = set === undefined ? updateLevelOf(config) : isUpdateLevel(set) ? set : null;
+  if (level === null) return side === 'before' ? UPDATE_LEVELS.length - 1 : 0;
+  return UPDATE_LEVELS.length - 1 - UPDATE_LEVELS.indexOf(level);
 }
 
 /**
@@ -1125,7 +1276,9 @@ export class ConfigStore {
         // The send epoch (design 2026-10-05 §D1), last, once the write is otherwise allowed: on version 3, raised for
         // every owner this write turns to `never`, and never lowered; before it, no send policy of an existing owner
         // moves at all.
-        const written = withSendEpochs(current, parsed.data);
+        // The standing epoch beside it (design 2026-10-19-standing-approvals, S8): raised by any tighter change policy,
+        // and never lowered, in this same write.
+        const written = withStandingEpoch(current, withSendEpochs(current, parsed.data));
         const serialized = `${JSON.stringify(written, null, 2)}\n`;
         await writeFileAtomic(this.path, serialized, FILE_MODE, options.signal);
         committed = written;
@@ -1371,6 +1524,52 @@ function withSendEpochs(before: Config, after: Config): Config {
   return Object.keys(epochs).length === 0 ? after : { ...after, sendEpochs: epochs };
 }
 
+/**
+ * The standing epoch in `config` (design 2026-10-19-standing-approvals, S8): its stored value, or 0 when it has none —
+ * or when it is not a whole number of 0 or more, which no write of this release leaves.
+ */
+export function standingEpochOf(config: Config): number {
+  const epoch = (config as { standingEpoch?: unknown }).standingEpoch;
+  return typeof epoch === 'number' && Number.isInteger(epoch) && epoch >= 0 ? epoch : 0;
+}
+
+/** The change policy of every inbox and account by id, each its own or the default. */
+function changePoliciesById(config: Config): Map<string, ChangePolicy> {
+  const policies = new Map<string, ChangePolicy>();
+  for (const inbox of Object.values(config.inboxes))
+    policies.set(inbox.id, inbox.changePolicy ?? defaultChangePolicy(config));
+  for (const account of Object.values(config.accounts)) {
+    policies.set(account.id, account.changePolicy ?? defaultChangePolicy(config));
+  }
+  return policies;
+}
+
+/**
+ * Whether this write turns a change policy from `chat` to `confirm`: the default's, or the effective one of an inbox or
+ * account there before and after, by id.
+ */
+function tightensAChangePolicy(before: Config, after: Config): boolean {
+  if (defaultChangePolicy(before) === 'chat' && defaultChangePolicy(after) === 'confirm') return true;
+  const was = changePoliciesById(before);
+  for (const [id, policy] of changePoliciesById(after)) {
+    if (policy === 'confirm' && was.get(id) === 'chat') return true;
+  }
+  return false;
+}
+
+/**
+ * `after`, with the standing epoch this write owes (design 2026-10-19-standing-approvals, S8): on version 3, the higher
+ * of the two it holds — never lowered, whatever the write's own copy says, nor dropped — and one more when it tightens a
+ * change policy (`tightensAChangePolicy`). Before version 3 there is no epoch, and no standing approval: every one is
+ * made on version 3.
+ */
+function withStandingEpoch(before: Config, after: Config): Config {
+  if (before.version !== 3 || after.version !== 3) return after;
+  const held = Math.max(standingEpochOf(before), standingEpochOf(after));
+  const kept = tightensAChangePolicy(before, after) ? held + 1 : held;
+  return kept === 0 && after.standingEpoch === undefined ? after : { ...after, standingEpoch: kept };
+}
+
 async function readFileIfExists(path: string): Promise<string | null> {
   try {
     return await readFile(path, 'utf8');
@@ -1526,10 +1725,12 @@ function followsReauth(before: NamedConfig, after: NamedConfig, fromId: string, 
 }
 
 /**
- * Null when `after` is `before` with only account keys changed — plus the version, and exactly one record of each
- * former name naming where it went — or a description of the first other difference.
+ * Null when `after` is `before` with only account keys changed — plus the version, exactly one record of each former
+ * name naming where it went, and the behaviour rules that held an account by its old name holding it by its new one
+ * (`behaviourRulesMigrated`) — or a description of the first other difference.
  */
 function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null {
+  const renames: { from: string; to: string; id: string }[] = [];
   for (const map of ['inboxes', 'accounts'] as const) {
     const was = new Map(Object.values(before[map]).map((row) => [row.id, canonicalJson(row)]));
     const now = Object.values(after[map]);
@@ -1547,13 +1748,18 @@ function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null
       if (!record || record.id !== row.id || record.name !== keyOf.get(row.id)) {
         return `the former name "${alias}" is wrong`;
       }
+      renames.push({ from: alias, to: record.name, id: row.id });
     }
+  }
+  if (canonicalJson(behaviourRulesMigrated(before, renames) ?? null) !== canonicalJson(after.behaviour ?? null)) {
+    return 'the behaviour rules changed other than by the names';
   }
   const {
     version: _v1,
     inboxes: _i1,
     accounts: _a1,
     naming: _n1,
+    behaviour: _b1,
     ...restBefore
   } = before as PlainConfig & {
     naming?: unknown;
@@ -1564,6 +1770,7 @@ function onlyKeysRenamed(before: PlainConfig, after: NamedConfig): string | null
     accounts: _a2,
     formerNames: _f,
     naming: _n2,
+    behaviour: _b2,
     ...restAfter
   } = after as NamedConfig & { naming?: unknown };
   return canonicalJson(restBefore) === canonicalJson(restAfter) ? null : 'a setting other than a name changed';
@@ -1820,8 +2027,18 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     loosen('defaults.changePolicy', defaultChangePolicy(before), defaultChangePolicy(after));
   }
   if (b.riskEscalation && !a.riskEscalation) loosen('defaults.riskEscalation', b.riskEscalation, a.riskEscalation);
-  // Off stops the one thing that tells a person this machine has fallen behind a release: a person agrees to that.
-  if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+  // A level that updates less keeps this machine behind for longer, or for good: a person agrees to that (design
+  // 2026-10-16, U2). The words as written, so a preview names what was set — an unknown one too.
+  // A level left exactly as it was moved nothing, whatever its word.
+  const levelKept = b.updates !== undefined && b.updates === a.updates;
+  if (!levelKept && updateRank(after, 'after') < updateRank(before, 'before')) {
+    loosen(
+      'defaults.updates',
+      before.defaults.updates ?? updateLevelOf(before),
+      after.defaults.updates ?? updateLevelOf(after),
+    );
+  } else if (updateCheckSetting(before) === 'on' && updateCheckSetting(after) === 'off') {
+    // 0.18's switch off beside a level that says otherwise: what a release before 0.20 reads on this machine.
     loosen('defaults.updateCheck', updateCheckSetting(before), updateCheckSetting(after));
   }
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
@@ -1874,7 +2091,102 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (before.secrets === undefined && after.secrets !== undefined && after.secrets.store !== 'keychain') {
     if (holdsSecrets(before)) loosen('secrets.store', secretsStoreOf(before), after.secrets.store);
   }
+  // The agent label (design 2026-10-15-agent-label, L5), read as every channel reads it: a change that could leave a
+  // message unlabelled, or that changes how the label looks, waits for the person. Its values are rendered as the
+  // other settings' are, so the preview shows them and the approval binds them.
+  for (const loosening of classifyAgentLabelChange(agentLabelOf(before), agentLabelOf(after))) {
+    loosen(
+      loosening.path,
+      labelSettingValue(loosening, loosening.was, before),
+      labelSettingValue(loosening, loosening.now, after),
+    );
+  }
+  // What an agent may do (design 2026-10-19-agent-behaviour-rules, B5), judged per connected account as every channel
+  // decides it: a change that lets an agent do more at any level waits for the person, and one that only narrows applies
+  // at once. Its values are every level the change moves, by name, so the preview shows the whole change and the
+  // approval binds it.
+  const behaviour = classifyBehaviourChange(readBehaviourSettings(before), readBehaviourSettings(after), {
+    before: behaviourAccountsOf(before),
+    after: behaviourAccountsOf(after),
+  });
+  if (behaviour.loosens) {
+    const levels = behaviourLevels(behaviour.deltas);
+    loosen('behaviour.rules', levels.before, levels.after);
+  }
   return { loosened: changes.map((change) => change.path), changes };
+}
+
+/** What a level allows, in a preview's words: `everything` where no rule holds, `nothing` for an empty one. */
+function behaviourActsText(acts: readonly BehaviourAct[] | 'all'): string {
+  return acts === 'all' ? 'everything' : acts.length === 0 ? 'nothing' : acts.join(', ');
+}
+
+/** A level by the name the person knows: the account, and its conversation — `acme/slack C0GENERAL`. */
+function behaviourLevelText(scope: RuleRef): string {
+  const account = scope.account === '*' ? 'any other account' : scope.account;
+  return scope.conversation === undefined ? account : `${account} ${scope.conversation}`;
+}
+
+/**
+ * The levels a change to the behaviour rules moves, as a loosening carries them: each level, by name, to what it
+ * allowed before, and to what it allows after. Read back as `<level>: <before> → <after>` in a preview.
+ */
+function behaviourLevels(deltas: readonly BehaviourDelta[]): {
+  before: Record<string, string>;
+  after: Record<string, string>;
+} {
+  const before: Record<string, string> = {};
+  const after: Record<string, string> = {};
+  for (const delta of deltas) {
+    const level = behaviourLevelText(delta.scope);
+    before[level] = behaviourActsText(delta.before);
+    after[level] = behaviourActsText(delta.after);
+  }
+  return { before, after };
+}
+
+/**
+ * One label rule in words, as a preview lists it: `acme/slack in C0ACME for post/reply: me`. No comma inside, since a
+ * preview joins a list of them with commas.
+ */
+export function agentLabelRuleText(rule: AgentLabelRule): string {
+  const where = rule.conversation === undefined ? '' : ` in ${rule.conversation}`;
+  const kinds = rule.kinds === undefined ? '' : ` for ${rule.kinds.join('/')}`;
+  return `${rule.account}${where}${kinds}: ${rule.as}`;
+}
+
+/**
+ * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles by the name of
+ * the workspace each is for, in `config` — the side the value was read from — and the rest as text.
+ *
+ * Icons and styles are stored by the account's id, so they follow a rename; a preview names the workspace as the person
+ * knows it, `acme/slack`, never its id, which they have never seen (0.21). The ids are still what an approval binds:
+ * `changedSettings` records the stored values as they are. An id that names no connected account — one removed since —
+ * has no other name, and keeps its id.
+ */
+function labelSettingValue(loosening: AgentLabelLoosening, value: unknown, config: Config): SettingValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
+  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles') {
+    const accounts = connectedAccounts(config);
+    return Object.fromEntries(
+      Object.entries(value as Readonly<Record<string, string>>).map(([id, entry]) => [
+        accounts.find((account) => account.id === id)?.alias ?? id,
+        entry,
+      ]),
+    );
+  }
+  return String(value);
+}
+
+/** The label settings a change can write, as the file holds them — raw, as `changedSettings` records every setting. */
+const LABEL_SETTINGS = ['word', 'name', 'rules', 'slackIcons', 'slackStyles'] as const;
+
+function storedAgentLabel(config: Config): Readonly<Record<string, unknown>> {
+  const stored = config.agentLabel;
+  return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+    ? (stored as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -1897,7 +2209,8 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * and each mailbox's and account's own settings — including those of one added or removed.
+ * the agent label's settings, the behaviour rules, and each mailbox's and account's own settings — including those of
+ * one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
  * changes approved by chat" — and binding only the loosenings let a claim drop the tightening a person read, since
@@ -1937,7 +2250,19 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
     record(`defaults.${key}`, defaultsBefore[key], defaultsAfter[key]);
   }
   record('secrets.store', before.secrets?.store, after.secrets?.store);
+  const labelBefore = storedAgentLabel(before);
+  const labelAfter = storedAgentLabel(after);
+  for (const key of LABEL_SETTINGS) record(`agentLabel.${key}`, labelBefore[key], labelAfter[key]);
+  record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
   return changes;
+}
+
+/** The behaviour rules as the file holds them — raw, ids and all, as `changedSettings` records every setting. */
+function storedBehaviourRules(config: Config): unknown {
+  const stored = config.behaviour;
+  return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+    ? (stored as { rules?: unknown }).rules
+    : undefined;
 }
 
 /**

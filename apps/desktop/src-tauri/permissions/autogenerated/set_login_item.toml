@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-login-item"
+description = "Enables the set_login_item command without any pre-configured scope."
+commands.allow = ["set_login_item"]
+
+[[permission]]
+identifier = "deny-set-login-item"
+description = "Denies the set_login_item command without any pre-configured scope."
+commands.deny = ["set_login_item"]

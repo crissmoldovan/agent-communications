@@ -142,6 +142,8 @@ try {
   const tools = await waitFor(2);
   const names = tools.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
+    // An acknowledgement a standing approval the person made at their terminal covers: sent without asking, as the agent.
+    'slack_ack',
     // Where an approval stands, now or once it changes: it only looks.
     'slack_approval_wait',
     'slack_channels',
@@ -161,6 +163,8 @@ try {
     // Saves files on this machine, under the downloads folder only: a read as far as Slack is concerned.
     'slack_file_download',
     'slack_files',
+    // Makes the agent emoji as a file on this machine: reads Slack, changes nothing there.
+    'slack_icon_make',
     'slack_manifest',
     'slack_mode',
     'slack_mode_narrow',
@@ -175,6 +179,8 @@ try {
     'slack_react_send',
     'slack_read',
     'slack_search',
+    // Prepares a standing approval for a person to approve at their terminal with its code: it approves nothing.
+    'slack_standing_add',
     'slack_thread',
     // Connecting and changing a workspace: whatever loosens it or removes it waits for a change approval.
     'slack_workspace_add',

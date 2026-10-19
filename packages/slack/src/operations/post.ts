@@ -15,6 +15,7 @@ import {
 import { requireConversation } from './destination.ts';
 import { attachPolicyOf, type DraftInput, draftPayload, ownDraft } from './drafts.ts';
 import { gateDepsFor } from './gate.ts';
+import { checkedIdentity } from './label.ts';
 import { requireMessageAt, requireMessageTs } from './message.ts';
 import { NameBook } from './people.ts';
 import {
@@ -63,6 +64,11 @@ export interface PrepareRequest {
   readonly broadcast?: unknown;
   /** Local files to post, by path, for a new message: see `DraftInput.files`. */
   readonly files?: readonly string[] | undefined;
+  /**
+   * Who it appears to come from, when the person said so for this message (design 2026-10-15 L3): `agent`, labelled —
+   * the default anyway — or `me`, as them with no label. Never chosen by an agent on its own.
+   */
+  readonly as?: unknown;
 }
 
 function draftToWrite(request: PrepareRequest): DraftInput | undefined {
@@ -125,6 +131,7 @@ export async function prepareDraftPost(
   slack: SessionDeps = {},
 ): Promise<PreparedPost & LegacyDrainNote> {
   const writing = draftToWrite(request);
+  const requested = checkedIdentity(request.as);
   if (writing !== undefined) requireConversation(writing.channel, alias, context.handoffs);
   const composed = writing === undefined ? undefined : { payload: draftPayload(writing), source: writing.text ?? '' };
   const paths = writing?.files ?? [];
@@ -139,7 +146,7 @@ export async function prepareDraftPost(
       ? // Another workspace's draft is absent here: drafts share one directory, and the id alone proves nothing.
         await ownDraft(store, gate.accountId, request.draftId as string)
       : await store.create(gate.accountId, composed.payload, composed.source, files);
-  return noting(await preparePost(gate, draft, new NameBook()), legacyDrain);
+  return noting(await preparePost(gate, draft, new NameBook(), requested), legacyDrain);
 }
 
 export interface SendPostInput {
@@ -192,11 +199,16 @@ export async function react(
   wanted: ReactionOptions,
   approvalId: string | undefined,
   slack: SessionDeps = {},
+  /** `as`, when the person said who this reaction comes from (design 2026-10-15 S6). Only with no `approvalId`. */
+  as?: unknown,
 ): Promise<ReactionResult & LegacyDrainNote> {
+  const requested = checkedIdentity(as);
+  // A channel's name, or anything else that is no conversation id, is refused before the workspace is opened.
+  requireConversation(wanted.channel, alias, context.handoffs);
   // First — it prepares, or claims, or both: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const gate = await gateDepsFor(context, alias, slack);
-  const claiming = approvalId ?? (await prepareReaction(gate, wanted)).approvalId;
+  const claiming = approvalId ?? (await prepareReaction(gate, wanted, requested)).approvalId;
   return noting(await reactPrepared(gate, claiming, wanted), legacyDrain);
 }
 
@@ -226,6 +238,8 @@ export interface EditPrepareRequest {
   readonly files?: readonly string[] | undefined;
   /** The ids of the message's own files to take off it. */
   readonly removeFiles?: readonly string[] | undefined;
+  /** Who the edit appears to come from, when the person said so for this edit (design 2026-10-15 S5). */
+  readonly as?: unknown;
 }
 
 /* A Slack file id: F, then capitals and digits. Checked before Slack is asked, and before it goes into the record. */
@@ -297,6 +311,7 @@ export async function prepareEdit(
 ): Promise<PreparedEdit & LegacyDrainNote> {
   const writing = editWordsToWrite(request);
   const removeFiles = filesToRemove(request);
+  const requested = checkedIdentity(request.as);
   if (writing !== undefined) requireMessageAt({ channel: writing.channel, ts: request.ts }, alias, context.handoffs);
   else requireMessageTs(request.ts);
   const composed = writing === undefined ? undefined : { payload: draftPayload(writing), source: writing.text ?? '' };
@@ -313,7 +328,7 @@ export async function prepareEdit(
         await ownDraft(store, gate.accountId, request.draftId as string)
       : await store.create(gate.accountId, composed.payload, composed.source, files);
   requireMessageAt({ channel: draft.payload.channel, ts: request.ts }, alias, context.handoffs);
-  return noting(await prepareMessageEdit(gate, draft, request.ts, removeFiles, new NameBook()), legacyDrain);
+  return noting(await prepareMessageEdit(gate, draft, request.ts, removeFiles, new NameBook(), requested), legacyDrain);
 }
 
 export interface SendEditInput {

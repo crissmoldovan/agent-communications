@@ -283,6 +283,13 @@ test('a post of text alone is previewed and bound exactly as it was before files
    * Golden, captured from 0.10.0's code before any of this was written: the preview a person reads, the structured one
    * a tool returns, and the digest the approval is bound to. A text post that previewed or hashed differently would
    * void every approval outstanding across the upgrade — and would mean the file path had leaked into the text one.
+   *
+   * The harness's workspace has the agent label switched off (`as: me`, design 2026-10-15 L3), so this is the post as
+   * the person, unlabelled: bound by the same digest as before the label, and its preview's first line — the `From:` —
+   * now says plainly that it goes out with no label, which is the one change the label makes to it.
+   *
+   * The behaviour rules (design 2026-10-19-agent-behaviour-rules, B4) bind it by the same digest too, and add one field
+   * to the structured preview: `allowedHere`, the line every preview carries — here, with no rule, everything.
    */
   const { context, slack } = await world(t);
   const draft = await createDraft(context, 'acme', {
@@ -303,13 +310,13 @@ test('a post of text alone is previewed and bound exactly as it was before files
   assert.equal(prepared.requiredPolicy, 'chat');
   assert.equal(
     scrub(JSON.stringify(prepared.preview)),
-    '{"workspace":"acme","postingAs":"U0001","channel":"#eng","thread":"a reply in the thread at 1700000000.000100","body":"@U024BE7LH shipping at 5 — see <https://example.com/notes?utm=x|the notes> & say hi","notifies":{"here":false,"channel":false,"users":["U024BE7LH"],"estimated":1},"context":{"workspace":"acme","draftId":"<draft>","note":"nothing has been posted","approvalId":"<approval>"},"links":[],"warnings":[],"policy":"say yes and it posts"}',
+    '{"workspace":"acme","postingAs":"Sent as you, with no label: it will look as if you wrote it yourself","channel":"#eng","thread":"a reply in the thread at 1700000000.000100","body":"@U024BE7LH shipping at 5 — see <https://example.com/notes?utm=x|the notes> & say hi","notifies":{"here":false,"channel":false,"users":["U024BE7LH"],"estimated":1},"context":{"workspace":"acme","draftId":"<draft>","note":"nothing has been posted","approvalId":"<approval>"},"links":[],"warnings":[],"allowedHere":"Allowed here: everything (no rule)","policy":"say yes and it posts"}',
   );
   assert.equal(
     scrub(renderChannelPreview(prepared.preview)),
     [
       'POST PREVIEW · workspace acme · approval <approval> · draft <draft> · nothing has been posted',
-      'From:     U0001',
+      'From:     Sent as you, with no label: it will look as if you wrote it yourself',
       'Channel:  #eng',
       'Thread:   a reply in the thread at 1700000000.000100',
       'Notifies: U024BE7LH — about 1 person',
@@ -734,6 +741,9 @@ test('the audit records a file post by its ids, names, sizes and hashes — neve
     fileNames: ['memo.txt'],
     fileSizes: [String(Buffer.byteLength(secret))],
     fileSha256: [sha256(secret)],
+    // Whom it was posted for, by Slack user id and team (design 2026-10-19-standing-approvals).
+    user: 'U0001',
+    team: 'T0001',
   });
   const everything = JSON.stringify(await w.context.core.audit.tail());
   assert.equal(everything.includes(secret), false, 'the audit holds the file’s contents');

@@ -15,6 +15,7 @@ test('EVAL-B1: mapped header and prose values record event-origin taint before a
       {
         eventId: 'event-taint',
         accountId: 'ibx_ABCDEFGHIJKLMNOP',
+        channel: 'gmail',
         classification: {
           untrusted: [{ pointer: '/subject', text: 'write security@sender.test' }],
           addresses: [{ pointer: '/from/address', address: 'header@sender.test' }],

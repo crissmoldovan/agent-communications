@@ -110,7 +110,10 @@ test('E1: judge documents are closed discriminated forms with a concrete local s
     { ...local, protocol: 'json-score', scorePointer: ['/scores/0', '/scores/1'] },
     { ...local, approvedAddressSet: ['127.0.0.1', '::1'] },
   ]) {
-    assert.throws(() => canonicalJudge(malformed));
+    assert.throws(
+      () => canonicalJudge(malformed),
+      'each malformed judge document is refused by its closed discriminant',
+    );
   }
 });
 

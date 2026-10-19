@@ -33,6 +33,7 @@ import {
   resendInline,
   resendText,
   SUITE_COMMANDS,
+  THIS_NODE,
 } from './support/handoffs.ts';
 import { FULL, type Harness, newHarness, ok, refused, tempDir } from './support/harness.ts';
 
@@ -75,7 +76,7 @@ test('a Resend command is this Node, Resend’s own entry, its folders pinned, t
   const context = harness.context();
   const approve = context.handoffs.own(['approve', 'ap_1']);
   assert.ok(isCommand(approve));
-  assert.equal(approve.words[0], process.execPath);
+  assert.equal(approve.words[0], THIS_NODE);
   assert.ok(approve.words.includes(RESEND_SOURCE_CLI), approve.words.join(' '));
   const at = approve.words.indexOf(RESEND_SOURCE_CLI);
   assert.deepEqual(approve.words.slice(at + 1), [
@@ -94,7 +95,7 @@ test('a Resend command is this Node, Resend’s own entry, its folders pinned, t
   const doctor = context.handoffs.core(['doctor']);
   assert.ok(isCommand(doctor) && doctor.words.at(-1) === 'doctor');
   assert.ok(!doctor.words.includes(RESEND_SOURCE_CLI));
-  assert.equal(doctor.words[0], process.execPath);
+  assert.equal(doctor.words[0], THIS_NODE);
 });
 
 test('Resend’s context refuses a core that would print another package’s commands, or none', async () => {
@@ -212,10 +213,10 @@ test('under confirm the preview, the next step and the claim name Resend’s own
     );
     assert.equal(
       prepared.nextStep,
-      `Show the preview to the user, then have them run ${approve} in their own terminal; learn when they have with resend_send_wait. You cannot approve this yourself. Then execute it with the same approval id and the recipients and subject shown.`,
+      `Show the preview to the user, then have them run ${approve} in their own terminal; learn when they have with resend_send_wait. You cannot approve this yourself. Then execute it with the same approval id.`,
     );
     const pending = await hintOf(
-      executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect }),
+      executeSend(context, 'acme/resend', { approvalId: prepared.approvalId }),
       'APPROVAL_PENDING',
     );
     assert.equal(
@@ -236,7 +237,7 @@ test('a send whose outcome is not known is checked with Resend’s own send stat
   const status = resendInline(harness.core, ['send', 'status', prepared.approvalId, '--account', 'acme/resend']);
   // At once, its own code (design 2026-10-05 §D2): the send may have happened.
   const lost = await hintOf(
-    executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect }),
+    executeSend(context, 'acme/resend', { approvalId: prepared.approvalId }),
     'SEND_OUTCOME_UNKNOWN',
   );
   assert.equal(
@@ -253,7 +254,7 @@ test('a send whose outcome is not known is checked with Resend’s own send stat
   });
   // Its own code (design 2026-10-05 §D2): the outcome is unknown, never a void — and the status command after it.
   const unknown = await hintOf(
-    executeSend(later, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect }),
+    executeSend(later, 'acme/resend', { approvalId: prepared.approvalId }),
     'SEND_OUTCOME_UNKNOWN',
   );
   assert.ok(unknown.endsWith(` Check what happened with ${status} before anything else.`), unknown);
@@ -338,10 +339,10 @@ test('where Resend cannot be located, every handoff says why and keeps what it h
   );
   assert.equal(
     prepared.nextStep,
-    `Show the preview to the user; they approve it at their own terminal. ${why} You cannot approve this yourself. Then execute it with the same approval id and the recipients and subject shown.`,
+    `Show the preview to the user; they approve it at their own terminal. ${why} You cannot approve this yourself. Then execute it with the same approval id.`,
   );
   assert.equal(
-    await hintOf(executeSend(context, 'acme/resend', { approvalId: prepared.approvalId, expect: prepared.expect })),
+    await hintOf(executeSend(context, 'acme/resend', { approvalId: prepared.approvalId })),
     `Ask the user to approve it at their own terminal, then execute it again with the same approval. ${why} You cannot approve it yourself.`,
   );
   assert.equal(
@@ -502,7 +503,7 @@ test('from Resend, a Windows registration in another case is found and printed l
   const handoffs = resendHandoffs(harness.core.paths, 'win32').withRegistrations([registered]);
   const gmail = handoffs.of('gmail', ['approve', 'ap_1']);
   assert.ok(isCommand(gmail), 'message' in gmail ? gmail.message : '');
-  assert.equal(gmail.words[0], process.execPath);
+  assert.equal(gmail.words[0], THIS_NODE);
   assert.ok(
     gmail.words.some((word) => word.endsWith(join('gmail', 'dist', 'cli.mjs'))),
     gmail.words.join(' '),

@@ -1,9 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
+import { BEHAVIOUR_ACTS } from '../behaviour.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
-import { CHANNELS } from '../channel-servers.ts';
+import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
+import { UPDATE_LEVELS } from '../config.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
@@ -11,28 +14,49 @@ import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
 import {
+  BEHAVIOUR_CHANGE_KINDS,
+  type BehaviourChangeRequest,
+  behaviourChange,
+  behaviourReport,
+} from '../operations/behaviour.ts';
+import {
   CHANGE_POLICIES,
   changePolicyChange,
   changePolicyReport,
   refuseApprovalWithoutChange,
 } from '../operations/change-policy.ts';
+import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport } from '../operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
 import { orgAddChange, orgList, orgRemoveChange, orgShow, orgUpdateChange } from '../operations/organisations.ts';
+import { profileView } from '../operations/profile.ts';
 import { migrationLeftoversError, secretsMigration } from '../operations/secrets-migrate.ts';
 import {
   CLIENTS,
   channelsAvailable,
+  installVerification,
   LAUNCHERS,
   serverInstallChange,
   serverPruneChange,
 } from '../operations/servers.ts';
+import {
+  STANDING_CHANGE_KINDS,
+  type StandingChangeRequest,
+  standingChange,
+  standingReport,
+} from '../operations/standing.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
-import { updateAutoChange, updateLaterChange } from '../operations/update-settings.ts';
+import { updateJobChange } from '../operations/update-job.ts';
+import { updateRollbackChange } from '../operations/update-rollback.ts';
+import { updateLevelChange, updatePause, updateResume } from '../operations/update-settings.ts';
+import { updateStatus } from '../operations/update-status.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
-import { CHANGE_CLAIM, updateToolGate } from '../update-gate.ts';
+import { updateToolNotice } from '../update-gate.ts';
+import type { UpdateJobDeps } from '../update-job.ts';
+import { stateReleaseVerifier } from '../update-provenance.ts';
+import { npmRegistry } from '../update-release.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -70,6 +94,11 @@ export interface CoreMcpOptions {
    * the clock the daily update check reads and records by.
    */
   update?: UpdateDeps | undefined;
+  /**
+   * For a test: the runner the background update job's commands go through — `launchctl`, `systemctl`, the Windows
+   * scheduler — its user, its random minute and its clock, so that no test schedules a real job.
+   */
+  updateJob?: UpdateJobDeps | undefined;
 }
 
 export interface CoreMcpServer {
@@ -106,12 +135,13 @@ async function buildInstructions(core: Core): Promise<string> {
     `agent-communications core: install and manage the ${listed(CHANNEL_LABELS_LISTED, 'and')} servers, and look after this machine.`,
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
-    'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach and comms_change_policy with no change,',
-    'and comms_update with `check`.',
+    'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
+    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check` or `status`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
-    '(comms_org_add, comms_org_update, comms_org_remove) — is shown to the person before it happens. The first call',
+    '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label), letting an agent',
+    'do more (comms_behaviour) — is shown to the person before it happens. The first call',
     'returns `approvalRequired` with a `preview` and an `approvalId`: show the preview in full and ask. Then call the',
     'same tool again, with the same arguments and the `approvalId`. Under the `chat` change policy the person’s yes in',
     'this conversation is the approval; under `confirm` they first run the approve command the result gives, in their',
@@ -119,6 +149,8 @@ async function buildInstructions(core: Core): Promise<string> {
     'they say no, call comms_approval_revoke.',
     'Tightening applies at once — even beside a change that waits: comms_org_update with forOtherAddresses "off"',
     'turns that off before its preview is returned, and the preview marks it done.',
+    'comms_standing narrows or ends standing approvals at once. None is created or widened here: slack_standing_add',
+    'only prepares one the person asked for, and they approve it at their own terminal with its code, never in chat.',
     '',
     `The default change policy here is ${policy}.`,
     'A server registered with a client appears only after that client is restarted: say so.',
@@ -130,7 +162,13 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
   // Opened as core itself, so every command this server hands a person is located from this installation.
   const core = options.core ?? openCore({ env, caller: CORE_CALLER });
   const platform = options.platform ?? process.platform;
-  const updateDeps: UpdateDeps = { ...options.update, platform };
+  // Core carries sigstore-js, so its checks count what a release declares once it is verified, and its updates verify
+  // every release they install (a test hands in its own).
+  const updateDeps: UpdateDeps = {
+    ...(options.update === undefined ? { verifyRelease: stateReleaseVerifier(core.paths.stateDir) } : {}),
+    ...options.update,
+    platform,
+  };
   const server = new McpServer(
     { name: 'agentcomms', version: VERSION },
     { instructions: await buildInstructions(core) },
@@ -170,37 +208,36 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     };
   };
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
-  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the daily update check's stop
-  // (design 2026-09-28): an update that is out stops every tool but the update's own, the doctor and the paths, and
-  // the check itself runs in the background, never delaying a call.
+  // in the envelope above — before its handler runs. See `strictToolArguments`. Then the update notice (design
+  // 2026-10-16, U1): nothing is refused for being behind; the first result of this process that finds a newer release
+  // carries one line beside it, and the check itself runs in the background, never delaying a call.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core,
       env,
-      server: 'agentcomms',
       channel: 'core',
       running: VERSION,
+      // Each says what is behind in its own words already.
       exempt: ['comms_update', 'comms_doctor', 'comms_paths'],
-      // Every tool here that takes an approval claims a change with it, as the same command does at a terminal.
-      // `comms_approval_revoke` takes either kind: it is how a person's no reaches a send or a change.
-      approvals: {
-        comms_attach: CHANGE_CLAIM,
-        comms_change_policy: CHANGE_CLAIM,
-        comms_server_install: CHANGE_CLAIM,
-        comms_server_prune: CHANGE_CLAIM,
-        comms_names_migrate: CHANGE_CLAIM,
-        comms_secrets_migrate: CHANGE_CLAIM,
-        comms_org_add: CHANGE_CLAIM,
-        comms_org_update: CHANGE_CLAIM,
-        comms_org_remove: CHANGE_CLAIM,
-        // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-        comms_approval_wait: { lookup: true },
-      },
+      // `status: true` reads where updates stand and promises to ask npm nothing (desktop design DA13).
+      quiet: (tool, args) =>
+        tool === 'comms_update' &&
+        typeof args === 'object' &&
+        args !== null &&
+        (args as { status?: unknown }).status === true,
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),
+    {
+      // 0.18's two settings, replaced (design 2026-10-16, U2, U3): nothing is stopped any more to put off.
+      comms_update: {
+        later:
+          'Nothing is stopped for an update any more: to hold its notice, call comms_update with `pause` (1, 7 or 14 days) — no approval needed.',
+        auto: 'The daily check is now one of three levels: call comms_update with `level` — `auto`, `every-14-days` or `never`.',
+      },
+    },
   );
   /** One changing call: the change this tool plans, run through the one flow, returned in its one shape. */
   const change = async <T>(build: () => GatedChange<T>, approvalId: string | undefined) => {
@@ -248,7 +285,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Check this machine',
       description:
-        'Check this machine: Node, the directories, the configuration, account names, the secret store, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
+        'Check this machine: Node, the directories, the configuration, account names, the standing approvals in force and when each ends, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
       inputSchema: {},
       annotations: readsLocal,
     },
@@ -257,6 +294,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         doctor(core, env, {
           platform,
           ...(options.keyring !== undefined ? { keyring: options.keyring } : {}),
+          ...(options.updateJob !== undefined ? { updateJob: options.updateJob } : {}),
         }),
       ),
   );
@@ -311,7 +349,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_approval_wait',
     {
       title: 'Wait for an approval',
-      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
+      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends \`active\` once the person has approved it — it is used through its channel's acknowledgement, never claimed — and \`standing\` says pending, active or ended, with why. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
       inputSchema: {
         approvalId: z.string().describe('the approval to wait for'),
         waitSeconds: z
@@ -432,6 +470,237 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
   );
 
+  // ── The agent label ──────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * How what an agent sends is labelled (design 2026-10-15-agent-label, L6): `agentcomms label` and this, one operation.
+   * A rule's object is strict, so a misspelt key inside it is refused rather than dropped: a `conversaton` lost on the
+   * way would turn a rule for one channel into one for the whole account.
+   */
+  const ruleArg = (what: string) =>
+    z
+      .strictObject({
+        account: z.string().describe('the account it is for, by its name: `organisation/platform`'),
+        conversation: z
+          .string()
+          .optional()
+          .describe(
+            'only here — Slack: a channel or DM id (C…, G…, D…) or a person (U…); mail: an address, or @domain. Leave out for the whole account',
+          ),
+        kinds: z
+          .array(z.enum(ACT_KINDS as unknown as [string, ...string[]]))
+          .optional()
+          .describe('only these kinds of message; leave out for every kind'),
+        as: z.enum(['agent', 'me']).describe('`agent`: labelled. `me`: as the person, with no label'),
+      })
+      .optional()
+      .describe(what);
+
+  server.registerTool(
+    'comms_label',
+    {
+      title: 'The agent label',
+      description: `Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. With no change it only reports: the word, the name, every rule, and for each account and kind of message whether it goes out labelled or as the person. Otherwise exactly one of \`word\`, \`name\`, \`addRule\`, \`removeRule\`, \`icon\`, \`style\`. A new word, name or icon, a rule \`as: "me"\`, removing an \`agent\` rule, and a Slack workspace's \`style\` set to \`labelled\` are changes the person approves: the first call returns the preview — the phrase recipients will see, or what each kind of message will now be — and an approvalId; call again with it once they agree. A rule \`as: "agent"\`, removing a \`me\` rule, or a style back to \`app\`, applies at once. Add a \`me\` rule, or choose \`labelled\`, only when the person asked for that.`,
+      inputSchema: {
+        word: z
+          .string()
+          .optional()
+          .describe(`the word after the name: one of ${AGENT_LABEL_WORDS.join(', ')}, written exactly so`),
+        name: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('the name, for where a channel has no name of its own for the person; null clears it'),
+        addRule: ruleArg('who a kind of message appears to come from, on one account'),
+        removeRule: ruleArg('a rule to take away, as it is listed'),
+        icon: z
+          .strictObject({
+            account: z.string().describe('a Slack workspace, by its name'),
+            emoji: z
+              .string()
+              .nullable()
+              .describe('the workspace emoji the app’s posts show, between colons — `:jo-agent:`; null for the photo'),
+          })
+          .optional()
+          .describe('the icon of the agent’s Slack posts in one workspace'),
+        style: z
+          .strictObject({
+            account: z.string().describe('a Slack workspace, by its name'),
+            style: z
+              .enum(SLACK_STYLES as unknown as [string, ...string[]])
+              .describe(
+                '`app`, the default: the app posts where it can, with Slack’s APP tag, and the person, labelled, elsewhere. `labelled`: every agent message goes out as the person, labelled in its words, even where the app could post; reactions as the person, unlabelled',
+              ),
+          })
+          .optional()
+          .describe('how an agent’s messages look in one Slack workspace'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = LABEL_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `word`, `name`, `addRule`, `removeRule`, `icon` or `style` — with it.',
+          });
+          return labelReport(core);
+        });
+      }
+      const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as LabelChangeRequest;
+      return change(() => labelChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── What an agent may do ─────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Which acts an agent may start at all, per account and per conversation (design 2026-10-19-agent-behaviour-rules,
+   * B5): `agentcomms behaviour` and this, one operation. A rule's object is strict, as the label's are: a `conversaton`
+   * lost on the way would turn a rule for one channel into one for the whole account.
+   */
+  const placeArgs = {
+    account: z.string().describe('the account it is for, by its name: `organisation/platform`'),
+    conversation: z
+      .string()
+      .optional()
+      .describe(
+        'only here — Slack: a channel or DM id (C…, G…, D…) or a person (U…); mail: an address, or @domain. Leave out for the whole account',
+      ),
+  };
+
+  server.registerTool(
+    'comms_behaviour',
+    {
+      title: 'What an agent may do',
+      description: `Report or change which acts an agent may start at all — ${BEHAVIOUR_ACTS.join(', ')} — on each account and in each conversation; every act it may start still waits for the person's yes to its exact content. With no change it only reports: every rule, and for each account what is allowed across it and in each conversation a rule names. Otherwise exactly one of \`setRule\` — only these acts there, replacing the rule at that level; \`acts: []\` allows nothing — or \`removeRule\`. A change that only narrows what is allowed applies at once. One that allows more anywhere — an act added, a rule removed whose fallback is wider, a conversation allowed more than its account — is a change the person approves: the first call returns the preview, each level before → after, and an approvalId; call again with it once they agree. Start one that allows more only when the person asked for it.`,
+      inputSchema: {
+        setRule: z
+          .strictObject({
+            ...placeArgs,
+            acts: z
+              .array(z.enum(BEHAVIOUR_ACTS as unknown as [string, ...string[]]))
+              .describe('the acts an agent may start there, and only these; empty for none'),
+          })
+          .optional()
+          .describe('what an agent may do in one place: the rule for it, added or replaced'),
+        removeRule: z
+          .strictObject(placeArgs)
+          .optional()
+          .describe('a rule to take away, by its account and conversation, so the wider one holds there'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = BEHAVIOUR_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `setRule` or `removeRule` — with it.',
+          });
+          return behaviourReport(core);
+        });
+      }
+      const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
+      return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── What an agent may send without asking ────────────────────────────────────────────────────────────────────
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8, S10, §8.1): `agentcomms standing` and this, one
+   * operation. Each change only takes away, so none is gated and none takes an `approvalId`: a narrowing, a revoke and
+   * `off` apply at once. Creating or widening one reads Slack, and is Slack's, approved only at a terminal.
+   */
+  const limitArg = (what: string) => z.number().int().optional().describe(what);
+  server.registerTool(
+    'comms_standing',
+    {
+      title: 'Standing approvals',
+      description:
+        "Report, narrow or end the standing approvals: acknowledgements — a standard emoji reaction, or a short fixed reply the person wrote — that an agent may send without asking, on a message that has just arrived from another person, within the places, counts and days the person set. With no change it only reports: each one's state, its contents, each named by its digest, its places and limits as in force, when it ends, its uses in the last day and its last 10 acts. Otherwise exactly one of `narrow` — keep fewer contents or places, lower a limit, or end it sooner — `revoke`, which ends one, or `off`, which ends every one. Each applies at once and asks nobody, since each only takes away; one that would allow more is refused. Nothing here creates or widens one: that is prepared on Slack and approved by the person at their own terminal, with its code. End one, or all, whenever the person asks.",
+      inputSchema: {
+        narrow: z
+          .strictObject({
+            id: z.string().describe('the standing approval, by its id'),
+            keep: z
+              .array(z.string())
+              .optional()
+              .describe('the contents to keep, by the digests the report shows; every other is dropped'),
+            places: z
+              .array(z.string())
+              .optional()
+              .describe('the exact places to keep, by id (C…, G…, D…); every other is dropped'),
+            limits: z
+              .strictObject({
+                perThread: limitArg('acts per thread, or per message outside one, across every standing approval'),
+                perHour: limitArg('acts an hour'),
+                perDay: limitArg('acts a day'),
+                perSender: limitArg('acts a day on messages from any one person, across every standing approval'),
+                expiresDays: limitArg('days from its approval until it ends'),
+              })
+              .optional()
+              .describe('lower limits, or fewer days: each no higher than it is now'),
+          })
+          .optional()
+          .describe('what to keep of one standing approval: it applies at once'),
+        revoke: z
+          .strictObject({ id: z.string().describe('the standing approval, by its id') })
+          .optional()
+          .describe('end one standing approval at once, and every act of it not yet sent'),
+        off: z.literal(true).optional().describe('true ends every standing approval at once'),
+      },
+      // It only takes away, but what it takes away — a narrowing, a revoke, `off` — cannot be undone by any tool.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) =>
+      read(async () => {
+        const asked = STANDING_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+        if (asked.length === 0) return standingReport(core);
+        const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as StandingChangeRequest;
+        return standingChange(core, request, { surface: 'mcp' });
+      }),
+  );
+
+  // ── How the person writes ────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * The writing profile (design 2026-10-19-agent-behaviour-rules, B6), read before a message is written so the first
+   * preview is already written to it. Reading only, on purpose: a profile is the person's own instructions to their
+   * agents, and a tool that wrote one would let something an agent read change how every later message is written.
+   * Starting a missing file is the person's, at their terminal (`profile init`), and is no tool here.
+   */
+  server.registerTool(
+    'comms_profile',
+    {
+      title: 'The writing profile',
+      description:
+        'How the person wants a message written in one place — tone, language, length, sign-off, threads — from the Markdown files they keep: their own instructions to you, not content from anyone else. Call it before writing a message, for the account it goes from and the conversations it goes to, and follow it; where it and what the person asks in this conversation disagree, what they ask wins. For mail pass each recipient’s address and then its `@domain`, in recipient order; for a Slack DM its `D…` id and then the person’s `U…` id; for a channel its `C…` id. Returns the joined text, each part marked with the file it came from, and every file it would read, written or not. It only reads, and needs no approval. No tool writes a profile: the person starts a missing file at their own terminal, with the core CLI’s `profile init`.',
+      inputSchema: {
+        account: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'the account the message goes from: `acme/slack`, `acme/gmail`; left out, only the layers every message shares',
+          ),
+        conversations: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'the conversations it goes to, in order: for mail each address then its `@domain`; for a Slack DM the `D…` then the `U…`; for a channel its `C…`',
+          ),
+      },
+      annotations: readsLocal,
+    },
+    async (args) => read(() => profileView(core, { account: args.account, conversations: args.conversations })),
+  );
+
   // ── Organisation profiles ────────────────────────────────────────────────────────────────────────────────────
 
   /*
@@ -472,7 +741,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Show an organisation profile',
       description:
-        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, and any drift from what was approved, each with the call that repairs it. Never includes a client secret or the profile’s contents.',
+        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, any drift from what was approved, each with the call that repairs it, and `extensions`: which of the profile’s extensions are applied here, and which are not, with the release each needs. Never includes a client secret or the profile’s contents.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
       },
@@ -525,7 +794,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Update an organisation profile',
       description:
-        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, and `forOtherAddresses: "off"`, apply at once and are listed in the result.',
+        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, a tighter update cap from the organisation, and `forOtherAddresses: "off"` apply at once, even beside a change that waits, and are listed in the result; a looser cap is approved first. An extension the profile marks optional that this release does not know is skipped and named in `extensions`; one it marks required refuses the update (NEEDS_NEWER_RELEASE), changing nothing — update first, then call it again.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
         source: z.string().min(1).optional().describe('read the profile from this file from now on'),
@@ -588,7 +857,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         { oxford: true },
       )} — with an MCP client, and prove it starts. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. \`print\` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its \`details\`. The new server appears after the client is restarted — tell the person.`,
       inputSchema: {
-        channel: z.enum(CHANNELS as [string, ...string[]]).describe('which server'),
+        channel: z.enum(SERVERS as [string, ...string[]]).describe('which server'),
         client: z.enum(CLIENTS as [string, ...string[]]).describe('which MCP client to register it with'),
         // Checked here, so a client sees the rule in the schema, and again by the change itself: the name is quoted
         // in the preview the person approves, and a name that reads like a pin makes that preview lie.
@@ -601,7 +870,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           .string()
           .optional()
           .describe(
-            'any channel but the core: serve this one account, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack',
+            'a channel server that declares accounts: serve this one, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack',
           ),
         inbox: z
           .string()
@@ -631,19 +900,25 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
     async (args) => {
       try {
-        const install = serverInstallChange(core, env, {
-          channel: args.channel as (typeof CHANNELS)[number],
-          client: args.client as (typeof CLIENTS)[number],
-          name: args.name,
-          account: args.account,
-          inbox: args.inbox,
-          workspace: args.workspace,
-          readOnly: args.readOnly,
-          launcher: args.launcher as (typeof LAUNCHERS)[number] | undefined,
-          force: args.force,
-          print: args.print,
-          noVerify: args.noVerify,
-        });
+        const install = serverInstallChange(
+          core,
+          env,
+          {
+            channel: args.channel as (typeof SERVERS)[number],
+            client: args.client as (typeof CLIENTS)[number],
+            name: args.name,
+            account: args.account,
+            inbox: args.inbox,
+            workspace: args.workspace,
+            readOnly: args.readOnly,
+            launcher: args.launcher as (typeof LAUNCHERS)[number] | undefined,
+            force: args.force,
+            print: args.print,
+            noVerify: args.noVerify,
+          },
+          undefined,
+          installVerification(updateDeps, npmRegistry(env)),
+        );
         const outcome = await gatedChange(core, install, {
           surface: 'mcp',
           channel: 'core',
@@ -670,9 +945,12 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove unused runtimes',
       description:
-        'Remove a channel’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
+        'Remove the managed runtimes that no client config names, no printed entry names, no process runs and no stable launcher starts or keeps for a rollback — what upgrades leave behind. One newer than this release, or than what its stable launcher starts, stays: an update may be installing it. With no `channel`, every managed server’s, listed by server; with one, only that server’s. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId. While an update is under way on this machine, removing is refused and nothing changes: try again in a few minutes.',
       inputSchema: {
-        channel: z.enum(CHANNELS as [string, ...string[]]).describe('whose runtimes'),
+        channel: z
+          .enum(SERVERS as [string, ...string[]])
+          .optional()
+          .describe('whose runtimes; left out, every managed server’s'),
         dryRun: z.boolean().optional().describe('only say what would be removed'),
         includePrinted: z
           .boolean()
@@ -688,7 +966,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       change(
         () =>
           serverPruneChange(core, env, {
-            channel: args.channel as (typeof CHANNELS)[number],
+            channel: args.channel as (typeof SERVERS)[number] | undefined,
             dryRun: args.dryRun,
             includePrinted: args.includePrinted,
             processes: options.processes,
@@ -701,40 +979,106 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_update',
     {
       title: 'Update to the latest release',
-      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, unreadable }\` — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune.`,
+      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, moves, unreadable }\`, \`moves\` being the registrations the next update moves onto the stable launcher — asking nobody. \`status: true\` reads only this machine's files and returns where updates stand — \`{ level, set, by, cap, pausedUntil, lastChecked, latest, running, security, lastError, job }\`, \`job\` being the background job's \`{ state, where, installedAt, lastRun, working }\` — asking npm nothing. Without either, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. \`rollback: true\` switches every stable launcher back to the release before, also a change the person approves.`,
       inputSchema: {
         check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
-        noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
-        later: z
-          .boolean()
+        status: z
+          .literal(true)
           .optional()
           .describe(
-            'not now: every server and command on this machine carries on without stopping for the update until midnight, local time. A change the person approves: the first call returns its preview and an approvalId',
+            'only say where updates stand here — the level and what decided it, any pause, the last check, the latest and running versions, a security fix waiting, and the background job — read from local files, asking npm nothing',
           ),
-        auto: z
+        noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
+        level: z
+          .enum(UPDATE_LEVELS)
+          .optional()
+          .describe(
+            'how this machine updates: `auto` checks daily (and installs in the background once that is set up), `every-14-days` at most once every 14 days, `never` asks npm nothing. A level that updates less is a change the person approves: the first call returns its preview and an approvalId; one that updates more applies at once',
+          ),
+        pause: z
+          .union([z.literal(true), z.literal(1), z.literal(7), z.literal(14)])
+          .optional()
+          .describe(
+            'hold every update notice on this machine for 1, 7 or 14 days — `true`, or 7, when the person names no length. A plain answer: no approval. A security fix is never held',
+          ),
+        resume: z.literal(true).optional().describe('end a pause at once'),
+        backgroundJob: z
           .enum(['on', 'off'])
           .optional()
           .describe(
-            'turn the daily update check on or off for this machine. `off` is a change the person approves, like `later`; `on` applies at once',
+            'set up or remove the per-user job that installs verified releases in the background, once a day. `on` is a change the person approves: its preview names the job file and what it runs, when it runs, what macOS shows and how to remove it. `off` applies at once',
+          ),
+        rollback: z
+          .boolean()
+          .optional()
+          .describe(
+            'switch every stable launcher back to the release it started before its last switch, editing no client configuration. A change the person approves: the first call returns its preview and an approvalId',
           ),
         ...approvalArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
-      const modes = [args.check === true, args.later === true, args.auto !== undefined].filter(Boolean).length;
-      if (modes > 1 || (args.noVerify !== undefined && (args.later === true || args.auto !== undefined))) {
+      // One mode at a time, every mode counted: only the update itself, with none of them, takes `noVerify`.
+      const settings = [
+        args.level !== undefined,
+        args.pause !== undefined,
+        args.resume === true,
+        args.rollback === true,
+        args.backgroundJob !== undefined,
+      ];
+      const modes = [args.check === true, args.status === true, ...settings];
+      if (modes.filter(Boolean).length > 1 || (args.noVerify !== undefined && settings.some(Boolean))) {
         return fail(
-          new CommsError('USAGE', '`check`, `later` and `auto` are one at a time, and `noVerify` is for the update', {
-            hint: 'Call comms_update with one of them — or none, to update.',
-          }),
+          new CommsError(
+            'USAGE',
+            '`check`, `status`, `level`, `pause`, `resume`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
+            { hint: 'Call comms_update with one of them — or none, to update.' },
+          ),
         );
       }
-      if (args.later === true) {
-        return change(() => updateLaterChange(core, { now: updateDeps.now }), args.approvalId);
+      if (args.status === true) {
+        return read(() => {
+          // A read from local files: no change, so nothing for an approval to be for (desktop design DA13).
+          if (args.approvalId !== undefined) {
+            throw new CommsError('USAGE', '`status` only reads, so it takes no approvalId', {
+              hint: 'Call comms_update with `status` alone.',
+            });
+          }
+          return updateStatus(core, env, { platform, job: options.updateJob, now: updateDeps.now });
+        });
       }
-      if (args.auto !== undefined) {
-        return change(() => updateAutoChange(core, args.auto as 'on' | 'off'), args.approvalId);
+      if (args.rollback === true) {
+        return change(() => updateRollbackChange(core), args.approvalId);
+      }
+      if (args.backgroundJob !== undefined) {
+        return change(
+          () =>
+            updateJobChange(core, env, args.backgroundJob as 'on' | 'off', {
+              platform,
+              deps: options.updateJob,
+              surface: 'mcp',
+            }),
+          args.approvalId,
+        );
+      }
+      if (args.level !== undefined) {
+        return change(
+          () => updateLevelChange(core, args.level as string, { env, platform, job: options.updateJob }),
+          args.approvalId,
+        );
+      }
+      if (args.pause !== undefined || args.resume === true) {
+        return read(() => {
+          // A plain answer asks nobody, so an approval here is refused rather than dropped (`refuseUnclaimedApproval`).
+          refuseUnclaimedApproval(args.approvalId, {
+            message: '`pause` and `resume` ask nobody, so they take no approvalId',
+            hint: 'Call comms_update with `pause` or `resume` alone: either applies at once.',
+          });
+          return args.resume === true
+            ? updateResume(core, { now: updateDeps.now })
+            : updatePause(core, { days: args.pause === true ? undefined : args.pause, now: updateDeps.now });
+        });
       }
       if (args.check === true) {
         return read(() => {

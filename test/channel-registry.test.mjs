@@ -587,6 +587,11 @@ test('D14-b: a declared service is publishable, has surfaces and drivers, and ex
   const registry = loadRegistry(root);
   const service = registry.services.find((entry) => entry.directory === 'service-fixture');
   assert.deepEqual(service?.declaration, serviceManifest('ignored').agentcommsPackage);
+  assert.match(
+    await snapshotSource(root),
+    /packageName: '@agentcomms\/service-fixture'/,
+    'the core server snapshot includes a service declared only by its package manifest',
+  );
   assert.ok(registry.packages.includes('service-fixture'), 'a service is publishable');
   assert.ok(
     registry.held.some((entry) => entry.directory === 'service-fixture'),
@@ -666,6 +671,22 @@ test('D14-b: a service declaration is closed and validates the declared package 
   await refuse(
     { ...base, agentcommsPackage: { ...base.agentcommsPackage, binary: 'agent-other-service' } },
     /binary "agent-other-service" is not a key in package\.json "bin"/,
+  );
+  await refuse(
+    {
+      ...base,
+      bin: { '../agent-service-fixture': './dist/cli.mjs' },
+      agentcommsPackage: { ...base.agentcommsPackage, binary: '../agent-service-fixture' },
+    },
+    /binary must be a safe command basename/,
+  );
+  await refuse(
+    {
+      ...base,
+      bin: { 'agent-gmail': './dist/cli.mjs' },
+      agentcommsPackage: { ...base.agentcommsPackage, binary: 'agent-gmail' },
+    },
+    /binary "agent-gmail" is already declared by packages\/gmail\/package\.json/,
   );
   await refuse(
     {
@@ -1133,7 +1154,7 @@ test('the hand-written-list guard reads its words from the registry, so a channe
   assert.doesNotMatch('const ALSO_FOREIGN = { newcomer: [/\\bmailbox(es)?\\b/i] };', guard);
 });
 
-test('this checkout’s registry is the five channels, one held library, one held service and eight packages it ships', () => {
+test('this checkout’s registry is the five channels, one library, one service and eight packages it ships, none held', () => {
   assert.deepEqual(
     REGISTRY.channels.map((channel) => channel.directory),
     ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
@@ -1158,9 +1179,10 @@ test('this checkout’s registry is the five channels, one held library, one hel
     REGISTRY.services.map((service) => service.directory),
     ['events-daemon'],
   );
+  // 0.16.0 lifted the holds on the event library and daemon: both are now published with every release.
   assert.deepEqual(
     REGISTRY.held.map((entry) => entry.directory),
-    ['events', 'events-daemon'],
+    [],
   );
   assert.deepEqual(REGISTRY.undeclared, []);
 });

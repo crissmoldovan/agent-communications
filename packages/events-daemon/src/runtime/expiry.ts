@@ -1,5 +1,6 @@
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
+import { expireHeldDecisionsInTransaction } from './holds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
 import { degradeResetBarrier } from './system-reset-outbox.ts';
@@ -119,6 +120,10 @@ export class EventExpiry {
     const now = this.#now();
     return this.#store.immediate(() => {
       const database = this.#store.database;
+      // Holds take their own SQLite clock before every other expiry/control/replay action. This is intentionally
+      // earlier than the process-clock based legacy projection sweep: at equality the held row chooses its durable
+      // hold/ingest reason, removes its resolver claim, and is no longer eligible for the generic path.
+      expireHeldDecisionsInTransaction(database);
       const expiringJudgeWork = database
         .prepare(
           `SELECT projection.event_id, projection.rule_id, projection.rule_version, ingest.account_id,
@@ -126,7 +131,15 @@ export class EventExpiry {
              FROM ingest_rules AS projection
              JOIN ingest ON ingest.event_id = projection.event_id
              JOIN rule_versions AS rule ON rule.rule_id = projection.rule_id AND rule.version = projection.rule_version
-            WHERE projection.decision_deadline <= ?`,
+            WHERE projection.decision_deadline <= ?
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM decisions AS held
+                 WHERE held.event_id = projection.event_id
+                   AND held.rule_id = projection.rule_id
+                   AND held.rule_version = projection.rule_version
+                   AND held.outcome = 'hold'
+              )`,
         )
         .all(now) as Array<{
         event_id: string;
@@ -207,11 +220,32 @@ export class EventExpiry {
            FROM ingest_rules p
            JOIN ingest i ON i.event_id = p.event_id
            LEFT JOIN rule_versions r ON r.rule_id = p.rule_id AND r.version = p.rule_version
-           WHERE p.decision_deadline <= ?`,
+           WHERE p.decision_deadline <= ?
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM decisions AS held
+                WHERE held.event_id = p.event_id
+                  AND held.rule_id = p.rule_id
+                  AND held.rule_version = p.rule_version
+                  AND held.outcome = 'hold'
+             )`,
         )
         .run(now, now);
       const projections = Number(
-        database.prepare('DELETE FROM ingest_rules WHERE decision_deadline <= ?').run(now).changes,
+        database
+          .prepare(
+            `DELETE FROM ingest_rules AS projection
+              WHERE projection.decision_deadline <= ?
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM decisions AS held
+                   WHERE held.event_id = projection.event_id
+                     AND held.rule_id = projection.rule_id
+                     AND held.rule_version = projection.rule_version
+                     AND held.outcome = 'hold'
+                )`,
+          )
+          .run(now).changes,
       );
       const decisionMetadata = Number(
         database

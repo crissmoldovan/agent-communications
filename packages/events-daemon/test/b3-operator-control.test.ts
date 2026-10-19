@@ -15,7 +15,7 @@ const subscriber = {
   retentionMs: 60_000,
 };
 
-test('B3 operator control creates immutable subscriber versions and keeps every pre-E producer unavailable', {
+test('E9 operator control creates immutable subscriber and judge versions while retaining the E2 model seam', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-operator-');
@@ -33,19 +33,50 @@ test('B3 operator control creates immutable subscriber versions and keeps every 
         objectId: 'subscriber-control',
         version: 1,
         document: subscriber,
-        digest: (created as { digest: string }).digest,
+        digest: '590c35f84a86811a1e1fbd2b7856d27e84a5a758d430c9c2b7f51f7be4d74ec9',
         state: null,
       });
       assert.deepEqual(await control.handle({ operation: 'subscribersList', args: {} }), [
         {
           subscriberId: 'subscriber-control',
           version: 1,
-          digest: (created as { digest: string }).digest,
+          digest: '590c35f84a86811a1e1fbd2b7856d27e84a5a758d430c9c2b7f51f7be4d74ec9',
           revokedAt: null,
         },
       ]);
 
-      const before = store.database
+      const judge = {
+        judgeId: 'judge-control',
+        version: 1,
+        kind: 'local-endpoint',
+        provider: 'ollama',
+        model: 'test',
+        endpoint: 'http://127.0.0.1:11434/v1/systemone',
+        approvedAddressSet: ['127.0.0.1'],
+        promptTemplate: 'test',
+        protocol: 'noul',
+      };
+      const createdJudge = await control.handle({ operation: 'addJudge', args: { document: judge } });
+      assert.deepEqual(createdJudge, {
+        id: 'judge-control@1',
+        kind: 'judge',
+        objectId: 'judge-control',
+        version: 1,
+        document: judge,
+        digest: 'dd44bd6868bbb6e4874fd35f5a605062f048cebc561d48d0ad4c00f9758194e6',
+        state: null,
+      });
+      assert.deepEqual(await control.handle({ operation: 'judgesList', args: {} }), [
+        {
+          judgeId: 'judge-control',
+          version: 1,
+          kind: 'local-endpoint',
+          provider: 'ollama',
+          model: 'test',
+          revokedAt: null,
+        },
+      ]);
+      const beforeE2 = store.database
         .prepare(
           `SELECT (SELECT count(*) FROM judge_versions) AS judges,
                   (SELECT count(*) FROM judge_budget_versions) AS budgets,
@@ -54,24 +85,6 @@ test('B3 operator control creates immutable subscriber versions and keeps every 
                   (SELECT count(*) FROM activation_intents) AS approvals`,
         )
         .get();
-      for (const operation of [
-        'judgesList',
-        'addJudge',
-        'updateJudge',
-        'removeJudge',
-        'judgeTest',
-        'budgetShow',
-        'updateBudget',
-        'judgeKindsList',
-        'enableJudgeKind',
-        'disableJudgeKind',
-      ] as const) {
-        assert.deepEqual(
-          await control.handle({ operation, args: operation.includes('Kind') ? { kind: 'typesafe' } : {} }),
-          { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' },
-          `${operation} is a callable owner request but makes no Phase-E producer`,
-        );
-      }
       for (const operation of [
         'enableJudgeKind',
         'disableJudgeKind',
@@ -84,18 +97,6 @@ test('B3 operator control creates immutable subscriber versions and keeps every 
           `${operation} stays unavailable through Phase E2`,
         );
       }
-      assert.deepEqual(await control.handle({ operation: 'heldList', args: {} }), {
-        kind: 'held-list',
-        decisions: [],
-      });
-      assert.deepEqual(
-        await control.handle({ operation: 'decideHeld', args: { decisionId: 'held-1', decision: 'accept' } }),
-        {
-          kind: 'unavailable',
-          code: 'HOLDS_UNAVAILABLE',
-          phase: 'E',
-        },
-      );
       assert.deepEqual(
         store.database
           .prepare(
@@ -106,9 +107,49 @@ test('B3 operator control creates immutable subscriber versions and keeps every 
                     (SELECT count(*) FROM activation_intents) AS approvals`,
           )
           .get(),
-        before,
-        'unavailable operations create neither immutable configuration nor an approval/pointer',
+        beforeE2,
+        'every E2 refusal leaves the existing live E state untouched',
       );
+      const preparedKinds: unknown[] = [];
+      const mcpKindControl = new B3OperatorControl({
+        store,
+        ports: { quiescer: new WriterQuiescer() },
+        activations: {
+          prepareJudgeBudget: async () => {
+            throw new Error('not used by this control path');
+          },
+          prepareJudgeKind: async (input) => {
+            preparedKinds.push(input);
+            return {
+              intentId: 'pending-mcp-kind-enable',
+              approvalId: 'approval-mcp-kind-enable',
+              binding: {} as never,
+              kind: 'judge-kind',
+            } as never;
+          },
+          cancelForJudgeKindInTransaction: () => 0,
+          cancelForRevocationInTransaction: () => 0,
+        },
+      });
+      assert.deepEqual(
+        await mcpKindControl.handle({ operation: 'enableJudgeKind', args: { kind: 'typesafe' } }),
+        {
+          intentId: 'pending-mcp-kind-enable',
+          approvalId: 'approval-mcp-kind-enable',
+          binding: {},
+          kind: 'judge-kind',
+        },
+        'the MCP-capable operator path creates only a pending activation',
+      );
+      assert.deepEqual(preparedKinds, [{ kind: 'typesafe', version: 1 }]);
+      assert.equal(
+        store.database
+          .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = 'typesafe'")
+          .get(),
+        undefined,
+        'MCP kind enable never leaves an active pointer before the approval finaliser',
+      );
+      assert.deepEqual(await control.handle({ operation: 'heldList', args: {} }), { kind: 'held-list', decisions: [] });
     } finally {
       store.close();
     }

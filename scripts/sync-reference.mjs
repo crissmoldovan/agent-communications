@@ -284,7 +284,6 @@ async function cliPage(cli) {
         '| `0` | it worked |',
         '| `1` | unexpected failure |',
         `| \`10\` | ${cli.approval} |`,
-        '| `11` | a newer release is out: update first (`agentcomms update`), or put it off until tomorrow (`agentcomms update --later`) |',
         '| `64` | the command was used wrongly |',
         '| `65` | the data given was not usable |',
         '| `66` | what was asked for does not exist |',

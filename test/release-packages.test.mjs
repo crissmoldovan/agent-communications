@@ -1024,16 +1024,20 @@ test('REL-d: the release documents say what a hold is, and how it is lifted', as
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
-test('REL-B1: B1 through Phase D stay held, while their eventual owner publish is events then events-daemon from one checked tag', async () => {
-  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked while held');
-  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked while held');
-  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B1');
-  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B1');
-  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B1 tag publish');
-  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B1 tag publish');
+test('REL-B1: from 0.16.0 the event library and daemon publish with every release, the library first', async () => {
+  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked');
+  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked');
+  assert.ok(!Object.hasOwn(HELD, 'events'), '@agentcomms/events is no longer held');
+  assert.ok(!Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon is no longer held');
+  assert.ok(PACKAGES.includes('events'), '@agentcomms/events is in every tag publish');
+  assert.ok(PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is in every tag publish');
+  assert.ok(
+    PACKAGES.indexOf('events') < PACKAGES.indexOf('events-daemon'),
+    'the daemon publishes after the library it pins exactly',
+  );
 
   const release = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
-  assert.match(release, /A B1, B2 or Phase D merge publishes neither package/i);
+  assert.match(release, /released together from 0\.16\.0/i);
   assert.match(release, /same checked tag/i);
   assert.match(
     release,
@@ -1042,32 +1046,79 @@ test('REL-B1: B1 through Phase D stay held, while their eventual owner publish i
   );
 });
 
-test('REL-B2: the held B2 and Phase-D runtime stays out of publication and the release browser gate proves loopback SSE/CORS', async () => {
-  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events remains consumer-checked for B2');
-  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon remains consumer-checked for B2');
-  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B2');
-  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B2');
-  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B2 tag publish');
-  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B2 tag publish');
+test('REL-B1: no public surface of the released daemon still calls it held, unreleased or "until Phase E"', async () => {
+  // What a person installs, runs or reads: the manifest, the CLI and MCP text, the skill and its contract, the
+  // generated references and the READMEs. "Held decisions" (judge holds) are a feature, not a release status.
+  const daemonSurfaces = [
+    'packages/events-daemon/package.json',
+    'packages/events-daemon/README.md',
+    'packages/events-daemon/src/cli/program.ts',
+    'packages/events-daemon/src/mcp/server.ts',
+    'packages/events-daemon/src/index.ts',
+    'packages/events/README.md',
+    'skills/_shared/contract-events.md',
+    'skills/agentcomms-events/SKILL.md',
+    'skills/agentcomms-events/references/contract.md',
+    'docs/reference/events-daemon-cli.md',
+    'docs/reference/events-daemon-mcp-tools.md',
+  ];
+  const stale =
+    /\bheld (?:local|service|back from release|from publication)\b|\blocal and held\b|\bremains? held\b|\bnot released yet\b|\bpre-Phase-E\b|\buntil Phase E2?\b/i;
+  for (const file of daemonSurfaces) {
+    const text = (await readFile(join(ROOT, file), 'utf8')).replace(/\s+/g, ' ');
+    assert.doesNotMatch(text, stale, `${file} still describes the released daemon as held or unreleased`);
+  }
+  // The repository-wide documents keep the generic hold procedure for future packages, so only the daemon's own
+  // wording is checked there.
+  for (const file of ['README.md', 'CONTRIBUTING.md']) {
+    const text = (await readFile(join(ROOT, file), 'utf8')).replace(/\s+/g, ' ');
+    assert.doesNotMatch(
+      text,
+      /held local event|event daemon, which is not released|events-daemon\b[^.]{0,60}\b(?:is|are|remains?|stays?) held\b|remain held through/i,
+      `${file} still describes the released daemon as held`,
+    );
+  }
+  const manifest = JSON.parse(await readFile(join(ROOT, 'packages', 'events-daemon', 'package.json'), 'utf8'));
+  assert.doesNotMatch(manifest.description, /\bheld\b/i, 'the npm description does not call the daemon held');
+});
 
+test('the release guide and the release skill name exactly the packages a tag publishes, in order', async () => {
+  const guide = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
+  const inventory = /`PACKAGES` is what a tag publishes: (.*?), in that order/.exec(guide);
+  assert.ok(inventory, 'the release guide states what a tag publishes');
+  assert.deepEqual(
+    [...inventory[1].matchAll(/`([a-z-]+)`/g)].map((match) => match[1]),
+    [...PACKAGES],
+    'the release guide lists PACKAGES exactly, in order',
+  );
+  const skill = (await readFile(join(ROOT, '.claude', 'skills', 'release', 'SKILL.md'), 'utf8')).replace(/\s+/g, ' ');
+  const today = /in that order — today (.*?) \(`node scripts\/packages\.mjs` prints the list\)/.exec(skill);
+  assert.ok(today, 'the release skill states what a tag publishes today');
+  assert.deepEqual(
+    [...today[1].matchAll(/`@agentcomms\/([a-z-]+)`/g)].map((match) => match[1]),
+    [...PACKAGES],
+    'the release skill lists PACKAGES exactly, in order',
+  );
+});
+
+test('REL-B2: the released daemon keeps its human-only boundary, and the release browser gate proves loopback SSE/CORS', async () => {
   const [readme, release] = await Promise.all([
     readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8'),
     readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8'),
   ]);
-  assert.match(readme, /B2 adds no command or MCP tool/i, 'B2 does not create a new public surface');
-  assert.match(readme, /delivery retry, drop or hold/i, 'B3 delivery controls remain absent');
-  assert.match(readme, /subscriber management/i, 'B3 subscriber controls remain absent');
-  assert.match(readme, /named event-secret or migration operation/i, 'B3 secret operations remain absent');
+  const text = readme.replace(/\s+/g, ' ');
+  assert.match(text, /until you approve the rule yourself, at your terminal/i, 'collection waits for a person');
+  assert.match(text, /An agent can never/i, 'the README states what an agent cannot do');
+  assert.match(text, /approve anything/i, 'an agent never approves');
+  assert.match(text, /see, set or rotate a webhook secret or stream token/i, 'secrets stay human-only');
+  assert.match(text, /decide a held event/i, 'held decisions stay human-only');
   assert.match(
-    release,
-    /both held throughout B1, B2 and Phase D/i,
-    'the release guide keeps both packages held through Phase D',
+    text,
+    /Every judge kind is off until you enable it, at your terminal/i,
+    'judges stay off until a person enables them',
   );
-  assert.match(
-    readme,
-    /held from publication throughout B1, B2 and Phase D/i,
-    'the daemon README keeps both packages held through Phase D',
-  );
+  assert.match(text, /see, set or rotate a hosted judge's API key/i, "a judge's key stays human-only");
+  assert.match(text, /macOS or Linux/i, 'the supported platforms are stated');
   assert.match(release, /loopback daemon SSE\/CORS/i, 'the release browser gate includes B2 SSE/CORS verification');
 });
 

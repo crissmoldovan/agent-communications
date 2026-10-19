@@ -1,0 +1,6 @@
+# The one Rust the app is built and checked with, here and in CI (desktop.yml, desktop-release.yml), and on the
+# signing Mac (release-desktop.sh adds its two targets to it). Change it in all three at once.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

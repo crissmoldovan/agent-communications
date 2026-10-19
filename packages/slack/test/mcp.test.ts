@@ -573,6 +573,8 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
     }
     const writers = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
     assert.deepEqual(writers.sort(), [
+      // An acknowledgement a standing approval covers: it reaches Slack, with no yes asked of anyone.
+      'slack_ack',
       // A deletion's and an edit's prepare write an approval, as a post's does; nothing changes in Slack.
       'slack_delete_prepare',
       'slack_delete_send',
@@ -584,11 +586,15 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       'slack_edit_send',
       // It writes files on this machine, as `gmail_attachment_download` does — never over one, so not destructive.
       'slack_file_download',
+      // It writes the agent emoji's PNG on this machine, made again over its own last one; nothing reaches Slack.
+      'slack_icon_make',
       'slack_mode_set',
       'slack_post_prepare',
       'slack_post_send',
       'slack_react',
       'slack_react_send',
+      // It writes a standing approval's pending record on this machine, for the person to approve at a terminal.
+      'slack_standing_add',
       'slack_workspace_add',
       'slack_workspace_finish',
       'slack_workspace_policy',
@@ -598,6 +604,7 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
     // A post cannot be taken back once people have read it, nor an edit or a deletion, nor a deleted token, and a client
     // that asks before such a call must know.
     for (const irreversible of [
+      'slack_ack',
       'slack_delete_send',
       'slack_draft_delete',
       'slack_edit_send',
@@ -768,6 +775,9 @@ test('a pinned server refuses another workspace on every tool that takes one', a
     emoji: 'eyes',
     mode: 'send',
     flowId: 'sfl_AAAAAAAAAAAAAAAAAAAAAA',
+    places: 'threads-i-am-in',
+    standingId: 'ap_AAAAAAAAAAAAAAAAAAAAAA',
+    content: 'a'.repeat(64),
   };
   try {
     const tools = (await client.listTools()).tools;

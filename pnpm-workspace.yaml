@@ -1,9 +1,10 @@
 packages:
   - packages/*
+  - apps/*
 
 # One version of each shared tool across every package.
 catalog:
-  "@biomejs/biome": 2.5.14
+  "@biomejs/biome": 2.5.15
   "@types/node": ^22.18.0
   tsdown: 0.23.0
   typescript: 7.0.2
@@ -12,7 +13,9 @@ catalog:
 # Supply-chain defaults (pnpm 11): refuse versions younger than a day, and build nothing
 # with install scripts unless it is listed here.
 minimumReleaseAge: 1440
-allowBuilds: {}
+# esbuild's install script only optimises how its binary is found, and pnpm installs the platform binary as an optional
+# dependency, so nothing needs it run. No other dependency, the desktop app's included, lists an install script.
+allowBuilds: { esbuild: false }
 # Before a script, pnpm 11 reinstalls whatever it thinks is stale — unfiltered, which would pull in the Laya runtime
 # closure the normal install leaves out. Stop instead: the person runs the filtered install CONTRIBUTING gives.
 verifyDepsBeforeRun: error

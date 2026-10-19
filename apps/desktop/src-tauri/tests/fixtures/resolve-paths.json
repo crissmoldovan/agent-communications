@@ -1,0 +1,352 @@
+{
+  "$comment": "Recorded from core's resolvePaths (packages/core/src/paths.ts); src/test/paths-parity.test.ts re-checks every POSIX case against it, and src/test/paths-parity-windows.test.ts every win32 case, with node:path answered by path.win32 as a Windows host answers it.",
+  "cases": [
+    {
+      "name": "linux defaults",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "macOS defaults",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "XDG_CONFIG_HOME moves the config, and state and secrets with it",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "XDG_CONFIG_HOME": "/example/xdg/config"
+      },
+      "expected": {
+        "configDir": "/example/xdg/config/agent-communications",
+        "stateDir": "/example/xdg/config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/xdg/config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "XDG_DATA_HOME moves the data",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "XDG_DATA_HOME": "/example/xdg/data"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/xdg/data/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR takes state and secrets with it",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/srv/comms/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR wins over XDG_CONFIG_HOME",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms",
+        "XDG_CONFIG_HOME": "/example/xdg/config"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/srv/comms/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_STATE_DIR moves the state alone",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_STATE_DIR": "/var/example/state"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/var/example/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_DATA_DIR moves the data alone",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "/opt/example/data"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/opt/example/data",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "every variable at once",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms",
+        "AGENT_COMMS_STATE_DIR": "/var/example/state",
+        "AGENT_COMMS_DATA_DIR": "/opt/example/data",
+        "XDG_CONFIG_HOME": "/example/xdg/config",
+        "XDG_DATA_HOME": "/example/xdg/data"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/var/example/state",
+        "dataDir": "/opt/example/data",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "empty variables count as unset",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "",
+        "AGENT_COMMS_STATE_DIR": "",
+        "AGENT_COMMS_DATA_DIR": "",
+        "XDG_CONFIG_HOME": "",
+        "XDG_DATA_HOME": ""
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "Windows variables mean nothing on POSIX",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "APPDATA": "/example/appdata",
+        "LOCALAPPDATA": "/example/localappdata"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "paths are normalised: trailing separators, dots and doubled separators",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv//comms/./x/../",
+        "XDG_DATA_HOME": "/example/xdg/./data/",
+        "AGENT_COMMS_STATE_DIR": "/var/example/state//"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/var/example/state",
+        "dataDir": "/example/xdg/data/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "a path that climbs past the root stops there",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "/../../opt/example"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/opt/example",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "a home with a trailing separator",
+      "platform": "linux",
+      "home": "/example/home/",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "windows defaults: config under %APPDATA%, the rest under %LOCALAPPDATA%",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {},
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "APPDATA and LOCALAPPDATA name the roots",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "D:\\Roaming",
+        "LOCALAPPDATA": "E:\\Local"
+      },
+      "expected": {
+        "configDir": "D:\\Roaming\\agent-communications",
+        "stateDir": "E:\\Local\\agent-communications\\state",
+        "dataDir": "E:\\Local\\agent-communications",
+        "secretsDir": "E:\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "an empty APPDATA or LOCALAPPDATA is unset",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "",
+        "LOCALAPPDATA": ""
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "XDG_CONFIG_HOME is honoured on Windows too, and state and secrets stay local",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "XDG_CONFIG_HOME": "D:\\xdg\\config"
+      },
+      "expected": {
+        "configDir": "D:\\xdg\\config\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "XDG_DATA_HOME is not read on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "XDG_DATA_HOME": "D:\\xdg\\data"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR takes state and secrets with it on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "D:\\comms"
+      },
+      "expected": {
+        "configDir": "D:\\comms",
+        "stateDir": "D:\\comms\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "D:\\comms\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_STATE_DIR moves the state alone on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_STATE_DIR": "F:\\state"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "F:\\state",
+        "dataDir": "C:\\Users\\example\\AppData\\Local\\agent-communications",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_DATA_DIR moves the data on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "G:\\data"
+      },
+      "expected": {
+        "configDir": "C:\\Users\\example\\AppData\\Roaming\\agent-communications",
+        "stateDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\state",
+        "dataDir": "G:\\data",
+        "secretsDir": "C:\\Users\\example\\AppData\\Local\\agent-communications\\secrets"
+      }
+    },
+    {
+      "name": "forward slashes, a trailing separator and dot segments are normalised",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "D:/comms/./x/../",
+        "AGENT_COMMS_DATA_DIR": "G:/data//here/"
+      },
+      "expected": {
+        "configDir": "D:\\comms",
+        "stateDir": "D:\\comms\\state",
+        "dataDir": "G:\\data\\here",
+        "secretsDir": "D:\\comms\\secrets"
+      }
+    },
+    {
+      "name": "every variable at once on Windows",
+      "platform": "win32",
+      "home": "C:\\Users\\example",
+      "env": {
+        "APPDATA": "D:\\Roaming",
+        "LOCALAPPDATA": "E:\\Local",
+        "XDG_CONFIG_HOME": "H:\\xdg",
+        "AGENT_COMMS_STATE_DIR": "F:\\state",
+        "AGENT_COMMS_DATA_DIR": "G:\\data"
+      },
+      "expected": {
+        "configDir": "H:\\xdg\\agent-communications",
+        "stateDir": "F:\\state",
+        "dataDir": "G:\\data",
+        "secretsDir": "E:\\Local\\agent-communications\\secrets"
+      }
+    }
+  ]
+}

@@ -1,18 +1,20 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, lstatSync, readlinkSync } from 'node:fs';
 import { type FileHandle, open } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { isDangerous } from './chars.ts';
 import type {
   ClientConfig,
   Config,
   OrganisationGeneration,
+  OrganisationIgnoredExtension,
   OrganisationRecord,
   OrganisationServes,
   OrganisationSlackApp,
 } from './config.ts';
 import { hasNames } from './config.ts';
+import { canonicalJson } from './digest.ts';
 import { CommsError } from './errors.ts';
 import {
   type CliHandoffs,
@@ -28,6 +30,8 @@ import { clientSecretRef, GOOGLE_CLIENT_ID_PATTERN } from './oauth-client-record
 import { expandHome, homeDirectory } from './paths.ts';
 import { truncateDisplay } from './render.ts';
 import { neutralise } from './untrusted.ts';
+import { VERSION } from './version.ts';
+import { compareVersions } from './versions.ts';
 
 /**
  * Organisation profiles (design 2026-10-02): an organisation makes its apps once — a Google OAuth client, a Slack app
@@ -41,9 +45,10 @@ import { neutralise } from './untrusted.ts';
  * one place a profile changes the configuration, each change approved first.
  *
  * **A profile is data, never code, and none of it is trusted.** Every field comes from whoever wrote the document, so
- * each has a grammar and a bound, an unknown key is an error, and the two free-text fields are neutralised and put on
- * one line wherever they are shown. The client secret is never shown anywhere — not in a preview, an effect, an error,
- * the audit log, a command's output or a tool's result.
+ * each has a grammar and a bound, an unknown key is an error — anywhere but inside `extensions`, the one door a later
+ * release's fields come in by (design 2026-10-19) — and the two free-text fields are neutralised and put on one line
+ * wherever they are shown. The client secret is never shown anywhere — not in a preview, an effect, an error, the audit
+ * log, a command's output or a tool's result.
  */
 
 /** What a profile says it is, in its first key. */
@@ -99,11 +104,60 @@ const slackAppSchema: z.ZodType<ProfileSlackApp, unknown> = z.strictObject({
     .optional(),
 });
 
+// ── Extensions (design 2026-10-19) ───────────────────────────────────────────────────────────────────────────────
+
+/** The most entries a profile's `extensions` may have (X1). */
+export const EXTENSIONS_MAX = 16;
+
+/** An extension's name: a lower-case letter, then 1–39 lower-case letters, digits or hyphens (X1). */
+export const EXTENSION_NAME_PATTERN: RegExp = /^[a-z][a-z0-9-]{1,39}$/;
+
+/** A release as `since` names it: `MAJOR.MINOR.PATCH` and nothing more — no prerelease, no build, no `v`. */
+const PLAIN_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/**
+ * One entry of a profile's `extensions`, as the generic schema has checked it: `required` and `since`, and the
+ * extension's own fields, which only a release that knows the extension can check (`profileExtensions`).
+ */
+export interface ProfileExtension {
+  required: boolean;
+  since: string;
+  [field: string]: unknown;
+}
+
+const extensionEntrySchema = z.looseObject({
+  required: z.boolean({ message: 'required is true or false: whether a release that does not know it must refuse it' }),
+  since: z
+    .string({ message: 'since is the first release that understands it, as MAJOR.MINOR.PATCH' })
+    .regex(PLAIN_VERSION, 'since is the first release that understands it, as MAJOR.MINOR.PATCH: 0.23.0'),
+});
+
+/**
+ * The one door a version-1 profile has for what later releases add (design 2026-10-19, X1): at most 16 entries, each
+ * named to the grammar above and each an object carrying `required` and `since`. Its other fields are the extension's;
+ * every other object of the profile stays strict.
+ */
+const extensionsSchema = z
+  .record(
+    z
+      .string()
+      .regex(
+        EXTENSION_NAME_PATTERN,
+        'an extension is named by a lower-case letter, then 1–39 lower-case letters, digits or hyphens',
+      ),
+    extensionEntrySchema,
+    { message: 'extensions is an object of named entries' },
+  )
+  .refine((entries) => Object.keys(entries).length <= EXTENSIONS_MAX, {
+    message: `extensions has at most ${EXTENSIONS_MAX} entries`,
+  });
+
 /**
  * The strict schema every profile passes (design 2026-10-02 §D2): exactly these keys, each to its grammar and bound.
  *
  * Version 1 names apps and nothing else — no defaults, no policies. Either `gmail` or `slack` may be absent, and so may
- * either Slack app: a profile that stops naming one is how an organisation withdraws it (§D8).
+ * either Slack app: a profile that stops naming one is how an organisation withdraws it (§D8). From 0.21.0 it may also
+ * carry `extensions` (design 2026-10-19): the only key whose contents are not all this release's to know.
  */
 const profileSchema = z.strictObject({
   agentcomms: z.literal(PROFILE_KIND),
@@ -144,6 +198,7 @@ const profileSchema = z.strictObject({
       apps: z.strictObject({ read: slackAppSchema.optional(), send: slackAppSchema.optional() }),
     })
     .optional(),
+  extensions: extensionsSchema.optional(),
 });
 
 export interface ProfileSlackApp {
@@ -173,6 +228,8 @@ export interface OrganisationProfile {
   label: string;
   gmail?: ProfileGmail | undefined;
   slack?: ProfileSlack | undefined;
+  /** What later releases add, by name (design 2026-10-19). Absent on every profile written for 0.20.0 or older. */
+  extensions?: Record<string, ProfileExtension> | undefined;
 }
 
 export const organisationProfileSchema: z.ZodType<OrganisationProfile, unknown> = profileSchema;
@@ -194,6 +251,208 @@ export function servesText(serves: OrganisationServes): string {
     : `addresses at ${serves.domains.map((domain) => shownText(domain)).join(', ')}`;
 }
 
+// ── Known extensions (design 2026-10-19, X2) ─────────────────────────────────────────────────────────────────────
+
+/**
+ * What a change of an extension does, as its own classifier says: `tightens` applies at once, as every tightening does;
+ * `loosens` and `who-acts` — a change of who acts — are approved first, before → after (X4).
+ */
+export type ExtensionEffect = 'tightens' | 'loosens' | 'who-acts';
+
+/**
+ * One extension this release knows, as the registry holds it. Its entry in a profile is untrusted like every other
+ * field: checked against `schema`, and shown only through `describe`, whose words are fixed around values neutralised.
+ */
+export interface KnownExtension {
+  readonly name: string;
+  /**
+   * Whether a release that does not know it may skip it (X2). It may when its absence leaves every other field meaning
+   * the same, and this machine no looser; it must be understood when skipping it would let the rest do more than
+   * intended — a limit on an app, a narrower `serves` — or would change who acts. The pull request that adds an entry
+   * states which, and why: that statement is a review item.
+   */
+  readonly ignorable: boolean;
+  /** Its own fields — the entry without `required` and `since` — as this release reads them. */
+  readonly schema: z.ZodType<unknown, unknown>;
+  /** What moving from `before` to `after` does; `undefined` on either side is "not there". */
+  classify(before: unknown, after: unknown): ExtensionEffect;
+  /** The value the record holds of it, as `apply` left it; `undefined` when it holds none. */
+  recorded(record: OrganisationRecord): unknown;
+  /** The record with `value` applied; `undefined` takes it away. Pure: it returns a new record. */
+  apply(record: OrganisationRecord, value: unknown): OrganisationRecord;
+  /** A value as a preview names it; `undefined` is "none". */
+  describe(value: unknown): string;
+}
+
+/** The extensions a release knows, by name. */
+export type ExtensionRegistry = ReadonlyMap<string, KnownExtension>;
+
+/**
+ * The extensions this release knows: none. 0.21.0 ships the mechanism with an empty registry; a later feature adds its
+ * entry in the pull request that adds the feature, and tests inject their own.
+ */
+export const KNOWN_EXTENSIONS: ExtensionRegistry = new Map<string, KnownExtension>();
+
+/** Why an entry is not applied here: a later release has it, this one should and does not, or it waits for `org update`. */
+export type IgnoredReason = 'needs-newer' | 'unknown' | 'pending';
+
+/** An entry not applied here, as a result and `org show` name it. */
+export interface IgnoredExtension {
+  name: string;
+  since: string;
+  reason: IgnoredReason;
+}
+
+/** An entry this release knows, its own fields as its schema read them. */
+export interface UnderstoodExtension {
+  name: string;
+  value: unknown;
+  sha256: string;
+  extension: KnownExtension;
+}
+
+/** A profile's extensions against a registry: what this release applies, what it skips, and what it must refuse. */
+export interface ExtensionVerdict {
+  understood: UnderstoodExtension[];
+  /** Unknown and optional: not applied, and recorded as skipped. */
+  ignored: (IgnoredExtension & { sha256: string })[];
+  /** Unknown and required: the profile cannot be taken here at all. */
+  refused: IgnoredExtension[];
+}
+
+/** The SHA-256 of an entry's canonical JSON — keys sorted at every level, no whitespace (X3). */
+export function extensionSha256(entry: unknown): string {
+  return createHash('sha256').update(canonicalJson(entry), 'utf8').digest('hex');
+}
+
+/**
+ * Why an entry this release does not know is not applied: `needs-newer` when the release it names comes after this one;
+ * otherwise `unknown` — one this release should know and does not, a typo or another fork's (X3).
+ */
+export function sinceReason(since: string, running: string = VERSION): 'needs-newer' | 'unknown' {
+  const order = compareVersions(since, running);
+  return order !== null && order > 0 ? 'needs-newer' : 'unknown';
+}
+
+/**
+ * A profile's extensions, read against the extensions a release knows (X2, X3), in name order:
+ *
+ * - known: held to its own schema, and refused, naming it, when it must be understood and is marked optional — the
+ *   marker exists for older releases, and a release that knows the field holds the profile to it. Marked required when
+ *   it could have been ignored is only stricter than needed, and accepted;
+ * - unknown and optional: skipped;
+ * - unknown and required: refused — the caller says so in the words of a profile that needs a later release.
+ *
+ * Refusals of the first kind are BAD_DATA, in the words of every other refusal of a profile.
+ */
+export function profileExtensions(
+  profile: OrganisationProfile,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): ExtensionVerdict {
+  const verdict: ExtensionVerdict = { understood: [], ignored: [], refused: [] };
+  const entries = profile.extensions ?? {};
+  for (const name of Object.keys(entries).sort()) {
+    const entry = entries[name] as ProfileExtension;
+    const known = registry.get(name);
+    const sha256 = extensionSha256(entry);
+    if (known === undefined) {
+      const item = { name, since: entry.since, reason: sinceReason(entry.since) };
+      if (entry.required) verdict.refused.push(item);
+      else verdict.ignored.push({ ...item, sha256 });
+      continue;
+    }
+    if (!known.ignorable && !entry.required) {
+      throw new CommsError(
+        'BAD_DATA',
+        `the organisation profile is not valid: extensions.${name}: "${name}" must be understood by every release that reads it, so it must be marked required: true`,
+        {
+          hint: 'A release that does not know it would skip it and do more than the organisation means. Ask your organisation to mark it required.',
+        },
+      );
+    }
+    const { required: _required, since: _since, ...own } = entry;
+    const parsed = known.schema.safeParse(own);
+    if (!parsed.success) {
+      throw new CommsError(
+        'BAD_DATA',
+        `the organisation profile is not valid: ${issuesText(
+          parsed.error.issues.map((issue) => ({ ...issue, path: ['extensions', name, ...issue.path] })),
+          'the extension has',
+        )}`,
+        { hint: 'Ask your organisation for its current profile.' },
+      );
+    }
+    verdict.understood.push({ name, value: parsed.data, sha256, extension: known });
+  }
+  return verdict;
+}
+
+/**
+ * An organisation record's list of skipped entries (X3), read leniently: every well-formed entry — an object with a
+ * string `since` and a string `sha256` — and whether the list held anything else. A list that is not an object at all
+ * counts as malformed, with no entries. The record is a file another release or a hand can write, and the first release
+ * to read the list must not make the whole configuration unreadable over its shape.
+ */
+export function ignoredListOf(record: OrganisationRecord | undefined): {
+  entries: Record<string, OrganisationIgnoredExtension>;
+  malformed: boolean;
+} {
+  const raw = record?.ignoredExtensions;
+  if (raw === undefined) return { entries: {}, malformed: false };
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { entries: {}, malformed: true };
+  const entries: Record<string, OrganisationIgnoredExtension> = {};
+  let malformed = false;
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const entry = value as { since?: unknown; sha256?: unknown } | null;
+    if (
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof entry.since === 'string' &&
+      typeof entry.sha256 === 'string'
+    ) {
+      entries[name] = { since: entry.since, sha256: entry.sha256 };
+    } else malformed = true;
+  }
+  return { entries, malformed };
+}
+
+/** The entries an organisation's record lists as not applied here, in name order, each with why (X3, X7). */
+export function ignoredOf(
+  record: OrganisationRecord | undefined,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): IgnoredExtension[] {
+  const listed = ignoredListOf(record).entries;
+  return Object.keys(listed)
+    .sort()
+    .map((name) => {
+      const since = listed[name]?.since ?? '';
+      // A record is a file an older release or a hand can write: what it says is shown as untrusted text.
+      return {
+        name: shownText(name, 40),
+        since: shownText(since, 20),
+        reason: registry.has(name) ? ('pending' as const) : sinceReason(since),
+      };
+    });
+}
+
+/** One entry not applied here, in the words a preview, a result and `org show` use (X3). */
+export function notAppliedText(item: IgnoredExtension): string {
+  return `${item.reason === 'pending' ? 'not applied here yet' : 'not applied here'}: ${notAppliedDetail(item)}`;
+}
+
+/** The same without its first words, as `doctor` lists several on one line. */
+export function notAppliedDetail(item: IgnoredExtension): string {
+  const name = shownText(item.name, 40);
+  switch (item.reason) {
+    case 'needs-newer':
+      return `${name} (needs ${shownText(item.since, 20)} or later)`;
+    case 'unknown':
+      return `${name} is not an extension this release knows`;
+    default:
+      return `${name}, which this release knows: an org update applies it`;
+  }
+}
+
 /**
  * Parses a profile's text, or refuses it — naming each problem by where it is and what it should be, never by the value
  * found there. A key the schema does not know is named, neutralised and cut short: it came from the document too.
@@ -207,23 +466,68 @@ export function parseProfile(text: string): OrganisationProfile {
       hint: 'Ask your organisation for its profile again; it is one JSON document.',
     });
   }
+  refuseLaterVersion(raw);
   const parsed = organisationProfileSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
-  const problems = parsed.error.issues.slice(0, 6).map((issue) => {
-    const where = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the profile';
-    if (issue.code === 'unrecognized_keys') {
-      return `${where}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} a profile has`;
-    }
-    // The secret's own messages are the schema's, which say what a secret looks like; any other wording zod might
-    // produce for it is replaced, so nothing about the value can reach a message.
-    if (issue.path.join('.') === 'gmail.clientSecret') {
-      return `${where}: the client secret is 1–256 printable ASCII characters`;
-    }
-    return `${where}: ${issue.message}`;
-  });
-  throw new CommsError('BAD_DATA', `the organisation profile is not valid: ${problems.join('; ')}`, {
-    hint: 'A profile has exactly the keys its organisation’s README describes. Ask your organisation for its current one.',
-  });
+  throw new CommsError(
+    'BAD_DATA',
+    `the organisation profile is not valid: ${issuesText(parsed.error.issues, 'a profile has')}`,
+    {
+      hint: 'A profile has exactly the keys its organisation’s README describes, and anything new goes under `extensions`. Ask your organisation for its current one.',
+    },
+  );
+}
+
+/**
+ * Up to six of a schema's issues, each by where it is and what it should be, never by the value found there. Where it
+ * is can be a key the document chose — an extension's name — so it is neutralised and put on one line too, as a key
+ * the schema does not know is.
+ */
+function issuesText(issues: readonly z.core.$ZodIssue[], has: string): string {
+  return issues
+    .slice(0, 6)
+    .map((issue) => {
+      const where = issue.path.length > 0 ? shownText(issue.path.map(String).join('.'), 120) : 'the profile';
+      if (issue.code === 'unrecognized_keys') {
+        return `${where}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} ${has}`;
+      }
+      // A key `extensions` refuses: what a name should be — the key schema's message, not zod's "Invalid key".
+      if (issue.code === 'invalid_key') {
+        return `${where}: ${issue.issues[0]?.message ?? 'that is not a name an extension can have'}`;
+      }
+      // The secret's own messages are the schema's, which say what a secret looks like; any other wording zod might
+      // produce for it is replaced, so nothing about the value can reach a message.
+      if (issue.path.join('.') === 'gmail.clientSecret') {
+        return `${where}: the client secret is 1–256 printable ASCII characters`;
+      }
+      return `${where}: ${issue.message}`;
+    })
+    .join('; ');
+}
+
+/**
+ * A profile of a later version than 1 is one this release is too old for, not one the organisation got wrong (design
+ * 2026-10-19, X3): refused as a profile that needs a later release, with the hint to update first — never with zod's
+ * `expected 1`, and never by sending the member to ask the organisation for another. Only a whole number past 1 is a
+ * later version; any other `version` is wrong, and the schema says so as before.
+ */
+function refuseLaterVersion(raw: unknown): void {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
+  const { agentcomms, version, organisation } = raw as Record<string, unknown>;
+  if (agentcomms !== PROFILE_KIND || typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 1) {
+    return;
+  }
+  const named =
+    typeof organisation === 'string' && parseOrganisation(organisation, { max: PROFILE_ORGANISATION_MAX }) !== null;
+  const who = named ? `${organisation}'s profile` : 'the organisation’s profile';
+  throw new CommsError(
+    'NEEDS_NEWER_RELEASE',
+    `${who} is version ${version}, which needs a later agent-communications than this one (${VERSION}): nothing was changed`,
+    {
+      hint: `This agent-communications (${VERSION}) is older than the profile. Update it first, then add or update the profile again.`,
+      details: { version, ...(named ? { organisation } : {}) },
+    },
+  );
 }
 
 /**
@@ -314,48 +618,287 @@ export interface ProfileFile {
   path: string;
   sha256: string;
   profile: OrganisationProfile;
+  /** The organisation's update caps, from the file beside the profile (`updatesPathFor`); absent when there is none. */
+  updates?: UpdatesFile | undefined;
+  /** The organisation's agent app, from the file beside the profile (`agentAppPathFor`); absent when there is none. */
+  agentApp?: AgentAppFile | undefined;
 }
 
 /**
- * Reads a profile from an absolute path, in one bounded read: open once, check it is a regular file, read at most one
- * byte more than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a
- * device, a directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path
- * is one the person chose.
+ * The bytes at an absolute path, in one bounded read: open once, check it is a regular file, read at most one byte more
+ * than `PROFILE_MAX_BYTES` from the same handle. A path somebody typed can name a FIFO that never ends, a device, a
+ * directory; none of them is a profile, and none may be how a command hangs. A symlink is followed: the path is one the
+ * person chose. `unopened` says what a file that cannot be opened is: a refusal for the profile, whatever the reason;
+ * nothing for a file beside it (`readSideFile`) when it is not there, and a refusal when it is there and cannot be
+ * opened.
  */
-export async function readProfileFile(path: string): Promise<ProfileFile> {
+async function readBounded(
+  path: string,
+  what: { unopened: (error: unknown) => null; noun: string; size: string },
+): Promise<Buffer | null> {
   let handle: FileHandle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-  } catch {
-    throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
-      hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
-    });
+  } catch (error) {
+    return what.unopened(error);
   }
-  let bytes: Buffer;
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new CommsError('USAGE', `${shownPath(path)} is not a file`);
     const buffer = Buffer.allocUnsafe(PROFILE_MAX_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, PROFILE_MAX_BYTES + 1, 0);
     if (bytesRead > PROFILE_MAX_BYTES) {
-      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than a profile can be (64 KiB)`, {
-        hint: 'A profile is a few hundred bytes of JSON. Check this is the file your organisation sent.',
+      throw new CommsError('BAD_DATA', `${shownPath(path)} is larger than ${what.size} can be (64 KiB)`, {
+        hint: `${what.size.charAt(0).toUpperCase()}${what.size.slice(1)} is a few hundred bytes of JSON. Check this is the file your organisation sent.`,
       });
     }
-    bytes = Buffer.from(buffer.subarray(0, bytesRead));
+    return Buffer.from(buffer.subarray(0, bytesRead));
   } catch (error) {
     if (error instanceof CommsError) throw error;
-    throw new CommsError('NOT_FOUND', `the profile at ${shownPath(path)} could not be read`, { cause: error });
+    throw new CommsError('NOT_FOUND', `${what.noun} at ${shownPath(path)} could not be read`, { cause: error });
   } finally {
     await handle.close();
   }
+}
+
+function utf8(bytes: Buffer, what: string): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new CommsError('BAD_DATA', `${what} is not UTF-8 text`);
+  }
+}
+
+/** The most symbolic links followed from a profile's path to its file: as many as the system itself follows. */
+const LINK_HOPS = 40;
+
+/**
+ * The file a profile's path names, through every symbolic link at its end: the path itself when it is not a link, or
+ * cannot be looked at — what reading it then finds is the bounded read's to say. A link's target is read against the
+ * folder the link is in. The folders on the way are left as they are spelt: the file beside the result is in the same
+ * folder whatever they resolve to.
+ *
+ * What the files beside a profile are looked for beside (`readProfileFile`): an organisation keeps them beside its
+ * profile, in its own checkout, and a person who links to that profile from somewhere else has linked to the profile
+ * alone. Looked for beside the link, a caps file is not there, and the caps it names would be lifted.
+ */
+export function profileTarget(path: string): string {
+  let at = path;
+  for (let hops = 0; hops < LINK_HOPS; hops += 1) {
+    let link: string;
+    try {
+      if (!lstatSync(at).isSymbolicLink()) return at;
+      link = readlinkSync(at);
+    } catch {
+      return at;
+    }
+    at = resolve(dirname(at), link);
+  }
+  throw new CommsError('USAGE', `${shownPath(path)} is a chain of more than ${LINK_HOPS} symbolic links`, {
+    hint: 'Pass the path of the profile file itself.',
+  });
+}
+
+/**
+ * Reads a profile from an absolute path (`readBounded`), and each file the organisation keeps beside it when there is
+ * one: its update caps (`updatesPathFor`) and its agent app (`agentAppPathFor`). Each is bound by the SHA-256 of its
+ * own exact bytes.
+ *
+ * The path is resolved once, through any symbolic link at its end (`profileTarget`): the profile is read from the file
+ * it names, and the files beside it are looked for beside that file — never beside the link, where they are not, and
+ * where a file of somebody else's could be. The path recorded, and read again by `org update`, is the one given.
+ */
+export async function readProfileFile(path: string): Promise<ProfileFile> {
+  const target = profileTarget(path);
+  const bytes = (await readBounded(target, {
+    unopened: () => {
+      throw new CommsError('NOT_FOUND', `no profile file at ${shownPath(path)}`, {
+        hint: 'Pass the path of your organisation’s .agentcomms.json file — after `git pull` in its repository, if it came from one.',
+      });
+    },
+    noun: 'the profile',
+    size: 'a profile',
+  })) as Buffer;
+  const profile = parseProfile(utf8(bytes, 'the organisation profile'));
+  const updates = await readUpdatesFile(updatesPathFor(target), profile);
+  const agentApp = await readAgentAppFile(agentAppPathFor(target), profile);
+  return {
+    path,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    profile,
+    ...(updates === undefined ? {} : { updates }),
+    ...(agentApp === undefined ? {} : { agentApp }),
+  };
+}
+
+// ── Files beside the profile ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * **What an organisation adds after 0.19.0 goes in a file beside its profile, not in it.** Every object of a version-1
+ * profile is strict, in this release and in every one since profiles were added (0.13.0 to 0.19.0): a new key anywhere
+ * refuses the whole document, and a member still on an older release would then lose `org update` for everything else
+ * the organisation changes, until they updated. So the profile stays exactly as those releases read it, and each
+ * addition goes in `<profile>.<suffix>.json`, which they never open. This release reads each whenever it reads the
+ * profile, binds it by its own SHA-256 in the same approval, and records it where the configuration's loose schema lets
+ * older releases keep it through their writes.
+ */
+interface SideFile<T> {
+  /** What a refusal calls it: `the updates file`. */
+  noun: string;
+  /** The same with an indefinite article, for the size refusal: `an updates file`. */
+  size: string;
+  /** What it holds, strictly. Every document names the organisation whose profile it sits beside. */
+  schema: z.ZodType<T & { organisation: string }>;
+  /** What a refusal tells the person it should hold. */
+  hint: string;
+  /** Anything else it must agree on with the profile beside it: the problem to refuse it with, or nothing. */
+  agrees?: ((document: T & { organisation: string }, profile: OrganisationProfile) => string | undefined) | undefined;
+}
+
+/** A side file's path for a profile: in the same folder, the profile's name with `.<suffix>.json` for its `.json`. */
+function sidePathFor(profilePath: string, suffix: string): string {
+  return /\.json$/i.test(profilePath)
+    ? `${profilePath.slice(0, -'.json'.length)}.${suffix}.json`
+    : `${profilePath}.${suffix}.json`;
+}
+
+/**
+ * Reads one file beside a profile, if there is one, and holds it to the profile: the same organisation, and whatever
+ * else `agrees` asks. Read in one bounded read as the profile is (`readBounded`), strict as the profile is, and refused
+ * in the same words — naming each problem by where it is, never by the value found there — but naming this file, so
+ * the person knows which of the two to fix. Only a file that is not there is none: one that is there and cannot be
+ * opened is refused, since read as none it would lift what it says — the caps, or the one app `workspace bot` takes.
+ */
+async function readSideFile<T>(
+  path: string,
+  profile: OrganisationProfile,
+  side: SideFile<T>,
+): Promise<{ path: string; sha256: string; document: T & { organisation: string } } | undefined> {
+  const where = shownPath(path);
+  const bytes = await readBounded(path, {
+    unopened: (error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new CommsError('NOT_FOUND', `${side.noun} at ${where} could not be opened`, { cause: error });
+    },
+    noun: side.noun,
+    size: side.size,
+  });
+  if (bytes === null) return undefined;
+  const refuse = (problem: string): never => {
+    throw new CommsError('BAD_DATA', `${side.noun} ${where} is not valid: ${problem}`, { hint: side.hint });
+  };
   let text: string;
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    throw new CommsError('BAD_DATA', 'the organisation profile is not UTF-8 text');
+    return refuse('it is not UTF-8 text');
   }
-  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), profile: parseProfile(text) };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.startsWith('﻿') ? text.slice(1) : text);
+  } catch {
+    return refuse('it is not valid JSON');
+  }
+  const parsed = side.schema.safeParse(raw);
+  if (!parsed.success) {
+    return refuse(
+      parsed.error.issues
+        .slice(0, 6)
+        .map((issue) => {
+          const at = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the file';
+          return issue.code === 'unrecognized_keys'
+            ? `${at}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} it has`
+            : `${at}: ${issue.message}`;
+        })
+        .join('; '),
+    );
+  }
+  const document = parsed.data;
+  if (document.organisation !== profile.organisation) {
+    return refuse(
+      `it names the organisation ${shownText(document.organisation, 40)}, not ${profile.organisation}, whose profile it sits beside`,
+    );
+  }
+  const problem = side.agrees?.(document, profile);
+  if (problem !== undefined) return refuse(problem);
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), document };
+}
+
+// ── The organisation's agent app ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An organisation's agent app (CUE-493, decided 2026-10-16): one bot-only Slack app per organisation — no user scopes,
+ * token rotation off — that its administrator installs once. Its bot token is shared with members privately, never in
+ * the profile's repository, and each member who wants their agent's posts to appear as the app pastes it once with
+ * Slack's `workspace bot`. Their own read and send connection is untouched; a member who does nothing keeps the
+ * labelled fallback.
+ *
+ * **The app is named in a file beside the profile, not in it** (`readSideFile`): a key such as `slack.apps.agent` in
+ * the profile would make every release from 0.13.0 to 0.19.0 refuse it. Its id goes in `<profile>.agent-app.json`,
+ * recorded as `slack.apps.agent`.
+ *
+ * It holds the app's id and nothing secret: what lets `workspace bot` refuse a token of any other app, and lets `doctor`
+ * tell a member whom to ask for this one.
+ */
+export const AGENT_APP_KIND = 'organisation-agent-app' as const;
+
+/** The agent app's file for a profile: in the same folder, the profile's name with `.agent-app.json` for its `.json`. */
+export function agentAppPathFor(profilePath: string): string {
+  return sidePathFor(profilePath, 'agent-app');
+}
+
+/** The agent app as it was read: from where, the SHA-256 of its exact bytes, and the app it names. */
+export interface AgentAppFile {
+  path: string;
+  sha256: string;
+  appId: string;
+}
+
+const agentAppSchema = z.strictObject({
+  agentcomms: z.literal(AGENT_APP_KIND),
+  version: z.literal(1),
+  organisation: z.string(),
+  slack: z.strictObject({
+    workspace: z
+      .string()
+      .regex(SLACK_WORKSPACE_ID_PATTERN, 'a Slack workspace id is T followed by capital letters or digits'),
+    appId: z.string().regex(SLACK_APP_ID_PATTERN, 'a Slack app id is A followed by 2–20 capital letters or digits'),
+  }),
+});
+
+/** The agent app's file, held to the profile's organisation and to its own Slack workspace. */
+async function readAgentAppFile(path: string, profile: OrganisationProfile): Promise<AgentAppFile | undefined> {
+  const read = await readSideFile(path, profile, {
+    noun: 'the agent app file',
+    size: 'an agent app file',
+    schema: agentAppSchema,
+    hint: 'It names the organisation’s agent app and nothing else: its kind, version 1, the organisation, and its Slack workspace and app id. Ask your organisation for its current one.',
+    agrees: (document, beside) => {
+      if (!beside.slack) return 'the profile beside it lists no Slack workspace for the app to post in';
+      if (document.slack.workspace !== beside.slack.workspace) {
+        return `it names the workspace ${document.slack.workspace}, not ${beside.slack.workspace}, the profile's`;
+      }
+      return undefined;
+    },
+  });
+  return read === undefined ? undefined : { path: read.path, sha256: read.sha256, appId: read.document.slack.appId };
+}
+
+/**
+ * The agent app an organisation's profile names for this Slack workspace, as the configuration records it — or none.
+ *
+ * Whatever string the record holds is returned, an app id or not: a check against a hand-edited value then refuses
+ * every token, the stricter reading, rather than none.
+ */
+export function organisationAgentApp(
+  config: Config,
+  organisation: string,
+  workspace: string,
+): { appId: string } | undefined {
+  const slack = recordOf(config, organisation)?.slack;
+  if (slack === undefined || slack.workspace !== workspace) return undefined;
+  const agent = slack.apps.agent;
+  return typeof agent?.appId === 'string' && agent.appId !== '' ? { appId: agent.appId } : undefined;
 }
 
 // ── The record ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1057,4 +1600,78 @@ export function unmanagedSlackAccounts(config: Config, organisation: string, wor
     })
     .map(([name]) => name)
     .sort();
+}
+
+// ── The organisation's update caps ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An organisation's update caps (design 2026-10-16, U8): the most its members' machines may update — `max`,
+ * `every-14-days` or `never` — and `background: false`, no background job. They only ever tighten: a member's level is
+ * capped at `max`, and nothing a member sets goes past it.
+ *
+ * **They are named in a file beside the profile, not in it** (`readSideFile`): a key such as `updates` in the profile
+ * would make every release from 0.13.0 to 0.19.0 refuse it. They go in `<profile>.updates.json`, recorded as the
+ * organisation's `updates`.
+ */
+export const UPDATE_CAPS = ['every-14-days', 'never'] as const;
+export type UpdateCap = (typeof UPDATE_CAPS)[number];
+
+/** The updates file for a profile: in the same folder, the profile's name with `.updates.json` for its `.json`. */
+export function updatesPathFor(profilePath: string): string {
+  return sidePathFor(profilePath, 'updates');
+}
+
+/** The caps as they were read: from where, the SHA-256 of the exact bytes, and what they say. */
+export interface UpdatesFile {
+  path: string;
+  sha256: string;
+  max?: UpdateCap | undefined;
+  background?: false | undefined;
+}
+
+const updatesSchema = z.strictObject({
+  organisation: z.string(),
+  max: z
+    .enum(UPDATE_CAPS, { message: 'max is every-14-days or never: a cap only ever makes updates less frequent' })
+    .optional(),
+  background: z
+    .literal(false, { message: 'background is false or left out: a cap can only turn background updates off' })
+    .optional(),
+});
+
+/** The updates file, held to the profile's organisation (`readSideFile`). */
+async function readUpdatesFile(path: string, profile: OrganisationProfile): Promise<UpdatesFile | undefined> {
+  const read = await readSideFile(path, profile, {
+    noun: 'the updates file',
+    size: 'an updates file',
+    schema: updatesSchema,
+    hint: 'It names the organisation, and the caps on how its members update and nothing else: `max` (every-14-days or never) and `background` (false). Ask your organisation for its current one.',
+  });
+  if (read === undefined) return undefined;
+  const { max, background } = read.document;
+  return {
+    path: read.path,
+    sha256: read.sha256,
+    ...(max === undefined ? {} : { max }),
+    ...(background === undefined ? {} : { background: false as const }),
+  };
+}
+
+/**
+ * The caps file beside a profile, read with no profile to hold it to but the organisation's word: what stands in for
+ * the caps the configuration records when `config.json` cannot be read (`effectiveUpdates`, failing closed). Beside the
+ * file the path names (`profileTarget`), in the same bounded, strict read, held to the same organisation. Refused as
+ * `readProfileFile` refuses it; undefined when there is none.
+ */
+export async function readUpdatesBeside(profilePath: string, organisation: string): Promise<UpdatesFile | undefined> {
+  return readUpdatesFile(updatesPathFor(profileTarget(profilePath)), { organisation } as OrganisationProfile);
+}
+
+/** The caps, as a preview and the doctor say them: "at most never, no background updates", or "no caps". */
+export function capsText(caps: { max?: string | undefined; background?: boolean | undefined } | undefined): string {
+  const parts = [
+    ...(caps?.max === undefined ? [] : [`at most ${shownText(caps.max, 20)}`]),
+    ...(caps?.background === false ? ['no background updates'] : []),
+  ];
+  return parts.length === 0 ? 'no caps' : parts.join(', ');
 }

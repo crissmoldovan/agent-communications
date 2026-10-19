@@ -12,13 +12,28 @@ import {
   expandHome,
   formerNamesOf,
   homeDirectory,
+  type MessageIdentity,
+  type MessagePreview,
   neutralise,
   parseAddressList,
   readComposeProfile,
   recipientDomains,
   renderMessagePreview,
 } from '@agentcomms/core';
-import type { GmailContext } from '../context.ts';
+import type { GmailContext, ResolvedInbox } from '../context.ts';
+import {
+  accountNameOf,
+  addressesOf,
+  IDENTITIES,
+  IDENTITY_WORDS,
+  identityLine,
+  identityOfFrom,
+  labelSettingsOf,
+  type MailIdentity,
+  mailIdentity,
+  mailKind,
+  shownFrom,
+} from '../domain/agent-label.ts';
 import { buildBody } from '../domain/body.ts';
 import {
   type ComposeAttachment,
@@ -52,6 +67,13 @@ export interface DraftResult {
   cc: string[];
   bcc: string[];
   subject: string;
+  /**
+   * Who the draft appears to come from (design 2026-10-15-agent-label, L3): `agent`, labelled in its From line, or
+   * `me`, the bare address as before. The preview's first line says which.
+   */
+  identity: MessageIdentity;
+  /** The From line the draft carries, as a recipient will read it. */
+  from: string;
   /** The message as the user should see it before approving anything. */
   preview: string;
   attachments: Array<{ filename: string; size: number; mimeType: string; source: string }>;
@@ -84,6 +106,11 @@ export interface DraftInput {
   signature?: boolean | undefined;
   /** Include the writing profile in the result, for an agent about to revise. */
   includeProfile?: boolean | undefined;
+  /**
+   * `me` to write it as the person, unlabelled, or `agent` (L3). Only what the person said for this message: left out,
+   * the rules and then the default, `agent`, decide. Checked by the operation, so both surfaces refuse a word alike.
+   */
+  as?: string | undefined;
 }
 
 async function attachmentsFor(
@@ -183,6 +210,32 @@ function warningsFor(input: { to: string[]; cc: string[]; bcc: string[]; ownDoma
   return warnings;
 }
 
+/**
+ * Who this draft appears to come from, and the From line that says so (G1): settled before anything is written, so a
+ * label that cannot be made refuses the draft rather than saving one unlabelled.
+ */
+async function draftIdentity(
+  context: GmailContext,
+  resolved: ResolvedInbox,
+  options: { kind: 'send' | 'reply'; requested: string | undefined; recipients: readonly string[] },
+): Promise<MailIdentity> {
+  const requested = oneOf(options.requested, IDENTITIES, IDENTITY_WORDS);
+  const config = await context.config();
+  const transport = await context.transport(resolved.alias);
+  // The name is the send-as one when Gmail will say; a mailbox that will not list them falls back to the core's.
+  const sendAs = await transport.listSendAs().catch(() => []);
+  return mailIdentity({
+    settings: labelSettingsOf(config),
+    account: accountNameOf(config, resolved),
+    accountId: resolved.inbox.id,
+    kind: options.kind,
+    requested,
+    recipients: addressesOf(options.recipients),
+    address: resolved.inbox.email,
+    sendAs,
+  });
+}
+
 /** Creates a draft. Nothing is sent, and nothing can be: the send path is a separate operation with its own gate. */
 export async function createDraft(context: GmailContext, alias: string, input: DraftInput): Promise<DraftResult> {
   const resolved = await context.inbox(alias);
@@ -193,11 +246,16 @@ export async function createDraft(context: GmailContext, alias: string, input: D
   const cc = input.cc ?? [];
   const bcc = input.bcc ?? [];
   const from = resolved.inbox.email;
+  const label = await draftIdentity(context, resolved, {
+    kind: 'send',
+    requested: input.as,
+    recipients: [...to, ...cc, ...bcc],
+  });
   const { attachments, described, warnings: attachmentWarnings } = await attachmentsFor(context, input.attach ?? []);
   const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
 
   const composed = await composeMessage({
-    from: formatAddress({ name: '', address: from }),
+    from: label.from,
     to,
     cc,
     bcc,
@@ -233,11 +291,13 @@ export async function createDraft(context: GmailContext, alias: string, input: D
     cc,
     bcc,
     subject: input.subject ?? '',
-    preview: renderMessagePreview({
+    identity: label.identity,
+    from: label.from,
+    preview: labelledPreview(label, {
       // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
       // is one address whose display name contains another, and the preview truncated at 90 characters showed the
       // decoy and never the real recipient.
-      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
+      recipients: { from: label.from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject: input.subject ?? '',
       body: composed.text,
       attachments: described.map((attachment) => ({
@@ -349,6 +409,14 @@ function previewable(entries: readonly string[]): string[] {
   });
 }
 
+/** A draft's preview, its first line saying who it appears to come from (L3). */
+function labelledPreview(
+  identity: { readonly identity: MessageIdentity; readonly phrase?: string | undefined },
+  preview: MessagePreview,
+): string {
+  return `${identityLine(identity)}\n${renderMessagePreview(preview)}`;
+}
+
 /** How much of an original is quoted. Long enough for context, short enough not to dominate the message. */
 const QUOTE_MAX_CHARS = 4000;
 
@@ -420,13 +488,19 @@ export async function replyDraft(
   }
 
   const from = resolved.inbox.email;
+  // A reply answers a message; a forward has nothing to answer, and starts a new one (L4's `send`).
+  const label = await draftIdentity(context, resolved, {
+    kind: mailKind(plan.inReplyTo),
+    requested: input.as,
+    recipients: [...to, ...cc, ...bcc],
+  });
   const { attachments, described, warnings: attachmentWarnings } = await attachmentsFor(context, input.attach ?? []);
   const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
   const subject = input.subject ?? plan.subject;
   const quoted = input.quote === false ? undefined : quoteOf(original, mode);
 
   const composed = await composeMessage({
-    from: formatAddress({ name: '', address: from }),
+    from: label.from,
     to,
     cc,
     bcc,
@@ -477,11 +551,13 @@ export async function replyDraft(
     cc,
     bcc,
     subject,
-    preview: renderMessagePreview({
+    identity: label.identity,
+    from: label.from,
+    preview: labelledPreview(label, {
       // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
       // is one address whose display name contains another, and the preview truncated at 90 characters showed the
       // decoy and never the real recipient.
-      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
+      recipients: { from: label.from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject,
       body: composed.text,
       attachments: described.map((attachment) => ({
@@ -585,7 +661,7 @@ export async function deleteDraft(context: GmailContext, alias: string, draftId:
  * the mail that was approved. Our own tools close it here — including two tool calls from the same agent in
  * parallel. What remains is an edit made in Gmail web at that exact moment, and that is documented, not claimed.
  */
-async function refuseWhileSending(context: GmailContext, inboxId: string, draftId: string): Promise<void> {
+export async function refuseWhileSending(context: GmailContext, inboxId: string, draftId: string): Promise<void> {
   // A send under way here, or one an earlier release has under way: either stands on the draft.
   const sending = await context.core.approvals.list({ inboxId, states: ['sending'] });
   const send = sending.find((stored) => (asV2(stored) ?? asLegacy(stored))?.draftId === draftId);
@@ -621,7 +697,14 @@ export async function updateDraft(
   const cc = input.cc ?? parseAddressList(headerValue(headers, 'Cc')).map((entry) => entry.address);
   const bcc = input.bcc ?? parseAddressList(headerValue(headers, 'Bcc')).map((entry) => entry.address);
   const subject = input.subject ?? headerValue(headers, 'Subject') ?? '';
-  const from = resolved.inbox.email;
+  const inReplyTo = headerValue(headers, 'In-Reply-To');
+  // The kind of the draft being changed: a reply stays a reply. Settled again, so a rule or `as` that says otherwise
+  // now is what the rewritten draft carries.
+  const label = await draftIdentity(context, resolved, {
+    kind: mailKind(inReplyTo),
+    requested: input.as,
+    recipients: [...to, ...cc, ...bcc],
+  });
 
   const existingParts = readParts(existing.message?.payload);
   // The body kept from the draft already ends with the signature, because the draft was composed with it. Passing
@@ -648,11 +731,10 @@ export async function updateDraft(
   const attachments = [...carried.attachments, ...added];
   const described = [...carried.described, ...describedAdded];
   const signature = input.signature === false ? undefined : keptSignature;
-  const inReplyTo = headerValue(headers, 'In-Reply-To');
   const references = (headerValue(headers, 'References') ?? '').split(/\s+/).filter(Boolean);
 
   const composed = await composeMessage({
-    from: formatAddress({ name: '', address: from }),
+    from: label.from,
     to,
     cc,
     bcc,
@@ -690,11 +772,13 @@ export async function updateDraft(
     cc,
     bcc,
     subject,
-    preview: renderMessagePreview({
+    identity: label.identity,
+    from: label.from,
+    preview: labelledPreview(label, {
       // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
       // is one address whose display name contains another, and the preview truncated at 90 characters showed the
       // decoy and never the real recipient.
-      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
+      recipients: { from: label.from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject,
       body: composed.text,
       attachments: described.map((attachment) => ({
@@ -725,6 +809,10 @@ export async function getDraft(context: GmailContext, alias: string, draftId: st
   const cc = parseAddressList(headerValue(headers, 'Cc')).map((entry) => entry.address);
   const bcc = parseAddressList(headerValue(headers, 'Bcc')).map((entry) => entry.address);
   const subject = headerValue(headers, 'Subject') ?? '';
+  // Read back from the draft: what it says now, label or none, whatever wrote it.
+  const fromHeader = headerValue(headers, 'From');
+  const from = fromHeader === undefined ? resolved.inbox.email : shownFrom(fromHeader);
+  const identity = identityOfFrom(fromHeader);
   const body = parts.plain.map((part) => part.text ?? '').join('\n');
   const attachments = parts.attachments.map((part) => ({
     filename: part.filename ?? '(unnamed)',
@@ -747,8 +835,10 @@ export async function getDraft(context: GmailContext, alias: string, draftId: st
     cc,
     bcc,
     subject,
-    preview: renderMessagePreview({
-      recipients: { from: resolved.inbox.email, to, cc, bcc },
+    identity: identity.identity,
+    from,
+    preview: labelledPreview(identity, {
+      recipients: { from, to, cc, bcc },
       subject,
       body,
       attachments,

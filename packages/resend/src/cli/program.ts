@@ -1,6 +1,5 @@
 import {
   agentMarker,
-  approvalsOf,
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
@@ -9,7 +8,7 @@ import {
   colorEnabled,
   commandPathOf,
   EXIT_CODES,
-  exemptFromUpdateGate,
+  exemptFromUpdateNotice,
   type GatedChange,
   gatedChangeAtTerminal,
   type Handoff,
@@ -29,14 +28,13 @@ import {
   resolvePaths,
   runCommand,
   runUpdateCheckChild,
-  SEND_LOOKUP,
   type Streams,
   type SupportedClient,
   serverInstallChange,
   serverPruneChange,
   terminalUpdateHooks,
   UPDATE_CHECK_CHILD_COMMAND,
-  updateGateAtTerminal,
+  updateNoticeAtTerminal,
   waitForApproval,
   wholeNumber,
   writeResult,
@@ -185,8 +183,7 @@ Getting started — run these with this CLI:
   received list --account acme/resend
   mcp install --client claude-code   register the server with an agent, once a person approves it
 
-Exit codes: 0 ok · 1 unexpected · 10 a send or a change was refused or needs approval · 11 an update
-is out: update first, or put it off (the stop names both commands) · 64 usage ·
+Exit codes: 0 ok · 1 unexpected · 10 a send or a change was refused or needs approval · 64 usage ·
 65 bad data · 66 not found · 69 provider or secret store unavailable · 75 temporary (retry later) ·
 77 key or permission needed · 78 configuration problem.`,
     )
@@ -235,45 +232,25 @@ is out: update first, or put it off (the stop names both commands) · 64 usage �
   const output = (): OutputOptions => ({ json: globals().json, color: globals().color, platform });
 
   /*
-   * The daily update check (design 2026-09-28 §3), before any command but the exempt ones: an update that is out
-   * stops it — a person at a terminal is asked "Update now, later today, or cancel?", anything else ends with
-   * UPDATE_REQUIRED (exit 11). A hook on the program, so a command added later is gated by being a command at all;
-   * `act` ends with the exit status it decided, when it decided one.
+   * The update notice (design 2026-10-16, U1), before any command but the exempt ones: the day's check, waited for
+   * about three seconds at most, and — when a newer release is out and no command on this machine said so today — one
+   * line on stderr. It never stops the command. A hook on the program, so a command added later has it by being a
+   * command at all.
    */
-  let gated: number | null = null;
   program.hook('preAction', async (_program, command) => {
     const path = commandPathOf(command);
-    // The update check a command handed on (#48) is part of the gate, not a command anybody types.
-    if (exemptFromUpdateGate(path, [UPDATE_CHECK_CHILD_COMMAND])) return;
+    // The update check a command handed on (#48) is part of the notice, not a command anybody types.
+    if (exemptFromUpdateNotice(path, [UPDATE_CHECK_CHILD_COMMAND])) return;
     const core = coreForInvocation();
-    let ended: number | null = null;
-    const code = await runCommand(
-      output(),
-      async () => {
-        ended = await updateGateAtTerminal({
-          core,
-          env,
-          binary: 'agent-resend',
-          channel: 'resend',
-          running: VERSION,
-          output: output(),
-          noInput: false,
-          streams,
-          approvals: approvalsOf(command),
-          // `send status` looks a send up by its approval, as `resend_send_status` does over MCP.
-          // A wait only looks too: it answers while an update is out, for any approval this machine can read (decision 7).
-          approvalClaim:
-            path.join(' ') === 'send status'
-              ? SEND_LOOKUP
-              : path.join(' ') === 'send wait'
-                ? { lookup: true }
-                : undefined,
-          ...terminalUpdateHooks(core, env, { channel: 'resend', output: output(), streams }),
-        });
-      },
+    await updateNoticeAtTerminal({
+      core,
+      env,
+      channel: 'resend',
+      running: VERSION,
+      output: output(),
       streams,
-    );
-    gated = code !== 0 ? code : ended;
+      ...terminalUpdateHooks(core, env),
+    });
   });
 
   const act =
@@ -281,10 +258,6 @@ is out: update first, or put it off (the stop names both commands) · 64 usage �
     async (...args: A): Promise<void> => {
       ran = true;
       softExit = null;
-      if (gated !== null) {
-        exitCode = gated;
-        return;
-      }
       const core = coreForInvocation();
       const context = new ResendContext({ ...deps, core, env, pathOverrides: core.pathOverrides, surface: 'cli' });
       exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
@@ -573,6 +546,10 @@ is out: update first, or put it off (the stop names both commands) · 64 usage �
     .option('--in-reply-to <messageId>', 'the Message-ID this replies to, to keep the thread')
     .option('--references <messageId>', 'an earlier Message-ID in the thread; repeat for more', collect, [])
     .option('--scheduled-at <time>', 'send later: an ISO 8601 time with a zone, at most 30 days ahead')
+    .option(
+      '--as <who>',
+      'who it appears to come from: agent (From labelled) or me (From as given, only when the person said so)',
+    )
     .action(
       act(async (context, _options, flags: Options) => {
         const prepared = await prepareSend(context, String(flags.account), {
@@ -588,27 +565,37 @@ is out: update first, or put it off (the stop names both commands) · 64 usage �
           inReplyTo: flags.inReplyTo === undefined ? undefined : String(flags.inReplyTo),
           references: flags.references as string[],
           scheduledAt: flags.scheduledAt === undefined ? undefined : String(flags.scheduledAt),
+          as: flags.as === undefined ? undefined : String(flags.as),
         });
         writeResult(prepared, output(), renderPrepared, streams);
       }),
     );
 
   accountOption(send.command('execute <approvalId>'))
-    .description('send a prepared email, once. Refuses unless the approval, the content and the recipients all match')
-    .requiredOption('--expect-to <addresses>', 'the To list you believe it goes to, comma-separated, or none')
-    .requiredOption('--expect-cc <addresses>', 'the Cc list, or none')
-    .requiredOption('--expect-bcc <addresses>', 'the Bcc list, or none')
-    .requiredOption('--expect-subject <subject>', 'the subject')
+    .description('send a prepared email by approval id; optional legacy expectations are checked exactly')
+    .option('--expect-to <addresses>', 'legacy exact check: To list, comma-separated, or none')
+    .option('--expect-cc <addresses>', 'legacy exact check: Cc list, or none')
+    .option('--expect-bcc <addresses>', 'legacy exact check: Bcc list, or none')
+    .option('--expect-subject <subject>', 'legacy exact check: subject')
     .action(
       act(async (context, _options, approvalId: string, flags: Options) => {
+        const expectation = [flags.expectTo, flags.expectCc, flags.expectBcc, flags.expectSubject];
+        const hasExpect = expectation.some((value) => value !== undefined);
+        if (hasExpect && expectation.some((value) => value === undefined)) {
+          throw new CommsError('USAGE', 'give all four --expect-* options together, or leave all four out');
+        }
         const sent = await executeSend(context, String(flags.account), {
           approvalId,
-          expect: {
-            to: expectList(flags.expectTo, '--expect-to'),
-            cc: expectList(flags.expectCc, '--expect-cc'),
-            bcc: expectList(flags.expectBcc, '--expect-bcc'),
-            subject: String(flags.expectSubject),
-          },
+          ...(hasExpect
+            ? {
+                expect: {
+                  to: expectList(flags.expectTo, '--expect-to'),
+                  cc: expectList(flags.expectCc, '--expect-cc'),
+                  bcc: expectList(flags.expectBcc, '--expect-bcc'),
+                  subject: String(flags.expectSubject),
+                },
+              }
+            : {}),
         });
         writeResult(sent, output(), renderSent, streams);
       }),

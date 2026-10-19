@@ -3,6 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 // @ts-expect-error The verifier is a repository executable with no declaration file.
 import * as phaseEVerifier from '../../../scripts/verify-events-phase-e-tests.mjs';
 
@@ -350,7 +351,77 @@ test('E3 scope: a strict runner whose loop only diagnoses mutations is rejected 
   }
 });
 
+test('E3 scope: a strict copied-tree runner without an unmutated named TAP baseline is rejected', async () => {
+  const root = await manifestFixture();
+  try {
+    const supportPath = join(root, 'packages/events-daemon/test/support/judge-kind-mutants.ts');
+    const source = await readFile(supportPath, 'utf8');
+    const baseline = `    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+`;
+    assert.equal(source.includes(baseline), true, 'fixture contains the copied-tree baseline');
+    await writeFile(supportPath, source.replace(baseline, ''));
+    const problems = await verifyPhaseETestManifest({ root });
+    assert.equal(
+      problems.includes('judge-kind-mutants: strict copied-tree runner must prove one named TAP pass before mutation'),
+      true,
+      `a strict runner without its baseline must refuse: ${problems.join('; ')}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('E3 scope: static guards analyse each kind literal and each SQL statement independently', () => {
+  const kindProblem = ['src/runtime/kinds.ts: judge kind literals must come from domain/lifecycle.ts'];
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const hosted = 'typesafe'; const embedded = 'laya'; const local = 'local-endpoint';",
+    }),
+    kindProblem,
+    'separate constants cannot split the closed judge-kind vocabulary past the guard',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const kinds = { hosted: 'typesafe', embedded: 'laya', local: 'local-endpoint' };",
+    }),
+    kindProblem,
+    'an object of judge-kind values cannot duplicate the canonical registry',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: 'const hosted = `typesafe`; const embedded = `laya`; const local = `local-endpoint`;',
+    }),
+    kindProblem,
+    'no-substitution template literals cannot duplicate the canonical judge-kind registry',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const hosted = '\\x74ypesafe';",
+    }),
+    kindProblem,
+    'an escaped string literal cannot disguise a canonical judge kind',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const open = '/*'; const hosted = 'typesafe'; const close = '*/';",
+    }),
+    kindProblem,
+    'comment delimiters inside strings cannot hide a canonical judge kind',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/kinds.ts',
+      source: "const quote = /['\"]/; const hosted = 'typesafe';",
+    }),
+    kindProblem,
+    'regular-expression quote characters cannot hide a canonical judge kind',
+  );
   assert.deepEqual(
     verifyPhaseEJudgeSource({
       file: 'src/runtime/kinds.ts',
@@ -403,4 +474,110 @@ test('E3 scope: static guards analyse each kind literal and each SQL statement i
     [],
     'a single-row primary-key transition is the only unscoped judge-work exemption',
   );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'packages/events-daemon/src/runtime/computed-import.ts',
+      source: "const name = 'node:https'; const raw = await import(name); raw['request']({});",
+    }),
+    [
+      'packages/events-daemon/src/runtime/computed-import.ts: judge paths must not use computed module specifiers',
+      'packages/events-daemon/src/runtime/computed-import.ts: judge paths must not use computed request aliases',
+    ],
+    'a computed ESM import and request property cannot bypass the raw-network gate',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'packages/events-daemon/src/runtime/computed-require.ts',
+      source: "const name = 'https'; const raw = require(name); raw.request({});",
+    }),
+    ['packages/events-daemon/src/runtime/computed-require.ts: judge paths must not use computed module specifiers'],
+    'a computed CommonJS import cannot bypass the raw-network gate',
+  );
+});
+
+test('E12 scope: the audit matrix and explicit Task 10 deferral are structural, not manifest-defined', async () => {
+  const root = await manifestFixture();
+  try {
+    const baselineProblems = await verifyPhaseETestManifest({ root });
+    assert.equal(
+      baselineProblems.includes('Phase-E audit matrix digest does not match its immutable inventory'),
+      false,
+      `the immutable audit matrix digest must stay exact: ${baselineProblems.join('; ')}`,
+    );
+    const verifierPath = join(root, 'scripts/verify-events-phase-e-tests.mjs');
+    const verifier = await readFile(verifierPath, 'utf8');
+    const pinnedRow = "    ['activation-approval-claim-to-pointer', 'e4-final-pointer-drift'],\n";
+    assert.equal(verifier.includes(pinnedRow), true, 'the copied audit matrix contains the pinned await/write row');
+    await writeFile(verifierPath, verifier.replace(pinnedRow, ''));
+    const copiedVerifier = await import(`${pathToFileURL(verifierPath).href}?matrix-row-deleted=${Date.now()}`);
+    const rowProblems = await copiedVerifier.verifyPhaseETestManifest({ root });
+    assert.equal(
+      rowProblems.includes('Phase-E audit matrix digest does not match its immutable inventory'),
+      true,
+      `deleting a real audit row must fail the immutable matrix digest: ${rowProblems.join('; ')}`,
+    );
+
+    const manifestPath = join(root, 'packages/events-daemon/test/fixtures/judges/case-manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    delete manifest.audit;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const problems = await verifyPhaseETestManifest({ root });
+    assert.equal(
+      problems.includes('Phase-E audit matrix is missing'),
+      true,
+      `deleting the audit matrix must fail closed: ${problems.join('; ')}`,
+    );
+    assert.equal(
+      problems.includes('Phase-E audit must declare deferred: Task 10'),
+      true,
+      `Task 10 cannot disappear silently: ${problems.join('; ')}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('E12 scope: judge paths reject alternate HTTP clients and every lifecycle purge caller is structural', async () => {
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'packages/events-daemon/src/runtime/judge-escape.ts',
+      source: 'fetch(url); http.request(url); https.request(url);',
+    }),
+    [
+      'packages/events-daemon/src/runtime/judge-escape.ts: judge paths must not call fetch',
+      'packages/events-daemon/src/runtime/judge-escape.ts: judge paths must not call http.request',
+      'packages/events-daemon/src/runtime/judge-escape.ts: judge paths must not call https.request',
+    ],
+    'the raw pinned transport is the only judge network path',
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'packages/events-daemon/src/runtime/holds.ts',
+      source:
+        "import { request as raw } from 'https'; import * as httpAlias from 'node:http'; const escaped = fetch; raw(url); httpAlias['request'](url); void escaped;",
+    }),
+    [
+      'packages/events-daemon/src/runtime/holds.ts: judge paths must not reference fetch',
+      'packages/events-daemon/src/runtime/holds.ts: judge paths must not import node:http or node:https',
+      'packages/events-daemon/src/runtime/holds.ts: judge paths must not use computed request aliases',
+    ],
+    'judge helper names and raw-client aliases cannot escape the static network boundary',
+  );
+
+  const root = await manifestFixture();
+  try {
+    const targetPath = join(root, 'packages/events-daemon/src/runtime/revocations.ts');
+    const targetSource = await readFile(targetPath, 'utf8');
+    const targetCall = 'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);';
+    assert.equal(targetSource.includes(targetCall), true, 'the target-removal fixture contains its judge purge caller');
+    await writeFile(targetPath, targetSource.replace(targetCall, 'void rule;'));
+    const problems = await verifyPhaseEStaticGuards({ root });
+    assert.equal(
+      problems.includes('purge caller target-remove is absent from packages/events-daemon/src/runtime/revocations.ts'),
+      true,
+      `deleting target removal's purge caller must fail closed: ${problems.join('; ')}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

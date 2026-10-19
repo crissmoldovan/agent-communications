@@ -3,6 +3,818 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.24.0
+
+**There is a desktop app: Agent Comms, a tray app that shows what your agents are doing and waiting for, and lets you
+take things away, but never sends or approves anything itself.** The owner asked for a desktop app on the CUE++
+design system, built the way Supbuddy and QuotaMate are. It shows:
+- your accounts and what agents may do on each;
+- the approvals waiting for you;
+- the agent label, the behaviour rules and the standing approvals;
+- updates, the events service, and the doctor.
+
+What only tightens, it applies at once: revoking an approval, ending standing approvals, narrowing a rule, pausing
+update notices. Anything else it opens in your terminal, with the exact command, for you to confirm there. It drives
+the agentcomms you already have installed, through its stable launchers, and bundles nothing.
+
+Nothing changes for the CLIs and MCP servers when you update. Two core changes come with the app:
+- `agentcomms update --status` (and `comms_update` with `status: true`) says where updates stand without asking npm;
+- `doctor --json` prints one result when a check fails, as the channels' doctors already do.
+
+**The app's installers are on the `desktop-v0.24.0` GitHub release:**
+- **Windows and Linux** builds come from CI, unsigned.
+- **macOS** builds are signed and notarised by the owner's release from their Mac, and appear when the owner publishes
+  that release.
+- **The app's own updater** stays off until a release ships its signing key; Settings says so.
+
+**Agent Comms, a desktop app, shows what agent-communications is doing on this machine — and never sends, posts or
+approves anything.** It is a tray app for macOS, Windows and Linux, in `apps/desktop`, and it drives what you already
+installed: nothing about the packages on npm changes. It shows:
+
+- **Overview:** the version, where updates stand, each doctor's result, how many approvals wait, the standing
+  approvals that are active, and the events service;
+- **Accounts:** each mailbox, workspace, Resend account and WhatsApp, with its policies, label style, what agents may
+  do there, and its writing profile, which opens in your editor;
+- **Approvals:** each one waiting, with Revoke and Approve in Terminal;
+- **Agent:** the label, the behaviour rules — a rule that narrows applies at once, one that widens goes to Terminal —
+  and the standing approvals, each of which you can end;
+- **Updates, Events and Doctor:** the level, a pause and the background job; the events service's status, rules and
+  deliveries; and every check, with its fix to copy. Gmail's doctor runs only when you ask, because it calls Google.
+
+What only takes something away it applies itself, as the CLI would at once. Everything that needs your approval goes
+to Terminal: the app shows the full preview, revokes the approval it prepared to get it, and opens your terminal with
+the change itself, built from a fixed list of commands, never from the CLI's output; you approve it there with its
+code. An approval an agent prepared opens as that channel's `approve`. Sign-ins run in Terminal too, so the app never
+handles a token. What a sender wrote shows as plain text in a block marked *From outside*.
+
+It runs this installation's own launchers, with no shell, every argument checked against the product's grammar, and
+all the folder pins on every call, so it and the CLI always agree on the folders; Settings takes the folders
+`AGENT_COMMS_*` would set, for an app started from the Dock or the Start menu. A launcher runs only from this machine's
+own disks — Settings refuse a network share for any folder — and, on macOS and Linux, only when it and its folder are
+yours and nobody else may change them, as the install leaves them; Settings show which launcher every call starts, and
+why the app would not run it. What it starts gets only the environment it needs: never an agent's markers, `CI`,
+`NODE_OPTIONS`, a loader variable or another `AGENT_COMMS_*` folder. A preview left without Approve or Cancel — the
+screen changed, or the next change replaced it — has its approval revoked as it goes, so the tray never counts it;
+Cancel says it cancelled only once the revoke worked. Open link takes only the three pages doctor fixes name
+(`api.slack.com`, `myaccount.google.com`, `console.cloud.google.com`), and never Google's `/url` redirect. With nothing installed it shows the
+install command, and installs nothing. A section that needs a newer release than yours says so: behaviour rules and
+profiles need 0.22.0, standing approvals 0.23.0, and the update status this release.
+
+It is released on its own tag, `desktop-vX.Y.Z`, on the commit of the release it ships with, and never as Latest.
+macOS gets a DMG signed with a Developer ID and notarised, built on the owner's Mac, that installs a later signed
+release when you choose to, after checking its signature — once a release carries the updater: one published before
+the updater key is set up says, in its release and in Settings, that its updater is off, and that copy is replaced by
+hand. Windows and Linux get an unsigned `.exe`, `.AppImage` and `.deb` from CI, whose updater is off. [The desktop app](README.md#the-desktop-app) says how to install it, and
+[Releasing](docs/RELEASING.md#the-desktop-app) how the owner releases it.
+
+**`agentcomms update --status` says where updates stand on this machine, and asks npm nothing.** Until now the level,
+a pause, the last check and the background job were each in a different place: `doctor` gave one line, `update --check`
+asked the registry, and the job had no read of its own. `update --status`, and `comms_update` with `status: true`, read
+this machine's own files and say all of it at once:
+
+- the level in force, the level set, and what decided it — the setting with any organisation's cap, or `CI`,
+  `AGENT_COMMS_UPDATE_CHECK=off` or `AGENT_COMMS_UPDATES=never` in the command's own environment;
+- a pause and when it ends, when npm was last asked, the latest release it named, and why it got no answer when it got
+  none;
+- the release running, and a security fix waiting;
+- the background job: where it is, when it was set up, when it last ran and whether it works.
+
+It runs no check, however due, and prints no notice — and over MCP, `status: true` does not start the server's own
+background check either, so the app's poll every 15 seconds never reaches npm. On Windows the scheduler is asked about
+the job only when this installation recorded one, as `doctor` asks it. A job whose files or record cannot be read is
+`unreadable`, with a `reason`, and the rest is read all the same. `--status` takes no `--approval` and no
+`--no-verify`: it only reads. With `--json` the fields are `level`, `set`, `by`, `cap`, `pausedUntil`, `lastChecked`,
+`latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known of it;
+[Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
+
+**`agentcomms doctor --json` prints one envelope when a check fails, as Gmail's and Slack's doctors do.** It printed
+the report and then an error envelope after it — two documents on stdout, where `--json` promises one — so a script
+that read the last line lost the report. Now the report is the one envelope, `ok`, with `data.ok` false and each
+failing check in `data.checks`, and the exit status is still `78`. A script that read the error envelope's `CONFIG`
+should read `data.ok` instead. At a terminal nothing changes: the report, then `doctor found problems`. `comms_doctor`
+already returned the report alone.
+
+**A command printed for a POSIX shell quotes a word that starts with `=`.** zsh, the macOS default, reads a bare
+`=ls` as the path of `ls`, so such a word reached the program as something else. It is now in single quotes, as a word
+that starts with `~` already was; an `=` further in, as in `--name=x`, is left as it is.
+
+## 0.23.0
+
+**An agent can acknowledge a Slack message without asking you, in your words, where and as often as you allowed —
+and nothing else changes without your yes.** This is spec 3, which the owner asked for alongside the agent label:
+agents that read Slack "send acknowledgments back", and asking for each "Got it" stopped them. A standing approval is
+your yes given in advance, at your terminal with a code, to a few fixed acknowledgements in places you name. Each use
+waits a random 5–30 seconds, is counted against your limits, goes out labelled as your agent, and shows a
+notification on your screen.
+
+Nothing changes when you update: until you create one with `agent-slack standing add`, no message goes out without
+your yes, exactly as in 0.22.0. Read "Using one" below before you
+create one. An agent tricked by a message it reads can choose which messages to acknowledge and when. At the defaults
+that is enough to leak tens of bits an hour, so don't give standing approvals to an agent that also reads sensitive
+mail or secrets in the same session.
+
+**You can let an agent acknowledge a Slack message without asking you — with words or an emoji you wrote, where and
+as often as you said.** Until now nothing posted without your yes to that exact message, so an agent that read a
+question in Slack had to stop and ask before it could even say "Got it". Now you can say yes in advance, at your own
+terminal with a code, to a few acknowledgements — a standard emoji such as `eyes`, or a short reply such as "Got it,
+I'll look at this and come back to you" — on a message that has just arrived from another person, in the places,
+counts and days you set. That is a **standing approval**. The agent chooses only whether to acknowledge, and with which
+of your contents; it never writes the words, and it cannot pick an old message, one among many, or a new place.
+
+**Making one: `agent-slack standing add`, approved only with its code.**
+
+- `agent-slack standing add --workspace cue/slack --reactions eyes --replies-file ~/acks.txt --places C0123ABC
+  --expires 7d` prepares one. `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in
+  yourself in the last 14 days, where a message this product sent for you does not count. With no content, it holds
+  `eyes` alone. The limits are once a thread, 10 an hour, 30 a day and 3 a day on any one person's messages by default
+  (3, 30, 100 and 10 at most, with `--per-sender` for the last), and it ends 7 days after you approve it, 30 at most.
+- **Its preview shows everything you are agreeing to:** each content in full with its digest, and a warning for an
+  emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its
+  member count and whether another organisation shares it — a guest counts as someone from another organisation; the
+  limits; and the expiry. One an agent prepared over MCP, with `slack_standing_add`, opens "An agent
+  proposed these contents and places. Check each one."
+- **Only the code typed at a terminal approves it,** with `approve` as the result gives it, from either CLI — never a
+  typed `yes`, a client's form or a yes in chat, whatever your change policy. `--replaces <id>` widens one, and asks
+  again; a replacement that only narrows applies at once.
+- Only standard emoji, from a list shipped with the release, and replies of at most 200 characters on one line, with no
+  links, mentions, formatting or emoji: a ✅ or a 👍 in the words reads as a yes as surely as the reaction does.
+
+**Using one: `agent-slack ack`, and `slack_ack`.** One call names the standing approval, the message and the content by
+its digest, and nothing else. It is refused, with `STANDING_REFUSED` and its reason, unless the message:
+
+- arrived after the standing approval, within the last 15 minutes, and is the newest from someone else in its thread
+  or channel, not yet acknowledged under any standing approval;
+- and its thread's first message are from people, by an allow-list that refuses bots, apps, workflows, Slackbot,
+  this account's own posts and any message that begins with an agent's label, yours or anyone's — though a thread you
+  started yourself counts — and carry nothing to press, by an allow-list of blocks that only show something;
+- is in a place it covers, which has not grown to 50 members or more, or changed who shares it, since you approved it.
+
+A limit reached is `STANDING_LIMIT`, saying which and when it frees. A count is spent when the act is decided and
+never refunded, even when the act then fails; the act itself goes 5 to 30 seconds later, by a pause drawn from the
+operating system's random source, and both times are recorded. Either refusal says nothing was sent, and tells the
+agent to stop and ask you.
+
+**It always goes as your agent, and you see every act.** A reply goes in the thread, as the app or labelled
+"Jo Example (agent):", even under a rule that would send your posts as you; a reaction goes only as the app, and only
+where the app is a member — never in a DM, a group DM or a `labelled` workspace. Each act raises a notification on your
+screen — on macOS and Windows, and on Linux where `notify-send` is installed — saying what was sent, where and under
+which standing approval, and is in the audit with the acknowledged message's digest and whether it had been edited.
+Mail, top-level posts, edits, deletions, files and removing a reaction are never sent this way.
+
+**Seeing and ending them: `agentcomms standing`, and `comms_standing`.** `agentcomms standing list` shows each one, its
+contents by digest, its uses today and its last 10 acts with links; `agentcomms standing narrow <id>` keeps less of
+one, `agentcomms standing revoke <id>` ends one, and `agentcomms standing off` ends every one — each at once, asking
+nobody, and an acknowledgement already reading Slack when you narrow one is refused before anything is counted. If
+`standing off` cannot write something down, it says what, and it fails — naming each one — if any is still in force. Tightening your change policy ends every one too — even when an older release's CLI or server tightened it,
+since each standing approval keeps the change policy it was approved under; a send policy of `never`, or removing the
+account, ends that account's; loosening again revives none. `agentcomms doctor` lists the active ones and when each ends.
+
+Why: agents that listen in Slack were stopping to ask before sending even "Got it", or sending it as you. A
+standing approval keeps your yes on the exact words while letting the moment go, inside limits you set, and it is
+built for what an agent might be told by something it read: no free text, a target fixed by what just happened, low
+counts, and nothing that looks like you. It holds against an agent acting through the tools; an agent with a shell
+running as you is out of its reach, as SECURITY.md says. **What it can still leak:** an agent misled by something it
+read still chooses which arriving messages to acknowledge, with what and when, and anyone watching can read those
+choices — tens of bits an hour at the defaults. The pause and the per-person limit narrow that; they do not close it.
+Do not make a standing approval for an agent that also reads sensitive mail, files or secrets in the same session.
+
+**Upgrading.**
+- Nothing changes until you create a standing approval, at your terminal. Until then every reaction and reply still
+  needs your yes to it, as before.
+- Two new error codes, `STANDING_REFUSED` and `STANDING_LIMIT` (exit 10, the refusal class of `POLICY_NEVER`), and a
+  `standing approvals` line in `agentcomms doctor`.
+- **Restart your MCP clients after updating** to get `slack_ack`, `slack_standing_add` and `comms_standing`.
+
+## 0.22.0
+
+**What an agent may do is now yours to set, per account and per conversation, and every channel holds it.** This is
+the first of the behaviour rules the owner asked for with the agent label: "react and reply, but never start a
+conversation, edit or delete". Until now the send policy and your yes to each message were the only boundary. Now a
+rule can forbid an act outright, the tools refuse it before any preview and again at send, and a rule fails closed
+wherever it could otherwise go quiet. How the agent writes comes from a writing profile you keep, which it reads
+before it writes.
+
+Nothing changes when you update: with no rule, every act is allowed exactly as in 0.21.0. Results gain a few fields
+and one new code, `ACT_NOT_ALLOWED` (exit 10). Two refusals are new for everyone, rules or not:
+- **A Slack post or reaction must name its conversation by id** (`C…`, `G…`, `D…`). A channel's name is refused, because
+  Slack posts into a room by its name and so no rule could have matched it.
+- **A Slack `thread_ts` must look like a message's ts.**
+
+**Servers started before 0.22.0 enforce no rule** until their client restarts them. The first rule you add says so,
+and `doctor` names any such server.
+
+**You can decide what an agent may do at all, on each account and in each conversation, and how it writes there.**
+Until now the only boundary was the send policy and your yes to each message: in a workspace that could post, every act
+was open to the agent, and nothing said "this account may reply but never start a conversation". Now a rule can say
+exactly that, and the tools hold it, before anything reaches a preview and again at send. How the agent writes —
+tone, language, length, sign-off, threads — comes from a writing profile you keep for every channel and conversation,
+which the agent reads before it writes, so the first preview is already in your way of writing.
+
+**What an agent may do: `agentcomms behaviour`, and `comms_behaviour`.** A rule names an account, optionally one
+conversation — a Slack channel, DM or person (`C…`, `G…`, `D…`, `U…`), or a mail address or `@domain` — and the acts an
+agent may start there, and only those: `post`, `reply`, `reaction`, `edit`, `delete` and `file` on Slack, `send` and
+`reply` on Gmail, `send` on Resend.
+
+- `agentcomms behaviour allow cue/slack reply,reaction` lets an agent only reply and react in that workspace;
+  `agentcomms behaviour allow acme/gmail none --conversation @client.test` lets it send nothing to anyone there;
+  `agentcomms behaviour` shows every rule and what each account allows, across it and in each conversation a rule
+  names; `agentcomms behaviour clear <account> [--conversation <id>]` takes one away. Over MCP, `comms_behaviour` with
+  `setRule` or `removeRule`, and with no change it only reports.
+- **The most specific rule wins:** a conversation over its account, and for mail an address over the longest
+  `@domain` that covers it. An `@domain` rule holds its subdomains too, and a rule for a subdomain wins over its
+  parent's: `@eu.client.test` over `@client.test`. An address rule holds the address with any `+tag` —
+  `ceo+x@client.test` is `ceo@client.test` — and at Gmail with or without dots, at `gmail.com` or `googlemail.com`
+  alike, so no spelling of an address reaches its mailbox past the rule for it. A Slack DM is matched by its `D…` rule
+  and by the person's `U…` rule together, and only what both allow holds; a person's rule holds every group DM with
+  them as well, so "with Sam, only react" holds in a group DM Sam is in, and a group DM whose members cannot be read is
+  held to every person's rule.
+- **A rule that only narrows applies at once.** One that lets an agent do more — an act added, a rule removed whose
+  fallback is wider, a conversation allowed more than its account — is a change you approve first, its preview showing
+  each level before → after. An agent may start one, but the skills tell it to only when you asked.
+- **A rule fails closed.** It binds to the account's id, so a rename keeps it, and a rule left behind by a removed
+  account still holds an account connected again under that name. An act this release does not know narrows its rule;
+  a rule it cannot read at all makes its account allow nothing, and `doctor` says so. A rule naming an account no
+  account here could ever have — `*`, a name in capitals, a former name whose account is gone — makes every account
+  allow nothing; one naming a former name holds the account it names now; and `agentcomms names migrate` takes every
+  rule with the account it renames. Addresses and domains match whatever their case, whether a domain is written in
+  Unicode or in its `xn--` form, and with or without a trailing dot: a rule for `@bücher.example` holds mail to
+  `kunde@xn--bcher-kva.example`. A rule naming a domain that is not one is refused when added, and one written by hand
+  makes its account allow nothing.
+
+**An act a rule does not allow is refused, and the agent stops.** "this agent may only reply and react in #general
+(cue/slack)": `ACT_NOT_ALLOWED`, before any preview or approval exists, so nothing waits for you. The same refusal
+stops an act you said yes to when you narrowed the rule afterwards, before Slack, Gmail or Resend is called — and before
+the approval is used, so loosening the rule again lets the same approval go, once. The approval screen at your terminal
+refuses the same way, and asks you for no code. The hint
+reads the same on every channel: nothing was done, the `behaviour` command (as this machine runs it) and
+`comms_behaviour` show the rules, and the agent tells you which rule stopped it and does not try again. It never names
+a command that changes the rules.
+
+**Every channel checks every act, at prepare and at send.**
+
+- **Slack:** a post with no thread is `post`, one in a thread `reply`; a file needs `file` and, for where it lands,
+  `post` or `reply`; a reaction is `reaction`; an edit is `edit`, and `file` as well when it adds files; a deletion is
+  `delete`. Each is checked in `slack_post_prepare`, `slack_react`, `slack_edit_prepare` and `slack_delete_prepare`, and
+  again in the one place every send passes before Slack is called. Where an act lands is a conversation id — a
+  channel's `C…` or `G…`, a DM's `D…` — never a channel's name, `#name` or an id in lower case: anything else is
+  refused (`USAGE`) before Slack is asked anything, since Slack posts into a room by its name and a name matched no
+  rule. A reply is a reply only under a message Slack has there: a post's thread must be a message's ts, and where the
+  rules allow a reply but not a post (or a post but not a reply), the thread is read from Slack — one it does not have
+  in that conversation is the new top-level message Slack would make of it, checked as a `post`, and the refusal says
+  so. A read that fails for a moment is `TRANSIENT`, with nothing sent.
+- **Gmail:** every recipient — To, Cc and Bcc — is checked on their own, as the act the message is to them, and one
+  forbidden recipient refuses the whole message, naming them. `gmail_send_prepare` and `gmail_draft_send` refuse
+  alike; drafts stay possible under every rule, since a draft reaches nobody.
+- **Resend:** the same for every recipient of `resend_send_prepare`, and again at `resend_send_execute` — before every
+  attempt, so a rule narrowed while a throttle is waited out stops the retry. A Resend email with `In-Reply-To` is
+  still a `send`: Resend has no threads here.
+
+**A Gmail reply is proven from the mailbox, and is a reply only to the people on what it answers.** A message counts as
+a `reply` to a recipient only when its `In-Reply-To` names a message in this mailbox — outside Spam and Trash — which
+prepare asks Gmail with one search, and that recipient was on it: its From, Reply-To, To or Cc. To anyone else it goes
+to, it is a `send`, so replying to an unrelated message cannot reach someone new as a reply. Each recipient's act is
+bound into the approval. A forward, a message whose `In-Reply-To` names nothing here, or a thread id alone (Gmail gives
+every draft one) is a `send` to everyone. The preview, and the approval screen at your terminal, say who the reply
+answers — `Checked as: reply to Sam Lee <sam@partner.test>`, the sender's words made safe and on one line — and how
+many recipients get it as a new message. When a rule allows replies but not sends, and the message was meant as a reply
+it could not prove, or a recipient was not on the message it answers, the refusal says which. If Gmail cannot be asked,
+the prepare or send fails `TRANSIENT` — nothing sent, nothing used, try again — rather than reading as "not a reply". An
+approval prepared before this release is checked as both a reply and a send when its `In-Reply-To` could make it
+either: the stricter reading.
+
+**Writing profiles for every channel and conversation: `agentcomms profile`, and `comms_profile`.** A profile is
+Markdown you keep in `compose/` in the configuration directory, now in five layers, each refining the one before:
+`default.md`, `user.md`, the platform's (`gmail.md`, `slack.md` or `resend.md`), the account's
+(`inbox-<account>.md`, as before, now for Slack and Resend accounts too, such as `inbox-cue__slack.md`) and each
+conversation's (`conversation-<account>__<conversation>.md`). For mail every recipient's file is read, the address's
+before its domain's; for a Slack DM, both the DM's and the person's.
+
+- `agentcomms profile cue/slack --conversation C0123ABC` (and `comms_profile` with `account` and `conversations`)
+  shows the joined profile for that place, each part marked with its file, and every file it would read, written or
+  not. It only reads, and needs no approval.
+- `agentcomms profile init [<account>] [--conversation <id>]` starts the missing file for that place from a starter —
+  Tone, Language, Length, Sign-off and Threads, one example line each — prints its path, and never overwrites a file.
+  It is the command line's only: no tool lets an agent write a profile, because something it read could otherwise
+  change how every later message is written.
+- The skills tell agents to read it before writing any message, and to follow it; where it and what you ask in the
+  conversation disagree, what you ask wins. Nothing checks a message against it: it is guidance, and you still see every
+  message before it goes. Gmail's draft tools keep `includeProfile` as it was.
+
+Why: people asked for control over what an agent may do at all — "react and reply, but never start a conversation,
+edit or delete" — and over how it writes, at every level: per message, per account, per conversation and by kind. A boundary has to hold even when an agent is confused, or told otherwise by something it read, so the
+tools enforce it; a style is yours to describe, and your yes to each preview is what checks it.
+
+**Upgrading.**
+- Nothing to change: with no rule, everything is allowed, exactly as in 0.21.0, and the profile files you wrote keep
+  working — `inbox-<mailbox>.md` is the account layer now.
+- **Restart your MCP clients after updating.** A server started before 0.22.0 holds no rule until its client starts it
+  again. The first rule you add says so, and `agentcomms doctor` names every registered server older than 0.22.0 while
+  any rule exists.
+- One new error code, `ACT_NOT_ALLOWED` (exit 10, the refusal class of `POLICY_NEVER`), and one new line in every
+  send, post, reaction, edit and deletion preview, `Allowed here: …` — and in a Gmail reply's, `Checked as: …`.
+- `agentcomms doctor` counts a registered server that names no release, or one it cannot read, as one that may enforce
+  no rule, and says so. `agentcomms behaviour` shows every rule made safe: a hand-edited address cannot send an escape
+  sequence to your terminal.
+- A Slack post, reaction, edit or deletion in a DM that was prepared before you updated, and not yet sent, has to be
+  prepared again. One in a channel, a Gmail send and a Resend send do not.
+
+## 0.21.0
+
+**Organisation profiles can gain new fields without breaking members on an older release, and the rough edges found
+while setting up 0.20.0 on a real machine are fixed.** Every release since 0.13.0 refused a whole organisation
+profile over one key it did not know, so an admin could not add anything without stopping `org update` for every
+member who had not updated (CUE-494). From this release a profile has one place for new fields, `extensions`, and a
+release that does not know an entry skips it or asks you to update first — never applying it behind your back. The
+other changes come from the owner's own 0.20.0 setup on 2026-10-18: previews that showed internal ids, a label report
+that ignored the Slack style, a terminal approval that said "in the chat", a printed command that an update would
+later delete, and a prune that covered one server at a time.
+
+Nothing to do when you update: it is additive. Three results gain fields — `extensions` on the `comms_org_*` tools,
+`appRoute` per Slack workspace in `comms_label`, and `servers` and `refusedServers` from a prune — and a new error code,
+`NEEDS_NEWER_RELEASE` (exit 1), refuses a profile this release is too old for, where a profile of `version` 2 got
+`BAD_DATA` before. `agentcomms mcp prune` with no `--server` now covers every server, still shown to you and approved
+first; `--server core` does what it did. Members of an organisation should be on 0.21.0 before its admin adds the
+first extension.
+
+**An organisation can add new fields to its profile without breaking `org update` for members on 0.21.0 or later.**
+Until now every release refused a whole profile carrying any key it did not know, so one new field stopped
+`agentcomms org update` for every member who had not updated yet. From 0.21.0 a profile may carry an `extensions`
+section, the one place later releases add fields; everything else in the profile stays as strict as before. Each
+entry says whether it is `required` and the release that first understands it (`since`). On your release:
+
+- An optional entry it does not know is skipped, and the rest of the profile applies. `org add`, `org update` and
+  `org show` (and `comms_org_*`, under `extensions`) say `not applied here: <name> (needs <since> or later)`, and
+  `doctor` lists it as information. When you update to a release that understands it, `org update` applies it then:
+  at once if it only tightens something, and otherwise only after your yes, though the profile's file did not change.
+- A required entry it does not know stops `org add` or `org update` with a new code, `NEEDS_NEWER_RELEASE` (exit 1):
+  "acme's profile needs agent-communications 0.23.0 or later for "<name>": nothing was changed". Your last approved
+  settings stay exactly as they were, and nothing else stops. The hint names the update command and the
+  `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1",
+  and so is one given to `agent-gmail setup --profile` (and `gmail_setup` with `profile`), whose hint names the update
+  command too.
+  When the same command also turned `--for-other-addresses off`, which applies before the profile is read, or applied a
+  tighter cap at once, the refusal says so: "…: for other addresses was turned off; nothing else was changed".
+
+For admins nothing changes today: profiles stay valid as they are, and a release that adds the first extension says
+so in its notes. Members on 0.20.0 or older refuse any profile with `extensions` (they keep their last approved
+settings), so add one only once your members run 0.21.0 or later. The two files beside a profile,
+`<profile>.agent-app.json` and `<profile>.updates.json`, stay exactly as they are, and new fields go in `extensions`
+rather than in a new file. [Upgrading](docs/upgrading.md#0210-organisation-profiles-gain-extensions) has the rules.
+
+**A tighter update cap from your organisation applies at once.** `agentcomms org update` (and `comms_org_update`)
+asked for approval before applying any change to `<profile>.updates.json`, even one that only made updates less
+frequent. A cap that only tightens — `never` where it said `every-14-days`, `background: false` added, or caps added
+where there were none — now applies at once with no approval, even beside a change to the profile that waits. The
+preview lists it under "Done already, at once", and the result lists it first. A looser cap in any part, a caps file
+removed, or a mix of tighter and looser still asks first, as does a cap read from a new `--source`; a caps file that
+capped nothing, removed, is no change and asks nobody. `org add` still
+asks before anything, as it adds the whole profile.
+
+**A label change's preview names your Slack workspace as you know it.** `agentcomms label style <workspace> labelled`
+(or `comms_label` with `style`) showed the workspace's internal id where its name belongs: "how the agent’s Slack
+messages look: acc_… app → acc_… labelled". It now reads "how the agent’s Slack messages look in cue/slack: app →
+labelled", and a Slack icon change reads the same way: "the icon of the agent’s Slack posts in cue/slack: your Slack
+photo → :jo-agent:". The word, name and rule previews already named accounts by name, and still do. The approval still
+binds the workspace's id, so it cannot be spent on another workspace connected later under the same name: if the
+workspace's name comes to mean another account between your yes and the write, the change is refused and nothing is
+written.
+
+**`agentcomms label` says what a Slack workspace's style does to each kind of message.** For a workspace whose style
+is `labelled`, the report (and `comms_label` with no change) still said every kind went out "as your agent", even a
+reaction. It now says what the Slack route does there: a post, reply or file goes out as you, beginning
+"<your name in Slack> (agent):" in its words and its notification, with no APP tag; and a reaction is made as you, with
+no label, since a reaction carries no words. Under `app`, the default, a reaction is now said to be the app's where it
+can post, and yours, with no label, elsewhere; posts, replies and files read as before. Under either style, an edit is
+said as Slack makes it: an edit of your own message goes out as you, its new words beginning with the label, and an
+edit of a message the app posted stays the app's. And for a workspace whose agent app cannot post from this machine —
+connected through an organisation with no agent app, signed in before the app, connected to read, or with its app token
+revoked — the report no longer promises the app: it says every agent message there goes out as you, labelled, and every
+reaction as you, unlabelled, with the reason beside it, and `label` prints "style app — but its app cannot post from
+this machine". `comms_label` gives each Slack workspace `appRoute: true` or `false`.
+
+**Slack doctor no longer says organisations cannot post as an app.** For a workspace connected through an
+organisation's profile that names no agent app, `agent-slack doctor` said posting as the app "is not available through
+an organisation’s shared app yet", which stopped being true in 0.20.0. It now says posts go out as you, labelled, and
+that posting as an app becomes possible once your organisation's admin adds an agent app to its profile; the check
+then says what to do. It is still a note, with nothing for you to run.
+
+**A change you approve at your terminal says so.** Under the `chat` change policy, a command run at a terminal, such as
+`agentcomms update --background-job on` or `agentcomms label style <workspace> labelled`, printed a preview headed
+"approved by a yes in the chat", then asked you to type yes right there. The header now reads "approved by a yes typed
+here, at this terminal". Every CLI that asks this way says so: core's, Gmail's, Slack's, Resend's and WhatsApp's (the
+events service's server is installed and pruned through core's). And `approve <id>`, run for a change an agent
+prepared under `chat`, said "approved by a yes in the chat" above its request for a code; it now reads "approved by a
+code typed here, at this terminal". A preview an agent shows you in a chat still says "a yes in the chat", and under
+`confirm` it still says "a code typed at a terminal".
+
+**Commands printed for you keep working after an update.** Setting up the background job printed "To remove it:"
+followed by a command that started a versioned runtime, such as `…/runtime/0.20.0-core/…/cli.mjs`. The background job
+prunes old runtimes, so two releases later that command no longer existed. Every command a managed install prints now
+names your installation's stable launcher (`<data>/launch/core`, or the channel's own) when it starts that same
+release. That covers "To remove it", an approval, a change to run again, an update's next step and a doctor fix. Where
+there is no launcher yet, it names your managed CLI shim if that starts the very same file, and otherwise the runtime,
+as before. A command printed from a checkout, an npx cache or a global install is unchanged.
+
+**`agentcomms mcp prune` clears out every server's old runtimes at once.** With no `--server`, it used to prune only
+core's own runtimes; Gmail's, Slack's and the events service's needed `--server <name>` each, though an update tells
+you to prune them all. It now goes through every managed server and lists each runtime it would remove, grouped by
+server, in one preview you approve. `--server <name>` still keeps it to one server, and `comms_server_prune` works the
+same way: with no `channel` it covers every server. It keeps what it kept: this release's runtime, any runtime a
+client config or a printed entry names or a running process uses, and the runtime each stable launcher starts plus
+the one it keeps to roll back to. It now also keeps any runtime newer than this release or than what its launcher
+starts, which an update may be installing or checking. And a prune never runs beside an update: while
+`agentcomms update`, a rollback or the background run is under way, a prune that would remove something is refused at
+once and deletes nothing, and one approved before is refused when it is claimed; run it again in a few minutes. A dry
+run still answers. This holds for `--server` and for each channel's own `mcp prune` too. A server whose runtimes it
+cannot check, such as one whose stable launcher's pointer cannot be read, keeps them all while the others go ahead,
+and is named in the preview, at the end of what the command prints, and under `refusedServers` in the result. After an
+update, the result now names this one prune, not one command per channel.
+
+## 0.20.0
+
+**Updates never interrupt a conversation any more, and by default they install themselves in the background, checked
+first.** Until now, as soon as a newer version was out, every tool refused to run ("Hang on a minute, there's an
+update") until you updated, or approved "later". That approval also lapsed at midnight. Now tools always run, and a
+newer version is mentioned once. The default level installs verified releases in the background after one yes from
+you. Organisations' Slack workspaces can post as the app too, through one extra agent app, without anyone's
+connection changing.
+
+**Updates.**
+- **Nothing stops for an update.** A session's first result mentions a newer version once, and a command prints it on
+  stderr at most once a day. `UPDATE_REQUIRED` and exit code 11 are gone.
+- **Three levels,** chosen with `agentcomms update --level` or `comms_update` `level`:
+  - `auto`, the default, installs in the background;
+  - `every-14-days` mentions a new version at most every 14 days, and installs with your yes;
+  - `never` checks nothing.
+
+  Moving to a level that updates less shows a preview and needs your yes; moving back applies at once.
+- **Pause for 1, 7 or 14 days** with `--pause`, and resume with `--resume`. It needs no approval. A pause never holds
+  back a security fix.
+- **Background updates, set up with one yes** (`update --background-job on`, or `comms_update`
+  `backgroundJob: "on"`): a daily per-user job. It is a LaunchAgent on macOS, a systemd user timer on Linux, and a
+  scheduled task on Windows, with no admin rights needed. Each run:
+  - waits 3 days after a release, or 24 hours for one marked as a security fix;
+  - checks with Sigstore that every package was built by this repository's release workflow, from that version's
+    tag, on GitHub's runners, and refuses anything else;
+  - installs and self-checks, then switches all packages at once.
+
+  A major version, or a release that needs a decision from you, is mentioned, never installed by itself. Every run
+  is in the audit log. The new version takes effect the next time your client starts, or after `/mcp` → Reconnect
+  in Claude Code.
+- **Registrations start a stable launcher,** so after one approved update that moves them, an update never edits
+  your client's configuration again. `update --rollback` goes back to the version before, with your approval, and
+  that version is held until a newer one comes out.
+- **A security fix** is mentioned at once, whatever the level. If it isn't installed yet, the next send or post
+  preview begins with it, once.
+- **Every way in is checked the same way.** A by-hand `agentcomms update` or `comms_update`, and a first
+  `mcp install`, verify every package's provenance before installing anything, with the same pins as the background
+  run. Any failure refuses the whole change, with nothing installed. There is no bypass.
+- **Nothing a release says about itself is trusted before it is verified.** That covers whether it is a security fix,
+  whether it needs a decision, and whether it is a major. Notices use fixed wording and plain version numbers only,
+  never text taken from the registry.
+- **A release that needs your decision can't be stepped over.** A later patch that doesn't say so itself still waits
+  for you.
+- **Install scripts don't run.** Runtimes and global packages are installed with `--ignore-scripts`. No package in the
+  closure needs one, and a test keeps it that way.
+- **Background updates count as on only while they actually run.** If the job hasn't run in 48 hours, for example
+  after being switched off in Login Items, the full notices come back, security fixes included. Doctor says so too.
+- **A channel's own install command still works.** `agent-gmail mcp install` and `npx -y @agentcomms/<channel> mcp
+  install` install only the exact version you are already running (the code npx just fetched), say that it was not
+  verified, and name `agentcomms mcp install --server <channel>`, which checks it. Any other version is refused.
+  `--launcher npx` fetches unverified each time a client starts it; the managed launcher's runtime is verified.
+- **An organisation can only make updates stricter.** A file beside its profile can cap members at `every-14-days`
+  or `never`, or forbid background updates.
+
+**Slack, choose how an agent's post looks, per workspace.** Slack puts its own **APP** tag on every app post, and
+no app can hide or rename it. `agentcomms label style <workspace> app|labelled` (or `comms_label` with `style`) picks
+`app`, the default, with that tag, which nobody can fake; or `labelled`, where an agent's posts go out as you, starting
+"Your Name (agent): …". Moving to `labelled` shows a preview and needs your yes; moving back is at once.
+
+**Slack, posting as the app for organisations** (CUE-493).
+- An admin creates one extra bot-only app with `agent-slack manifest --mode agent`, installs it once, and shares its
+  token privately.
+- Each member who wants the app identity pastes the token once with `agent-slack workspace bot <org>/slack`. Nobody's
+  existing connection changes, and anyone who does nothing keeps the labelled posts from 0.19.0.
+- If the organisation names its agent app in a file beside its profile, a pasted token is checked to be that app's.
+- When the admin regenerates the token, a member's next app post is refused (nothing is sent), the old token is
+  forgotten, and the post after that goes out labelled until they paste the new one.
+
+Why: a person complained that the agent "blocks the conversation while updating". Updating should cost a person
+nothing, and should never be a way to slip unchecked code onto their machine. And the app identity from 0.19.0
+couldn't reach organisation workspaces without disrupting everyone's connection.
+
+**Upgrading.**
+- After updating, nothing stops for updates. The default level is `auto`. Your first session mentions setting up
+  background updates: say yes to its preview, or choose `every-14-days` or `never`.
+- One approved update moves your registrations to the stable launcher. It is the last update that edits client
+  configs. Restart your client afterwards.
+- An approval prepared by 0.19 for an install or update has to be prepared again.
+- On a company machine, the background job may be flagged by security software. Your organisation can forbid it with
+  `background: false` in the side file beside its profile.
+- An organisation profile itself is unchanged. The new organisation settings live in files beside it, which members
+  on older releases never open.
+
+## 0.19.0
+
+**What an agent sends is now labelled as your agent's: "Cristian Moldovan (agent)", not just your name.** People who
+get a Slack message, a Gmail message or a Resend email that an agent sent through these tools can tell it came from
+your agent, not from you. You decide when it speaks as you, and every preview's first line says plainly which of the
+two a message will be.
+
+**The label.** The label is your name and a word in parentheses. The word comes from a fixed list: `agent` (the
+default), `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`. `agentcomms label` and the MCP tool `comms_label` show
+the word, the name and the rules, and how each connected account's messages will look. Choose who a message appears to
+come from at four levels:
+- per message: tell the agent "send this one as me", and its prepare gets `as: "me"`;
+- per account;
+- per conversation: a Slack channel, a person you message, or a mail address or `@domain`;
+- by kind: posts, replies, reactions, edits, files or sends.
+
+A message's own choice beats a rule. Among rules the most specific one wins, and between equally specific rules
+`agent` wins. Anything that could leave a message unlabelled applies only after you confirm its preview: a "send as
+me" rule, removing an "agent" rule, a new word, a new name, a new Slack icon. A change that only adds labelling applies
+at once. Rules record the account they were made for, so an account connected later under a removed account's name
+never inherits them.
+
+**Slack.**
+- Where the app can post, an agent's message is posted by your Slack app, named "Your Name (agent)", with Slack's APP
+  badge beside it. That means a public channel, or a private one the app is in. The icon is your own agent emoji, or
+  your photo until you add one.
+- Where the app cannot post (a direct message between two people, a private channel it isn't in, a file, or a
+  workspace whose app has no bot token on this machine), the message goes out as you, with the label at its start, so
+  the notification carries it too.
+- Reactions come from the app where it can post. An agent's edit of a message is labelled.
+- An app's bot token reaches this machine one of two local ways, with no server:
+  - a sign-in with the app's client secret, entered once at your terminal: `workspace add … --with-client-secret`.
+    Slack allows it only for an app that has never turned PKCE on, so it needs a new app made from
+    `agent-slack manifest --with-client-secret`, which also picks a free loopback port for you;
+  - pasting the app's bot token once at your terminal, with `workspace bot`, for an app whose tokens do not rotate.
+- A workspace connected through an organisation's shared app still posts as you, labelled. Posting as the app through
+  an organisation's app is not available yet.
+- An agent reading Slack sees each message's reactions, as before, with no new permission.
+- `agent-slack icon make` (MCP `slack_icon_make`) turns your Slack photo into a square PNG with a small robot badge,
+  to upload as your agent emoji. Record its name with `agentcomms label icon`.
+
+**Gmail and Resend.**
+- A labelled message's From name is "Your Name (agent)". Gmail keeps that name on the sent message, as the live check
+  on 2026-10-16 confirmed.
+- Gmail drafts are labelled when written. A draft written in Gmail itself has only its From line rewritten when you
+  prepare to send it, leaving every other byte unchanged.
+- The send approval now covers the whole From line, name included, so it cannot change between the preview and the
+  send.
+
+**Also fixed.**
+- **Your commands and shims no longer break if the Node they start moves** (CUE-492). When `node` on your PATH is a link,
+  for example one another app installed, a printed command and a managed CLI shim now name the link, as client
+  registrations already did, not the file it pointed to at the time. `doctor` reports an older shim as stale, and
+  `update` repoints it.
+- **A Gmail send preview no longer calls a new message a reply.** It said "reply in conversation …" for every draft,
+  because Gmail gives each one a conversation; now it says so only for a real reply.
+- **An events rule tick no longer judges Gmail mail by the wall clock** instead of the scheduler's own. This only showed
+  in tests, but a test would have failed on any machine from 2026-10-15 on.
+
+Why: agents that read Slack and mail send acknowledgements and replies, and until now people saw those as yours. The
+label makes clear which messages your agent sent, without impersonating you and without a new service, and every
+unlabelled message rests on your yes to a preview that says so.
+
+**Upgrading.**
+- After updating, every message an agent sends is labelled unless you choose otherwise. `agentcomms update` (or
+  `comms_update`) moves each client to this release; restart the client afterwards. Older runtimes still running in
+  other clients send unlabelled until the update reaches them.
+- If Gmail has no display name for your address, or a Resend send has no From name, set one once with
+  `agentcomms label name "Your Name"`. Until then, a labelled draft or send is refused with that hint.
+- In Slack, nothing changes until you choose: your workspace's messages go out as you, labelled. To post as the app:
+  1. Create a new app from `agent-slack manifest --mode send --with-client-secret`.
+  2. Only one connection per person per workspace is kept, so an existing connection to that workspace has to be
+     removed first, with `workspace remove`.
+  3. Connect the new app with `workspace add … --with-client-secret`.
+  - On Slack's free plan, a workspace holds at most 10 apps, and this one counts toward them.
+- A Gmail send prepared before the upgrade, for a draft whose From has a display name, has to be prepared again.
+
+## 0.18.2
+
+**A rule activation whose approval ran out or was withdrawn before anyone approved it is now cancelled, and the rule's
+next update can be enabled** (CUE-491). When `rule enable` prepared a rule or an update and its approval expired unused
+(after 30 minutes) or was revoked, the activation stayed `pending` for good: `agent-events status` kept counting it, and
+for an update it kept the rule's one replacement slot, so enabling the rule's next version was refused as "this rule
+already has a replacement completing". The event service now settles such an activation as `cancelled`, with the
+failure code `APPROVAL_ABSENT`, on its next tick and when it starts, and `rule enable` settles its rule's lapsed update
+before it asks for a new approval. An activation that was approved and claimed is left to finish as before. Activations
+an earlier release left pending are settled the first time the upgraded service starts. Nothing to migrate.
+
+Why: on a real machine, two rule approvals that expired while the rule was being checked were still reported as
+`{"status":"pending","count":2,"failureCode":null}` after a third was approved, and nothing would ever have cleared
+them. A lapsed approval can never be used, so the activation it was asked for has nothing left to wait for.
+
+**Upgrading.** Nothing to change. `agentcomms update` (or `comms_update`) moves each client's managed runtime to
+0.18.2; restart the client afterwards, and restart a running `agent-events run`. The first time the upgraded service
+starts, it cancels any activations an earlier release left pending behind a lapsed approval.
+
+## 0.18.1
+
+**A first events rule now works in the order the README gives, and `agentcomms doctor` stops warning about commands
+that are fine.** These are the four problems found while trying 0.18.0 on a real machine. Nothing breaks and there is
+nothing to migrate.
+
+**Approving a rule no longer ends when its optional target test cannot run** (CUE-475). `agent-events approve` offers
+to test each pending target before you approve. Before collection was switched on, that test was refused as "the exact
+target version is not live", and the approval stopped without asking for its challenge, leaving the rule pending. The
+refusal now says what is off: `collection is switched off: switch it on with enable-all first, or approve without the
+test`. Any refused test is printed as `{"test":"not run","reason":…}`, and the approval goes on to its challenge. The
+README now switches collection on before the rule's approval.
+
+Why: in the README's order, `rule enable`, `approve`, then `enable-all`, a first rule's target test could never pass.
+A person who accepted the offered test lost the approval, even though declining the test was always allowed.
+
+**`agent-events sources list` names every connected account a rule can use** (CUE-474). Before any rule was active it
+returned an empty list, so the README step that sends you there to find an account id found nothing. Each connected
+Gmail inbox and Slack, Resend or WhatsApp account is now listed with its source, its stable `accountId` and the name it
+was connected under (`account`), whether or not a rule uses it yet. Accounts a rule is collecting from still carry
+their `cursorScope`; the others show `null`. The MCP tool `events_sources_list` returns the same rows. The README's
+last step now also says `dryrun show <record-id>` prints a record that `dryrun list` names.
+
+Why: a first rule needs the inbox's stable id (`ibx_…`), and nothing else in the events CLI showed it.
+
+**`agentcomms doctor` no longer warns that a working command is missing** (CUE-473). A managed runtime carries other
+channels' packages as dependencies, and doctor counted those copies as runtimes of their own: on a machine with Gmail,
+Slack and events installed, `agent-resend` and `agent-whatsapp` were reported as having no command on PATH, though
+neither was installed. Doctor, `update` and `prune` now count a runtime as a package's own only when its name says so
+or its manifest pins that package.
+
+Why: a warning about something you never installed sends you looking for a fault that is not there.
+
+**Tests.** A core approval-wait test that could fail on a slow Windows runner waits for every open wait's first look
+before breaking the one under test (CUE-472). The events owner tests now start with an empty configuration directory
+instead of reading the developer's own `~/.config`. The events CLI's control client now follows the environment the
+CLI is given, not `process.env`, so a test with its own state directory is never answered by an event service running
+on the machine.
+
+**Upgrading.** Nothing to change. `agentcomms update` (or `comms_update`) moves each client's managed runtime to
+0.18.1; restart the client afterwards. An event service started with `agent-events run` keeps running the version it
+started with until you stop it and start it again.
+
+## 0.18.0
+
+**`agentcomms` now installs, updates and repairs the events server like the channel servers, and a managed install
+puts its command on your PATH on macOS and Linux.** Until now, the events server was added to each client by hand,
+outside the managed install and update, and the CLI a managed install had already downloaded was not on PATH. This
+release also finishes what 0.17.0 left open:
+- `agent-events --version`;
+- judge fixes for turning a kind off and for budgets;
+- a PowerShell line you can paste on Windows;
+- sends that no longer echo a message's text outside the untrusted-content envelope.
+
+Nothing existing breaks. Read **Upgrading** at the end before you start it.
+
+**The core installer now manages the events MCP server.** `agentcomms mcp install --server events --client <client>`
+and `comms_server_install` with `channel: "events"` register `@agentcomms/events-daemon` through the same preview and
+approval flow as the channel servers. Listing, updating, doctor repairs and pruning now include it too. The service is
+derived from its `agentcommsPackage` declaration, so adding a service no longer requires another server list in core;
+channel account pins, read-only narrowing and warnings about rival servers remain channel-only.
+
+Why: the 0.16.0 and 0.17.0 instructions made people add `npx -y @agentcomms/events-daemon mcp` to each client by
+hand, outside the managed install and update path.
+
+**Managed installs now provide owned CLI shims.** After a managed install or registration update, `agentcomms`,
+`agent-gmail`, `agent-slack`, `agent-resend`, `agent-whatsapp` or `agent-events` is written to `~/.local/bin` on
+macOS/Linux. The shim starts that managed runtime with the locator's Node and entry; updates repoint it, prune removes
+it with the runtime, and `doctor` reports a missing, stale or foreign shim. Existing or changed files are never
+overwritten or deleted. A symlinked bin directory works, while a parent redirected during an operation is refused
+before the mutation. When the directory is not on `PATH`, the install result shows how to prepend it for the current
+shell and edits no profile. Windows shims are not offered yet: `.cmd` forwarding makes `cmd.exe` re-parse arguments,
+so the result keeps giving the full-path command or labelled PowerShell `&` line instead.
+
+Why: managed registrations already install a complete CLI runtime, but people still had to find or globally install
+the command separately for ordinary terminal use. Windows needs a forwarding format that preserves argument
+boundaries before it can offer the same convenience safely.
+
+**Windows handoffs with the default Node installation are pasteable in PowerShell.** When Node lives under
+`C:\Program Files`, a safe handoff is now printed as a line beginning with PowerShell's `&`, with every word
+single-quoted and the result labelled “PowerShell”. Inner single quotes are doubled. A command whose words cannot be
+proved safe in that form still uses the inert JSON fallback.
+
+Why: the absolute Node path needs quoting; earlier releases therefore reduced the most common Windows handoff to a
+list of words to retype even though PowerShell has a safe, explicit call-operator form.
+
+**`agent-events --version` and `agent-events -V` now print the installed daemon version.** A subcommand's
+`--version <number>` still selects that immutable object version.
+
+**Fixed — agents now send Gmail and Resend mail with the approval id, without copying recipients or subjects back
+into the send call.** The approval already binds the exact message, and copying those fields made text taken from
+mail appear again outside the untrusted-content envelope. Prepare, successful-send and audit results now return each
+channel's safe field shape: a validated address may stay plain, while subjects and any other sender-controlled text
+are sanitised and enveloped. Gmail's `send cancel --json` now uses the same field rules as `send list`, too.
+
+This is additive for existing integrations: Gmail may still be given its bound draft id, and Gmail or Resend may
+still be given `expect`, either as kept or as the display-safe form prepare returned, unchanged; when present, those
+legacy checks must match exactly and refuse the send if they do not. New
+calls need only the approval id (and the mailbox or account on an unpinned surface). The send gate, single-use claim
+and final content checks are unchanged.
+
+Rejected recipient values are no longer copied into prepare errors, and Gmail's detailed prepare refusals now
+envelope any sender-controlled evidence. Resend send status does the same for the subject kept in its local send
+record, over MCP and `send status --json`.
+
+**Fixed.** Turning off a judge kind now cancels a pending `enable-all` that captured a rule of that kind, and removing
+a judge now cancels pending rule activations and prevents its already-revoked version from becoming active.
+
+**Fixed.** A judge call that stopped before anything was sent no longer counts against the judge's budget. That covers
+a call refused, out of time or cut short by a crash before its first connection. 0.17.0 marked a call in flight before
+it reached the network, so such a call could be charged as if it had been made. Each try is now an attempt of its own:
+it is in flight only from its first network lookup, a retry is a new attempt, and the rolling and concurrent budgets
+count each attempt once.
+
+**Fixed.** A Slack sign-in listener now closes its loopback server if the sign-in expires before the listener can
+record that it started, so the port is released immediately instead of remaining occupied until the listener timeout.
+
+**Dependencies.** The MCP SDK moves to 2.3.1, the Google client libraries to their latest patch versions, Nodemailer
+to 10.0.16, Playwright (tests only) to 1.64.0 and Biome to 2.5.15. `postal-mime`, which core uses to read address
+headers, moves from 3 to 4. Its address parser is stricter: a quoted encoded word, or a display name that holds one, is
+no longer read as an address. `@types/node` stays on Node 22's line, the oldest Node the packages support.
+
+**Upgrading.** Run `agentcomms update`, or `comms_update` from a chat.
+- It moves every registration to 0.18.0.
+- On macOS and Linux it writes or repoints each managed registration's CLI shim in `~/.local/bin`. A file there that
+  this installation did not write is left alone.
+- Restart each client afterwards.
+
+To add the events server, run `agentcomms mcp install --server events --client <client>`.
+
+On its first start, this release moves the event database to schema 22. After that, do not start 0.17.0 against it:
+0.17.0 does not know schema 22. From this release on, `agent-events` refuses a database that a newer release has
+migrated. It names both versions and writes nothing to it.
+
+`postal-mime` 4 reads fewer unusual address headers as addresses; see **Dependencies**.
+
+## 0.17.0
+
+**Judges: a rule can now ask a model one yes/no question about an event — TypeSafe's hosted Jev, or a model you run
+on this machine — and match only when the answer clears the rule's threshold.** Conditions on an event's fields can
+say that a message is from a customer or mentions an invoice; they cannot say whether it asks you to do something
+today. A judge answers that, inside the same boundary as the rest of `agent-events`:
+- **Two kinds, each off until you enable it at your terminal.** `typesafe` sends the fields a rule names to TypeSafe's
+  System One API (`jev-1.13.0`), with your TypeSafe API key, which you enter at your terminal. `local-endpoint` calls a
+  server you run at `127.0.0.1` or `::1`, so nothing leaves the machine. Installing, updating, a rule or a budget never
+  enables a kind, and `judge kind disable` turns one off at once, purging the work bound to it.
+- **A judge sees only what the rule names.** It is asked only after the rule's own conditions match, about the exact
+  fields in its `inputs`, sanitised and marked as untrusted. It has no tools, secrets or authority: its answer is one
+  number from 0 to 1, and a message written to talk it into a match can move only that number. A timeout, a malformed
+  answer or a spent budget is no match.
+- **An uncertain answer can wait for you.** An answer just below the threshold is no match or, if the rule says
+  `"onUncertain": "hold"`, a held decision you settle at your terminal with `agent-events held decide`.
+- **Budgets you approve.** Every call counts against the rule's own ceilings and a daemon-wide budget (calls per hour,
+  input tokens per 30 days, concurrent calls) that only you can activate, and that a rule's new version cannot reset.
+- **`judge test`** tries an active judge on the daemon's own synthetic event, never one of yours, at most ten times an
+  hour per version. `doctor` reports each kind, the active budget and its reservations, how many decisions are held
+  and when the next expires, and a hosted judge whose key is missing.
+- **Agents** can propose judges and budgets, prepare a kind's enablement, test a judge and turn a kind off. They can
+  never approve, see or set a judge's key, or decide a held event; the `agentcomms-events` skill says so.
+
+The `agentcomms-events` skill also no longer says the daemon is unpublished: when its tools are missing, it tells you
+to register `npx -y @agentcomms/events-daemon mcp` with your client.
+
+**Fixed.** Since 0.16.0, a Slack or WhatsApp handle copied out of an event into a delivery was recorded under Gmail,
+so a later Slack or WhatsApp send to that handle was not recognised as coming from an event's untrusted content. Each
+handle is now recorded under its own channel, for deliveries and judge inputs alike.
+
+**What is not in it yet.** Laya, the model that would run inside the daemon, is listed but refused as not available
+yet. The desktop app comes in a later release.
+
+**Upgrading.** Nothing changes for rules without a judge, or for Gmail, Slack, Resend or WhatsApp. On its first start,
+0.17.0 upgrades the event database in place, and your rules, targets and records carry over; going back to 0.16.0
+after that is not supported. To use a judge, follow the
+[README's Judges section](packages/events-daemon/README.md#judges).
+
+## 0.16.0
+
+**Local events: `agent-events` watches the Gmail, Slack, Resend and WhatsApp accounts you connected and, when an event
+matches a rule you approved at your terminal, delivers it — to a signed webhook, a local live stream or a dry-run
+log.** Until now an agent could read your mail and messages only when asked; nothing could react when something
+arrived. Two new packages, and a skill:
+- **`@agentcomms/events-daemon`** (`agent-events`) — the local service, with its CLI and MCP server. A rule says which
+  source and accounts, which event, a condition on its fields, exactly which fields go out, and to which targets. When
+  you enable it you see the exact preview, and nothing is collected until you approve it by typing its challenge at
+  your terminal. Sources: Gmail (received, sent and labelled mail), Slack (messages and thread replies), Resend
+  (received mail and sent-mail status) and WhatsApp (messages from the chats WhatsApp for Mac lists; a hidden chat never
+  reaches a target). Targets: HTTPS webhooks — or plain HTTP to the literal loopback address — with pinned addresses,
+  every attempt signed (Standard Webhooks), and retry or drop per delivery; a loopback live stream (server-sent events)
+  with a token per subscriber; and an encrypted dry-run log only a person at a terminal can read. `pause`, `resume`,
+  `disable-all` (stops collection and purges pending work at once) and a content-free `doctor`.
+- **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a library with
+  no I/O for Node and browsers.
+- **The `agentcomms-events` skill** — how an agent proposes and tests rules over MCP. An agent can propose and test;
+  it can never approve, read what the dry-run log kept, see or set a secret, resume a target or decide a held event.
+
+**What is not in it yet.** Judges — a rule asking a model a yes/no question about an event — the desktop app and the
+local Laya model come in later releases; rules on an event's fields need none of them, and the judge commands say so.
+`agent-events` runs in the foreground, in a terminal you keep open, on macOS and Linux with Node 22.16 or newer;
+Windows is refused for now.
+
+**Upgrading.** Nothing changes for Gmail, Slack, Resend or WhatsApp. To try events: `npm i -g
+@agentcomms/events-daemon`, `agent-events run` in one terminal, then add a dry-run target and a rule as [its
+README](packages/events-daemon/README.md) shows. `agentcomms mcp install` does not register its MCP server yet: add
+`npx -y @agentcomms/events-daemon mcp` to your client yourself.
+
 ## 0.15.2
 
 **A Slack post, reaction, edit or deletion that Slack rate-limits waits and tries again, as Gmail and Resend sends do

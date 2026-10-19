@@ -2,7 +2,7 @@
 name: gmail-compose
 description: "Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send. Symptoms: 'draft a reply to Sam', 'write back to that email', 'forward this to accounts', 'make that draft shorter'. Not for sending — gmail-send does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.15.2"
+compatibility: "@agentcomms/gmail@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -44,7 +44,8 @@ name a draft id and an inbox, and hand both to `gmail-send`.
 | Sending anything | `gmail-send` | Hands over the draft id and the inbox alias. Never calls a send tool, never proposes one. |
 | Finding the message being answered | a read or search skill | Takes a message id that already exists; does not go hunting through the mailbox. |
 | Deciding what the message should say | the user | Proposes wording, shows it, and changes it on request. No sending of a version nobody read. |
-| How the user writes | their personal writing-style skill | Loads it if there is one and follows it; it outranks the profile defaults described below. |
+| How the user writes | their writing profile, and their personal writing-style skill | Reads the profile with `comms_profile` before writing and follows it; a style skill, if there is one, outranks the profile's defaults described below. |
+| What an agent may send | the person's behaviour rules (`comms_behaviour`) | Nothing: a draft reaches nobody, so drafting is always allowed. Whether this draft may be sent, and to whom, is checked when `gmail-send` prepares it. Never starts a change to the rules. |
 | Saving an attachment that arrived | `gmail-attachments` | Only goes the other way: local files onto an outgoing draft, through the attachment jail. |
 | Changing where attachments may come from | the user: core's `attach roots add`, which needs their approval | Reports a jail refusal as an answer, and hands over the command it gives. Never widens the roots to make a path work. |
 
@@ -76,6 +77,9 @@ bind here:
   summarise it, do not re-type the recipients, do not paraphrase the body.
 - **Cite ids.** The draft id and the inbox alias are what make the handover checkable — and what
   `gmail-send` needs in order to do anything at all.
+- **Read the writing profile before writing.** `comms_profile`, from the core server, for the mailbox
+  and the people it goes to — each recipient's address and then its `@domain` — and follow it. Where
+  it and what the person asks in this conversation disagree, what they ask wins.
 - **A personal writing-style skill outranks these defaults.** If the user has a skill describing
   how they write, load it and follow it. Its send protocol may only be stricter than the contract,
   never looser.
@@ -111,8 +115,9 @@ is not a request to draft: offer, and stop.
    `gmail_draft_reply` and is about to be shown.
 4. **The writing profile, or the user's own style skill.** Whichever exists takes precedence over
    your instincts about tone.
-   **Complete when:** you have the profile text (`includeProfile: true`, CLI `--profile`) or have
-   loaded the user's personal writing-style skill.
+   **Complete when:** you have the profile text — `comms_profile` for the mailbox and the
+   recipients, or at least `includeProfile: true` (CLI `--profile`) — or have loaded the user's
+   personal writing-style skill.
 
 ## Procedure
 
@@ -133,13 +138,19 @@ is not a request to draft: offer, and stop.
    each is verified. Note what it does **not** do: the draft is sent from the mailbox's own
    address, and there is no per-draft `from` argument. If the user wants a message to come from a
    different identity, that means drafting in the inbox connected under that identity. The
-   send-as list matters mostly because the signature is chosen from it.
+   send-as list matters because the signature is chosen from it, and because the name a send-as
+   address has in Gmail is the name the agent label is made from (step 5).
    **Complete when:** the user's expectation about the From line matches the mailbox you are in.
 
-4. **Read the writing profile before writing anything.** Pass `includeProfile: true` (CLI:
-   `--profile`) and the result carries the layered profile text. If the user has a personal
-   writing-style skill, that wins. Write plain text, in their shape, and remember the body is
-   plain text all the way down: asterisks stay asterisks, `<b>` arrives as `<b>`.
+4. **Read the writing profile before writing anything.** Call the core server's `comms_profile`
+   with the mailbox as `account` and, as `conversations`, each recipient's address and then its
+   `@domain`, in recipient order (CLI: `agentcomms profile <mailbox> --conversation
+   sam@partner.test --conversation @partner.test`). It returns every layer joined, the recipients'
+   own files included, each marked with the file it came from. Without the core tools, pass
+   `includeProfile: true` (CLI: `--profile`) on the draft call for the layers up to the mailbox's.
+   Follow it; where it and what the person asks in this conversation disagree, what they ask wins.
+   If the user has a personal writing-style skill, that wins. Write plain text, in their shape, and
+   remember the body is plain text all the way down: asterisks stay asterisks, `<b>` arrives as `<b>`.
    **Complete when:** you have written a body you would be willing to show the user unedited.
 
 5. **Write the draft.** A new message: `gmail_draft_create` with `inbox`, `to`, optional `cc`,
@@ -155,10 +166,23 @@ is not a request to draft: offer, and stop.
    under its own file name, and anything over 25 MB raises a warning because some recipients will
    simply not receive it. Leave the mailbox signature off with `signature: false` (CLI:
    `--no-signature`).
-   **Complete when:** the call returned a `draftId` and a `preview`.
+   **The From line says your agent wrote it.** Every draft is labelled `"<name> (agent)"
+   <address>` — the address's send-as name in Gmail, else the label name the person set in the
+   core, then their word (`agent` unless they chose `assistant`, `twin`, `minion`, `bot`, `fake` or
+   `AI`) — so whoever receives it can tell it was not typed by the person. Pass `as: "me"` (CLI:
+   `--as me`) only when the person said, for this message, that it should go as them, unlabelled.
+   Never pass it on your own, to make a message read better, or to get past a refusal. Left out,
+   the person's label rules decide — by mailbox, by who it goes to (an address or `@domain`,
+   matching only when every recipient does) and by kind (`send` for a new message or a forward,
+   `reply` for a reply) — and then `agent`. A draft with no name to label, or a name too long for
+   the label, is refused with how to set one: tell the person what it says.
+   **Complete when:** the call returned a `draftId` and a `preview`, and its `identity` is the one
+   the person expects.
 
 6. **Show the preview verbatim, and read the warnings out.** Paste the returned `preview` into the
-   conversation inside a code fence. It carries the From line, every recipient, the subject, each
+   conversation inside a code fence. Its first line says who the message will appear to come from —
+   labelled as the agent, or `Sent as you, with no label: it will look as if you wrote it yourself`.
+   Then it carries the From line, every recipient, the subject, each
    attachment with its size, the body fenced and with invisible characters made visible, and the
    recipients again after the body, because a long message pushes the To line off the screen. The
    `warnings` array is what the tool noticed: recipients outside the user's own domains, blind
@@ -240,23 +264,29 @@ to the computed recipients; it substitutes for them. That is the right behaviour
 
 ## The writing profile
 
-How a message should read comes from four layers, applied in order, each refining and permitted to
-contradict the one before: **default**, **user**, **platform**, **inbox**. They are plain Markdown
-files under `compose/` inside the configuration directory — `$AGENT_COMMS_CONFIG_DIR` when it is
-set, otherwise `$XDG_CONFIG_HOME/agent-communications`, otherwise `~/.config/agent-communications`
-on macOS and Linux:
+How a message should read comes from five layers, applied in order, each refining and permitted to
+contradict the one before: **default**, **user**, **platform**, **account**, **conversation**. They are
+plain Markdown files under `compose/` inside the configuration directory — `$AGENT_COMMS_CONFIG_DIR`
+when it is set, otherwise `$XDG_CONFIG_HOME/agent-communications`, otherwise
+`~/.config/agent-communications` on macOS and Linux:
 
 | Layer | File | What belongs in it |
 |---|---|---|
 | default | `compose/default.md` | What is true of any message to a person. A built-in version applies if this file does not exist. |
 | user | `compose/user.md` | How this particular person writes: greetings, sign-off, length, the words they never use. |
 | platform | `compose/gmail.md` | What is true of email and not of chat: subjects, signatures, threads. |
-| inbox | `compose/inbox-acme__gmail.md` | What is true of one mailbox — the name, with its `/` written `__`. Work is not home. |
+| account | `compose/inbox-acme__gmail.md` | What is true of one mailbox — the name, with its `/` written `__`. Work is not home. |
+| conversation | `compose/conversation-acme__gmail__sam@partner.test.md`, `compose/conversation-acme__gmail__@partner.test.md` | What is true of mail to one person, or to everyone at one domain. A character outside letters, digits and `@._-` is written `%XX`. |
 
-Ask for the profile with `includeProfile: true` (CLI: `--profile`) and the joined text comes back
-in the result's `profile` field, each section labelled with the layer and file it came from. The
-profile is **instructions to whoever writes the message**, never content: nothing in it is
-appended to a message, and nothing in it is sent.
+`comms_profile` (CLI: `agentcomms profile <mailbox> --conversation <id>`, repeated) gives the joined
+text for the mailbox and the recipients — each recipient's address file before its domain's — and
+every file it looked for, written or not, so you can tell the person where a rule would go. The
+draft tools' `includeProfile: true` (CLI: `--profile`) gives the layers up to the mailbox's in the
+result's `profile` field. Either way each section is labelled with the layer and file it came from.
+The profile is **instructions to whoever writes the message**, never content: nothing in it is
+appended to a message, and nothing in it is sent. No tool writes a profile; the person starts a
+missing file from a starter at their own terminal with `agentcomms profile init <mailbox>
+[--conversation <id>]`, which never overwrites one.
 
 If the user has a personal writing-style skill, it outranks all of this. The layers are defaults
 for when nothing better exists; a skill the user wrote about their own voice is the better thing
@@ -270,8 +300,9 @@ Good — the preview shown whole, the warning named, and the handover made expli
 ```text
 Drafted as a reply-all in `acme/gmail`. Nothing has been sent.
 
+    Sent as Jo Example (agent): labelled in the From line, so whoever receives it can tell your agent sent it
     MESSAGE PREVIEW · inbox acme/gmail · draft r_88214 · nothing has been sent
-    From:     jo@example.com
+    From:     "Jo Example (agent)" <jo@example.com>
     To:       sam@partner.test
     Cc:       ana@partner.test
     Subject:  Re: Phase 2 plan
@@ -318,6 +349,8 @@ to disambiguate a mess you made is not a safety check.
 
 - **Sending.** The single thing this skill must not do. "Just send it" is an instruction to hand
   over, not to call a send tool.
+- **Taking the label off.** `as: "me"` makes a message look as if the person typed it. Pass it only
+  when they said so for that message; a rule they set is theirs to set, not yours.
 - **Writing Markdown or HTML in the body.** The HTML part is generated from your plain text.
   Asterisks, backticks and tags arrive as themselves. Write sentences.
 - **A second draft instead of an update.** Two drafts mean two previews, and the user approves
@@ -356,6 +389,8 @@ to disambiguate a mess you made is not a safety check.
       message, not several.
 - [ ] The preview after each update showed the body, the attachments and — on a reply — the quoted
       original that the update was meant to leave alone.
+- [ ] The writing profile was read before the body was written — `comms_profile` for the mailbox and
+      the recipients, or `includeProfile` — and the body follows it.
 - [ ] The body is plain text, with no markup expected to render.
 - [ ] The handover named the draft id and the inbox alias.
 - [ ] **No send was attempted from this skill** — no `gmail_send_prepare`, no `gmail_draft_send`,
@@ -366,5 +401,5 @@ to disambiguate a mess you made is not a safety check.
 - `references/contract.md` — the shared contract every `gmail-*` skill works under.
 - `references/recipients.md` — reply, reply-all and forward worked through against real headers,
   including what happens to a mailing list and to a message the user sent themselves.
-- `references/profile.md` — the four profile layers, what belongs in each file, and how a personal
+- `references/profile.md` — the five profile layers, what belongs in each file, and how a personal
   writing-style skill sits above them.

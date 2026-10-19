@@ -2,7 +2,7 @@
 name: comms-onboarding
 description: "Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. Symptoms: 'set up my email and Slack', 'install agent-communications', 'connect Gmail and Slack to Claude', 'onboard me', 'set this up on my other computer'. Not for one account's settings once it works — gmail-setup and slack-setup do those."
 license: MIT
-compatibility: "@agentcomms/core@0.15.2"
+compatibility: "@agentcomms/core@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -86,7 +86,14 @@ walk instead of borrowing a profile client. Existing mailboxes stay on the clien
 token. Slack automatically selects the profile's read app for `rgc/slack`, or its send app when
 `mode: "send"` is requested. No Client ID or port is needed. When the organisation
 changes its file, `comms_org_update` reads it again — a changed profile is approved first, a repair
-applies at once — and `comms_org_remove` stops using it.
+or a tighter update cap applies at once — and `comms_org_remove` stops using it.
+
+A profile can carry `extensions`, where later releases add fields. The result's `extensions.ignored`, and
+`comms_org_show`, name any entry this release skipped (`not applied here: <name> (needs <since> or later)`): say so
+in one line; the rest of the profile is in force and there is nothing to do. If `comms_org_add` or
+`comms_org_update` refuses with `NEEDS_NEWER_RELEASE`, the profile needs a later release: nothing was changed, and
+nothing else stops. Tell the person, update first (the comms-update skill), then call it again. Never edit the
+profile to get past it.
 
 ## 3. Connect each account
 
@@ -130,6 +137,37 @@ approved; `comms_change_policy` sets how changes are. WhatsApp never sends, so i
 workspace set to `chat` itself stays `chat` when the default goes to `confirm`: show the person the
 result's `warning`, and tighten each one it lists if that is what they meant.
 
+What an agent sends is labelled, so recipients can tell the agent sent it: the person's name and a word
+in parentheses, "Jo Example (agent)". `comms_label` with no change shows it for every account. A new
+word (`agent`, `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`) or a name for where a channel has
+none is a change: show the preview, get their yes, call again with `approvalId`. Add a rule `as: "me"`
+— a kind of message sent as them, unlabelled — only when they ask for that.
+
+**What an agent may do there** is theirs to narrow, per account or per conversation: for example reply and react
+in a Slack channel, but never start a conversation, edit or delete. `comms_behaviour` with `setRule: { account,
+conversation, acts }` — `conversation` left out for the whole account, `acts: []` for nothing — sets it (CLI:
+`agentcomms behaviour allow <account> reply,reaction --conversation <id>`), and with no change shows every rule.
+With no rule every act is allowed, as before. A rule that only narrows applies at once; one that lets an agent do
+more, or `removeRule`, is a change: show the preview and get their yes. Offer it once, set one only when they ask,
+and never start a loosening they did not ask for. A server started before 0.22.0 holds no rule until its client
+restarts it; the first rule's result says so, and `comms_doctor` names any such server.
+
+**How an agent writes** is the person's writing profile: Markdown files they keep, for every message, one channel,
+one account or one conversation. `comms_profile` with the `account` and its `conversations` shows the joined text
+and every file it reads, written or not; no tool writes one, and the person starts a missing file from a starter at
+their own terminal with `agentcomms profile init <account>`. Before you write any message on their behalf, call
+`comms_profile` for the account and the conversation, and follow it; what they ask in this conversation wins. On
+`ACT_NOT_ALLOWED`, tell them which rule refused it and stop: never retry it another way.
+
+**Acknowledging without asking** is a standing approval, and only ever the person's. With one, an agent may answer a
+Slack message that has just arrived from someone else with a reaction or a short reply the person wrote in advance,
+in places, counts and days they set; every use goes out as the agent and is shown on their screen. Nothing changes
+until they create one, at their own terminal with a code. It is not for an agent that also reads sensitive mail, files
+or secrets in the same session: which messages it acknowledges, and when, can carry tens of bits an hour. Do not offer one during setup, and never ask them to make
+one in chat. If they ask, the slack-posting skill prepares it with `slack_standing_add`, which only prepares: they
+approve it at their terminal with the approve command the result gives. `comms_standing` with no change shows them;
+with `revoke`, `narrow` or `off` it narrows or ends them at once, whenever they ask.
+
 ## 5. Check, and hand over
 
 - `comms_doctor`, `gmail_doctor`, `slack_doctor`, `resend_doctor` and `whatsapp_status`, for the
@@ -159,11 +197,17 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | Resend | `agent-resend account add <name> --mode <mode>`, the key typed by the person |
 | WhatsApp | `agent-whatsapp add <name>`, then `agent-whatsapp sync --account <name>`, at the Mac's terminal |
 | Policies | `agent-gmail inbox policy <name> --send <policy> --change <policy>`, `agent-slack workspace policy <name> --send <policy> --change <policy>`, `agent-resend account policy <name> --send <policy> --change <policy>`, `agentcomms policy confirm` |
+| The agent label | `agentcomms label`; `agentcomms label word <word>`, `agentcomms label name "<name>"` |
+| What an agent may do | `agentcomms behaviour`; `agentcomms behaviour allow <account> <act,…\|none> [--conversation <id>]`, `agentcomms behaviour clear <account> [--conversation <id>]` |
+| The writing profile | `agentcomms profile [<account>] [--conversation <id>…]`; `agentcomms profile init [<account>] [--conversation <id>]`, the person's, at their terminal |
+| Standing approvals | `agentcomms standing list`; `agentcomms standing revoke <id>`, `agentcomms standing off`; `agent-slack standing add --workspace <name> …` only prepares one the person asked for |
 | Check | `agentcomms doctor`, `agent-gmail doctor`, `agent-slack doctor`, `agent-resend doctor`, `agent-whatsapp status` |
 
 A change stops with exit `10`, its preview and an approval id, and changes nothing — with one
-exception: `agentcomms org update <organisation> --for-other-addresses off` turns that off at once,
-because narrowing never waits, and the preview and the final result both say it was done. Show the
+exception: `agentcomms org update <organisation>` applies what only tightens at once — `--for-other-addresses
+off`, and a tighter update cap from the organisation — because tightening never waits, and the preview and the final
+result both say it was done. A profile this release is too old for stops `org add` or `org update` with exit `1`
+and `NEEDS_NEWER_RELEASE`, changing nothing: update first, then run it again. Show the
 preview; after their yes, run the command its hint gives, which carries the approval id. Under `confirm` they
 first run the approve command the hint gives, in their own terminal, exactly as given, and
 `agentcomms approval wait <id>` tells you when they have. If they say no, `agentcomms approvals revoke <id>`, at
@@ -178,5 +222,9 @@ once. A person running a command at a terminal approves there and then: `yes`, o
 - **An own-app port that does not match the manifest.** Slack matches the redirect URL exactly; use the port
   the manifest was made with.
 - **Promising the tools before the restart.** Registered servers start in the next session.
+- **Setting a behaviour rule nobody asked for,** or loosening one to get past `ACT_NOT_ALLOWED`. The rules are the
+  person's; offer, and let them choose.
+- **Proposing a standing approval during setup,** or asking the person to make one in chat. It is theirs to ask for,
+  and theirs to approve at their terminal.
 - **A token in chat.** Never ask for one, never accept one. `agent-slack app update` reads the
   configuration token from a hidden prompt in the person's own terminal.

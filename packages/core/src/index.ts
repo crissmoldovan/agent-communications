@@ -1,4 +1,5 @@
 export * from './addresses.ts';
+export * from './agent-label.ts';
 export * from './approval-binding.ts';
 /*
  * What a person and an agent are told while an approval waits for the person (design 2026-10-05 §D7): the person's
@@ -42,6 +43,11 @@ export * from './approval-validate.ts';
 export { renderApprovalWait, type WaitCallContext, waitCallOptions } from './approval-wait-surface.ts';
 export * from './approvals.ts';
 export * from './audit.ts';
+/*
+ * What an agent may do (design 2026-10-19-agent-behaviour-rules): the rules, read fail-closed, the one decision every
+ * channel's prepare and execute make, and how a change to them is judged.
+ */
+export * from './behaviour.ts';
 export * from './change-flow.ts';
 export * from './changes.ts';
 export * from './channel-manifest.ts';
@@ -100,12 +106,15 @@ export * from './internet-mark.ts';
 export * from './jail.ts';
 export * from './keys.ts';
 export * from './known-folders.ts';
+export * from './launcher.ts';
 export * from './ledger.ts';
 export * from './lock.ts';
 export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
+// The notification on the person's screen for each standing act (design 2026-10-19-standing-approvals, S10).
+export * from './notify.ts';
 export * from './numbers.ts';
 export * from './oauth-client-records.ts';
 export {
@@ -124,6 +133,7 @@ export {
   type OrgChangeResult,
   type OrgOptions,
   orgAddChange,
+  readProfileOrRefuse,
 } from './operations/organisations.ts';
 /*
  * The registration and pruning changes, for the channels' own `mcp install` and `mcp prune`: the one change the core
@@ -136,25 +146,42 @@ export {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
+// The standing approvals as `agentcomms standing list` and `comms_standing` report them, and ending them at once.
+export {
+  type StandingActView,
+  type StandingChangeRequest,
+  type StandingReport,
+  type StandingView,
+  standingChange,
+  standingReport,
+} from './operations/standing.ts';
 export { type UpdateDeps, updateChange } from './operations/update.ts';
 export {
-  type UpdateAutoResult,
-  type UpdateLaterResult,
-  updateAutoChange,
-  updateLaterChange,
+  type UpdateLevelResult,
+  type UpdatePauseResult,
+  type UpdateResumeResult,
+  updateLevelChange,
+  updatePause,
+  updateResume,
 } from './operations/update-settings.ts';
+// Where updates stand here, as `agentcomms update --status` and `comms_update` with `status` report it.
+export { type UpdateStatus, updateStatus } from './operations/update-status.ts';
 /*
  * Organisation profiles (design 2026-10-02): what a channel needs to read the record — whether a client row is an
  * organisation's, and the generations of its client. The core writes the record; nothing else does.
  */
 export {
+  AGENT_APP_KIND,
+  type AgentAppFile,
   activeGeneration,
+  agentAppPathFor,
   GENERATION_LIMIT,
   type GenerationState,
   generationState,
   learnProfileSlackAppId,
   managingOrganisation,
   type OrganisationProfile,
+  organisationAgentApp,
   organisationProfileSchema,
   organisationsOf,
   PROFILE_ORGANISATION_MAX,
@@ -174,6 +201,8 @@ export * from './output.ts';
 export * from './paths.ts';
 export * from './plans.ts';
 export * from './reconcile.ts';
+// What a registration pins, its stable launcher's pointer included: the channels' doctors read it as core does.
+export { registrationVersion } from './registrations.ts';
 export * from './render.ts';
 export * from './sanitize.ts';
 export * from './save-deny.ts';
@@ -183,6 +212,28 @@ export * from './secrets.ts';
 export * from './send-epoch.ts';
 export * from './send-pacing.ts';
 export * from './sending-lease.ts';
+/*
+ * Standing approvals (design 2026-10-19-standing-approvals): the contents a person writes in advance, named by digest,
+ * the places and limits, what widens one, and the standard emoji a standing reaction may be.
+ */
+export * from './standing.ts';
+export * from './standing-emoji.ts';
+// Preparing one, showing it in full, and approving it only with its code at a terminal; ending one at once.
+export * from './standing-flow.ts';
+// Every use counted once, under the account's ledger lock and then the standing record's, and never refunded.
+export * from './standing-ledger.ts';
+// The pause between deciding a standing act and making it: 5 to 30 seconds, from the operating system's CSPRNG.
+export * from './standing-pause.ts';
+/*
+ * The module names a standing act's notification `Notice`, as the plan does; the root already has a `Notice` — the
+ * update notice (`update-gate.ts`) — so here it is `StandingNotice`. `Notifier` takes it either way.
+ */
+export {
+  mintStandingUse,
+  type Notice as StandingNotice,
+  type Notifier,
+  type StandingUseRequest,
+} from './standing-use.ts';
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';

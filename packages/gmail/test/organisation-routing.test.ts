@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { test } from 'node:test';
 import {
   CommsError,
@@ -34,8 +35,30 @@ const OTHER_ID = '234567890123-personal.apps.googleusercontent.com';
 const WHEN = '2026-10-02T12:00:00.000Z';
 const NOOP_LISTENER = {
   command: process.execPath,
-  args: ['-e', 'process.send?.({type:"ready"}); setTimeout(() => {}, 1000)'],
+  args: ['-e', 'process.send?.({type:"ready"}); process.disconnect?.()'],
 };
+
+test('the routing-only detached listener exits as soon as its ready channel is released', async () => {
+  const child = spawn(NOOP_LISTENER.command, [...NOOP_LISTENER.args, 'oauth-listen', 'flow_routing_lifetime'], {
+    env: process.env,
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once('message', () => resolve());
+      child.once('error', reject);
+    });
+    if (child.connected) child.disconnect();
+    child.unref();
+    const outcome = await Promise.race([
+      new Promise<'exited'>((resolve) => child.once('exit', () => resolve('exited'))),
+      new Promise<'waiting'>((resolve) => setTimeout(() => resolve('waiting'), 500)),
+    ]);
+    assert.equal(outcome, 'exited', 'the routing seam must not outlive the test after reporting ready');
+  } finally {
+    child.kill();
+  }
+});
 
 function generation(over: Partial<OrganisationGeneration> = {}): OrganisationGeneration {
   return {

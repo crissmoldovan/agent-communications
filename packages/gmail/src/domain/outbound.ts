@@ -10,7 +10,9 @@ import {
   sha256Hex,
 } from '@agentcomms/core';
 import type { RawMessage, SendAsAddress } from '../gmail-api/transport.ts';
+import { shownFrom } from './agent-label.ts';
 import { type GmailHeader, headerValue, headerValues, readParts } from './mime.ts';
+import { type FieldEnvelope, wrapField } from './untrusted-fields.ts';
 
 /**
  * What `send prepare` needs to know about a draft before anyone is asked to approve it.
@@ -30,6 +32,7 @@ export interface OutboundAttachment {
 }
 
 export interface DraftAnalysis {
+  /** The From header as the preview shows it and the approval binds it: decoded, display name and all (G3). */
   from: string;
   to: string[];
   cc: string[];
@@ -111,6 +114,7 @@ export async function analyseDraft(options: {
   const headers = message.payload?.headers ?? [];
   const parts = readParts(message.payload);
   const from = headerValue(headers, 'From') ?? '';
+  const fromShown = shownFrom(from);
   const fromAddress = normaliseAddress(parseAddressList(from)[0]?.address ?? '');
   const liveSignature = sendAs.find((entry) => normaliseAddress(entry.sendAsEmail) === fromAddress)?.signature;
 
@@ -229,8 +233,8 @@ export async function analyseDraft(options: {
       : Buffer.from(attachment.text ?? '', 'utf8');
     if (bytes.length === 0) {
       refusals.push({
-        reason: `the attachment "${attachment.filename ?? '(unnamed)'}" has no readable content`,
-        detail: 'an attachment whose bytes cannot be read cannot be bound to the approval',
+        reason: 'an attachment has no readable content',
+        detail: `${attachment.filename ?? '(unnamed)'} cannot be bound to the approval because its bytes cannot be read`,
       });
     }
     attachments.push({
@@ -242,7 +246,15 @@ export async function analyseDraft(options: {
   }
 
   const canonical: CanonicalMessage = {
-    from: fromAddress,
+    /*
+     * **The whole From, as the preview shows it** (design 2026-10-15-agent-label, G3): its display name is what says
+     * who the message appears to come from, so a name changed after the preview — the label taken off, or another
+     * put on — is a different message, and voids the approval. The address alone, as it was, let one through.
+     *
+     * A From that is a bare address reads as the address it always did, so a draft prepared before this release, which
+     * carried no name, keeps the digest it had.
+     */
+    from: fromShown,
     to: mergedAddresses(headers, 'To'),
     cc: mergedAddresses(headers, 'Cc'),
     bcc: mergedAddresses(headers, 'Bcc'),
@@ -267,7 +279,7 @@ export async function analyseDraft(options: {
   };
 
   const analysis: DraftAnalysis = {
-    from,
+    from: fromShown,
     to: canonical.to as string[],
     cc: canonical.cc as string[],
     bcc: canonical.bcc as string[],
@@ -288,9 +300,11 @@ export async function analyseDraft(options: {
 }
 
 /** The one error for a draft an agent may not send, carrying every reason rather than only the first. */
-export function unsendable(refusals: readonly Unsendable[]): CommsError {
+export function unsendable(refusals: readonly Unsendable[], envelope: FieldEnvelope): CommsError {
   return new CommsError('UNSENDABLE_HTML', `this draft cannot be sent by an agent: ${refusals[0]?.reason}`, {
     hint: 'Review it and send it from Gmail. An agent may only send what it could have written itself.',
-    details: { refusals: refusals.map((refusal) => `${refusal.reason} (${refusal.detail})`) },
+    details: {
+      refusals: refusals.map((refusal) => wrapField(`${refusal.reason} (${refusal.detail})`, 'send-refusal', envelope)),
+    },
   });
 }

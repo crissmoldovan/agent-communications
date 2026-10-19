@@ -25,7 +25,7 @@ verifies the tarball you installed was built from this repository by the workflo
 
 ## What you get
 
-Six packages and twenty skills.
+Eight packages and twenty-one skills.
 
 - **`@agentcomms/gmail`** — the CLI (`agent-gmail`) and the library. Everything works from a
   terminal, with `--json` for anything that consumes it.
@@ -42,10 +42,16 @@ Six packages and twenty skills.
   (`agent-whatsapp mcp`) and the library. Read-only, on macOS: lists, reads and searches the chats
   WhatsApp for Mac keeps on the Mac, and drafts replies as links you open and send yourself. No
   network client, no WhatsApp session, nothing that sends.
+- **`@agentcomms/events-daemon`** — local events (`agent-events`): watches the Gmail, Slack, Resend and
+  WhatsApp accounts you connected and, when an event matches a rule you approved at your terminal, delivers it
+  to a signed webhook, a local live stream or a dry-run log. Its MCP server (`agent-events mcp`) lets an agent
+  propose and test rules, never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
+- **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a
+  library with no I/O that runs in Node and in a browser.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
   sanitiser. Provider-neutral, so every channel shares it. Its `agentcomms` command and MCP
   server (`agentcomms mcp`) install and manage the others, from a terminal or from a chat.
-- **Twenty skills** — twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one that sets it all up and one that updates it — that teach an agent how to use all of it
+- **Twenty-one skills** — twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for local events, one that sets it all up and one that updates it — that teach an agent how to use all of it
   well, and where to stop.
 
 ## How the send gate works
@@ -67,7 +73,8 @@ Three policies, per mailbox:
 
 Under `chat` the server cannot see your conversation, so what it guarantees is narrower and it says
 so plainly: nothing is sent without a prepare step for **exactly** that content, within ten minutes,
-once, with matching recipients and subject, under the rate caps, and audited. Whether the agent
+once, with the approval id binding the recipients and subject, under the rate caps, and audited. Send echoes use the
+channel's safe field form rather than handing sender-controlled prose back bare. Whether the agent
 actually showed you the preview — and revoked it when you said no — is between you and your agent,
 which is why `confirm` exists. Under `confirm` the agent learns that you approved by waiting
 (`gmail_send_wait`), never by asking, and every result says where its approval stands; a send whose
@@ -95,29 +102,93 @@ npx -y @agentcomms/core mcp install --client claude-code   # or codex, cursor, g
 
 At a terminal it shows what it will register and asks you to type `yes`. Restart the client, and ask your agent to
 set things up: it can see which servers exist and where each is registered (`comms_channels_available`), register
-the Gmail and Slack servers (`comms_server_install`), bring every server to the latest release (`comms_update`),
-remove old runtimes (`comms_server_prune`), migrate names or secrets, and show or change the change policy
-(`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent screen, and
-a server it registers appears only once the client is restarted.
+the channel servers and the local events service (`comms_server_install`), bring every server to the latest release
+(`comms_update`), remove old runtimes (`comms_server_prune`), migrate names or secrets, and show or change the change
+policy (`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent
+screen, and a server it registers appears only once the client is restarted.
 
-**It keeps itself up to date.** Once a day the machine asks npm whether a newer release is out; when one is, every
-server and command stops first — "Hang on a minute, there's an update. Let's update first." — and your agent asks
-whether to update now (`comms_update`) or not until tomorrow (`comms_update` with `later`, which you approve). A
-command at a terminal asks you there; anywhere else the stop names this installation's own `update` and
-`update --later` commands, to run exactly as given (with core installed globally, `agentcomms update` and
-`agentcomms update --later` are the same). A server this machine does not register itself — the Claude Code plugin's,
-the Gemini extension's — is updated where it was installed. `agentcomms update --auto off` turns the check off for one
-machine; `CI`, and `AGENT_COMMS_UPDATE_CHECK=off`, skip it. [Upgrading](docs/upgrading.md#the-daily-check) has the
-details.
+**It keeps itself up to date, and never stops you for it.** Once a day the machine asks npm whether a newer release is
+out; when one is, a server's first result says so in one line, and a command once a day on stderr, and every tool and
+command carries on. On `auto`, the default, one yes sets up a background job that installs a release whose provenance
+verifies, three days after it is out — `comms_update` with `backgroundJob: "on"`, or
+`agentcomms update --background-job on`; it takes effect when each client restarts. Choose `every-14-days` or `never`
+with `agentcomms update --level`, pause the notices for 1, 7 or 14 days with `--pause`, or update by hand with
+`comms_update`. A server this machine does not register itself — the Claude Code plugin's, the Gemini extension's —
+is updated where it was installed. `agentcomms update --status` (`comms_update` with `status: true`) says where it all
+stands — the level, a pause, the last check, the latest and running releases, the background job — asking npm nothing.
+`CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
+[Upgrading](docs/upgrading.md#the-daily-check) has the details.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
 `chat` change policy your yes in the conversation approves it; under `confirm` you run, in your own terminal, the
 approve command the result gives, and type the code it shows. Run it exactly as given: it names this installation's
 own Node and CLI file, with its folders pinned, so it needs nothing on your PATH — and on Windows with Node under
-`C:\Program Files` it comes as words to type, each quoted for your shell. `agentcomms policy confirm` (core installed
-globally) sets that policy, and moving back to `chat` needs the code too. No tool approves a change, and none applies
-a change it did not plan itself.
+`C:\Program Files` it comes as a line labelled for PowerShell, beginning with `&`. Words that cannot be represented
+safely still come as inert JSON to type. `agentcomms policy confirm` (core installed globally) sets that policy, and
+moving back to `chat` needs the code too. No tool approves a change, and none applies a change it did not plan itself.
+
+**Managed installs also put their CLI on your PATH-ready route on macOS and Linux.** A managed `mcp install` writes
+the package's command into `~/.local/bin`, using the managed runtime's located Node and entry. An update repoints it;
+prune removes it with that runtime. A file the installation did not write is never overwritten, and every mutation
+stays inside the real directory resolved at the start. When the directory is not already on `PATH`, the result shows
+how to add it to the current shell and does not edit a profile. Windows shims are not offered yet: `.cmd` forwarding
+makes `cmd.exe` re-parse arguments and can turn metacharacters into commands. On Windows, use the full-path command
+or the labelled PowerShell `&` line the result provides.
 [Core MCP tool reference](docs/reference/core-mcp-tools.md).
+
+**Core's install verifies what it fetches.** A managed `mcp install` run by core — `comms_server_install`, or
+`npx -y @agentcomms/core mcp install --server gmail --client claude-code` at a terminal — verifies the Sigstore
+provenance of the release it fetches from npm, as an update does, before the preview and again at your yes, and
+registers it only once npm has installed exactly that tarball; a runtime already on the machine it registers on only
+once that runtime is shown to be that tarball. A channel's own `mcp install`
+(`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
+running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
+verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the
+client fetches the package from npm each time it starts it, unverified, where the managed launcher's runtime was
+verified. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
+
+### The desktop app
+
+**Agent Comms is a tray app that shows what agent-communications is doing on this machine — and it never sends,
+posts or approves anything.** It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
+policies, label style and what agents may do there; the approvals waiting for you; the agent label, the behaviour
+rules and the standing approvals; updates; the local events service; and every doctor check, with its fix to copy.
+The tray shows how many approvals wait, and closing the window hides it there.
+
+- **What it changes itself:** only what takes something away, which applies at once from the CLI too — revoking an
+  approval, a rule that narrows what agents may do, ending a standing approval, pausing update notices.
+- **What it sends to Terminal:** everything that needs your approval. The app shows the full preview, and **Approve
+  in Terminal** opens your terminal with the command, through this installation's own launcher; you approve it there
+  with its code, as you would have anyway. Signing in to a mailbox or a workspace runs in Terminal too, so the app
+  never handles a token. On a Mac, the first time, macOS asks whether Agent Comms may control Terminal.
+- **What a sender wrote** shows as plain text in a block marked *From outside*, never as HTML or Markdown.
+
+**It needs agent-communications installed for your user** — the core server, above. Without it the app shows the
+install command and stops there; it installs nothing itself. What it offers follows the version you have: behaviour
+rules and writing profiles need 0.22.0 or later, standing approvals 0.23.0, and the update status 0.24.0, and a
+section that needs a newer release says so. If you keep its folders elsewhere with `AGENT_COMMS_CONFIG_DIR`,
+`AGENT_COMMS_STATE_DIR` or `AGENT_COMMS_DATA_DIR`, set the same folders in its Settings: an app started from the Dock
+or the Start menu does not see your shell's variables. They must be on this machine's own disks, never a network
+share, and Settings show the launcher every call starts: the app runs it only when it is yours and nobody else may
+change it, as the install leaves it.
+
+**Install it from a GitHub release.** Desktop releases are tagged `desktop-vX.Y.Z`, beside the `vX.Y.Z` release they
+ship with, on [the Releases page](https://github.com/crissmoldovan/agent-communications/releases). A desktop release is
+never marked Latest — that is always the CLI's — so look for the newest `desktop-v` one.
+
+- **macOS:** the `.dmg`. Open it and drag Agent Comms to Applications. The macOS build is signed with a Developer ID
+  and notarised only when the owner builds and publishes the release on their Mac. When that release carries the
+  updater, its copy looks for later signed releases itself, once a day and from Check for Updates… in the tray, and
+  installs one when you choose Install and restart in Settings, after checking its signature. A release published
+  before the updater key was set up says so, and its copy's Settings say its updater is off: install a newer release
+  over it.
+- **Windows:** the `.exe`, which installs for your user alone. It is unsigned, so SmartScreen warns before it runs.
+- **Linux:** the `.AppImage` (make it executable, then run it) or the `.deb` (`sudo apt install ./` followed by its
+  file name). Both are unsigned. The tray needs `libayatana-appindicator3-1`, which the `.deb` installs.
+
+The Windows and Linux files are built by CI and attached to the same release. A copy built without the owner's
+updater key, as these are, has its updater off and says so in Settings: install a newer release over it. Start at
+login is off until you switch it on there.
 
 ### Or package by package
 
@@ -280,7 +351,7 @@ are yours, at a terminal — no tool changes them. Needs Node 22.16 or newer. 6 
 npx skills add crissmoldovan/agent-communications --skill '*'
 ```
 
-Twenty-one skills, twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for setting it all up, one for updating it and one for the local event daemon, which is not released yet: which tool to reach for, what a result means, and when to
+Twenty-one skills, twelve for Gmail, three for Slack, two for Resend, one for WhatsApp, one for setting it all up, one for updating it and one for the local event daemon: which tool to reach for, what a result means, and when to
 stop and ask. The channel skills work with the MCP server and without it, falling back to the CLI; the event skill uses only its MCP tools. [The skills](docs/skills.md).
 
 ### Already running another Gmail MCP server?
@@ -358,7 +429,7 @@ cannot drift from what the software does.
 |---|---|
 | [`agentcomms-events`](skills/agentcomms-events/SKILL.md) | Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions. |
 | [`comms-onboarding`](skills/comms-onboarding/SKILL.md) | Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. Symptoms: 'set up my email and Slack', 'install agent-communications', 'connect Gmail and Slack to Claude', 'onboard me', 'set this up on my other computer'. Not for one account's settings once it works — gmail-setup and slack-setup do those. |
-| [`comms-update`](skills/comms-update/SKILL.md) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a tool answering 'Hang on a minute, there's an update. Let's update first.' (UPDATE_REQUIRED), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings. |
+| [`comms-update`](skills/comms-update/SKILL.md) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings. |
 | [`gmail-attachments`](skills/gmail-attachments/SKILL.md) | Find files people sent, save them where the person says — Downloads, the current folder, or a folder they name — and attach a local file to a draft. Symptoms: 'find the invoice Sam sent', 'download the attachments from that thread', 'save those PDFs', 'attach the contract to that draft', 'why won't it attach that file'. Not for writing or sending the message — gmail-compose writes drafts and gmail-send sends them. |
 | [`gmail-compose`](skills/gmail-compose/SKILL.md) | Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send. Symptoms: 'draft a reply to Sam', 'write back to that email', 'forward this to accounts', 'make that draft shorter'. Not for sending — gmail-send does that. |
 | [`gmail-contacts`](skills/gmail-contacts/SKILL.md) | Find somebody's address and who they are, across saved contacts, people written to before, and past mail — showing every candidate with where it came from so the user chooses. Symptoms: 'what's X's email', 'do we have an address for her', 'which of these two Sams is it', 'when did I last hear from him'. Not for writing to them — gmail-compose does that. |
@@ -373,7 +444,7 @@ cannot drift from what the software does.
 | [`gmail-triage`](skills/gmail-triage/SKILL.md) | Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch. Symptoms: 'triage my inboxes', 'what needs my attention today', 'catch me up on email'. Not for applying the changes — gmail-organize does that. |
 | [`resend-reading`](skills/resend-reading/SKILL.md) | Read a Resend team — its domains, the sent emails and what happened to each, received email, delivery metrics and the suppression list — and report what was read without overstating it. Symptoms: 'is our domain verified', 'did the welcome email bounce', 'what came in to support@', 'how many complaints this week', 'why is this address not getting mail'. Not for sending — resend-sending does that. |
 | [`resend-sending`](skills/resend-sending/SKILL.md) | Send email through Resend: prepare it, show the person the whole preview, and send it once they approve — then check what happened, and see or cancel what is scheduled. Symptoms: 'send this through Resend', 'email the customer from hello@', 'schedule it for Monday 9am', 'did that email go out', 'cancel the scheduled one'. Not for reading mail or delivery stats — resend-reading does that. |
-| [`slack-posting`](skills/slack-posting/SKILL.md) | Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does. |
+| [`slack-posting`](skills/slack-posting/SKILL.md) | Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message', 'acknowledge new messages without asking me'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does. |
 | [`slack-reading`](skills/slack-reading/SKILL.md) | Read a Slack workspace — channels, threads, search, people and files — save the files people shared where the person says, and report what was read without overstating it. Symptoms: 'what did they say in #engineering', 'catch me up on that thread', 'search Slack for the invoice', 'who is in this channel', 'download the file Sam shared'. Not for drafting or posting — slack-posting does that. |
 | [`slack-setup`](skills/slack-setup/SKILL.md) | Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. Symptoms: 'connect my Slack', 'set up agent-slack', 'why can't it post', 'move this workspace to send mode', 'agent-slack doctor says something is wrong'. Not for reading or posting once it works — slack-reading and slack-posting do those. |
 | [`whatsapp-reading`](skills/whatsapp-reading/SKILL.md) | Read WhatsApp on this Mac, read-only: sync, list chats, read, search, and draft a reply as a link the person sends. Symptoms: 'what did Alice say on WhatsApp', 'catch me up on the family group'. Nothing here sends. |

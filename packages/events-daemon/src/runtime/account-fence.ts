@@ -40,6 +40,33 @@ export async function assertLiveEventAccount(
   });
 }
 
+/** One connected account a rule may name: its source, its stable id, and the name it was connected under. */
+export interface ConnectedEventAccount {
+  readonly source: SourceOptions['channel'];
+  readonly accountId: string;
+  readonly account: string;
+}
+
+/**
+ * Every connected account a rule may name, loaded afresh: Gmail's inboxes by their stable `ibx_…` id and the other
+ * channels' accounts by their `acc_…` id, each beside the name a person knows it by. What `sources list` shows, so
+ * a first rule's account id can be read from it before any rule is active (CUE-474).
+ */
+export async function connectedEventAccounts(
+  config: Pick<ConfigStore, 'load'>,
+): Promise<readonly ConnectedEventAccount[]> {
+  const current = await config.load();
+  const found: ConnectedEventAccount[] = [];
+  for (const [account, inbox] of Object.entries(current.inboxes))
+    if (inbox.provider === 'gmail') found.push({ source: 'gmail', accountId: inbox.id, account });
+  for (const [account, entry] of Object.entries(current.accounts))
+    if (entry.platform === 'slack' || entry.platform === 'resend' || entry.platform === 'whatsapp')
+      found.push({ source: entry.platform, accountId: entry.id, account });
+  return found.sort((left, right) =>
+    `${left.source}\u0000${left.account}`.localeCompare(`${right.source}\u0000${right.account}`),
+  );
+}
+
 /** The current stable ids for one source, loaded afresh at the boundary. */
 export async function liveEventAccountIds(
   config: Pick<ConfigStore, 'load'>,
@@ -104,10 +131,19 @@ export function purgeRemovedAccountWork(
        WHERE id IN (${plannedIntentIds})`,
     )
     .run(ACTIVATION_FAILURE.ACCOUNT_REMOVED, now, accountId, source);
+  const sourceEventIds = `SELECT event_id FROM ingest WHERE account_id = ? AND type GLOB ?`;
+  const eventTypePattern = `${source}.*`;
+  // Retained rows outlive their ingest record, whose retention may be the shortest, so each is scoped by its own
+  // account and by the source of the exact rule version that produced it, never by a join through `ingest`. A row
+  // whose rule version is unknown counts as this source's: a removal purges what it cannot attribute.
+  const ownedBy = (table: string) => `${table}.account_id = ?
+    AND COALESCE((SELECT COALESCE(json_extract(rule.document, '$.source.channel'), 'gmail') FROM rule_versions AS rule
+                  WHERE rule.rule_id = ${table}.rule_id AND rule.version = ${table}.rule_version), ?) = ?`;
+  const owned = [accountId, source, source] as const;
   if (source === 'whatsapp') {
     // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
     // occurrence ledger when a re-check observes account removal under the list lock.
-    database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
+    database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
     database.prepare('DELETE FROM whatsapp_rule_admissions WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_heads WHERE account_id = ?').run(accountId);
@@ -124,24 +160,29 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM cursors WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM activation_baselines WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
-  database
-    .prepare('DELETE FROM ingest_rules WHERE event_id IN (SELECT event_id FROM ingest WHERE account_id = ?)')
-    .run(accountId);
-  database.prepare('DELETE FROM dryrun_log WHERE account_id = ?').run(accountId);
-  if (source !== 'whatsapp') database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
+  database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
+  database.prepare(`DELETE FROM dryrun_log WHERE ${ownedBy('dryrun_log')}`).run(...owned);
+  database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE account_id = ? AND state = 'disclosing'",
+      `UPDATE deliveries
+          SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+        WHERE ${ownedBy('deliveries')} AND state = 'disclosing'`,
     )
-    .run(accountId);
+    .run(...owned);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, next_at = NULL WHERE account_id = ? AND state IN ('queued', 'retryable')",
+      `UPDATE deliveries
+          SET state = 'cancelled', encrypted_record = NULL, next_at = NULL
+        WHERE ${ownedBy('deliveries')} AND state IN ('queued', 'retryable')`,
     )
-    .run(accountId);
+    .run(...owned);
   database
-    .prepare("UPDATE deliveries SET encrypted_record = NULL WHERE account_id = ? AND state = 'dead-lettered'")
-    .run(accountId);
+    .prepare(
+      `UPDATE deliveries SET encrypted_record = NULL
+        WHERE ${ownedBy('deliveries')} AND state = 'dead-lettered'`,
+    )
+    .run(...owned);
   // D9: the account's activation points and source resolutions go too, so a later reconnect of the same stable id can
   // never resume from a cut-over taken before the removal and backfill the mail that arrived meanwhile.
   database.prepare('DELETE FROM rule_activation_points WHERE source = ? AND account_id = ?').run(source, accountId);
@@ -153,20 +194,22 @@ export function purgeRemovedAccountWork(
     .run(source, accountId);
   database
     .prepare(
-      "UPDATE decisions SET outcome = 'cancelled', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL WHERE account_id = ? AND outcome = 'hold'",
+      `UPDATE decisions
+          SET outcome = 'cancelled', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL
+        WHERE ${ownedBy('decisions')} AND outcome = 'hold'`,
     )
-    .run(accountId);
-  database.prepare('UPDATE decisions SET encrypted_record = NULL WHERE account_id = ?').run(accountId);
+    .run(...owned);
+  database.prepare(`UPDATE decisions SET encrypted_record = NULL WHERE ${ownedBy('decisions')}`).run(...owned);
   // Its ingest records go with its projections. One a terminal decision still names stays as that content-free
   // decision's identity (the spec keeps the delivery's cancelled or in-flight outcome), and goes when the decision does.
   database
     .prepare(
-      `DELETE FROM ingest WHERE account_id = ?
+      `DELETE FROM ingest WHERE account_id = ? AND type GLOB ?
          AND NOT EXISTS (SELECT 1 FROM decisions WHERE decisions.event_id = ingest.event_id)
          AND NOT EXISTS (SELECT 1 FROM dryrun_log WHERE dryrun_log.event_id = ingest.event_id)
          AND NOT EXISTS (SELECT 1 FROM stream_log WHERE stream_log.event_id = ingest.event_id)`,
     )
-    .run(accountId);
+    .run(accountId, eventTypePattern);
   // D9: every live rule version whose source scope names only that account is revoked, as a disable revokes it. A
   // multi-account version stays live for its other ids; the account fence stops it polling or disclosing this one.
   const versions = database
@@ -191,6 +234,9 @@ export function purgeRemovedAccountWork(
       .run(version.rule_id, version.version);
   }
   database
-    .prepare('INSERT OR REPLACE INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
-    .run(accountId, now);
+    .prepare(
+      `INSERT INTO account_revocations (source, account_id, revoked_at) VALUES (?, ?, ?)
+       ON CONFLICT(source, account_id) DO UPDATE SET revoked_at = excluded.revoked_at`,
+    )
+    .run(source, accountId, now);
 }

@@ -1,7 +1,7 @@
 {
   "name": "@agentcomms/events-daemon",
-  "version": "0.15.2",
-  "description": "The held local event-emission service for agent-communications.",
+  "version": "0.24.0",
+  "description": "The local event service for agent-communications: rules you approve deliver Gmail, Slack, Resend and WhatsApp events to a signed webhook, a local live stream or a dry-run log.",
   "type": "module",
   "license": "MIT",
   "author": "Criss Moldovan",
@@ -50,11 +50,11 @@
     "@agentcomms/whatsapp": "workspace:*"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "^2.3.1",
     "ajv": "8.20.0",
     "commander": "^15.0.0",
-    "playwright": "1.61.1",
+    "playwright": "1.64.0",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"
@@ -72,8 +72,5 @@
       "prefix": "agentcomms-",
       "contract": "skills/_shared/contract-events.md"
     }
-  },
-  "agentcommsRelease": {
-    "hold": "Held until the owner elects to release the first daemon consumer, alongside @agentcomms/events."
   }
 }

@@ -44,6 +44,7 @@ import {
 } from '../src/operations/b3-contract.ts';
 import * as ownerControl from '../src/runtime/owner.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures/b3-control-contract-v1');
@@ -573,7 +574,7 @@ test('B3 v1 owner wire registry dispatches every desktop capability over the aut
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     try {
-      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
+      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -625,6 +626,7 @@ test('B3 v1 regenerates every ordinary result vector byte-for-byte from its real
       let intentOrdinal = 0;
       owner = await startEventOwner({
         stateDir,
+        configDir: await emptyConfigDir(stateDir),
         now: () => 1_000,
         tickMs: 60_000,
         newIntentId: () => `act_contract_${++intentOrdinal}`,

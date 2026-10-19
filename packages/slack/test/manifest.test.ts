@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FILE_DOWNLOAD, methodRule, scopesFor, writeMethods } from '../src/api/methods.ts';
-import { buildManifest, NEVER_REQUESTED, READ_SCOPES, renderManifest, scopesForMode } from '../src/manifest.ts';
+import {
+  BOT_SCOPES,
+  botScopesForMode,
+  buildAgentManifest,
+  buildManifest,
+  NEVER_REQUESTED,
+  READ_SCOPES,
+  renderAgentManifest,
+  renderManifest,
+  scopesForMode,
+} from '../src/manifest.ts';
 
 /**
  * The manifests are the install. Whatever they ask for is what the token can do for as long as the workspace is
@@ -67,7 +77,7 @@ test('neither manifest asks for the scopes the design refused', () => {
    * the workspace id and name without any scope at all.
    */
   for (const mode of ['read', 'send'] as const) {
-    const scopes = scopesForMode(mode);
+    const scopes = [...scopesForMode(mode), ...botScopesForMode(mode)];
     for (const refused of NEVER_REQUESTED) {
       assert.equal(scopes.includes(refused), false, `${mode} mode asked for ${refused}`);
     }
@@ -119,12 +129,37 @@ test('the manifest carries only settings keys the research verified', () => {
   assert.equal(settings.org_deploy_enabled, false, 'this would install the app across an entire Grid org');
 });
 
-test('only user scopes are requested, never bot scopes', () => {
-  // Two reasons, and either alone would be enough: only a user token reaches the person's DMs and unjoined
-  // public channels, and Slack says "desktop redirects are not allowed to request bot scopes" — which is the
-  // redirect this package uses.
-  const manifest = buildManifest('send', 'http://localhost:3000/slack');
+test('the read app has no bot user and no bot scope, so no token it issues can post', () => {
+  // D1's guarantee, unchanged by the agent label (design 2026-10-15 S1): on this machine, no stored token for a read
+  // workspace can post. A bot user in the read manifest would be one.
+  const manifest = buildManifest('read', 'http://localhost:3000/slack');
   assert.deepEqual(Object.keys(manifest.oauth_config.scopes), ['user']);
+  assert.equal('features' in manifest, false, 'the read manifest declares a bot user');
+  assert.deepEqual(botScopesForMode('read'), []);
+});
+
+test('the send app has a bot user with exactly the four posting scopes, and none that reads or uploads', () => {
+  /*
+   * S1: the app posts as itself, named after the person, so the `send` manifest adds a bot user and exactly these
+   * four bot scopes — post, name each post, post in a public channel it has not joined, react. Nothing that reads
+   * (`*:history`, `*:read`) or uploads (`files:write`): a bot token here reads nothing, and files go out as the
+   * person. The user scopes are what they were.
+   */
+  const manifest = buildManifest('send', 'http://localhost:3000/slack');
+  assert.deepEqual(manifest.oauth_config.scopes.bot, [
+    'chat:write',
+    'chat:write.customize',
+    'chat:write.public',
+    'reactions:write',
+  ]);
+  assert.deepEqual(BOT_SCOPES, manifest.oauth_config.scopes.bot);
+  assert.deepEqual(botScopesForMode('send'), manifest.oauth_config.scopes.bot);
+  assert.deepEqual(manifest.oauth_config.scopes.user, scopesForMode('send'));
+  assert.ok(manifest.features?.bot_user, 'the send manifest has no bot user');
+  assert.equal(typeof manifest.features?.bot_user.display_name, 'string');
+  for (const scope of manifest.oauth_config.scopes.bot ?? []) {
+    assert.equal(/history|:read$|files:/.test(scope), false, `the bot asks for ${scope}, which reads or uploads`);
+  }
 });
 
 test('the redirect url is whatever the caller says, and it is the only one', () => {
@@ -143,4 +178,39 @@ test('scopes are only ever issued for a mode that exists', () => {
   // The type allows two values; the type is erased at runtime, and a cast upstream can deliver anything.
   assert.throws(() => scopesForMode('raed' as never), /neither "read" nor "send"/);
   assert.throws(() => scopesForMode(undefined as never), /neither "read" nor "send"/);
+});
+
+// ── The organisation's agent app (CUE-493) ─────────────────────────────────────────────────────────────────────────
+
+test('the agent app is a bot and nothing else: the four posting scopes, no user scope, no redirect, no rotation', () => {
+  /*
+   * One app per organisation, installed once by its administrator, whose bot token each member pastes with
+   * `workspace bot`. Nobody signs in through it — so no user scope and no redirect — and nothing here could renew a
+   * pasted token, so its rotation is off: `workspace bot` refuses a token that rotates.
+   */
+  const manifest = buildAgentManifest();
+  assert.deepEqual(manifest.oauth_config.scopes, { bot: [...BOT_SCOPES].sort() });
+  assert.equal('user' in manifest.oauth_config.scopes, false, 'the agent app asks for a user scope');
+  assert.equal('redirect_urls' in manifest.oauth_config, false, 'the agent app has a redirect');
+  assert.equal('pkce_enabled' in manifest.oauth_config, false, 'the agent app has nothing to sign in with');
+  assert.ok(manifest.features.bot_user, 'the agent app has no bot user');
+  assert.equal(manifest.features.bot_user.always_online, false);
+  assert.deepEqual(manifest.settings, {
+    org_deploy_enabled: false,
+    socket_mode_enabled: false,
+    token_rotation_enabled: false,
+  });
+  for (const scope of NEVER_REQUESTED) {
+    assert.equal(JSON.stringify(manifest).includes(`"${scope}"`), false, `the agent app asks for ${scope}`);
+  }
+  // Its own name, which the administrator changes to the organisation's: never one of this suite's commands.
+  assert.ok(manifest.display_information.name.length <= 35, 'Slack names an app in at most 35 characters');
+  assert.doesNotMatch(manifest.display_information.name, /agent-slack|agentcomms/);
+  assert.ok(manifest.display_information.description.length <= 140, 'Slack describes an app in at most 140');
+});
+
+test('the agent manifest a person pastes is valid JSON, and round-trips', () => {
+  const text = renderAgentManifest();
+  assert.equal(text.endsWith('\n'), true);
+  assert.deepEqual(JSON.parse(text), buildAgentManifest());
 });

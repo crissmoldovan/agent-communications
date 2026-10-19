@@ -126,6 +126,13 @@ function respondingSocket(response: string, afterResponse?: () => void) {
 
 const allowAllTransportGates: JudgeTransportHooks = { finalGate() {} };
 
+function lastingResources(): string[] {
+  return process
+    .getActiveResourcesInfo()
+    .filter((name) => !/Req|^WriteWrap$|^ShutdownWrap$/u.test(name))
+    .sort();
+}
+
 test('E6: dated TypeSafe and Ollama vectors allow only documented request fields and headers', () => {
   assert.deepEqual(JUDGE_ADAPTER_REFERENCES.typesafe, {
     quickstart: {
@@ -312,7 +319,7 @@ test('E6: execute requires a final gate in both its type and runtime boundary', 
     instructions: fixture.vectors.typesafe.instructions,
     maxInputTokens: 512,
     maxOutputTokens: 3,
-    hostedApiKey: 'test-hosted-key',
+    hostedApiKey: { generation: 1, material: 'test-hosted-key' },
   };
   const requireGateAtTypeBoundary = () => {
     // @ts-expect-error a transport call cannot omit the synchronous final authority gate
@@ -431,7 +438,7 @@ test('E6-M: TypeSafe refuses an unapproved document model instead of substitutin
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -472,7 +479,7 @@ test('E6-A: TypeSafe uses global-only pinned resolution without a caller address
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -502,6 +509,9 @@ test('E6-A: TypeSafe refuses every non-global resolver answer before TCP', async
     '192.0.2.1',
     '2002:a00:1::',
     '2001:0:a00:1::f7ff:fffe',
+    '2600::5efe:a00:1',
+    '2600::200:5efe:a9fe:101',
+    '2600::5efe:a9fe:a9fe',
   ]) {
     await t.test(address, async () => {
       let resolverCalls = 0;
@@ -527,7 +537,7 @@ test('E6-A: TypeSafe refuses every non-global resolver answer before TCP', async
             instructions: fixture.vectors.typesafe.instructions,
             maxInputTokens: 512,
             maxOutputTokens: 3,
-            hostedApiKey: 'test-hosted-key',
+            hostedApiKey: { generation: 1, material: 'test-hosted-key' },
           },
           allowAllTransportGates,
         ),
@@ -557,7 +567,7 @@ test('E6-A: TypeSafe refuses a mixed public and private resolver set before TCP'
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -592,7 +602,7 @@ test('E6: the TypeSafe transport pins DNS/TCP/TLS, runs every final gate, and wr
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     {
       finalGate: (phase) => {
@@ -636,7 +646,7 @@ test('E6: a 3xx is refused after exactly one raw request and never followed', as
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -665,7 +675,7 @@ test('E6: streaming response cap destroys the socket before parsing oversized pe
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -692,7 +702,7 @@ test('E6: no response byte can be read before the synchronous write gate', async
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     {
       finalGate: (phase) => {
@@ -760,7 +770,7 @@ test('E6: a phase that exceeds the fixed all-phase deadline produces no request 
         instructions: fixture.vectors.typesafe.instructions,
         maxInputTokens: 512,
         maxOutputTokens: 3,
-        hostedApiKey: 'test-hosted-key',
+        hostedApiKey: { generation: 1, material: 'test-hosted-key' },
       },
       allowAllTransportGates,
     ),
@@ -801,7 +811,7 @@ function countingTransport(clock: { now: () => number }) {
     instructions: fixture.vectors.typesafe.instructions,
     maxInputTokens: 512,
     maxOutputTokens: 3,
-    hostedApiKey: 'test-hosted-key',
+    hostedApiKey: { generation: 1, material: 'test-hosted-key' },
   };
   return { counts, peer, transport, call };
 }
@@ -836,15 +846,52 @@ test('E6: a final gate that reaches the all-phase deadline lets no later phase o
     let now = 0;
     const { counts, peer, transport, call } = countingTransport({ now: () => now });
     const result = await transport.execute(call, {
-      finalGate: (phase) => {
+      finalGate: (phase, assertBeforeTransition) => {
         if (phase === blocked) now = 20_000;
+        assertBeforeTransition?.();
       },
     });
     assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'), `${blocked} times out`);
-    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1);
-    assert.equal(counts.tcp, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
-    assert.equal(counts.tls, blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1);
-    assert.deepEqual(peer.writes, []);
+    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the final deadline`);
+    assert.equal(
+      counts.tcp,
+      blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+      `${blocked}: no TCP starts after the final deadline`,
+    );
+    assert.equal(
+      counts.tls,
+      blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+      `${blocked}: no TLS starts after the final deadline`,
+    );
+    assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the final deadline`);
+  }
+});
+
+test('E6: a gate whose commit runs past the all-phase deadline starts no network action after it', async () => {
+  for (const blocked of ['dns', 'tcp', 'tls', 'write'] as const) {
+    let now = 0;
+    const { counts, peer, transport, call } = countingTransport({ now: () => now });
+    const result = await transport.execute(call, {
+      finalGate: (phase, assertBeforeTransition) => {
+        assertBeforeTransition?.();
+        // Its own check passed; the transition it commits then takes the clock past the deadline.
+        if (phase === blocked) now = 20_000;
+      },
+    });
+    // A hosted judge's DNS gate has committed the attempt in flight by then, so the refusal is post-I/O and settles.
+    assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', false), `${blocked}: refused after its gate`);
+    assert.equal(counts.resolver, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the deadline`);
+    assert.equal(
+      counts.tcp,
+      blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+      `${blocked}: no TCP starts after the deadline`,
+    );
+    assert.equal(
+      counts.tls,
+      blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+      `${blocked}: no TLS starts after the deadline`,
+    );
+    assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the deadline`);
   }
 });
 
@@ -855,6 +902,7 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
       let resolverCalls = 0;
       let tcpCalls = 0;
       let tlsCalls = 0;
+      const finalGatePhases: string[] = [];
       const peer = respondingSocket(`HTTP/1.1 200 OK\r\n\r\n${fixture.vectors.typesafe.response}`);
       const transport = new JudgeTransport({
         resolver: {
@@ -886,21 +934,37 @@ test('E6: an awaited gate that crosses the all-phase deadline stops that phase a
             instructions: fixture.vectors.typesafe.instructions,
             maxInputTokens: 512,
             maxOutputTokens: 3,
-            hostedApiKey: 'test-hosted-key',
+            hostedApiKey: { generation: 1, material: 'test-hosted-key' },
           },
           {
             beforeGate: async (phase) => {
               if (phase === blocked) now = 20_000;
             },
-            finalGate() {},
+            finalGate(phase) {
+              finalGatePhases.push(phase);
+            },
           },
         ),
         refused('NETWORK_DEADLINE_EXCEEDED', blocked === 'dns'),
+        `${blocked}: an awaited gate that expires refuses with the all-phase deadline code`,
       );
-      assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1);
-      assert.equal(tcpCalls, blocked === 'dns' || blocked === 'tcp' ? 0 : 1);
-      assert.equal(tlsCalls, blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1);
-      assert.deepEqual(peer.writes, []);
+      assert.deepEqual(
+        finalGatePhases,
+        (['dns', 'tcp', 'tls', 'write'] as const).slice(0, ['dns', 'tcp', 'tls', 'write'].indexOf(blocked)),
+        `${blocked}: an expired awaited phase never reaches the durable final gate`,
+      );
+      assert.equal(resolverCalls, blocked === 'dns' ? 0 : 1, `${blocked}: no DNS starts after the awaited deadline`);
+      assert.equal(
+        tcpCalls,
+        blocked === 'dns' || blocked === 'tcp' ? 0 : 1,
+        `${blocked}: no TCP starts after the awaited deadline`,
+      );
+      assert.equal(
+        tlsCalls,
+        blocked === 'dns' || blocked === 'tcp' || blocked === 'tls' ? 0 : 1,
+        `${blocked}: no TLS starts after the awaited deadline`,
+      );
+      assert.deepEqual(peer.writes, [], `${blocked}: no request byte is written after the awaited deadline`);
     }
   }
 });
@@ -931,12 +995,82 @@ test('E6: a deadline reached while receiving a response is not accepted as an an
       instructions: fixture.vectors.typesafe.instructions,
       maxInputTokens: 512,
       maxOutputTokens: 3,
-      hostedApiKey: 'test-hosted-key',
+      hostedApiKey: { generation: 1, material: 'test-hosted-key' },
     },
     { finalGate() {} },
   );
   assert.deepEqual(result, refused('NETWORK_DEADLINE_EXCEEDED', false));
   assert.equal(peer.writes.length, 1);
+});
+
+test('E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte', async () => {
+  const resourcesBefore = lastingResources();
+  for (const phase of ['tcp', 'tls'] as const) {
+    let now = 0;
+    let tcpDestroyed = 0;
+    let tlsDestroyed = 0;
+    let tlsCalls = 0;
+    let writes = 0;
+    const tcpSocket = {
+      destroy() {
+        tcpDestroyed += 1;
+      },
+    };
+    const tlsSocket = {
+      destroy() {
+        tlsDestroyed += 1;
+      },
+      write() {
+        writes += 1;
+        return true;
+      },
+    };
+    const transport = new JudgeTransport({
+      resolver: { lookup: async () => ['8.8.8.8'] },
+      tcpConnect: async () => {
+        await Promise.resolve();
+        if (phase === 'tcp') now = 20_000;
+        return tcpSocket as never;
+      },
+      tlsConnect: async () => {
+        tlsCalls += 1;
+        await Promise.resolve();
+        now = 20_000;
+        return tlsSocket as never;
+      },
+      clock: {
+        now: () => now,
+        setTimeout: () => Symbol('deadline-timer'),
+        clearTimeout() {},
+      },
+    });
+    assert.deepEqual(
+      await transport.execute(
+        {
+          judge: typesafeJudge(),
+          state: fixture.vectors.typesafe.state,
+          questionName: fixture.vectors.typesafe.questionName,
+          instructions: fixture.vectors.typesafe.instructions,
+          maxInputTokens: 512,
+          maxOutputTokens: 3,
+          hostedApiKey: { generation: 1, material: 'test-hosted-key' },
+        },
+        allowAllTransportGates,
+      ),
+      refused('NETWORK_DEADLINE_EXCEEDED', false),
+      `${phase}: an exact-deadline socket is refused`,
+    );
+    assert.equal(tcpDestroyed, 1, `${phase}: the connected TCP socket is destroyed exactly once`);
+    assert.equal(tlsDestroyed, phase === 'tls' ? 1 : 0, `${phase}: only a resolved TLS socket is destroyed`);
+    assert.equal(tlsCalls, phase === 'tls' ? 1 : 0, `${phase}: no TLS phase starts after a timed-out TCP connect`);
+    assert.equal(writes, 0, `${phase}: no request byte follows the deadline`);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lastingResources(),
+    resourcesBefore,
+    'the exact-deadline connect and TLS paths leave no lasting process resource',
+  );
 });
 
 interface TransportMutation {
@@ -946,13 +1080,14 @@ interface TransportMutation {
   readonly after: string;
   readonly testFile: string;
   readonly testName: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 const packageRoot = join(import.meta.dirname, '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const mutantsRoot = join(packageRoot, '.mutants');
 
-const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
+const transportMutations: readonly TransportMutation[] = [
   {
     id: 'e6-reference-date',
     file: 'runtime/judge-adapters.ts',
@@ -1046,7 +1181,7 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-dns-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'dns');",
+    before: "this.#finalGate(hooks, 'dns', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1054,7 +1189,7 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-tcp-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'tcp');",
+    before: "this.#finalGate(hooks, 'tcp', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1062,7 +1197,7 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-tls-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'tls');",
+    before: "this.#finalGate(hooks, 'tls', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1070,7 +1205,7 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-write-final-gate',
     file: 'runtime/judge-transport.ts',
-    before: "this.#finalGate(hooks, 'write');",
+    before: "this.#finalGate(hooks, 'write', deadline);",
     after: 'void hooks;',
     testFile: 'judge-network-fences.test.ts',
     testName: 'E6: every hosted final gate refuses before its next physical network action',
@@ -1079,13 +1214,13 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
     id: 'e6-write-gate-adjacency',
     file: 'runtime/judge-transport.ts',
     before: `      await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);
       const response = boundedResponse(socket);`,
     after: `      const response = boundedResponse(socket);
       await this.#beforeGate(hooks, 'write');
-      this.#finalGate(hooks, 'write');
+      this.#finalGate(hooks, 'write', deadline);
       assertBeforeDeadline(deadline, this.#clock);
       socket.write(request);`,
     testFile: 'judge-transport.test.ts',
@@ -1134,20 +1269,17 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-post-gate-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `      this.#finalGate(hooks, 'dns');
-      assertBeforeDeadline(deadline, this.#clock);`,
-    after: `      this.#finalGate(hooks, 'dns');`,
+    before: `    assertBeforeDeadline(deadline, this.#clock);
+    let decision: unknown;`,
+    after: '    let decision: unknown;',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: an awaited gate that crosses the all-phase deadline stops that phase and every later phase',
   },
   {
     id: 'e6-final-gate-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `      this.#finalGate(hooks, 'write');
-      assertBeforeDeadline(deadline, this.#clock);
-      socket.write(request);`,
-    after: `      this.#finalGate(hooks, 'write');
-      socket.write(request);`,
+    before: '      decision = hooks.finalGate(phase, () => assertBeforeDeadline(deadline, this.#clock));',
+    after: '      decision = hooks.finalGate(phase);',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: a final gate that reaches the all-phase deadline lets no later phase or byte through',
   },
@@ -1166,9 +1298,8 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
   {
     id: 'e6-response-deadline',
     file: 'runtime/judge-transport.ts',
-    before: `    assertBeforeDeadline(deadline, clock);
-    return result;`,
-    after: '    return result;',
+    before: '      assertBeforeDeadline(deadline, clock);',
+    after: '      void deadline;',
     testFile: 'judge-transport.test.ts',
     testName: 'E6: a deadline reached while receiving a response is not accepted as an answer',
   },
@@ -1226,7 +1357,41 @@ const JUDGE_TRANSPORT_MUTATIONS: readonly TransportMutation[] = [
     testFile: 'judge-transport.test.ts',
     testName: 'E6-M: TypeSafe request bytes take the approved document model, never a transport constant',
   },
+  {
+    id: 'e-review-isatap-embedded-address',
+    file: 'network/address-policy.ts',
+    before:
+      'if (isatapInterface === 0x00005efen || isatapInterface === 0x02005efen) embedded.push(ipv4From(address.value));',
+    after: 'if (false) embedded.push(ipv4From(address.value));',
+    testFile: 'network/address-policy.test.ts',
+    testName: 'NET-B2: validates the outer and every embedded transition address',
+    killingAssertion:
+      '2600::5efe:a00:1: an approved ISATAP outer address cannot hide an unapproved embedded IPv4 address',
+  },
+  {
+    id: 'e-review-exact-deadline-socket-disposal',
+    file: 'runtime/judge-transport.ts',
+    before: `    } catch (error) {
+      try {
+        disposeLate?.(result);
+      } catch {
+        // Cleanup failure cannot turn an elapsed attempt into a usable socket or hide the deadline refusal.
+      }
+      throw error;
+    }`,
+    after: `    } catch (error) {
+      throw error;
+    }`,
+    testFile: 'judge-transport.test.ts',
+    testName: 'E6: sockets resolving exactly at the TCP or TLS deadline are destroyed once and leave no handle or byte',
+    killingAssertion: 'the connected TCP socket is destroyed exactly once',
+  },
 ];
+
+const JUDGE_TRANSPORT_MUTATIONS = transportMutations.map((mutation) => ({
+  ...mutation,
+  killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+}));
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -1284,6 +1449,26 @@ function assertExactlyOneNamedMutationFailure(
   assert.deepEqual(subtests, [mutation.testName], `${mutation.id}: a different test ran\n${result.output}`);
   const failures = [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]);
   assert.deepEqual(failures, [mutation.testName], `${mutation.id}: its named test did not fail\n${result.output}`);
+  assert.equal(
+    result.output.includes(mutation.killingAssertion ?? ''),
+    true,
+    `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+  );
+}
+
+function assertExactlyOneNamedMutationPass(
+  mutation: TransportMutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.equal(result.code, 0, `${mutation.id}: unmutated named test did not pass\n${result.output}`);
+  const summary = (name: 'tests' | 'pass' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: baseline emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: baseline ran more than one named test\n${result.output}`);
+  assert.equal(summary('pass'), 1, `${mutation.id}: baseline did not pass exactly once\n${result.output}`);
+  assert.equal(summary('fail'), 0, `${mutation.id}: baseline reported a failure\n${result.output}`);
 }
 
 async function expectTransportMutationToFail(mutation: TransportMutation): Promise<number> {
@@ -1298,23 +1483,33 @@ async function expectTransportMutationToFail(mutation: TransportMutation): Promi
     const original = await readFile(target, 'utf8');
     assert.equal(occurrences(original, mutation.before), 1, `${mutation.id} must replace one production guard`);
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
-    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const { NODE_TEST_CONTEXT: _parentContext, ...environment } = process.env;
-    const result = await runStrictMutationChild({
+    const args = [
+      '--import',
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      '--test-reporter=tap',
+      '--test-name-pattern',
+      exactTestName(mutation.testName),
+      join(root, 'test', mutation.testFile),
+    ];
+    const baseline = await runStrictMutationChild({
       command: process.execPath,
-      args: [
-        '--import',
-        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, 'test', mutation.testFile),
-      ],
+      args,
       cwd: root,
       env: environment,
+      timeoutMs: 30_000,
+    });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args,
+      cwd: root,
+      env: environment,
+      timeoutMs: 30_000,
     });
     assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;

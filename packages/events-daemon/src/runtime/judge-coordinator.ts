@@ -1,5 +1,6 @@
-import { canonicalJson } from '@agentcomms/core';
+import { canonicalJson, newBoundary, wrapUntrusted } from '@agentcomms/core';
 import {
+  applyRepresentation,
   catalogueEntry,
   classifyMapped,
   compileMapping,
@@ -9,17 +10,21 @@ import {
   type MappedValue,
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
-  assertJudgeReservationStillInFlight,
-  beginJudgeTransport,
+  finalizeJudgeTransportRefusal,
   JudgeBudgetError,
   type JudgeReservation,
-  releaseJudgeWork,
+  JudgeReservationIoGate,
   reserveJudgeWork,
-  settleJudgeWork,
 } from './judge-budget.ts';
-import { JudgeTransport, type JudgeTransportResult, prepareJudgeTransportRequest } from './judge-transport.ts';
+import {
+  type HostedJudgeCredential,
+  JudgeTransport,
+  type JudgeTransportResult,
+  prepareJudgeTransportRequest,
+} from './judge-transport.ts';
 import { type EventTaintRecorder, sanitiseSenderFields } from './untrusted.ts';
 
 const QUESTION_NAME = 'decision';
@@ -54,7 +59,7 @@ export interface JudgeCoordinatorOptions {
   readonly newId?: (() => string) | undefined;
   /** B3's secret slot is read only at the hosted request boundary and is never retained here. */
   readonly hostedApiKeyFor?:
-    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<string | null>)
+    | ((input: { readonly judgeId: string; readonly judgeVersion: number }) => Promise<HostedJudgeCredential | null>)
     | undefined;
 }
 
@@ -96,8 +101,17 @@ export function buildJudgeInput(rule: CanonicalFullRuleDocument, event: Record<s
   if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored judge input mapping is unavailable');
   const sanitised = sanitiseSenderFields(found.value, event);
   const mapped: MappedValue = evaluateMapping(compiled.value, sanitised);
-  const classification = classifyMapped(found.value as never, sanitised as never, mapped);
-  const state = canonicalJson(mapped.data);
+  const plainClassification = classifyMapped(found.value as never, sanitised as never, mapped);
+  const boundary = newBoundary();
+  const enveloped: MappedValue = {
+    data: applyRepresentation(mapped.data, plainClassification, {
+      kind: 'enveloped',
+      envelope: (text) => wrapUntrusted(text, { field: 'judge-input' }, boundary),
+    }),
+    provenance: mapped.provenance,
+  };
+  const classification = classifyMapped(found.value as never, sanitised as never, enveloped);
+  const state = canonicalJson(enveloped.data);
   return { state, classification };
 }
 
@@ -160,21 +174,29 @@ export class JudgeCoordinator {
     await this.#taint.record({
       eventId: input.eventId,
       accountId: input.accountId,
+      channel: input.rule.source.channel,
       classification: envelope.classification,
     });
 
     // The hosted key is material only at this boundary.  It participates in the exact request bytes, so a rule never
     // reserves the body while the sealed writer later sends a longer Authorization-bearing HTTP request.
-    let hostedApiKey: string | null | undefined;
+    let hostedApiKey: HostedJudgeCredential | null | undefined;
     try {
       hostedApiKey =
-        agentic.judge.kind === 'typesafe'
+        agentic.judge.kind === JUDGE_KIND_TYPESAFE
           ? await this.#hostedApiKeyFor({ judgeId: agentic.judge.judgeId, judgeVersion: agentic.judge.version })
           : undefined;
     } catch {
       return { kind: 'closed', reason: 'hosted-key-unavailable', reservationId: null };
     }
-    if (agentic.judge.kind === 'typesafe' && (typeof hostedApiKey !== 'string' || hostedApiKey.length === 0))
+    if (
+      agentic.judge.kind === JUDGE_KIND_TYPESAFE &&
+      (hostedApiKey === null ||
+        hostedApiKey === undefined ||
+        !Number.isSafeInteger(hostedApiKey.generation) ||
+        hostedApiKey.generation < 1 ||
+        hostedApiKey.material.length === 0)
+    )
       return { kind: 'closed', reason: 'hosted-key-unavailable', reservationId: null };
 
     const call = {
@@ -224,43 +246,54 @@ export class JudgeCoordinator {
       return { kind: 'closed', reason: code, reservationId: null };
     }
 
-    try {
-      if (!beginJudgeTransport({ store: this.#store, reservationId: reservation.id, now: this.#now() })) {
-        return { kind: 'closed', reason: 'reservation-lost', reservationId: reservation.id };
-      }
-    } catch (error) {
-      if (error instanceof JudgeBudgetError && error.code === 'JUDGE_PAUSED')
-        return { kind: 'deferred', reservationId: reservation.id };
-      return {
-        kind: 'closed',
-        reason:
-          error instanceof Error && 'code' in error ? String((error as JudgeBudgetError).code) : 'authority-changed',
-        reservationId: reservation.id,
-      };
-    }
-
+    const ioGate = new JudgeReservationIoGate({
+      store: this.#store,
+      reservationId: reservation.id,
+      judgeKind: agentic.judge.kind,
+      now: this.#now,
+      ...(prepared.hostedKeyGeneration === null
+        ? {}
+        : {
+            hostedKey: {
+              judgeId: agentic.judge.judgeId,
+              judgeVersion: agentic.judge.version,
+              generation: prepared.hostedKeyGeneration,
+            },
+          }),
+    });
     const result = await this.#transport.execute(call, {
       // The sealed transport invokes this synchronous authority recheck directly beside every physical
       // DNS/TCP/TLS/write action; no await can sit between it and that I/O.
-      finalGate: () => {
-        assertJudgeReservationStillInFlight({ store: this.#store, reservationId: reservation.id });
-        return undefined;
-      },
+      finalGate: ioGate.finalGate,
       preparedRequest: prepared,
     });
 
     if (result.kind !== 'answer') {
-      if (result.preIo === true) {
-        releaseJudgeWork({ store: this.#store, reservationId: reservation.id, now: this.#now(), beforeIo: true });
-        return { kind: 'deferred', reservationId: reservation.id };
-      }
       const settlement =
         result.code === 'OUTPUT_TOKEN_LIMIT_EXCEEDED'
           ? 'output-token-limit'
           : result.code === 'NETWORK_DEADLINE_EXCEEDED'
             ? 'timeout'
             : 'unknown';
-      settleJudgeWork({ store: this.#store, reservationId: reservation.id, result: settlement, now: this.#now() });
+      const disposition = finalizeJudgeTransportRefusal({
+        store: this.#store,
+        reservationId: reservation.id,
+        result: settlement,
+        now: this.#now(),
+      });
+      if (ioGate.firstGateError !== undefined) {
+        if (ioGate.firstGateError instanceof JudgeBudgetError && ioGate.firstGateError.code === 'JUDGE_PAUSED')
+          return { kind: 'deferred', reservationId: reservation.id };
+        return {
+          kind: 'closed',
+          reason:
+            ioGate.firstGateError instanceof Error && 'code' in ioGate.firstGateError
+              ? String((ioGate.firstGateError as JudgeBudgetError).code)
+              : 'authority-changed',
+          reservationId: reservation.id,
+        };
+      }
+      if (disposition === 'released') return { kind: 'deferred', reservationId: reservation.id };
       return { kind: 'closed', reason: closedReason(result), reservationId: reservation.id };
     }
 

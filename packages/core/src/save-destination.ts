@@ -969,7 +969,9 @@ export async function settleDestination(core: Core, input: SettleInput): Promise
    */
   const opened = await openFolderWithIdentity(folder);
   await checkSaveFolder(opened.path, deny, spent);
-  const via = claimed.download.answer === undefined ? 'chat' : (claimed.approvedVia ?? 'terminal');
+  // A question is answered at a terminal or in a form; `standing` is a standing approval's child's, never a download's.
+  const recorded = claimed.approvedVia === 'elicitation' ? 'elicitation' : 'terminal';
+  const via = claimed.download.answer === undefined ? 'chat' : recorded;
   return {
     folder: opened.path,
     identity: opened.identity,

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs, { access, readdir } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -22,6 +21,8 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+let nextManifestPort = 50_000;
+
 for (const account of ['profile', 'own-app'] as const) {
   for (const boundary of [
     'before secret',
@@ -35,10 +36,7 @@ for (const account of ['profile', 'own-app'] as const) {
     test(`foreground ${account} interruption ${boundary} settles the accepted callback before exit`, {
       timeout: 10000,
     }, async (t) => {
-      const probe = createServer();
-      await new Promise<void>((done) => probe.listen(0, 'localhost', done));
-      const port = (probe.address() as { port: number }).port;
-      await new Promise<void>((done) => probe.close(() => done()));
+      const port = nextManifestPort++;
       const harness = await newOrganisationHarness({ port });
       const before = await harness.core.config.load();
       const secrets = await harness.core.secrets('file');
@@ -211,7 +209,9 @@ for (const account of ['profile', 'own-app'] as const) {
       );
       t.after(() => releaseWrite.resolve());
       const auth = new URL(await ready.promise);
-      const callback = new URL(`http://localhost:${port}/slack/callback`);
+      const redirectUri = auth.searchParams.get('redirect_uri');
+      assert.ok(redirectUri, 'the Slack request must name the bound foreground listener');
+      const callback = new URL(redirectUri);
       callback.searchParams.set('state', auth.searchParams.get('state') ?? '');
       callback.searchParams.set('code', 'fake-code');
       await fetchListener(callback);
@@ -270,10 +270,7 @@ for (const configOutcome of ['resolved', 'recovered'] as const)
     : 'an interrupt during postcommit profile revocation finishes cleanup without rolling back the saved app switch', {
     timeout: 10000,
   }, async (t) => {
-    const probe = createServer();
-    await new Promise<void>((done) => probe.listen(0, 'localhost', done));
-    const port = (probe.address() as { port: number }).port;
-    await new Promise<void>((done) => probe.close(() => done()));
+    const port = nextManifestPort++;
     const harness = await newOrganisationHarness({ port, readAppId: 'A0READ' });
     const source = await harness.addWorkspace({
       alias: 'rgc/slack',
@@ -345,7 +342,9 @@ for (const configOutcome of ['resolved', 'recovered'] as const)
     });
     void action.catch((error) => ready.reject(error));
     const auth = new URL(await ready.promise);
-    const callback = new URL(`http://localhost:${port}/slack/callback`);
+    const redirectUri = auth.searchParams.get('redirect_uri');
+    assert.ok(redirectUri, 'the Slack request must name the bound foreground listener');
+    const callback = new URL(redirectUri);
     callback.searchParams.set('state', auth.searchParams.get('state') ?? '');
     callback.searchParams.set('code', 'fake-code');
     await fetchListener(callback);

@@ -113,6 +113,25 @@ for (const [path, what] of [
   );
 }
 
+/*
+ * The desktop app (`apps/desktop`): a private workspace package, never published, whose version is the repository's
+ * (desktop design DA8). Its manifest and the first `"version"` of its `tauri.conf.json` — the app's own, which Tauri
+ * builds into the bundle — are edited as text, for the plugin manifest's reason above: a round trip through the parser
+ * would reformat both. It is not in `PUBLISHABLE`, so the loop over the packages never reaches it.
+ */
+for (const [path, what] of [
+  [join(ROOT, 'apps', 'desktop', 'package.json'), "the desktop app's version"],
+  [join(ROOT, 'apps', 'desktop', 'src-tauri', 'tauri.conf.json'), "the desktop app's tauri.conf.json version"],
+]) {
+  const source = await readFile(path, 'utf8').catch(() => null);
+  if (source === null) continue;
+  if (!/"version":\s*"[\w.-]+"/.test(source)) {
+    problems.push(`${relative(ROOT, path).split(sep).join('/')}: no "version" to keep in step`);
+    continue;
+  }
+  await put(path, source.replace(/"version":\s*"[\w.-]+"/, `"version": "${version}"`), what);
+}
+
 const launcher = join(ROOT, 'bin', 'agent-gmail-launch');
 const script = await readFile(launcher, 'utf8').catch(() => null);
 if (script !== null) {

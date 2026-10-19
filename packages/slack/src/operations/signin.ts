@@ -35,11 +35,16 @@ import type { InstallMode } from '../manifest.ts';
 import { createPendingRevocation, pendingRevocationResult, revokePendingEntry } from './revocations.ts';
 import {
   accountFrom,
+  botBundleFrom,
+  botSecretRefFor,
   bundleFrom,
   checkAliasFree,
+  clientSecretRefFor,
+  pendingClientSecretRefFor,
   profileTargetFor,
   renewedSecretRefFor,
   requireWorkspace,
+  type SlackAccount,
   secretRefFor,
   validateExchange,
   viewOf,
@@ -86,6 +91,14 @@ export interface StartOptions {
   readonly listenerCommand?: ListenerEntry | undefined;
   /** Injectable listener lifetime for embedded callers and loopback tests; never changes stored expiry. */
   readonly listenerTimeoutMs?: number | undefined;
+  /**
+   * The app's client secret, as a person typed it at a hidden prompt: sign in with it rather than PKCE (design
+   * 2026-10-15 S1, revised). Kept in the secret store before the flow is saved — by the app's id on a reauth that
+   * knows it, by the Client ID until Slack says otherwise — and the flow holds only where it is.
+   */
+  readonly clientSecret?: string | undefined;
+  /** Where an account that already signs in with its app's client secret keeps it: a reauth that typed none reuses it. */
+  readonly clientSecretRef?: string | undefined;
 }
 
 export interface StartedSignIn {
@@ -147,12 +160,31 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     });
   }
 
-  const request = buildAuthorizeUrl({
+  if ((options.clientSecret !== undefined || options.clientSecretRef !== undefined) && options.profile) {
+    throw new CommsError('USAGE', "an organisation's app signs in through its profile, not with its client secret", {
+      hint: 'Leave --with-client-secret out: the organisation’s administrator holds the app’s secret, not its members.',
+    });
+  }
+  // Kept before anything else exists, so a flow never names a secret that is not there.
+  const clientSecretRef =
+    options.clientSecret === undefined
+      ? options.clientSecretRef
+      : options.expect?.appId !== undefined
+        ? clientSecretRefFor(options.expect.appId)
+        : pendingClientSecretRefFor(options.clientId);
+  if (options.clientSecret !== undefined && clientSecretRef !== undefined) {
+    if (options.clientSecret.trim() === '')
+      throw new CommsError('USAGE', 'no client secret was typed, so nothing started');
+    await (await context.secrets()).set(clientSecretRef, options.clientSecret.trim());
+  }
+  const auth = clientSecretRef === undefined ? 'pkce' : 'client-secret';
+  let request = buildAuthorizeUrl({
     clientId: options.clientId,
     mode: options.mode,
     port: options.port,
     // The account a renewal must turn out to be, else the profile's workspace; an own app's first sign-in knows none.
     team: options.expect?.workspaceId ?? options.profile?.workspace,
+    auth,
   });
   const startedAt = context.now();
   const flow: SlackFlow = {
@@ -164,6 +196,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     clientId: options.clientId,
     ...(options.profile ? { profile: options.profile } : {}),
     ...(options.transition ? { transition: options.transition } : {}),
+    ...(clientSecretRef === undefined ? {} : { clientSecretRef }),
     verifier: request.pkce.verifier,
     state: request.state,
     redirectUrl: request.redirectUrl,
@@ -188,22 +221,39 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
    * able to complete it and nothing that would ever remove it.
    */
   let listener: StartedSignIn['listener'];
+  let listenerPort = options.port;
   try {
     foreground?.signal.throwIfAborted();
     await context.flows.save(flow);
     foreground?.signal.throwIfAborted();
-    listener =
-      options.detached === false
-        ? await startInProcess(context, flow, options.listenerTimeoutMs, foreground?.signal)
-        : await startDetached(context, flow, options);
+    if (options.detached === false) {
+      const started = await startInProcess(
+        context,
+        flow,
+        options.listenerTimeoutMs,
+        foreground?.signal,
+        testLoopbackPort(context),
+      );
+      listener = started.listener;
+      listenerPort = started.port;
+    } else {
+      listenerPort = await startDetached(context, flow, options);
+    }
     if (foreground?.signal.aborted) {
       await listener?.close();
       foreground.signal.throwIfAborted();
     }
   } catch (error) {
     await context.flows.discard(flow.flowId);
+    await discardPendingSecret(context, flow);
     if (foreground?.signal.aborted) throw error;
     if (error instanceof CommsError) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      throw new CommsError('UNEXPECTED', `port ${flow.port} is already in use, so the sign-in could not start`, {
+        hint: busyPortHint(context, flow, true),
+        cause: error,
+      });
+    }
     throw new CommsError('UNEXPECTED', `the sign-in could not start: ${(error as Error).message}`, {
       hint: `Port ${options.port} may already be in use.`,
       cause: error,
@@ -213,12 +263,24 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     else foregroundSettled?.();
   }
 
+  if (listenerPort !== options.port) {
+    request = buildAuthorizeUrl({
+      clientId: options.clientId,
+      mode: options.mode,
+      port: listenerPort,
+      team: options.expect?.workspaceId ?? options.profile?.workspace,
+      pkce: request.pkce,
+      state: request.state,
+      auth,
+    });
+  }
+
   return {
     flowId: flow.flowId,
     alias: flow.alias,
     mode: flow.mode,
     authUrl: request.url,
-    redirectUrl: flow.redirectUrl,
+    redirectUrl: request.redirectUrl,
     expiresAt: flow.expiresAt,
     ...(listener ? { listener } : {}),
   };
@@ -229,16 +291,25 @@ async function startInProcess(
   flow: SlackFlow,
   timeoutMs?: number,
   signal?: AbortSignal,
-): Promise<StartedSignIn['listener']> {
+  loopbackPort?: number,
+): Promise<{ listener: NonNullable<StartedSignIn['listener']>; port: number }> {
   const loopback = await startLoopback({
     state: flow.state,
-    port: flow.port,
+    port: loopbackPort ?? flow.port,
     timeoutMs: timeoutMs ?? Math.max(1000, Date.parse(flow.expiresAt) - context.now().getTime()),
     about: { alias: flow.alias, mode: flow.mode, reauth: Boolean(flow.expect) },
     failureMessage: flow.profile
       ? (error, description) => listenerFailure(context, flow, error, description)
       : undefined,
   });
+  if (loopback.redirectUrl !== flow.redirectUrl) {
+    try {
+      await context.flows.patch(flow.flowId, { redirectUrl: loopback.redirectUrl });
+    } catch (error) {
+      await loopback.close();
+      throw error;
+    }
+  }
   let cancel: (() => void) | undefined;
   const interrupted = new Promise<never>((_, reject) => {
     if (!signal) return;
@@ -270,7 +341,7 @@ async function startInProcess(
   // Abort can already be observable when listen resolves. Own rejection now, before startup can await cleanup;
   // callers still receive the original result (and its error), never a flattened success promise.
   void result.catch(() => undefined);
-  return { result, close: () => loopback.close() };
+  return { listener: { result, close: () => loopback.close() }, port: loopback.port };
 }
 
 /**
@@ -286,37 +357,43 @@ export async function runSignInListener(
   const flow = await context.flows.get(flowId);
   const loopback = await startLoopback({
     state: flow.state,
-    port: flow.port,
+    port: testLoopbackPort(context) ?? flow.port,
     timeoutMs: options.timeoutMs ?? Math.max(1000, Date.parse(flow.expiresAt) - context.now().getTime()),
     about: { alias: flow.alias, mode: flow.mode, reauth: Boolean(flow.expect) },
     failureMessage: flow.profile
       ? (error, description) => listenerFailure(context, flow, error, description)
       : undefined,
   });
-  await context.flows.patch(flowId, { listenerPid: process.pid });
-
-  // The parent is waiting for exactly this before it prints the link; afterwards the two share only files.
-  process.send?.({ type: 'ready', port: loopback.port });
-  process.disconnect?.();
-
-  const outcome = await loopback.result;
-  await loopback.close();
-  if (outcome.kind === 'code') {
-    await context.flows.recordOutcome(flowId, { code: outcome.code });
-  } else if (outcome.kind === 'denied') {
-    await context.flows.recordOutcome(flowId, {
-      error: outcome.error,
-      ...(outcome.description ? { description: outcome.description } : {}),
+  try {
+    await context.flows.patch(flowId, {
+      listenerPid: process.pid,
+      ...(loopback.redirectUrl === flow.redirectUrl ? {} : { redirectUrl: loopback.redirectUrl }),
     });
-  } else {
-    /*
-     * A timeout ends the flow here, rather than leaving it to "expire on its own" — which files do not do.
-     *
-     * Nobody is coming: this listener held the port for the flow's whole life and saw no redirect. Leaving the
-     * record behind leaves a PKCE verifier on disk until something happens to call `peek` on that exact id, which
-     * nothing ever will.
-     */
-    await context.flows.discard(flowId);
+
+    // The parent is waiting for exactly this before it prints the link; afterwards the two share only files.
+    process.send?.({ type: 'ready', port: loopback.port });
+    process.disconnect?.();
+
+    const outcome = await loopback.result;
+    if (outcome.kind === 'code') {
+      await context.flows.recordOutcome(flowId, { code: outcome.code });
+    } else if (outcome.kind === 'denied') {
+      await context.flows.recordOutcome(flowId, {
+        error: outcome.error,
+        ...(outcome.description ? { description: outcome.description } : {}),
+      });
+    } else {
+      /*
+       * A timeout ends the flow here, rather than leaving it to "expire on its own" — which files do not do.
+       *
+       * Nobody is coming: this listener held the port for the flow's whole life and saw no redirect. Leaving the
+       * record behind leaves a PKCE verifier on disk until something happens to call `peek` on that exact id, which
+       * nothing ever will.
+       */
+      await context.flows.discard(flowId);
+    }
+  } finally {
+    await loopback.close();
   }
 }
 
@@ -325,11 +402,7 @@ export interface ListenerEntry {
   readonly args: readonly string[];
 }
 
-async function startDetached(
-  context: SlackContext,
-  flow: SlackFlow,
-  options: StartOptions,
-): Promise<StartedSignIn['listener']> {
+async function startDetached(context: SlackContext, flow: SlackFlow, options: StartOptions): Promise<number> {
   const entry = options.listenerCommand ?? (await defaultListenerCommand());
 
   /*
@@ -375,15 +448,18 @@ async function startDetached(
     });
   }
 
+  let listenerPort: number;
+  // Ended before it said it was ready: by far most often because something else holds the port.
+  let endedEarly = false;
   try {
-    await new Promise<void>((settle, reject) => {
+    listenerPort = await new Promise<number>((settle, reject) => {
       const timer = setTimeout(
         () => reject(new Error('the sign-in listener did not start within thirty seconds')),
         LISTENER_START_MS,
       );
-      child.once('message', (message: { type?: string; error?: string }) => {
+      child.once('message', (message: { type?: string; error?: string; port?: number }) => {
         clearTimeout(timer);
-        if (message?.type === 'ready') settle();
+        if (message?.type === 'ready' && typeof message.port === 'number') settle(message.port);
         else reject(new Error(message?.error ?? 'the sign-in listener could not start'));
       });
       child.once('error', (error) => {
@@ -392,6 +468,7 @@ async function startDetached(
       });
       child.once('exit', (code) => {
         clearTimeout(timer);
+        endedEarly = true;
         // The likeliest reason by far, and the one whose fix is not obvious from an exit code.
         reject(
           new Error(
@@ -404,14 +481,16 @@ async function startDetached(
     child.kill();
     await context.flows.discard(flow.flowId);
     throw new CommsError('UNEXPECTED', String((error as Error).message), {
-      hint: 'Run the sign-in at a terminal instead, without `--start`.',
+      hint: endedEarly
+        ? `${busyPortHint(context, flow, false)} If nothing holds it, run the sign-in at a terminal without \`--start\`, which says what stopped it.`
+        : 'Run the sign-in at a terminal instead, without `--start`.',
       cause: error,
     });
   }
 
   releaseChannel(child);
   child.unref();
-  return undefined;
+  return listenerPort;
 }
 
 /**
@@ -435,12 +514,51 @@ export function releaseChannel(child: { disconnect(): void }): void {
   }
 }
 
+/**
+ * What to do about a sign-in whose port something else holds (2026-10-15): free the port, or — connecting a person's
+ * own app — make a new app, whose manifest chooses a free port that is then that app's. An existing app's port cannot
+ * simply change, because Slack matches the redirect URL it stores exactly: so a reauth, which signs in through the app
+ * the workspace already has, and an organisation's app, which keeps the profile's port, have only the first way.
+ *
+ * `certain` when the system said the port is in use; otherwise the listener only ended before it was ready, and this
+ * says what to do if that is why, rather than that it is.
+ */
+function busyPortHint(context: SlackContext, flow: SlackFlow, certain: boolean): string {
+  const held = certain
+    ? `Port ${flow.port} is held by another program: close whatever uses it, then sign in again`
+    : `If another program holds port ${flow.port}, close whatever uses it, then sign in again`;
+  if (flow.profile) return `${held}. It is the organisation app's port, so it cannot change here.`;
+  if (flow.expect) return `${held}. It is the port this workspace's app redirects to, so it cannot change here.`;
+  const manifest = [
+    'manifest',
+    ...(flow.mode === 'send' ? ['--mode', 'send'] : []),
+    ...(flow.clientSecretRef === undefined ? [] : ['--with-client-secret']),
+  ];
+  return handoffSentence(
+    context.handoffs.own(manifest),
+    (command) => `${held} — or, for a new app, run ${command} again: it chooses a free port, which the new app keeps.`,
+    {
+      instead: `${held} — or, for a new app, call slack_manifest again: it chooses a free port, which the new app keeps.`,
+    },
+  );
+}
+
+function testLoopbackPort(context: SlackContext): number | undefined {
+  const raw = context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT;
+  if (raw === undefined) return undefined;
+  const port = Number(raw);
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : undefined;
+}
+
 function listenerEnv(context: SlackContext): NodeJS.ProcessEnv {
-  // Only the two paths. The child re-opens the same config and state as this process and needs nothing else — in
-  // particular no credential, because it never touches one: it receives a code and writes it down.
+  // Only the two paths in production. Tests may also carry the port-zero seam through to the child. It needs no
+  // credential, because it never touches one: it receives a code and writes it down.
   return {
     AGENT_COMMS_CONFIG_DIR: context.core.paths.configDir,
     AGENT_COMMS_STATE_DIR: context.core.paths.stateDir,
+    ...(context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT === undefined
+      ? {}
+      : { AGENT_COMMS_TEST_SLACK_LISTENER_PORT: context.env.AGENT_COMMS_TEST_SLACK_LISTENER_PORT }),
   };
 }
 
@@ -1120,16 +1238,23 @@ export async function completeSignIn(
       );
     }
     if (flow.profile) profileTargetFor(flow, await context.config(), context.handoffs);
+    // A client-secret sign-in sends the app's secret and no verifier; a PKCE one the verifier and no secret.
+    const clientSecret = await clientSecretOf(context, flow);
     const exchanged = await context.exchange({
       client_id: flow.clientId,
       code,
       redirect_uri: flow.redirectUrl,
-      code_verifier: flow.verifier,
+      ...(clientSecret === undefined ? { code_verifier: flow.verifier } : { client_secret: clientSecret }),
     });
     if (flow.profile) profileTargetFor(flow, await context.config(), context.handoffs);
     let token: ReturnType<typeof readExchange>;
     try {
-      token = readExchange(exchanged, context.handoffs);
+      token = readExchange(
+        exchanged,
+        context.handoffs,
+        flow.mode,
+        clientSecret === undefined ? {} : { refusedRedirect: pasteInstead(context, flow) },
+      );
     } catch (error) {
       if (flow.profile && error instanceof CommsError && error.details) {
         throw await profileFailure(
@@ -1183,6 +1308,15 @@ export async function completeSignIn(
     const accountId = existing ? existing.account.id : newAccountId();
     const secretRef = existing ? renewedSecretRefFor(accountId) : secretRefFor(accountId);
     const secrets = await context.secrets();
+    // The app's client secret, kept by the app's id once Slack has said which app this is (S1, revised).
+    const keptSecretRef =
+      flow.clientSecretRef === undefined
+        ? undefined
+        : token.appId !== undefined && /^A[A-Z0-9]{2,20}$/.test(token.appId)
+          ? clientSecretRefFor(token.appId)
+          : flow.clientSecretRef;
+    // A refresh token of an app that never enabled PKCE does not expire after 30 days.
+    const refreshExpires = flow.clientSecretRef === undefined;
     const account = accountFrom({
       token,
       mode: flow.mode,
@@ -1193,6 +1327,7 @@ export async function completeSignIn(
       ...(flow.profile
         ? { provenance: { organisation: flow.profile.organisation, profileApp: flow.profile.role } }
         : {}),
+      ...(keptSecretRef === undefined ? {} : { clientSecretRef: keptSecretRef }),
     });
     let written: AccountConfig = account;
     let writtenAlias = flow.alias;
@@ -1220,13 +1355,23 @@ export async function completeSignIn(
        */
       const stage = async () => {
         completionSignal?.throwIfAborted();
-        await secrets.set(secretRef, serialiseBundle(bundleFrom(token, at)));
+        await secrets.set(secretRef, serialiseBundle(bundleFrom(token, at, { refreshExpires })));
+        // The secret under the app's id before anything names it there.
+        if (clientSecret !== undefined && keptSecretRef !== undefined && keptSecretRef !== flow.clientSecretRef) {
+          await secrets.set(keptSecretRef, clientSecret);
+        }
       };
       // Detached finishers retain their existing staging/claim semantics. Foreground interruption fences both
       // writes under the credentials lock, including callbacks that already own their flow.
       if (!completionSignal) await stage();
       const switchAccount = async () => {
         if (completionSignal) await stage();
+        /*
+         * A sign-in that leaves the account unable to post deletes the app's bot token first, before anything says
+         * `read` (design 2026-10-15 S1): on this machine, no stored token of a read workspace may post. Deleted, never
+         * revoked — the token is the workspace's. If the delete fails nothing is saved, and the account is as it was.
+         */
+        if (existing && flow.mode !== 'send') await secrets.delete(botSecretRefFor(accountId));
         if (
           flow.transition === 'profile-app' &&
           existing &&
@@ -1339,6 +1484,16 @@ export async function completeSignIn(
              * not speak to, including fields a later version adds that this one has never heard of.
              */
             written = held && flow.expect ? { ...held, ...account, createdAt: held.createdAt } : account;
+            // A read account names no bot user: its app's token was deleted above (S1).
+            if (flow.mode !== 'send') {
+              const { botUserId: _bot, ...unbotted } = written as SlackAccount;
+              written = unbotted;
+            }
+            // Renewals use the secret only for the grant made with it: a PKCE sign-in's tokens renew without one.
+            if (keptSecretRef === undefined) {
+              const { clientSecretRef: _secret, ...pkce } = written as SlackAccount;
+              written = pkce;
+            }
             const next = flow.profile
               ? learnProfileSlackAppId(
                   current,
@@ -1430,6 +1585,25 @@ export async function completeSignIn(
      * That bound is the whole justification. A credential that did *not* expire on its own would have to be
      * reported rather than dropped.
      */
+    /*
+     * The send app's bot token, kept once the sign-in that issued it is saved (design 2026-10-15 S1) — after, so a
+     * sign-in refused at its write leaves no bot token behind, named by nothing. If this one write fails, the sign-in
+     * still stands, and its posts go out as the person, labelled, until it signs in again; the result says so.
+     */
+    let appTokenUnsaved: string | undefined;
+    if (flow.mode === 'send' && token.bot) {
+      try {
+        const current = await context.secrets();
+        await current.set(
+          botSecretRefFor(accountId),
+          serialiseBundle(botBundleFrom(token.bot, at, { refreshExpires })),
+        );
+      } catch (error) {
+        appTokenUnsaved = `the app's token could not be stored (${safeSlackFailureText((error as Error).message)}), so posts go out as you, labelled, until this workspace signs in again`;
+      }
+    }
+    const withApp = (view: WorkspaceView): WorkspaceView =>
+      appTokenUnsaved === undefined ? view : { ...view, appTokenUnsaved };
     // The credential of the row this write actually replaced, read under the lock — not the snapshot's.
     const previousRef = replacedRef ?? existing?.account.secretRef;
     if (pendingRevocation) {
@@ -1447,22 +1621,60 @@ export async function completeSignIn(
           message: 'the app switch was saved; its old credential remains pending cleanup',
         });
       }
-      return {
+      return withApp({
         ...viewOf(writtenAlias, written, flow.profile?.label),
         ...(savedBeforeInterrupt() ? { committedBeforeAbort: true as const } : {}),
         cleanup,
-      };
+      });
     }
     if (previousRef && previousRef !== secretRef) {
       await secrets.delete(previousRef).catch(() => undefined);
     }
 
-    const view = viewOf(writtenAlias, written, flow.profile?.label);
+    const view = withApp(viewOf(writtenAlias, written, flow.profile?.label));
     return savedBeforeInterrupt() ? { ...view, committedBeforeAbort: true } : view;
   } finally {
     // Only the owner may stop the listener or discard the flow; a cancelled or losing finisher does neither.
     stopListener(flow, context.now());
     // The result was built before this deletion; an interrupt here leaves the saved sign-in and its result accurate.
     await context.flows.discard(flowId);
+    // A first sign-in's secret, kept by the Client ID until Slack named the app: moved by now, or not needed.
+    await discardPendingSecret(context, flow);
   }
+}
+
+/**
+ * The app's client secret, for a client-secret sign-in — or undefined for a PKCE one. Read from the secret store, where
+ * the start put it; one that is gone is a refusal, never a sign-in attempted without it.
+ */
+async function clientSecretOf(context: SlackContext, flow: SlackFlow): Promise<string | undefined> {
+  if (flow.clientSecretRef === undefined) return undefined;
+  const secrets = await context.secrets();
+  secrets.invalidate(flow.clientSecretRef);
+  const secret = await secrets.get(flow.clientSecretRef);
+  if (secret === null || secret === '') {
+    throw new CommsError('AUTH_REQUIRED', "the app's client secret is not stored on this machine any more", {
+      hint: 'Nothing was saved. Start the sign-in again with --with-client-secret, and type the secret when asked.',
+    });
+  }
+  return secret;
+}
+
+/** Deletes a first sign-in's secret kept by its Client ID, once its flow is over. One kept by the app's id stays. */
+async function discardPendingSecret(context: SlackContext, flow: SlackFlow): Promise<void> {
+  if (flow.clientSecretRef === undefined || flow.clientSecretRef !== pendingClientSecretRefFor(flow.clientId)) return;
+  await (await context.secrets()).delete(flow.clientSecretRef).catch(() => undefined);
+}
+
+/**
+ * What to do when Slack refuses a client-secret sign-in's `localhost` redirect: sign in with PKCE, which Slack takes on
+ * `localhost`, and paste the app's bot token once — the plain way round a redirect Slack wants on HTTPS (§10).
+ */
+function pasteInstead(context: SlackContext, flow: SlackFlow): string {
+  const bot = handoffSentence(
+    context.handoffs.own(['workspace', 'bot', flow.alias]),
+    (command) => `then give it its bot token once with ${command}`,
+    { instead: "then give it its bot token once with the Slack CLI's workspace bot, at a terminal" },
+  );
+  return `Slack would not take the localhost redirect for an app signing in with its client secret. Sign in the usual way — the same command without --with-client-secret, through an app with PKCE on — and ${bot}.`;
 }

@@ -1,4 +1,5 @@
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
   approveAndWaitSentence,
@@ -12,29 +13,66 @@ import {
   handoffSentence,
   LEASE_LOST_BEFORE_SEND,
   type LegacyDrainReport,
+  type MessageIdentity,
   type MessagePreview,
   newBoundary,
   ownerOf,
   type PublicApprovalView,
-  publicApproval,
+  parseAddressList,
   renderMessagePreview,
   resolveName,
-  type SenderFieldWrapper,
   type SendPolicy,
   type StoredApproval,
+  sameExpectation,
+  securityNotice,
   sendEpochOf,
   stricterPolicy,
   type TaintAggregate,
+  truncateDisplay,
   withApproval,
   withSendingLease,
 } from '@agentcomms/core';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
+import {
+  accountNameOf,
+  fromFits,
+  IDENTITIES,
+  IDENTITY_WORDS,
+  identityLine,
+  identityOfFrom,
+  labelSettingsOf,
+  mailDecision,
+  mailFrom,
+  mailKind,
+  rewriteFromField,
+  sendableAddresses,
+  shownFrom,
+} from '../domain/agent-label.ts';
 import { analyseDraft, type DraftAnalysis, type Unsendable, unsendable } from '../domain/outbound.ts';
-import { addressField, domainField, type FieldEnvelope, filenameField, wrapField } from '../domain/untrusted-fields.ts';
+import {
+  addressField,
+  domainField,
+  expectationFields,
+  type FieldEnvelope,
+  gmailApprovalView,
+} from '../domain/untrusted-fields.ts';
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
+import { VERSION } from '../version.ts';
+import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
+import {
+  allowedHere,
+  bindingOf,
+  boundDigest,
+  checkedAsLine,
+  placeActs,
+  replyProofOf,
+  requireMailActs,
+  stillBound,
+} from './mail-acts.ts';
 import { type UnsentSection, unsentSection } from './unsent.ts';
+import { oneOf } from './words.ts';
 
 /**
  * The send gate: prepare → approve → execute.
@@ -57,6 +95,13 @@ export interface SendPreparation {
   draftId: string;
   /** What the person must read before approving. Show it verbatim; do not summarise it. */
   preview: string;
+  /**
+   * Who the message appears to come from (design 2026-10-15-agent-label, L3), settled here and bound by the approval
+   * with the From line that says it: `agent`, labelled, or `me`. The preview's first line says which.
+   */
+  identity: MessageIdentity;
+  /** True when the draft's From did not fit its identity, and its From header alone was rewritten (G2). */
+  fromRewritten: boolean;
   policy: SendPolicy;
   /** The stricter of the live policy and anything risk escalation raised. */
   effectivePolicy: SendPolicy;
@@ -650,6 +695,14 @@ function previewFor(options: {
   effectivePolicy: SendPolicy;
   /** The risk flags this look raised: one the preview says in words of its own. */
   flags?: readonly string[] | undefined;
+  /** The From line this prepare rewrote, as it was (G2): said on the line after the identity. */
+  rewrittenFrom?: string | undefined;
+  /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
+  security?: string | null | undefined;
+  /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
+  allowedHere?: string | undefined;
+  /** What it was checked as, when it answers a message here: `Checked as: reply to …` (B4). */
+  checkedAs?: string | undefined;
 }): string {
   const { analysis, facts, record, alias } = options;
   // Every way the draft writes a recipient carries that recipient's note: the note is this package's words alone.
@@ -691,7 +744,15 @@ function previewFor(options: {
       note: 'nothing has been sent',
     },
     recipientNotes: notes,
-    thread: analysis.threadId ? `reply in conversation ${analysis.threadId}` : undefined,
+    /*
+     * Only for a reply. Gmail gives every draft a thread id, a new message's too, so the id alone said "reply" for
+     * everything. What makes a draft a reply is In-Reply-To or References. Display text only: the digest binds the
+     * thread id and both headers, and is unchanged by this.
+     */
+    thread:
+      analysis.threadId && (analysis.inReplyTo?.trim() || analysis.references.length > 0)
+        ? `reply in conversation ${analysis.threadId}`
+        : undefined,
     links: analysis.links,
     warnings,
     policy:
@@ -699,14 +760,114 @@ function previewFor(options: {
         ? 'Policy: confirm — this send needs approval outside the chat before it can go.'
         : 'Policy: chat — send only after the user approves this exact preview.',
   };
-  return renderMessagePreview(preview);
+  // First, a security fix this machine does not install on its own, when there is one to ask about (U7); then who it
+  // appears to come from — read from the From line the approval binds, so the terminal's approval says what the
+  // prepare said (L3); then, when this prepare rewrote that line, what it was; then what the rules allow here (B4).
+  const lines = [...(options.security ? [options.security] : []), identityLine(identityOfFrom(analysis.from))];
+  if (options.rewrittenFrom !== undefined) {
+    lines.push(
+      `The From line was rewritten for this send, its header alone: it was ${truncateDisplay(options.rewrittenFrom, 120)}`,
+    );
+  }
+  if (options.checkedAs !== undefined) lines.push(options.checkedAs);
+  if (options.allowedHere !== undefined) lines.push(options.allowedHere);
+  return `${lines.join('\n')}\n${renderMessagePreview(preview)}`;
+}
+
+/** A draft as `readDraft` reads it. */
+type ReadDraft = Awaited<ReturnType<typeof readDraft>>;
+
+/**
+ * G2: settles who this send appears to come from and, when the draft's From does not say it, rewrites that header
+ * alone and replaces the draft with the result — read again, so the approval is bound to what Gmail now holds. A
+ * draft from an address this mailbox may not send as is refused rather than relabelled, and is left as it was.
+ */
+async function fitFrom(
+  context: GmailContext,
+  resolved: ResolvedInbox,
+  draftId: string,
+  read: ReadDraft,
+  requested: MessageIdentity | undefined,
+): Promise<{ read: ReadDraft; identity: MessageIdentity; rewrittenFrom: string | undefined }> {
+  const config = await context.config();
+  const transport = await context.transport(resolved.alias);
+  const settings = labelSettingsOf(config);
+  const { analysis } = read;
+  const decision = mailDecision({
+    settings,
+    account: accountNameOf(config, resolved),
+    accountId: resolved.inbox.id,
+    kind: mailKind(analysis.inReplyTo),
+    requested,
+    recipients: [...analysis.to, ...analysis.cc, ...analysis.bcc],
+  });
+  const parsed = parseAddressList(analysis.from);
+  const address = parsed.length === 1 ? (parsed[0]?.address ?? resolved.inbox.email) : resolved.inbox.email;
+  // As `me`, a From that carries no label already fits, whatever address it names: nothing is rewritten, as before.
+  if (decision.identity === 'me' && parsed.length === 1 && !identityOfFrom(analysis.from).phrase) {
+    return { read, identity: 'me', rewrittenFrom: undefined };
+  }
+  const sendAs = await transport.listSendAs().catch(() => []);
+  if (!sendableAddresses(resolved.inbox.email, sendAs).has(address)) {
+    throw new CommsError(
+      'BAD_DATA',
+      'this draft is from an address this mailbox cannot send as, so it cannot be labelled',
+      {
+        hint: 'Review it and send it from Gmail, or write it again from one of this mailbox’s addresses.',
+      },
+    );
+  }
+  const wanted = mailFrom(decision, { address, sendAs, settings });
+  if (fromFits(analysis.from, wanted)) return { read, identity: wanted.identity, rewrittenFrom: undefined };
+
+  // A change to the draft, as `draft update` is one: never under a send that stands on it.
+  await refuseWhileSending(context, resolved.inbox.id, draftId);
+  const stored = await transport.getDraftRaw(draftId);
+  if (stored.messageId !== read.draftMessageId) {
+    throw new CommsError('APPROVAL_VOID', 'the draft changed while it was being prepared', {
+      hint: 'Prepare the send again to see what it says now.',
+    });
+  }
+  await transport.updateDraft(draftId, rewriteFromField(stored.raw, wanted.from), stored.threadId);
+  await context.core.audit.append({
+    inboxId: resolved.inbox.id,
+    alias: resolved.alias,
+    operation: 'draft.relabel',
+    outcome: 'ok',
+    surface: context.surface,
+    ids: { draftIds: [draftId], messageIds: [read.draftMessageId] },
+    reason: `From rewritten as ${wanted.identity}`,
+  });
+  const again = await readDraft(context, resolved.alias, draftId);
+  if (again.refusals.length > 0) {
+    throw unsendable(again.refusals, { boundary: newBoundary(), inbox: resolved.alias, id: draftId });
+  }
+  // What Gmail kept is what is bound: a From it did not keep as written is refused, never sent as something else.
+  if (!fromFits(again.analysis.from, wanted)) {
+    throw new CommsError('UNEXPECTED', 'Gmail did not keep the From line this draft was given', {
+      hint: 'Nothing was sent. Review the draft and send it from Gmail.',
+    });
+  }
+  return { read: again, identity: wanted.identity, rewrittenFrom: shownFrom(analysis.from) };
 }
 
 /**
  * Step one. Reads the draft, refuses it if an agent could not have written it, and records an approval bound to this
  * exact content. Nothing is sent, and preparing twice is free: each prepare is its own record.
  */
-export async function prepareSend(context: GmailContext, alias: string, draftId: string): Promise<SendPreparation> {
+export async function prepareSend(
+  context: GmailContext,
+  alias: string,
+  draftId: string,
+  options: {
+    /**
+     * `me` or `agent`: what the person said for this message (L3). Left out, the rules and then `agent` decide.
+     * Checked here, so a word that is not one is refused alike from either surface.
+     */
+    as?: string | undefined;
+  } = {},
+): Promise<SendPreparation> {
+  const requested = oneOf(options.as, IDENTITIES, IDENTITY_WORDS);
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const resolved = await context.inbox(alias);
@@ -724,11 +885,26 @@ export async function prepareSend(context: GmailContext, alias: string, draftId:
   }
 
   const transport = await context.transport(alias);
-  const { analysis, draftMessageId, refusals } = await readDraft(context, alias, draftId);
-  if (refusals.length > 0) throw unsendable(refusals);
-  if (analysis.to.length === 0 && analysis.cc.length === 0 && analysis.bcc.length === 0) {
+  const first = await readDraft(context, alias, draftId);
+  if (first.refusals.length > 0) {
+    throw unsendable(first.refusals, { boundary: newBoundary(), inbox: alias, id: draftId });
+  }
+  if (first.analysis.to.length === 0 && first.analysis.cc.length === 0 && first.analysis.bcc.length === 0) {
     throw new CommsError('BAD_DATA', 'this draft has no recipients', { hint: 'Add them and prepare the send again.' });
   }
+  // What this send is to each recipient — a reply to whoever was on the message it answers, proven from the mailbox,
+  // or a new message — and whether the behaviour rules allow that at every recipient (design
+  // 2026-10-19-agent-behaviour-rules, B2–B4): before the draft is relabelled, and before any approval or preview exists.
+  // A mailbox that cannot be asked raises TRANSIENT here, and nothing is prepared.
+  const firstProof = await replyProofOf(transport, first.analysis);
+  requireMailActs(context, config, resolved, placeActs(first.analysis, firstProof), first.analysis);
+  // Who it appears to come from, and a From that says so — rewritten, its header alone, when it does not (G2).
+  const fitted = await fitFrom(context, resolved, draftId, first, requested);
+  const { analysis, draftMessageId } = fitted.read;
+  // The draft as it is bound, after any relabelling, checked as what it is: proven again only if what it answers moved.
+  const proof = analysis.inReplyTo === first.analysis.inReplyTo ? firstProof : await replyProofOf(transport, analysis);
+  const acts = placeActs(analysis, proof);
+  const allowed = requireMailActs(context, config, resolved, acts, analysis);
 
   const { facts, flags, correspondentHistory } = config.defaults.riskEscalation
     ? await studyRecipients(context, transport, resolved, analysis)
@@ -742,7 +918,8 @@ export async function prepareSend(context: GmailContext, alias: string, draftId:
     inboxSub: resolved.inbox.sub,
     draftId,
     draftMessageId,
-    contentDigest: analysis.digest,
+    // The draft's digest, with each recipient and the act it was checked as: what the send checks again (B4).
+    contentDigest: boundDigest(analysis, acts),
     sendEpoch: sendEpochOf(config, resolved.inbox.id),
     policy: livePolicy,
     requiredPolicy,
@@ -760,24 +937,50 @@ export async function prepareSend(context: GmailContext, alias: string, draftId:
     reason: flags.length > 0 ? `escalated: ${flags.join(', ')}` : `policy ${effectivePolicy}`,
   });
 
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = await securityNotice({
+    core: context.core,
+    env: context.env,
+    running: VERSION,
+    act: 'send',
+    approvalId: record.approvalId,
+  });
   return {
     approvalId: record.approvalId,
     inbox: alias,
     draftId,
-    preview: previewFor({ analysis, facts, record, alias, effectivePolicy, flags }),
+    preview: previewFor({
+      analysis,
+      facts,
+      record,
+      alias,
+      effectivePolicy,
+      flags,
+      rewrittenFrom: fitted.rewrittenFrom,
+      security,
+      allowedHere: allowedHere(config, resolved, allowed),
+      checkedAs: await checkedAsLine(transport, analysis, acts, proof),
+    }),
+    identity: fitted.identity,
+    fromRewritten: fitted.rewrittenFrom !== undefined,
     policy: livePolicy,
     effectivePolicy,
     riskFlags: flags,
     taint: taintOf(facts, { boundary: newBoundary(), inbox: alias, id: draftMessageId }),
     ...(correspondentHistory === undefined ? {} : { correspondentHistory }),
-    expect: record.expect,
-    digest: analysis.digest,
+    expect: expectationFields(record.expect, {
+      boundary: newBoundary(),
+      inbox: alias,
+      id: record.approvalId,
+    }),
+    // What the approval is bound to: the draft, and each recipient with the act it was checked as.
+    digest: record.contentDigest,
     expiresAt: record.expiresAt,
     // Not in the approval's digest: the draft is. The command is this process's own, located where it is printed.
     nextStep:
       effectivePolicy === 'confirm'
         ? confirmNextStep(context, record.approvalId)
-        : 'Show the preview to the user verbatim and wait for an explicit yes. Then send it with the same approval id and the recipients and subject shown above.',
+        : 'Show the preview to the user verbatim and wait for an explicit yes. Then send it with the same approval id.',
     approval: await context.core.approvals.approvalOf(record),
     ...(legacyDrain === undefined ? {} : { legacyDrain }),
   };
@@ -799,6 +1002,30 @@ function confirmNextStep(context: GmailContext, approvalId: string): string {
       return wait === undefined ? `${first} — ${last}` : `${first}; learn when they have with ${wait} — ${last}`;
     },
     { instead: 'Show the preview to the user; they can send it from Gmail. You cannot approve this yourself.' },
+  );
+}
+
+/**
+ * Legacy callers may supply the canonical expectation they kept, while a caller holding the exact prepare result may
+ * still hand back its display-safe form. The latter is accepted only when it is byte-for-byte the field rendering of
+ * the live draft under the boundary and metadata that result carried; an invented or edited envelope mismatches.
+ */
+function suppliedExpectationMatches(
+  supplied: Expectation,
+  live: Expectation,
+  envelope: Omit<FieldEnvelope, 'boundary'>,
+): boolean {
+  if (sameExpectation(supplied, live)) return true;
+  const boundary = /^<untrusted-content boundary="([A-Za-z0-9_-]+)" field="subject"/.exec(supplied.subject)?.[1];
+  if (boundary === undefined) return false;
+  const displayed = expectationFields(live, { ...envelope, boundary });
+  return (
+    displayed.subject === supplied.subject &&
+    (['to', 'cc', 'bcc'] as const).every(
+      (field) =>
+        displayed[field].length === supplied[field].length &&
+        displayed[field].every((value, index) => value === supplied[field][index]),
+    )
   );
 }
 
@@ -829,7 +1056,13 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
   const { analysis, draftMessageId } = await readDraft(context, alias, record.draftId).catch(async (error: unknown) => {
     throw withApproval(error, await context.core.approvals.approvalOf(record));
   });
-  if (draftMessageId !== record.draftMessageId || analysis.digest !== record.contentDigest) {
+  const transport = await context.transport(alias);
+  // The acts this approval was bound as, from its digest (B4): a mailbox that cannot be asked, when it has to be, is
+  // TRANSIENT, and the approval is as it was.
+  const binding = await bindingOf(transport, record.contentDigest, analysis).catch(async (error: unknown) => {
+    throw withApproval(error, await context.core.approvals.approvalOf(record));
+  });
+  if (draftMessageId !== record.draftMessageId || binding === undefined) {
     const voided = await context.core.approvals.revoke(approvalId, 'the draft changed after the preview was prepared', {
       disposition: 'integrity',
       expect: { kind: 'send' },
@@ -842,7 +1075,16 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
       },
     });
   }
-  const transport = await context.transport(alias);
+  // The rules as they are now, for the act this approval was bound as (B4): a person is never asked to approve what
+  // a rule tightened since the prepare would refuse to send.
+  let allowed: ActDecision;
+  let checkedAs: string | undefined;
+  try {
+    allowed = requireMailActs(context, config, { alias, inbox }, binding.places, analysis);
+    checkedAs = await checkedAsLine(transport, analysis, binding.places, binding.proof);
+  } catch (error) {
+    throw withApproval(error, await context.core.approvals.approvalOf(record));
+  }
   const { facts, flags } = config.defaults.riskEscalation
     ? await studyRecipients(context, transport, { alias, inbox }, analysis)
     : { facts: [], flags: [] };
@@ -856,6 +1098,8 @@ export async function beginApproval(context: GmailContext, approvalId: string): 
       alias,
       effectivePolicy: stricterPolicy(livePolicy, record.requiredPolicy),
       flags,
+      allowedHere: allowedHere(config, { alias, inbox }, allowed),
+      checkedAs,
     }),
     challenge,
     effectivePolicy: stricterPolicy(livePolicy, record.requiredPolicy),
@@ -879,10 +1123,16 @@ export async function finishApproval(
   const { analysis, draftMessageId } = await readDraft(context, alias, record.draftId).catch(async (error: unknown) => {
     throw withApproval(error, await context.core.approvals.approvalOf(record));
   });
+  const binding = await bindingOf(await context.transport(alias), record.contentDigest, analysis).catch(
+    async (error: unknown) => {
+      throw withApproval(error, await context.core.approvals.approvalOf(record));
+    },
+  );
   const approved = await context.core.approvals.approve(
     approvalId,
     via,
-    { draftMessageId, contentDigest: analysis.digest },
+    // The digest the approval is bound to, when the draft still reads as it did: a changed one never matches.
+    { draftMessageId, contentDigest: binding?.digest ?? analysis.digest },
     answer,
     'send',
     context.platform,
@@ -910,9 +1160,11 @@ export async function executeSend(
   context: GmailContext,
   alias: string,
   options: {
-    draftId: string;
+    /** Legacy callers may still name it; otherwise the approval supplies the bound draft. */
+    draftId?: string | undefined;
     approvalId: string;
-    expect: Expectation;
+    /** Legacy callers may still restate it; otherwise the approval supplies the bound expectation. */
+    expect?: Expectation | undefined;
     /** True only for the CLI marker `--expect-subject none`; MCP subjects remain ordinary strings. */
     expectSubjectNone?: boolean | undefined;
   },
@@ -938,20 +1190,50 @@ export async function executeSend(
     { action: 'claim' },
   );
   if (outcome.error) throw outcome.error;
+  if (outcome.record === null) throw new CommsError('UNEXPECTED', 'a claimable send approval read as no record');
+  const draftId = options.draftId ?? outcome.record.draftId;
 
   // Read first, claim second: the claim is single-use, and burning it on a draft that has since changed would cost
   // the user a fresh approval for no reason. Refused here, the approval is as it was, and says so.
-  const before = await readDraft(context, alias, options.draftId).catch((error: unknown) => {
+  const before = await readDraft(context, alias, draftId).catch((error: unknown) => {
     throw withApproval(error, outcome.approval);
   });
-  if (before.refusals.length > 0) throw withApproval(unsendable(before.refusals), outcome.approval);
+  if (before.refusals.length > 0) {
+    throw withApproval(
+      unsendable(before.refusals, { boundary: newBoundary(), inbox: alias, id: draftId }),
+      outcome.approval,
+    );
+  }
   const liveSubject = before.analysis.subject;
-  const expect = options.expectSubjectNone
-    ? {
-        ...options.expect,
-        subject: ['', 'none'].includes(liveSubject.trim()) ? liveSubject : 'none',
-      }
-    : options.expect;
+  const liveExpect = expectationOf(before.analysis);
+  const suppliedExpect = options.expect;
+  const adjustedExpect =
+    options.expectSubjectNone && suppliedExpect !== undefined
+      ? {
+          ...suppliedExpect,
+          subject: ['', 'none'].includes(liveSubject.trim()) ? liveSubject : 'none',
+        }
+      : (suppliedExpect ?? outcome.record.expect);
+  const expect =
+    suppliedExpect !== undefined &&
+    suppliedExpectationMatches(adjustedExpect, liveExpect, { inbox: alias, id: options.approvalId })
+      ? outcome.record.expect
+      : adjustedExpect;
+
+  // The acts the approval was bound as, from its digest, and the rules as they are now for them (design
+  // 2026-10-19-agent-behaviour-rules, B4) — before the claim, as Slack and Resend ask, so a rule tightened since the yes
+  // refuses the send and leaves the approval usable once it is loosened again. A mailbox that cannot be asked, when it
+  // has to be, is TRANSIENT. A digest no reading gives is the draft changed: the claim below refuses it as that.
+  const binding = await bindingOf(transport, outcome.record.contentDigest, before.analysis).catch((error: unknown) => {
+    throw withApproval(error, outcome.approval);
+  });
+  if (binding !== undefined) {
+    try {
+      requireMailActs(context, config, resolved, binding.places, before.analysis);
+    } catch (error) {
+      throw withApproval(error, outcome.approval);
+    }
+  }
 
   const {
     record: claimed,
@@ -961,7 +1243,8 @@ export async function executeSend(
     options.approvalId,
     {
       draftMessageId: before.draftMessageId,
-      contentDigest: before.analysis.digest,
+      // The digest the approval is bound to, when the draft still reads as it did: a changed one never matches.
+      contentDigest: binding?.digest ?? before.analysis.digest,
       inboxId: resolved.inbox.id,
       inboxSub: resolved.inbox.sub,
       expect,
@@ -986,11 +1269,11 @@ export async function executeSend(
     alias,
     inboxId: resolved.inbox.id,
     approvalId: options.approvalId,
-    draftId: options.draftId,
+    draftId,
   };
   // Claimed: from here until its outcome is recorded, the claim's lease is renewed while Gmail's work is outstanding.
   return withSendingLease(context.core.approvals, options.approvalId, claimToken, async () => {
-    if (claimed.draftId !== options.draftId) {
+    if (claimed.draftId !== draftId) {
       const error = new CommsError(
         'APPROVAL_VOID',
         'nothing was sent: this approval was prepared for a different draft',
@@ -1018,14 +1301,26 @@ export async function executeSend(
       // `draft delete` refuse while an approval is sending — but a person in Gmail web still can.
       let now: Awaited<ReturnType<typeof readDraft>>;
       try {
-        now = await readDraft(context, alias, options.draftId);
+        now = await readDraft(context, alias, draftId);
       } catch (error) {
         throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
       }
-      if (now.draftMessageId !== claimed.draftMessageId || now.analysis.digest !== claimed.contentDigest) {
+      // The acts recovered before the claim, held to the draft as it reads now: no mailbox is asked from here on.
+      if (
+        now.draftMessageId !== claimed.draftMessageId ||
+        binding === undefined ||
+        !stillBound(binding, claimed.contentDigest, now.analysis)
+      ) {
         const error = new CommsError('APPROVAL_VOID', 'nothing was sent: the draft changed while it was being sent', {
           hint: 'Prepare the send again to see what it says now.',
         });
+        throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
+      }
+      // The rules as they are now, read afresh, for each recipient and the act that was approved (design
+      // 2026-10-19-agent-behaviour-rules, B4): a rule tightened after the claim stops the send before Gmail is asked.
+      try {
+        requireMailActs(context, await context.config(), resolved, binding.places, now.analysis);
+      } catch (error) {
         throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
       }
 
@@ -1055,11 +1350,11 @@ export async function executeSend(
     for (;;) {
       await readyToSend();
       try {
-        sent = await transport.sendDraft(options.draftId);
+        sent = await transport.sendDraft(draftId);
         break;
       } catch (error) {
         const said = error instanceof Error ? error.message : String(error);
-        const ids = { approvalIds: [options.approvalId], draftIds: [options.draftId] };
+        const ids = { approvalIds: [options.approvalId], draftIds: [draftId] };
         if (sendCertainlyRefused(error)) {
           const throttle = sendThrottleOf(error, context.now().getTime());
           const delay = throttle?.limit === 'rate' ? pacing.next(throttle.waitMs) : null;
@@ -1146,7 +1441,7 @@ export async function executeSend(
         surface: context.surface,
         ids: {
           approvalIds: [options.approvalId],
-          draftIds: [options.draftId],
+          draftIds: [draftId],
           // Only an id Gmail gave: accepted without one, the field is left out and the reason says so.
           ...(sentMessageId === undefined ? {} : { messageIds: [sentMessageId] }),
         },
@@ -1166,14 +1461,15 @@ export async function executeSend(
     return {
       inbox: alias,
       approvalId: options.approvalId,
-      draftId: options.draftId,
+      draftId,
       ...(sentMessageId === undefined ? {} : { sentMessageId }),
       said: sentMessageId === undefined ? SENT_WITHOUT_ID : `sent, message id ${sentMessageId}`,
       threadId: sent.threadId,
-      to: claimed.expect.to,
-      cc: claimed.expect.cc,
-      bcc: claimed.expect.bcc,
-      subject: claimed.expect.subject,
+      ...expectationFields(claimed.expect, {
+        boundary: newBoundary(),
+        inbox: alias,
+        id: options.approvalId,
+      }),
       verified,
       ...(unrecorded.length > 0 ? { note: unrecorded.join('; ') } : {}),
       approval: approval ?? (await approvalNow(context, options.approvalId, resolved.inbox.id, claimedApproval)),
@@ -1206,27 +1502,10 @@ export async function listApprovals(
     : undefined;
   const seen = await context.core.approvals.inspectAll(inboxId ? { inboxId } : {});
   const approvals = seen.map(({ stored, outcome }) => {
-    const owner = ownerOf(stored);
-    const alias = owner === null ? null : (byId.get(owner) ?? '(removed)');
-    // The envelope names the mailbox by its alias where it still has one, else by the id it was prepared for.
-    const envelope = {
-      boundary: newBoundary(),
-      inbox: alias !== null && alias !== '(removed)' ? alias : (owner ?? 'none') || 'none',
-      id: outcome.approval.id,
-    };
-    const wrap: SenderFieldWrapper = (text, field) =>
-      field === 'subject'
-        ? wrapField(text, 'subject', envelope)
-        : field === 'filename'
-          ? filenameField(text, envelope)
-          : addressField(text, field, envelope);
+    const { approval, inbox } = gmailApprovalView(stored, outcome, byId);
     return {
-      ...publicApproval(stored, outcome, {
-        wrap,
-        // Gmail's own surface: acceptance is sending, and says so (D2).
-        ...(outcome.approval.channel === 'gmail' ? { usedSaid: (at: string) => `sent at ${at}` } : {}),
-      }),
-      inbox: alias,
+      ...approval,
+      inbox,
     };
   });
   // Then the drafts whose last preparation expired, and what the records read can say of each (design §D9).

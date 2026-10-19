@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.15.2"
+compatibility: "@agentcomms/events-daemon@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -13,8 +13,10 @@ metadata:
 Read [the contract](references/contract.md) first. It is the boundary: this skill uses only model-callable event tools,
 keeps every proposal disabled, and gives human-only work back to a person.
 
-The local event daemon is not published yet. If no `events_*` tools are available, say that local event rules are not
-available on this machine yet and stop: do not substitute another tool, and do not describe a rule as active.
+If no `events_*` tools are available, the events MCP server is not registered with this client. Say so: the person
+registers it through the managed core path — `agentcomms mcp install --server events --client <client>` at a terminal,
+or `comms_server_install` with `channel: "events"` from a chat — and restarts the client. Then stop: do not substitute
+another tool, and do not describe a rule as active.
 
 ## Safe workflow
 
@@ -41,9 +43,23 @@ available on this machine yet and stop: do not substitute another tool, and do n
 
 ## Judge boundary
 
-Every judge kind is off until a person enables it. Until Phase E, judge, budget and kind tools return typed
-unavailable results; Laya remains unavailable until Phase E2. Report that state. Do not substitute a target test,
-local endpoint or another tool for a judge.
+Every judge kind is off until a person enables it. `events_judge_kinds_list` shows which kinds are on. Laya is not
+available in this release: its kind, `events_judge_model_status` and `events_judge_model_remove` return a typed
+unavailable result (`E2_REQUIRED`). Report that state.
+
+- **Propose, never activate.** `events_judge_add` and `events_judge_update` create an immutable judge version, used
+  only once a rule naming it is approved. `events_budget_update` creates a pending judge budget, and
+  `events_judge_kind_enable` prepares a kind's enablement. Each returns an approval: follow the handoff below. A
+  rule's judge goes in its `agentic` part, with only the fields the question needs in `inputs`.
+- **Test only with the daemon's event.** `events_judge_test` asks one active judge version about the daemon's own
+  fixed synthetic event, never caller content, at most ten times an hour per version. Its answer is not a rule's
+  decision.
+- **Tighten at once.** `events_judge_kind_disable` turns a kind off immediately, needs no approval, and cancels a
+  pending global enablement that captured a rule of that kind. A removed judge also cancels its pending rule
+  activations; never describe a rule that embeds a revoked judge as activatable.
+- **Keys stay with the person.** Never ask for, read or relay a hosted judge's API key, and never invent one.
+- **Prepared is not active.** Never invent a local endpoint, and never call a prepared kind, budget or rule active.
+- Do not substitute a target test, a local endpoint or another tool for a judge.
 
 ## Approval handoff
 
@@ -73,4 +89,5 @@ and ordinary CLI requests do not select it.
 
 Name the catalogue example, source, immutable rule version and local result. Separate what was inspected, what was
 proposed, what the local test produced, and what only a person can decide. A disabled proposal is not active; a typed
-unavailable judge result is not a judge run; a target test does not prove delivery.
+unavailable judge result is not a judge run; a judge test is not a rule's decision; a target test does not prove
+delivery.

@@ -1,13 +1,30 @@
+import { resolve } from 'node:path';
 import { corruptStubOf, type StoredApproval, stateOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
-import { CHANNELS, type Channel, channelLabel, channelServer, requireChannelManifest } from '../channel-servers.ts';
+import {
+  CHANNELS,
+  requireChannelManifest,
+  SERVERS,
+  type ServerId,
+  serverFacts,
+  serverLabel,
+} from '../channel-servers.ts';
 import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
-import { type CliHandoffs, type Handoff, handoffChoices, handoffSentence, requireHandoffs } from '../handoffs.ts';
+import { type CliHandoffs, type Handoff, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
+import {
+  exchangePointer,
+  launcherExists,
+  launcherName,
+  launcherPaths,
+  restorePointer,
+  writeLauncher,
+} from '../launcher.ts';
+import { type ManagedShimWriteResult, managedShimPath, managedShimsSupported } from '../managed-shims.ts';
 import { type RegisteredServer, scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
 import {
   clientCliSearch,
@@ -29,13 +46,41 @@ import {
   preflightInstall,
   reusableRuntime,
   type SupportedClient,
+  verifyEntry,
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
-import { compareVersions, isBehind, isVersion, npmGlobalPackages, npmInstallGlobal, npmLatestVersion } from '../npm.ts';
-import { launcherOf, registrationVersion } from '../registrations.ts';
-import { changeUpdateCheck, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
+import { nodeProgram } from '../node-program.ts';
+import {
+  compareVersions,
+  isBehind,
+  isVersion,
+  npmGlobalPackages,
+  npmInstallGlobal,
+  npmLatestVersion,
+  type ReleaseDeclaration,
+} from '../npm.ts';
+import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
+import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
+// Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
+import type { VerifiedProvenance } from '../update-provenance.ts';
+import {
+  BUILT_BY,
+  type DecidingRelease,
+  declaredSince,
+  npmRegistry,
+  oldestVersion,
+  type RegistryAnswer,
+  type ReleaseRegistry,
+  type ReleaseSources,
+  type ReleaseVerifier,
+  runtimeIntegrityProblem,
+  verifyReleaseSet,
+} from '../update-release.ts';
+import { changeUpdateCheck, type ReleaseFacts, type UpdateCurrent, updateCheckSwitchedOff } from '../update-state.ts';
+import { shownRelease } from '../update-words.ts';
 import { VERSION } from '../version.ts';
-import { channelProduct } from './servers.ts';
+import { isPlainVersion } from '../versions.ts';
+import { launcherSwitchEffect, serverProduct, withManagedShim } from './servers.ts';
 
 /**
  * Bringing a machine to the latest release, from a terminal (`agentcomms update`) or a chat (`comms_update`).
@@ -51,21 +96,23 @@ import { channelProduct } from './servers.ts';
  * The check reads and asks nobody. The update is a change whose effects are every step, one sentence each, so the
  * approval is bound to exactly that list — the versions in it included: a release published between the question and
  * the yes is a different change, and the claim is refused. Nothing behind, nothing is prepared.
+ *
+ * A registration that starts the stable launcher (design 2026-10-16, U6) is not registered again: the update installs
+ * the latest runtime and switches the launcher's pointer, and no client's configuration is touched. A managed
+ * registration from before the launcher names a versioned runtime; the update registers it again on the launcher —
+ * the one update that edits it — even when it is already at the latest release.
  */
 
 /**
- * The packages this suite publishes, whose latest releases an update reads: every channel's, from the manifests, and
- * every package a channel's server is run through by `npx` when that is another one — Gmail's `gmail-mcp`.
+ * The packages this suite publishes, whose latest releases an update reads: every declared server owner's, from the
+ * channel and service declarations, and every package a server is run through by `npx` when that is another one —
+ * Gmail's `gmail-mcp`.
  */
-const CHANNEL_PACKAGES: readonly string[] = Object.freeze(
-  CHANNELS.map((channel) => channelServer(channel).packageName),
-);
+const OWNER_PACKAGES: readonly string[] = Object.freeze(SERVERS.map((server) => serverFacts(server).packageName));
 const SERVER_PACKAGES: readonly string[] = Object.freeze(
-  CHANNELS.map((channel) => channelServer(channel).npxPackage).filter((name) => !CHANNEL_PACKAGES.includes(name)),
+  SERVERS.map((server) => serverFacts(server).npxPackage).filter((name) => !OWNER_PACKAGES.includes(name)),
 );
-const PUBLISHED_NAMES: readonly string[] = Object.freeze(
-  [...new Set([...CHANNEL_PACKAGES, ...SERVER_PACKAGES])].sort(),
-);
+const PUBLISHED_NAMES: readonly string[] = Object.freeze([...new Set([...OWNER_PACKAGES, ...SERVER_PACKAGES])].sort());
 
 /**
  * What an update does outside this process, each replaceable: a test hands in stand-ins, and nothing it runs reads
@@ -80,6 +127,29 @@ export interface UpdateDeps {
   installGlobal?: ((spec: string) => Promise<void>) | undefined;
   /** Installs a managed runtime of exactly this version, as the managed launcher would. */
   installRuntime?: ((packageName: string, version: string) => Promise<void>) | undefined;
+  /**
+   * What the releases after `from` up to `version` declare — a decision any of them needs, and whether `version` is a
+   * security fix (design 2026-10-16, U5, U7) — each counted only once verified, by `verifyRelease`. Defaults to
+   * `declaredSince` over `registry`, or the registry npm reads — but only beside the registry's own `latest`: a test
+   * that hands in a `latestVersion` hands in this too, or the facts are not read. Null: never read them.
+   */
+  releaseFacts?:
+    | ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration>)
+    | null
+    | undefined;
+  /**
+   * Every package's full document on the registry, read for the tarball integrity of the release an update installs
+   * (and what the releases on the way declare). Defaults to the registry npm reads — but only beside the registry's own
+   * `latest`: a test that hands in a `latestVersion` hands in this too.
+   */
+  registry?: ReleaseRegistry | undefined;
+  /**
+   * Verifies a release's provenance before an update installs or switches to it (design 2026-10-16 U5 step 3, held to
+   * the same pins as the background run). Core's CLI and server hand in theirs (`stateReleaseVerifier`: npm's
+   * attestations endpoint and sigstore-js); a test hands in its own. Without one every release is refused: nothing
+   * installs unverified, and nothing skips it.
+   */
+  verifyRelease?: ReleaseVerifier | undefined;
   /** The clock a check or an update is recorded by in the daily check's file. */
   now?: (() => Date) | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
@@ -91,11 +161,11 @@ export interface UpdateRequest {
   noVerify?: boolean | undefined;
 }
 
-/** One client's registration of one channel's server. */
+/** One client's registration of one declared server. */
 export interface RegistrationItem {
   kind: 'registration';
-  channel: Channel;
-  /** The package the entry starts: the channel's, or for Gmail started through npx, `@agentcomms/gmail-mcp`. */
+  channel: ServerId;
+  /** The package the entry starts: the owner's, or for Gmail started through npx, `@agentcomms/gmail-mcp`. */
   package: string;
   client: string;
   name: string;
@@ -108,6 +178,11 @@ export interface RegistrationItem {
   latest: string;
   /** Its pin and `--read-only`, as `mcp install` writes them. An update keeps exactly these. */
   narrowing: string[];
+  /**
+   * The stable launcher the entry starts, when it starts one (design 2026-10-16, U6): its version is the release the
+   * launcher's pointer names, and an update switches that pointer and leaves the entry as it is.
+   */
+  launches?: string | undefined;
   /** On an entry that is behind: whether the update can register it again from here. */
   updatable?: boolean | undefined;
   /** Why not, and what a person can do instead; or, for one that pins nothing, why it is not compared. */
@@ -117,7 +192,7 @@ export interface RegistrationItem {
 /** The managed runtime of one package at the latest release: behind when a registration the update moves needs it. */
 export interface RuntimeItem {
   kind: 'runtime';
-  channel: Channel;
+  channel: ServerId;
   package: string;
   /** The newest runtime of this package on disk, or null when there is none. */
   version: string | null;
@@ -145,6 +220,11 @@ export interface UpdateReport {
   upToDate: UpdateItem[];
   /** Registrations that pin no version — a checkout's own code, or an entry written by hand — so are not compared. */
   unpinned: RegistrationItem[];
+  /**
+   * Managed registrations at the latest release that still name a versioned runtime: the next update registers each
+   * again on the stable launcher, once, after which updates switch the launcher's pointer and edit no client config.
+   */
+  moves?: RegistrationItem[] | undefined;
   /** Client configs, and the global package list, that could not be read: what they hold is not known. */
   unreadable: UnreadableConfig[];
 }
@@ -152,7 +232,7 @@ export interface UpdateReport {
 export type UpdateStep =
   | {
       kind: 'runtime';
-      channel: Channel;
+      channel: ServerId;
       package: string;
       version: string;
       path: string;
@@ -161,7 +241,7 @@ export type UpdateStep =
     }
   | {
       kind: 'registration';
-      channel: Channel;
+      channel: ServerId;
       client: string;
       name: string;
       scope: 'user';
@@ -177,6 +257,7 @@ export type UpdateStep =
       /** Where the entry it replaced was saved. */
       backupPath?: string | undefined;
       warnings?: string[] | undefined;
+      shim?: ManagedShimWriteResult | undefined;
     }
   | {
       kind: 'global';
@@ -184,6 +265,24 @@ export type UpdateStep =
       from: string;
       to: string;
       outcome: 'updated' | 'failed';
+      detail?: string | undefined;
+    }
+  | {
+      /** A stable launcher switched to the latest runtime: every registration that starts it, and no client config. */
+      kind: 'pointer';
+      channel: ServerId;
+      package: string;
+      launcher: string;
+      /** The release it started before, or null when its pointer named none. */
+      from: string | null;
+      to: string;
+      /** The runtime it starts now. */
+      runtime: string;
+      /** The registrations that start it, which run `to` once their client restarts them. */
+      registrations: { client: string; name: string; scope: 'user' | 'project'; path: string }[];
+      outcome: 'switched' | 'failed' | 'skipped';
+      /** Whether a registration that starts it was started and answered, as `mcp install` checks an entry. */
+      verification?: InstallResult['verification'] | undefined;
       detail?: string | undefined;
     };
 
@@ -217,19 +316,23 @@ interface Inspection {
   handoffs: CliHandoffs;
   /** Behind, and updatable as far as the files show. */
   candidates: Found[];
+  /** At the latest release, naming a versioned runtime, and updatable: registered again on the stable launcher. */
+  moving: Found[];
+  /** Behind, starting this installation's stable launcher: its pointer is switched. */
+  launched: Found[];
   /** Behind, and not updatable from here. */
   manual: RegistrationItem[];
   globals: GlobalItem[];
 }
 
-function narrowingArgs(channel: Channel, narrowing: Narrowing): string[] {
-  return channelServer(channel).serverArgs({ client: 'json', ...narrowing });
+function narrowingArgs(server: ServerId, narrowing: Narrowing): string[] {
+  return serverFacts(server).serverArgs({ client: 'json', ...narrowing });
 }
 
-/** Every registration of every channel's server, as the core's `channels` finds them — nothing an `env` holds. */
-function registrations(servers: readonly RegisteredServer[]): { channel: Channel; server: RegisteredServer }[] {
-  return CHANNELS.flatMap((channel) =>
-    servers.filter((server) => isProductServer(server, channelServer(channel))).map((server) => ({ channel, server })),
+/** Every registration of every declared server, as the core's `channels` finds them — nothing an `env` holds. */
+function registrations(servers: readonly RegisteredServer[]): { channel: ServerId; server: RegisteredServer }[] {
+  return SERVERS.flatMap((channel) =>
+    servers.filter((server) => isProductServer(server, serverFacts(channel))).map((server) => ({ channel, server })),
   );
 }
 
@@ -242,10 +345,15 @@ async function latestReleases(
     names.map(async (name) => {
       try {
         const version = await latestVersion(name);
-        if (!isVersion(version)) {
+        // A release only as a plain MAJOR.MINOR.PATCH, as the background run holds it: a prerelease or build metadata
+        // is the registry's text, and nothing installs one.
+        if (!isPlainVersion(version)) {
           return {
             name,
-            problem: `the npm registry names ${JSON.stringify(String(version)).slice(0, 60)} as the latest release of ${name}, which is not a version`,
+            // What it named is not repeated: the registry's answer can be anything at all.
+            problem: isVersion(version)
+              ? `the npm registry names something that is not a plain release (MAJOR.MINOR.PATCH) as the latest release of ${name}`
+              : `the npm registry names something that is not a version as the latest release of ${name}`,
           };
         }
         return { name, version };
@@ -270,18 +378,22 @@ async function latestReleases(
 }
 
 /**
- * How to register an entry again by hand: its channel's own `mcp install`, with every flag that decides its reach —
- * located as that channel's command among this machine's registrations, or why it is not locatable here (CUE-403).
+ * How to register an entry again by hand: core's own `mcp install --server <channel>`, located, with every flag that
+ * decides its reach (CUE-403). Never the channel's own: it registers the release that command is, and the one found
+ * among this machine's registrations may be the old one the entry behind still starts (re-review of 0.20.0, severity
+ * 3). Core registers its own release, the one this update brings the machine to.
  *
  * The entry's name and pins are read from the client's file, which may hold anything, so on Windows the command may
  * have no line to paste: the reasons below give it with `handoffSentence`, which shows it as words then.
  */
 function installHandoff(item: RegistrationItem, handoffs: CliHandoffs): Handoff {
-  const facts = channelServer(item.channel);
+  const facts = serverFacts(item.channel);
   const words = ['mcp', 'install', '--client', item.client];
   if (item.name !== facts.defaultServerName) words.push('--name', item.name);
   words.push(...item.narrowing, '--force');
-  return handoffs.of(item.channel, words);
+  return handoffs.core(
+    item.channel === 'core' ? words : ['mcp', 'install', '--server', item.channel, ...words.slice(2)],
+  );
 }
 
 /**
@@ -346,8 +458,8 @@ async function runtimesNeeded(
   managed: readonly RegistrationItem[],
 ): Promise<RuntimeItem[]> {
   const needed: RuntimeItem[] = [];
-  for (const channel of CHANNELS) {
-    const packageName = channelServer(channel).packageName;
+  for (const channel of SERVERS) {
+    const packageName = serverFacts(channel).packageName;
     const version = latest[packageName];
     if (version === undefined) continue;
     if (!managed.some((item) => item.channel === channel && item.launcher === 'managed')) continue;
@@ -371,7 +483,7 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   const handoffs = requireHandoffs(core, deps.platform).withRegistrations(scan.servers);
   const unreadable: UnreadableConfig[] = [...scan.unreadable];
   const found = registrations(scan.servers).map(({ channel, server }) => {
-    const facts = channelServer(channel);
+    const facts = serverFacts(channel);
     const narrowing = facts.narrowingOf(server.args);
     return {
       channel,
@@ -404,9 +516,9 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
    * can reach npm before that channel's first publish — and asking about it would stop the update for everyone who
    * does not use it.
    */
-  const wanted = new Set<string>([channelServer('core').packageName]);
+  const wanted = new Set<string>([serverFacts('core').packageName]);
   for (const entry of found) {
-    wanted.add(channelServer(entry.channel).packageName);
+    wanted.add(serverFacts(entry.channel).packageName);
     wanted.add(entry.package);
   }
   for (const name of Object.keys(installed)) wanted.add(name);
@@ -425,9 +537,13 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   const behind: UpdateItem[] = [];
   const upToDate: UpdateItem[] = [];
   const unpinned: RegistrationItem[] = [];
+  const moves: RegistrationItem[] = [];
   const candidates: Found[] = [];
+  const moving: Found[] = [];
+  const launched: Found[] = [];
   const manual: RegistrationItem[] = [];
   for (const entry of found) {
+    const stable = stableLauncherOf(entry.server, serverFacts(entry.channel));
     const item: RegistrationItem = {
       kind: 'registration',
       channel: entry.channel,
@@ -436,23 +552,51 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
       name: entry.server.name,
       scope: entry.server.scope ?? 'user',
       path: entry.server.path,
-      launcher: launcherOf(entry.server, channelServer(entry.channel)),
+      launcher: launcherOf(entry.server, serverFacts(entry.channel)),
       version: entry.version,
       latest: latest[entry.package] ?? '',
       narrowing: narrowingArgs(entry.channel, entry.narrowing),
+      ...(stable === null ? {} : { launches: stable.launcher }),
     };
     if (item.version === null) {
       unpinned.push({
         ...item,
         reason:
-          item.launcher === 'local'
-            ? "it starts a checkout's own code, which pins no release"
-            : 'it pins no release, so there is nothing to compare: it was not written by `mcp install`',
+          stable !== null
+            ? `it starts the stable launcher ${stable.launcher}, whose pointer is not there or names no release; a managed install or update writes it afresh`
+            : item.launcher === 'local'
+              ? "it starts a checkout's own code, which pins no release"
+              : 'it pins no release, so there is nothing to compare: it was not written by `mcp install`',
       });
       continue;
     }
     if (!isBehind(item.version, item.latest)) {
       upToDate.push(item);
+      // At the latest release, and still naming a runtime by its version: moved to the stable launcher, once.
+      if (stable === null && item.launcher === 'managed') {
+        const reason = await whyNotUpdatable(context, config, item, entry.narrowing, handoffs);
+        if (reason === undefined) {
+          const listed: RegistrationItem = { ...item, updatable: true };
+          moves.push(listed);
+          moving.push({ server: entry.server, item: listed });
+        }
+      }
+      continue;
+    }
+    if (stable !== null) {
+      // The launcher's pointer is switched, which needs no client and edits no configuration — but only this
+      // installation's launcher is this update's to switch.
+      const own = resolve(stable.dataDir) === resolve(core.paths.dataDir);
+      const listed: RegistrationItem = own
+        ? { ...item, updatable: true }
+        : {
+            ...item,
+            updatable: false,
+            reason: `it starts the stable launcher of another data directory, ${stable.dataDir}: update it from the installation that uses that directory`,
+          };
+      behind.push(listed);
+      if (own) launched.push({ server: entry.server, item: listed });
+      else manual.push(listed);
       continue;
     }
     const reason = await whyNotUpdatable(context, config, item, entry.narrowing, handoffs);
@@ -462,15 +606,16 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
     else manual.push(listed);
   }
 
-  // The runtimes: behind when a registration being moved needs the latest one; up to date when it is on disk.
+  // The runtimes: behind when a registration being moved, or a launcher being switched, needs the latest one; up to date
+  // when it is on disk.
   const needed = await runtimesNeeded(
     core.paths.dataDir,
     latest,
-    candidates.map((candidate) => candidate.item),
+    [...candidates, ...launched].map((candidate) => candidate.item),
   );
   behind.push(...needed);
-  for (const channel of CHANNELS) {
-    const packageName = channelServer(channel).packageName;
+  for (const channel of SERVERS) {
+    const packageName = serverFacts(channel).packageName;
     const version = latest[packageName];
     if (version === undefined || (await reusableRuntime(core.paths.dataDir, packageName, version)) === null) continue;
     upToDate.push({
@@ -496,9 +641,11 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
   }
 
   return {
-    report: { core: VERSION, latest, behind, upToDate, unpinned, unreadable },
+    report: { core: VERSION, latest, behind, upToDate, unpinned, moves, unreadable },
     handoffs,
     candidates,
+    moving,
+    launched,
     manual,
     globals,
   };
@@ -521,11 +668,65 @@ export async function updateCheck(
   claim?: string,
 ): Promise<UpdateReport> {
   const { report } = await inspect(core, env, deps);
-  await recordFound(core, env, report, deps, null, claim);
+  await recordFound(core, env, report, deps, null, claim, await releaseOf(report, env, deps));
   return report;
 }
 
-const CORE_PACKAGE = channelServer('core').packageName;
+/**
+ * What the latest release's core manifest declares, for the daily check's file — or null, where it is not to be read
+ * or could not be: never a reason for the check to fail. Read only for a release newer than nothing — a counted one.
+ */
+async function releaseOf(report: UpdateReport, env: NodeJS.ProcessEnv, deps: UpdateDeps): Promise<ReleaseFacts | null> {
+  const latest = report.latest[CORE_PACKAGE];
+  if (latest === undefined || !isPlainVersion(latest)) return null;
+  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps);
+  if (read === null) return null;
+  try {
+    return { version: latest, ...(await read(CORE_PACKAGE, latest, oldestHere(report))) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The oldest release this machine runs, as the report saw it — what every release after it is read for: the core
+ * answering, and every registration, runtime and global package behind.
+ */
+function oldestHere(report: UpdateReport): string | null {
+  return oldestVersion([report.core, ...report.behind.map((item) => item.version)]);
+}
+
+/**
+ * The daily check's and `update --check`'s reader of what releases declare (`declaredSince`): the registry handed in,
+ * or the one npm reads — but only beside the registry's own `latest`: a test with a stand-in `latestVersion` hands in
+ * `releaseFacts` itself, or none is read. With the verifier handed in, and none where none was: a channel's process
+ * carries no Sigstore, so what it reads counts for nothing. Each package's document is read once, however often asked.
+ */
+export function releaseFactsReader(
+  env: NodeJS.ProcessEnv,
+  deps: Pick<UpdateDeps, 'registry' | 'latestVersion' | 'verifyRelease'>,
+): ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration>) | null {
+  if (deps.latestVersion !== undefined) return null;
+  const read = deps.registry ?? npmRegistry(env);
+  const documents = new Map<string, Promise<RegistryAnswer>>();
+  const registry: ReleaseRegistry = (packageName) => {
+    const known = documents.get(packageName) ?? read(packageName);
+    documents.set(packageName, known);
+    return known;
+  };
+  return async (packageName, version, from = null) => {
+    const { security, needsDecision } = await declaredSince(
+      registry,
+      deps.verifyRelease ?? null,
+      packageName,
+      from,
+      version,
+    );
+    return { security, needsDecision };
+  };
+}
+
+const CORE_PACKAGE = serverFacts('core').packageName;
 
 /**
  * One registration: its channel, its client, its scope, the file it is in and its name. Two copies of it in one file —
@@ -538,7 +739,7 @@ const CORE_PACKAGE = channelServer('core').packageName;
  * and every call there was told to restart the client — which starts the same old code.
  */
 const registrationKey = (entry: {
-  channel: Channel;
+  channel: ServerId;
   client: string;
   scope: 'user' | 'project';
   path: string;
@@ -567,16 +768,60 @@ async function recordFound(
   deps: Pick<UpdateDeps, 'now'>,
   after: UpdateResult | null = null,
   claim?: string,
+  release?: ReleaseFacts | null,
 ): Promise<void> {
   const latest = report.latest[CORE_PACKAGE];
   if (updateCheckSwitchedOff(env) !== null || latest === undefined || !isVersion(latest)) return;
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const { behind, current } = updateCheckFindings(report, latest, after);
+  const moves = movesLeft(report, after);
+  // What the release declares, when this read it; what an earlier read found of another release counts for nothing.
+  const facts = (record: { release: ReleaseFacts | null }) =>
+    release !== undefined ? release : record.release?.version === latest ? record.release : null;
   await changeUpdateCheck(core.paths.stateDir, (record) =>
     claim !== undefined && record.checking !== claim
       ? null
-      : { record: { ...record, lastChecked: at, latest, behind, current, lastError: null, checking: null } },
+      : {
+          record: {
+            ...record,
+            lastChecked: at,
+            latest,
+            behind,
+            current,
+            lastError: null,
+            checking: null,
+            release: facts(record),
+            moves,
+          },
+        },
   ).catch(() => undefined);
+}
+
+/**
+ * How many managed registrations still name a versioned runtime once `after` is done, for the notice (design
+ * 2026-10-16 U6): those at the latest release the update would move (`moves`), and those behind it that it registers
+ * again on the stable launcher — less each one `after` registered. Null when a client's configuration could not be
+ * read, and so what it holds is not known.
+ */
+function movesLeft(report: UpdateReport, after: UpdateResult | null): number | null {
+  if (report.unreadable.some((file) => file.client !== 'npm')) return null;
+  const moved = new Set<string>();
+  for (const step of after?.steps ?? []) {
+    if (step.kind === 'registration' && step.outcome === 'registered' && step.verification !== 'failed') {
+      moved.add(registrationKey(step));
+    }
+  }
+  const versioned = [
+    ...(report.moves ?? []),
+    ...report.behind.filter(
+      (item): item is RegistrationItem =>
+        item.kind === 'registration' &&
+        item.launcher === 'managed' &&
+        item.launches === undefined &&
+        item.updatable !== false,
+    ),
+  ];
+  return versioned.filter((item) => !moved.has(registrationKey(item))).length;
 }
 
 /**
@@ -605,6 +850,11 @@ export function updateCheckFindings(
     if (step.kind === 'registration' && step.outcome === 'registered' && step.verification !== 'failed') {
       moved.add(registrationKey(step));
     }
+    // A switched launcher moved every registration that starts it, without registering any of them again.
+    if (step.kind === 'pointer' && step.outcome === 'switched' && step.verification !== 'failed') {
+      for (const registration of step.registrations)
+        moved.add(registrationKey({ channel: step.channel, ...registration }));
+    }
     if (step.kind === 'global' && step.outcome === 'updated') installed.add(step.package);
   }
   const atLatest = (version: string | null) => version !== null && isVersion(version) && !isBehind(version, latest);
@@ -623,7 +873,7 @@ export function updateCheckFindings(
       });
   const globals = items.filter((item): item is GlobalItem => item.kind === 'global');
   const global = CHANNELS.filter((channel) => {
-    const name = channelServer(channel).packageName;
+    const name = serverFacts(channel).packageName;
     return globals.some((item) => item.package === name && atLatest(installed.has(name) ? item.latest : item.version));
   });
   // What an update did not settle is still behind: a step that failed, or something left for a person.
@@ -643,6 +893,28 @@ interface RegistrationStep {
   install: PlannedInstall;
   /** Where the entry goes and what it starts, as the preview says it: see `entryDestination`. */
   destination: string;
+  /** The managed package CLI shim this registration writes or repoints. */
+  shim?: string | undefined;
+  /** For a managed entry: what the install does to the product's stable launcher, as the preview says it. */
+  pointer?: string | undefined;
+}
+
+/** A stable launcher an update switches to the latest runtime (design 2026-10-16, U6). */
+interface PointerStep {
+  channel: ServerId;
+  package: string;
+  name: string;
+  launcher: string;
+  /** The release its pointer names now, or null. */
+  version: string | null;
+  latest: string;
+  /** The runtime it is switched to. */
+  runtime: string;
+  /** The launcher file is not there, and is written again with this Node before the switch. */
+  rewrite: string | null;
+  /** The registrations that start it, as their client config has them: the first is started to check the switch. */
+  servers: RegisteredServer[];
+  items: RegistrationItem[];
 }
 
 interface Planned {
@@ -651,17 +923,24 @@ interface Planned {
   handoffs: CliHandoffs;
   latest: Record<string, string>;
   runtimes: RuntimeItem[];
+  pointers: PointerStep[];
   registrations: RegistrationStep[];
   globals: GlobalItem[];
   manual: RegistrationItem[];
   nothingBehind: boolean;
+  /** Whether each switched launcher is started, through a registration of it, to check that it answers. */
+  verify: boolean;
+  /** Every release this update installs or switches to, by package: verified before the preview was made. */
+  verified: Map<string, VerifiedProvenance>;
+  /** The releases it takes this machine past, up to core's latest, that say they need a decision from the person. */
+  deciding: DecidingRelease[];
 }
 
 /**
  * What a registration may reach, as the preview of `mcp install` says it, in the channel's words: "pinned to the
  * mailbox …", "not pinned: it reaches every workspace on this machine". Empty for the core, which reaches no account.
  */
-function reachOf(channel: Channel, narrowing: Narrowing): string {
+function reachOf(channel: ServerId, narrowing: Narrowing): string {
   const own = pinOption(channel);
   if (own === undefined || own === 'readOnly') return '';
   const noun = accountNoun(channel);
@@ -681,30 +960,189 @@ function reachOf(channel: Channel, narrowing: Narrowing): string {
  */
 function registrationEffects(step: RegistrationStep): string[] {
   const { item } = step;
-  const reach = reachOf(item.channel, channelServer(item.channel).narrowingOf(item.narrowing));
-  const entry = `registers the ${channelLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
+  const reach = reachOf(item.channel, serverFacts(item.channel).narrowingOf(item.narrowing));
+  const entry =
+    item.version === item.latest
+      ? `moves the ${serverLabel(item.channel)} MCP server registered with ${item.client} as "${item.name}" to the stable launcher (${item.scope} scope), at ${item.latest} as it is${reach ? ` — ${reach}, as now` : ''}`
+      : `registers the ${serverLabel(item.channel)} MCP server with ${item.client} as "${item.name}" again (${item.scope} scope, ${item.launcher} launcher), at ${item.latest} in place of ${item.version}${reach ? ` — ${reach}, as now` : ''}`;
   // Where it goes and what it starts, as `mcp install` says it (#46): in the digest, so a claim from an environment
   // that resolves another config file or another command is another update.
-  return item.launcher === 'npx'
-    ? [
-        entry,
-        step.destination,
-        `${item.client} will fetch ${item.package}@${item.latest} from npm each time it starts "${item.name}"`,
-      ]
-    : [entry, step.destination];
+  const effects = [entry, step.destination];
+  if (step.pointer) effects.push(step.pointer);
+  // Every managed step replaces an entry that names a versioned runtime: one on the launcher is switched instead.
+  if (item.launcher === 'managed') {
+    effects.push(
+      `from then on, an update switches that launcher's pointer and leaves this entry in ${item.client}'s configuration as it is`,
+    );
+  }
+  if (step.shim)
+    effects.push(`writes or repoints the owned CLI shim at ${step.shim}; a foreign file there is left unchanged`);
+  if (item.launcher === 'npx') {
+    effects.push(
+      `${item.client} will fetch ${item.package}@${item.latest} from npm each time it starts "${item.name}"`,
+    );
+  }
+  return effects;
+}
+
+/**
+ * The release of each package this update installs or switches to: each runtime it installs, each launcher it
+ * switches, each registration it writes — a managed one's runtime, an npx one's package, which its client fetches from
+ * npm — and each global package it updates.
+ */
+function releasesOf(
+  runtimes: readonly RuntimeItem[],
+  pointers: readonly PointerStep[],
+  registrations: readonly RegistrationStep[],
+  globals: readonly GlobalItem[],
+): Map<string, string> {
+  const wanted = new Map<string, string>();
+  for (const runtime of runtimes) wanted.set(runtime.package, runtime.latest);
+  for (const pointer of pointers) wanted.set(pointer.package, pointer.latest);
+  for (const { item, product } of registrations) {
+    wanted.set(item.launcher === 'managed' ? product.packageName : item.package, item.latest);
+  }
+  for (const global of globals) wanted.set(global.package, global.latest);
+  return wanted;
+}
+
+/**
+ * Where an update reads releases' documents and verifies them: the registry npm reads, unless a test handed in a
+ * stand-in, and the verifier its caller handed in — core's CLI and server hand in one with npm's attestations and
+ * sigstore-js. Null where there is none: then every release is refused, and nothing reaches the network.
+ */
+function releaseSources(env: NodeJS.ProcessEnv, deps: UpdateDeps): ReleaseSources {
+  const standIn = deps.latestVersion !== undefined || deps.registry !== undefined;
+  return {
+    registry: deps.registry ?? (deps.latestVersion === undefined ? npmRegistry(env) : null),
+    verify: deps.verifyRelease ?? null,
+    why: standIn
+      ? 'this update was handed a stand-in registry and no verifier'
+      : "nothing here can verify provenance: run the update from core's own command or server",
+  };
+}
+
+/**
+ * Verifies every release in `wanted` before an update installs or switches to it: the shared check
+ * (`verifyReleaseSet`), from this update's sources. The first that does not verify refuses the whole update.
+ */
+function verifyReleases(
+  env: NodeJS.ProcessEnv,
+  deps: UpdateDeps,
+  wanted: ReadonlyMap<string, string>,
+): Promise<Map<string, VerifiedProvenance>> {
+  return verifyReleaseSet(releaseSources(env, deps), wanted, 'update');
+}
+
+/**
+ * The releases of core after the oldest one this machine runs, up to the latest, that say they need a decision — a
+ * migration, a changed safety default (design 2026-10-16 U5) — each with whether it verified: what the preview says,
+ * since the person's yes to it is that decision. Read as the update reads releases; a registry that cannot be read here
+ * says nothing more, since what is installed was verified already.
+ */
+async function decidingSince(
+  env: NodeJS.ProcessEnv,
+  deps: UpdateDeps,
+  report: UpdateReport,
+): Promise<DecidingRelease[]> {
+  const latest = report.latest[CORE_PACKAGE];
+  const { registry, verify } = releaseSources(env, deps);
+  if (latest === undefined || registry === null) return [];
+  try {
+    return (await declaredSince(registry, verify, CORE_PACKAGE, oldestHere(report), latest)).deciding;
+  } catch {
+    return [];
+  }
+}
+
+/** What the preview says of each release it takes this machine past that needs a decision: never the manifest's words. */
+function decidingEffects(planned: Planned): string[] {
+  return planned.deciding.map(
+    ({ version, verified }) =>
+      `${shownRelease(version)}, a release this update takes this machine past, says it needs a decision from you — a migration, or a changed safety default${verified ? '' : ' (its provenance could not be verified)'}: read its release notes before you approve`,
+  );
+}
+
+/** What the preview says of each release it verified: one sentence a package, in the order the packages sort. */
+function verifiedEffects(planned: Planned): string[] {
+  return [...planned.verified.values()].map(
+    (provenance) =>
+      `${provenance.package}@${provenance.version} was verified before this preview: built by ${BUILT_BY}`,
+  );
 }
 
 /** Every step as the sentences a person reads, in the order the steps are taken. */
 function effectsOf(planned: Planned): string[] {
+  // One launcher a product: said with the first of its registrations, which switches it, and not again.
+  const pointed = new Set<string>();
+  const once = (step: RegistrationStep): RegistrationStep => {
+    if (step.pointer === undefined || !pointed.has(step.pointer)) {
+      if (step.pointer !== undefined) pointed.add(step.pointer);
+      return step;
+    }
+    return { ...step, pointer: undefined };
+  };
   return [
     // The wording `mcp install` uses for the same act, so the two previews read alike.
     ...planned.runtimes.map((runtime) => `installs ${runtime.package}@${runtime.latest} from npm into ${runtime.path}`),
-    ...planned.registrations.flatMap(registrationEffects),
+    ...planned.pointers.flatMap(pointerEffects),
+    ...planned.registrations.map(once).flatMap(registrationEffects),
     ...planned.globals.map(
       (global) =>
         `updates the global ${global.package} from ${global.version} to ${global.latest}: \`npm install -g ${global.package}@${global.latest}\``,
     ),
+    ...decidingEffects(planned),
+    ...verifiedEffects(planned),
   ];
+}
+
+/** A launcher switch as the sentences a person reads: the switch, who starts it, and a launcher written again. */
+function pointerEffects(step: PointerStep): string[] {
+  const who = step.items.map((item) => `${item.client} as "${item.name}"`);
+  const starters = who.length === 1 ? who[0] : `${who.slice(0, -1).join(', ')} and ${who.at(-1)}`;
+  return [
+    ...(step.rewrite === null
+      ? []
+      : [
+          `writes the stable launcher ${step.launcher} again, which is not there, to start its runtime with ${step.rewrite}`,
+        ]),
+    `switches the ${serverLabel(step.channel)} stable launcher ${step.launcher} from ${step.version ?? 'no release'} to ${step.latest}; no client configuration is changed`,
+    `${starters} ${who.length === 1 ? 'starts' : 'start'} it, and ${who.length === 1 ? 'runs' : 'run'} ${step.latest} once restarted`,
+  ];
+}
+
+/**
+ * The launchers the registrations in `launched` start, one a product: each switched to the latest runtime. Only this
+ * installation's own launchers are in `launched` (see `inspect`).
+ */
+async function planPointers(
+  context: InstallContext,
+  latest: Record<string, string>,
+  launched: readonly Found[],
+): Promise<PointerStep[]> {
+  const { dataDir } = context.core.paths;
+  const steps: PointerStep[] = [];
+  for (const channel of SERVERS) {
+    const own = launched.filter((entry) => entry.item.channel === channel);
+    const { packageName } = serverFacts(channel);
+    const version = latest[packageName];
+    if (own.length === 0 || version === undefined) continue;
+    const name = launcherName(packageName);
+    const platform = context.platform ?? process.platform;
+    steps.push({
+      channel,
+      package: packageName,
+      name,
+      launcher: launcherPaths(dataDir, name).launcher,
+      version: own[0]?.item.version ?? null,
+      latest: version,
+      runtime: managedRuntimeDir(dataDir, packageName, version),
+      rewrite: (await launcherExists(dataDir, name)) ? null : nodeProgram(context.env, platform),
+      servers: own.map((entry) => entry.server),
+      items: own.map((entry) => entry.item),
+    });
+  }
+  return steps;
 }
 
 function counted(count: number, one: string, many: string): string {
@@ -736,7 +1174,7 @@ async function planRegistrations(
     if (seen.has(key)) continue;
     seen.add(key);
     const launcher = item.launcher as Launcher;
-    const product = await channelProduct(item.channel, launcher, item.latest);
+    const product = await serverProduct(item.channel, launcher, item.latest);
     const options: InstallOptions = {
       client: item.client as SupportedClient,
       name: item.name,
@@ -766,6 +1204,24 @@ async function planRegistrations(
       options,
       install: plannedInstall(preflight),
       destination: entryDestination(item.client, preflight.target, preflight.command, context.env),
+      ...(launcher === 'managed'
+        ? {
+            pointer: launcherSwitchEffect(
+              context.core.paths.dataDir,
+              product.packageName,
+              serverLabel(item.channel),
+              item.latest,
+            ),
+          }
+        : {}),
+      ...(launcher === 'managed' && managedShimsSupported(context)
+        ? {
+            shim: managedShimPath(
+              { env: context.env, dataDir: context.core.paths.dataDir, platform: context.platform },
+              product.binary,
+            ),
+          }
+        : {}),
     });
   }
   return { steps, manual };
@@ -787,25 +1243,43 @@ export function updateChange(
   let planned: Planned | null = null;
   return {
     plan: async (config) => {
+      // Never beside a background run: refused here, before an approval is prepared or claimed, and held below.
+      await refuseWhileUpdating(core.paths.stateDir);
       const inspection = await inspect(core, env, deps);
-      const { steps, manual } = await planRegistrations(context, inspection.candidates, request, inspection.handoffs);
-      const runtimes = await runtimesNeeded(
-        core.paths.dataDir,
-        inspection.report.latest,
-        steps.map((step) => step.item),
+      const { steps, manual } = await planRegistrations(
+        context,
+        [...inspection.candidates, ...inspection.moving],
+        request,
+        inspection.handoffs,
       );
+      const pointers = await planPointers(context, inspection.report.latest, inspection.launched);
+      const runtimes = await runtimesNeeded(core.paths.dataDir, inspection.report.latest, [
+        ...steps.map((step) => step.item),
+        ...pointers.flatMap((step) => step.items),
+      ]);
+      // Every release it would install or switch to, verified before anything is shown or done: one that does not
+      // verify refuses the whole update, and nothing is prepared to approve.
+      const wanted = releasesOf(runtimes, pointers, steps, inspection.globals);
+      const verified = await verifyReleases(env, deps, wanted);
+      // And the releases it takes this machine past: one that needs a decision is said in the preview, in fixed words.
+      const deciding = wanted.size === 0 ? [] : await decidingSince(env, deps, inspection.report);
       planned = {
         report: inspection.report,
         latest: inspection.report.latest,
         runtimes,
+        pointers,
         registrations: steps,
         globals: inspection.globals,
         handoffs: inspection.handoffs,
         manual: [...inspection.manual, ...manual],
-        nothingBehind: inspection.report.behind.length === 0,
+        nothingBehind: inspection.report.behind.length === 0 && (inspection.report.moves ?? []).length === 0,
+        verify: request.noVerify !== true,
+        verified,
+        deciding,
       };
       const parts = [
         steps.length > 0 ? counted(steps.length, 'registration', 'registrations') : '',
+        pointers.length > 0 ? counted(pointers.length, 'launcher', 'launchers') : '',
         runtimes.length > 0 ? counted(runtimes.length, 'runtime', 'runtimes') : '',
         inspection.globals.length > 0 ? counted(inspection.globals.length, 'global package', 'global packages') : '',
       ].filter(Boolean);
@@ -821,11 +1295,14 @@ export function updateChange(
     },
     apply: async () => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the update was applied before it was planned');
-      const result = await applyUpdate(context, planned, deps);
-      // What it moved to the latest release — and only what worked — is what lets a server or a command started
-      // before this say "restart" rather than "update" from now on.
-      await recordFound(core, env, planned.report, deps, result);
-      return result;
+      const done = planned;
+      return withPersonUpdateLock(core.paths.stateDir, async () => {
+        const result = await applyUpdate(context, done, deps);
+        // What it moved to the latest release — and only what worked — is what lets a server or a command started
+        // before this say "restart" rather than "update" from now on.
+        await recordFound(core, env, done.report, deps, result);
+        return result;
+      });
     },
     refuseApproval: (approvalId) => {
       if (planned === null) throw new CommsError('UNEXPECTED', 'the update was refused before it was planned');
@@ -920,27 +1397,102 @@ function whatBecameOf(stored: StoredApproval | null): string {
   return states[record.state] ?? `it is ${JSON.stringify(record.state)}, a state this version does not know`;
 }
 
-/** The product a runtime of `packageName` is installed as: the channel whose package it is. */
+/** The product a runtime of `packageName` is installed as: the declared server whose package it is. */
 function runtimeProduct(packageName: string, version: string): Promise<McpProduct> {
-  const channel = CHANNELS.find((each) => channelServer(each).packageName === packageName);
-  if (channel === undefined) throw new CommsError('UNEXPECTED', `${packageName} is not a channel's package`);
-  return channelProduct(channel, 'managed', version);
+  const channel = SERVERS.find((each) => serverFacts(each).packageName === packageName);
+  if (channel === undefined) throw new CommsError('UNEXPECTED', `${packageName} is not a declared server package`);
+  return serverProduct(channel, 'managed', version);
 }
 
 /**
- * Every channel's `mcp prune`, as a person runs it at a terminal: each located among this machine's registrations, and
- * for one that is not, why — never a bare name (CUE-403).
+ * The prune of every managed server's old runtimes, as a person runs it at a terminal: core's own `mcp prune`, which
+ * with no `--server` covers every server the registry declares (0.21) — located, never a bare name (CUE-403).
  */
-function pruneCommands(handoffs: CliHandoffs): string {
-  return handoffChoices(
-    CHANNELS.map((channel) => handoffs.of(channel, ['mcp', 'prune'])),
-    'none of their commands is locatable here:',
-    { conjunction: 'and' },
+function pruneSentence(handoffs: CliHandoffs): string {
+  return handoffSentence(
+    handoffs.core(['mcp', 'prune']),
+    (command) =>
+      `Then, from the restarted server, prune the runtimes the old versions leave behind: comms_server_prune with no channel, which prunes every server’s — at a terminal, ${command}.`,
+    {
+      instead:
+        'Then, from the restarted server, prune the runtimes the old versions leave behind with comms_server_prune and no channel, which prunes every server’s.',
+    },
   );
 }
 
 function message(error: unknown): string {
   return error instanceof CommsError ? error.message : error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Switches one stable launcher to the runtime just installed: the launcher written again first when it is not there,
+ * then its pointer, in one rename. With `verify`, the first registration that starts it is started as its client would
+ * start it and must answer; when it does not, the pointer is put back as it was — unless something has switched it
+ * since — and the step failed. Nothing of either runtime is changed, and no client configuration is touched.
+ */
+async function switchLauncher(
+  context: InstallContext,
+  pointer: PointerStep,
+  verify: boolean,
+  runtimeMissing: string | undefined,
+): Promise<UpdateStep> {
+  const { dataDir } = context.core.paths;
+  const base = {
+    kind: 'pointer' as const,
+    channel: pointer.channel,
+    package: pointer.package,
+    launcher: pointer.launcher,
+    from: pointer.version,
+    to: pointer.latest,
+    runtime: pointer.runtime,
+    registrations: pointer.items.map(({ client, name, scope, path }) => ({ client, name, scope, path })),
+  };
+  if (runtimeMissing !== undefined) {
+    return {
+      ...base,
+      outcome: 'skipped',
+      detail: `its runtime ${pointer.package}@${pointer.latest} ${runtimeMissing}, so the launcher was left as it was`,
+    };
+  }
+  try {
+    if (pointer.rewrite !== null) {
+      await writeLauncher(dataDir, pointer.name, pointer.rewrite, { platform: context.platform });
+    }
+    const before = await exchangePointer(dataDir, pointer.name, pointer.runtime);
+    const [first] = pointer.servers;
+    if (!verify || first === undefined) return { ...base, outcome: 'switched', verification: 'skipped' };
+    const product = await serverProduct(pointer.channel, 'managed', pointer.latest);
+    const check = await verifyEntry({ command: first.command, args: first.args, env: first.env ?? {} }, product);
+    if (check.ok) return { ...base, outcome: 'switched', verification: 'passed', detail: check.detail };
+    const back = await restorePointer(dataDir, pointer.name, before, pointer.runtime).catch(() => false);
+    return {
+      ...base,
+      outcome: 'failed',
+      verification: 'failed',
+      detail: `${first.client} as "${first.name}" did not start through it: ${check.detail}; ${back ? `so the launcher was switched back to ${pointer.version ?? 'what it started before'}` : 'and the launcher could not be switched back, because something has switched it since'}`,
+    };
+  } catch (error) {
+    return { ...base, outcome: 'failed', detail: message(error) };
+  }
+}
+
+/**
+ * Why the runtime of `packageName` at `version` is not the release verified before the preview, or null when it is
+ * (see `runtimeIntegrityProblem`). One that was never verified — nothing in the plan named it — is not used either.
+ */
+async function integrityProblem(
+  dataDir: string,
+  planned: Planned,
+  packageName: string,
+  version: string,
+  check: { verify: ReleaseVerifier | null; known: Map<string, string> },
+): Promise<string | null> {
+  const verified = planned.verified.get(packageName);
+  const runtime = managedRuntimeDir(dataDir, packageName, version);
+  if (verified === undefined || verified.version !== version) {
+    return `${packageName}@${version} was not verified before the preview, so ${runtime} is not used`;
+  }
+  return runtimeIntegrityProblem(runtime, packageName, verified.sha512, check);
 }
 
 async function applyUpdate(context: InstallContext, planned: Planned, deps: UpdateDeps): Promise<UpdateResult> {
@@ -953,7 +1505,19 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   const steps: UpdateStep[] = [];
 
   // The runtimes first: a registration whose runtime could not be installed is not attempted, and stays as it was.
-  const missing = new Set<string>();
+  const missing = new Map<string, string>();
+  const { dataDir } = context.core.paths;
+  // What each runtime holds is checked against what was verified — its own package, and every package of this suite
+  // it depends on, which is verified now when it was not before the preview.
+  const check = {
+    verify: releaseSources(context.env, deps).verify,
+    known: new Map(
+      [...planned.verified.values()].map((provenance) => [
+        `${provenance.package}@${provenance.version}`,
+        provenance.sha512,
+      ]),
+    ),
+  };
   for (const runtime of planned.runtimes) {
     const base = {
       kind: 'runtime' as const,
@@ -964,11 +1528,51 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
     };
     try {
       await installRuntime(runtime.package, runtime.latest);
-      steps.push({ ...base, outcome: 'installed' });
     } catch (error) {
-      missing.add(runtime.package);
+      missing.set(runtime.package, 'could not be installed');
       steps.push({ ...base, outcome: 'failed', detail: message(error) });
+      continue;
     }
+    // What npm left is the tarball whose provenance was verified, or nothing is switched to it or registered on it.
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.latest, check);
+    if (problem === null) steps.push({ ...base, outcome: 'installed' });
+    else {
+      missing.set(runtime.package, 'is not the tarball whose provenance was verified');
+      steps.push({ ...base, outcome: 'failed', detail: problem });
+    }
+  }
+  // A runtime found on disk, not installed now, is held to the same: the release a launcher switches to, or a
+  // registration starts, is the verified one.
+  const used = [
+    ...planned.pointers.map((pointer) => ({
+      channel: pointer.channel,
+      package: pointer.package,
+      version: pointer.latest,
+    })),
+    ...planned.registrations
+      .filter(({ item }) => item.launcher === 'managed')
+      .map(({ item, product }) => ({ channel: item.channel, package: product.packageName, version: item.latest })),
+  ];
+  const installedNow = new Set(planned.runtimes.map((runtime) => runtime.package));
+  for (const runtime of used) {
+    if (installedNow.has(runtime.package) || missing.has(runtime.package)) continue;
+    const problem = await integrityProblem(dataDir, planned, runtime.package, runtime.version, check);
+    if (problem === null) continue;
+    missing.set(runtime.package, 'is not the tarball whose provenance was verified');
+    steps.push({
+      kind: 'runtime',
+      channel: runtime.channel,
+      package: runtime.package,
+      version: runtime.version,
+      path: managedRuntimeDir(dataDir, runtime.package, runtime.version),
+      outcome: 'failed',
+      detail: problem,
+    });
+  }
+
+  // Then each stable launcher: its pointer switched to the runtime just installed, and no client configuration touched.
+  for (const pointer of planned.pointers) {
+    steps.push(await switchLauncher(context, pointer, planned.verify, missing.get(pointer.package)));
   }
 
   for (const { item, product, options, install } of planned.registrations) {
@@ -984,25 +1588,28 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
       to: item.latest,
       narrowing: item.narrowing,
     };
-    if (item.launcher === 'managed' && missing.has(product.packageName)) {
+    const lacking = item.launcher === 'managed' ? missing.get(product.packageName) : undefined;
+    if (lacking !== undefined) {
       steps.push({
         ...base,
         outcome: 'skipped',
-        detail: `its runtime ${product.packageName}@${item.latest} could not be installed, so the entry was left as it was`,
+        detail: `its runtime ${product.packageName}@${item.latest} ${lacking}, so the entry was left as it was`,
       });
       continue;
     }
     try {
       // The pins the plan checked the install's own keep-the-pin rule arrives at, given outright: the entry is written
       // with exactly those whatever it finds to replace now, and says nothing of keeping what it was told.
-      const pins = channelServer(item.channel).narrowingOf(item.narrowing);
+      const pins = serverFacts(item.channel).narrowingOf(item.narrowing);
       // Held to what the plan found — the file, the client CLI, the entry replaced and the command it starts — so
       // nothing is looked for again and registered in its place.
-      const result = await mcpInstall(context, product, { ...options, ...pins }, install);
-      if (!result.applied) {
-        steps.push({ ...base, outcome: 'failed', detail: result.notApplied ?? 'nothing was registered' });
+      const installed = await mcpInstall(context, product, { ...options, ...pins }, install);
+      if (!installed.applied) {
+        steps.push({ ...base, outcome: 'failed', detail: installed.notApplied ?? 'nothing was registered' });
         continue;
       }
+      // The entry moved, so its owned CLI shim moves with it, as `mcp install` moves it.
+      const result = await withManagedShim(context, product, installed);
       steps.push({
         ...base,
         outcome: 'registered',
@@ -1010,6 +1617,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
         ...(result.verifyDetail !== undefined ? { detail: result.verifyDetail } : {}),
         ...(result.backupPath !== undefined ? { backupPath: result.backupPath } : {}),
         ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+        ...(result.shim !== undefined ? { shim: result.shim } : {}),
       });
     } catch (error) {
       steps.push({ ...base, outcome: 'failed', detail: message(error) });
@@ -1030,18 +1638,26 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   const worked = (step: UpdateStep) =>
     step.kind === 'registration'
       ? step.outcome === 'registered' && step.verification !== 'failed'
-      : step.outcome !== 'failed';
+      : step.kind === 'pointer'
+        ? step.outcome === 'switched' && step.verification !== 'failed'
+        : step.outcome !== 'failed';
   const ok = steps.every(worked);
   const status: UpdateResult['status'] =
     steps.length === 0 ? (planned.nothingBehind ? 'up-to-date' : 'manual') : ok ? 'updated' : 'failed';
   const clients = [
     ...new Set(
-      steps.flatMap((step) => (step.kind === 'registration' && step.outcome === 'registered' ? [step.client] : [])),
+      steps.flatMap((step) =>
+        step.kind === 'registration' && step.outcome === 'registered'
+          ? [step.client]
+          : step.kind === 'pointer' && step.outcome === 'switched'
+            ? step.registrations.map((registration) => registration.client)
+            : [],
+      ),
     ),
   ];
   const next =
     clients.length > 0
-      ? `Restart ${clients.length === 1 ? clients[0] : `${clients.slice(0, -1).join(', ')} and ${clients.at(-1)}`} to load the new servers: no MCP client loads a new server into a session that is already running. Then, from the restarted server, prune the runtimes the old versions leave behind: comms_server_prune for each channel — at a terminal, ${pruneCommands(planned.handoffs)}.`
+      ? `Restart ${clients.length === 1 ? clients[0] : `${clients.slice(0, -1).join(', ')} and ${clients.at(-1)}`} to load the new servers: no MCP client loads a new server into a session that is already running. ${pruneSentence(planned.handoffs)}`
       : null;
   return { status, latest: planned.latest, steps, manual: planned.manual, ok, next };
 }

@@ -1,10 +1,12 @@
-import { channelLabel } from './channel-servers.ts';
+import { serverLabel } from './channel-servers.ts';
 import { isDangerous } from './chars.ts';
 import { paint } from './cli-runtime.ts';
 import { type CliHandoffs, handoffSentence } from './handoffs.ts';
 import type { InstallResult, PruneResult } from './mcp-install.ts';
 import type { DoctorReport } from './operations/maintenance.ts';
+import type { PruneAllResult } from './operations/servers.ts';
 import type { UpdateItem, UpdateReport, UpdateResult } from './operations/update.ts';
+import type { UpdateStatus } from './operations/update-status.ts';
 
 /**
  * One renderer for every surface a send preview is shown on — the chat, an elicitation form, a terminal. Text the
@@ -228,6 +230,11 @@ export interface PreviewNotifies {
 }
 
 export interface ChannelPreview {
+  /**
+   * A security fix is out and this machine does not install it on its own (design 2026-10-16, U7): the line the
+   * preview opens with, asked once. Display only — never in what the approval binds.
+   */
+  security?: string | undefined;
   workspace: string;
   /**
    * Who this will be posted as, as a person should read it: `Acme Bot (U024BE7LH)`.
@@ -341,6 +348,7 @@ export function describeSize(bytes: number): string {
  */
 export function renderChannelPreview(preview: ChannelPreview): string {
   const lines: string[] = [];
+  if (preview.security) lines.push(escapeForDisplay(preview.security));
   const context = preview.context ?? {};
   const { replaces } = preview;
   lines.push(
@@ -425,6 +433,12 @@ export function renderInstall(result: InstallResult, color: boolean): string {
     );
   }
   if (result.backupPath) lines.push(`The entry it replaced was saved to ${result.backupPath}.`);
+  if (result.shim && result.shim.status !== 'foreign') {
+    lines.push(`CLI shim ${result.shim.status}: ${result.shim.path}.`);
+  }
+  if (result.shimFailure) lines.push(paint(color, 'yellow', `CLI shim failed: ${result.shimFailure}.`));
+  if (result.shimNotice) lines.push(paint(color, 'yellow', result.shimNotice));
+  if (result.shim?.pathNotice) lines.push(result.shim.pathNotice);
   // A check that ran and failed is not one that was skipped: "Not checked" for both read as "probably fine".
   if (result.verification === 'passed') lines.push(paint(color, 'green', `Checked: ${result.verifyDetail}`));
   else if (result.verification === 'failed') {
@@ -450,15 +464,42 @@ export function renderDoctor(report: DoctorReport): string {
     .join('\n');
 }
 
-/** What `mcp prune` removed and kept, and why each one it kept is still needed. */
-export function renderPrune(result: PruneResult, color: boolean): string {
+/**
+ * What `mcp prune` removed and kept, and why each one it kept is still needed. A prune of every managed server lists
+ * each server that had a runtime under its own name, in the registry's order.
+ */
+export function renderPrune(result: PruneResult | PruneAllResult, color: boolean): string {
+  if ('servers' in result) {
+    const groups = result.servers
+      .map((part) => ({ label: part.label, lines: pruneLines(part, color) }))
+      .filter((group) => group.lines.length > 0)
+      .map((group) => [`${group.label}:`, ...group.lines.map((line) => `  ${line}`)].join('\n'));
+    if (groups.length === 0) return `No managed runtimes to remove in ${result.runtimeDir}.`;
+    // Last, so a server left unchecked among others that went ahead is not lost in the list above.
+    const unchecked = (result.refusedServers ?? []).map(({ label, refused }) => `${label} (${refused})`);
+    if (unchecked.length > 0) {
+      const its = unchecked.length === 1 ? 'its' : 'their';
+      groups.push(
+        paint(color, 'yellow', `Not checked, so none of ${its} runtimes was removed: ${unchecked.join('; ')}.`),
+      );
+    }
+    return groups.join('\n');
+  }
+  const lines = pruneLines(result, color);
+  if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
+  return lines.join('\n');
+}
+
+/** One server's prune, a line a runtime or shim; none when it had nothing to look at. */
+function pruneLines(result: PruneResult, color: boolean): string[] {
   const lines: string[] = [];
   if (result.refused) lines.push(paint(color, 'yellow', `Nothing removed: ${result.refused}.`));
   const verb = result.dryRun ? 'Would remove' : 'Removed';
   for (const item of result.removed) lines.push(paint(color, 'green', `${verb} ${item.version}: ${item.path}`));
+  for (const path of result.shims.removed) lines.push(paint(color, 'green', `${verb} CLI shim: ${path}`));
+  for (const path of result.shims.kept) lines.push(`Kept foreign CLI shim: ${path}`);
   for (const item of result.kept) lines.push(`Kept ${item.version} (${item.reason}): ${item.path}`);
-  if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
-  return lines.join('\n');
+  return lines;
 }
 
 // ── An update, as `agentcomms update` prints it — here so a channel's command can print one too ──────────────────
@@ -479,7 +520,8 @@ function describeItem(item: UpdateItem): string {
     item.version === null
       ? 'pins no release'
       : `${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
-  return `${channelLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${item.launcher}, ${version}${pins})`;
+  const launcher = item.launches === undefined ? item.launcher : `${item.launcher}, stable launcher`;
+  return `${serverLabel(item.channel)} with ${item.client} as "${item.name}" ${where} (${launcher}, ${version}${pins})`;
 }
 
 export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): string {
@@ -498,12 +540,21 @@ export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): 
   section('Behind', report.behind);
   section('Up to date', report.upToDate);
   section('Pinned to no release', report.unpinned);
+  // At the latest release, still naming a versioned runtime: the next update moves each to the stable launcher, once.
+  section('To move to the stable launcher', report.moves ?? []);
   for (const file of report.unreadable) lines.push('', `Could not read ${file.path}: ${file.reason}.`);
   const updatable = report.behind.some((item) => item.kind !== 'registration' || item.updatable === true);
+  const moves = (report.moves ?? []).length > 0;
   lines.push(
     '',
     report.behind.length === 0
-      ? 'Everything here is at the latest release.'
+      ? moves
+        ? handoffSentence(
+            handoffs.core(['update']),
+            (command) =>
+              `Everything here is at the latest release. Run ${command} once to move the registrations above to the stable launcher: after that, an update edits no client configuration.`,
+          )
+        : 'Everything here is at the latest release.'
       : updatable
         ? handoffSentence(
             handoffs.core(['update']),
@@ -512,6 +563,38 @@ export function renderUpdateCheck(report: UpdateReport, handoffs: CliHandoffs): 
         : 'Nothing behind can be updated from here; each says why above.',
   );
   return lines.join('\n');
+}
+
+/**
+ * What `update --status` prints: a `key value` line per field, as `paths` prints its folders, the job's under `job.`.
+ * Nothing known is `none`. Each value is shown on one line, its control and invisible characters made visible: a
+ * check's error is the registry's text, and an organisation's name the configuration's.
+ */
+export function renderUpdateStatus(status: UpdateStatus): string {
+  const shown = (value: string | boolean | null): string => {
+    if (value === null) return 'none';
+    if (typeof value === 'boolean') return value ? 'yes' : 'no';
+    return escapeForDisplay(value).replace(/[\n\t]+/g, ' ');
+  };
+  const rows: [string, string | boolean | null][] = [
+    ['level', status.level],
+    ['set', status.set],
+    ['by', status.by],
+    ['cap', status.cap === null ? null : `${status.cap.level} (${status.cap.organisation})`],
+    ['pausedUntil', status.pausedUntil],
+    ['lastChecked', status.lastChecked],
+    ['latest', status.latest],
+    ['running', status.running],
+    ['security', status.security],
+    ['lastError', status.lastError],
+    ['job.state', status.job.state],
+    ['job.where', status.job.where],
+    ['job.installedAt', status.job.installedAt],
+    ['job.lastRun', status.job.lastRun],
+    ['job.working', status.job.working],
+    ...(status.job.reason === undefined ? [] : ([['job.reason', status.job.reason]] as [string, string][])),
+  ];
+  return rows.map(([key, value]) => `${key.padEnd(15)} ${shown(value)}`).join('\n');
 }
 
 export function renderUpdate(result: UpdateResult, color: boolean): string {
@@ -534,6 +617,9 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
         if (step.verification === 'passed') lines.push(`  Checked: ${step.detail}`);
         else if (step.verification === 'failed') lines.push(paint(color, 'red', `  Failed to start: ${step.detail}`));
         else lines.push(paint(color, 'yellow', `  Not checked: ${step.detail ?? 'skipped'}`));
+        if (step.shim && step.shim.status !== 'foreign')
+          lines.push(`  CLI shim ${step.shim.status}: ${step.shim.path}.`);
+        if (step.shim?.pathNotice) lines.push(`  ${step.shim.pathNotice}`);
         for (const warning of step.warnings ?? []) lines.push(`  ${warning}`);
       } else {
         lines.push(
@@ -541,6 +627,28 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
             color,
             'red',
             `${step.outcome === 'skipped' ? 'Skipped' : 'Could not register'} ${what}: ${step.detail}`,
+          ),
+        );
+      }
+    } else if (step.kind === 'pointer') {
+      const starters = step.registrations.map((registration) => `"${registration.name}" with ${registration.client}`);
+      if (step.outcome === 'switched') {
+        lines.push(
+          paint(
+            color,
+            'green',
+            `Switched the stable launcher ${step.launcher} from ${step.from ?? 'no release'} to ${step.to}: no client configuration was changed.`,
+          ),
+        );
+        if (step.verification === 'passed') lines.push(`  Checked: ${step.detail}`);
+        else lines.push(paint(color, 'yellow', `  Not checked: ${step.detail ?? 'skipped'}`));
+        lines.push(`  ${starters.join(', ')} ${starters.length === 1 ? 'runs' : 'run'} ${step.to} once restarted.`);
+      } else {
+        lines.push(
+          paint(
+            color,
+            'red',
+            `${step.outcome === 'skipped' ? 'Skipped' : 'Could not switch'} the stable launcher ${step.launcher} to ${step.to}: ${step.detail ?? 'no reason given'}`,
           ),
         );
       }

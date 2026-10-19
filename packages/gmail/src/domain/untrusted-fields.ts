@@ -1,4 +1,15 @@
-import { decodeHeaderWords, type TaintCollector, wrapUntrusted } from '@agentcomms/core';
+import {
+  type ApprovalOutcome,
+  decodeHeaderWords,
+  type Expectation,
+  newBoundary,
+  ownerOf,
+  type PublicApprovalView,
+  publicApproval,
+  type StoredApproval,
+  type TaintCollector,
+  wrapUntrusted,
+} from '@agentcomms/core';
 
 /**
  * Fields a sender chose that travel beside the body rather than inside it: an attachment's name and declared type,
@@ -60,9 +71,59 @@ export function mimeTypeField(value: string, envelope: FieldEnvelope): string {
     : wrapField(trimmed.slice(0, MAX_TOKEN_CHARS), 'mime-type', envelope);
 }
 
+/** Whether an address may be shown bare, in this package's own words: a plain address and nothing more. */
+export function isPlainAddress(address: string): boolean {
+  return PLAIN_ADDRESS.test(address);
+}
+
+/** Whether a domain may be shown bare, in this package's own words: a plain domain and nothing more. */
+export function isPlainDomain(domain: string): boolean {
+  return PLAIN_DOMAIN.test(domain);
+}
+
 /** An address: bare when it is a plain address and nothing more, wrapped otherwise. */
 export function addressField(address: string, field: string, envelope: FieldEnvelope): string {
   return PLAIN_ADDRESS.test(address) ? address : wrapField(address.slice(0, MAX_TOKEN_CHARS), field, envelope);
+}
+
+/** A send's recipients and subject as Gmail may return them: display-safe, never the raw approval binding. */
+export function expectationFields(expect: Expectation, envelope: FieldEnvelope): Expectation {
+  return {
+    to: expect.to.map((address) => addressField(address, 'to', envelope)),
+    cc: expect.cc.map((address) => addressField(address, 'cc', envelope)),
+    bcc: expect.bcc.map((address) => addressField(address, 'bcc', envelope)),
+    subject: wrapField(expect.subject, 'subject', envelope),
+  };
+}
+
+/**
+ * One approval through Gmail's own field rules. `send list` and `send cancel --json` share this path so the same
+ * strict address stays plain on both; prose and every non-plain token stay enveloped.
+ */
+export function gmailApprovalView(
+  stored: StoredApproval,
+  outcome: ApprovalOutcome,
+  aliases: ReadonlyMap<string, string>,
+): { approval: PublicApprovalView; inbox: string | null } {
+  const owner = ownerOf(stored);
+  const inbox = owner === null ? null : (aliases.get(owner) ?? '(removed)');
+  const envelope: FieldEnvelope = {
+    boundary: newBoundary(),
+    inbox: inbox !== null && inbox !== '(removed)' ? inbox : (owner ?? 'none') || 'none',
+    id: outcome.approval.id,
+  };
+  return {
+    approval: publicApproval(stored, outcome, {
+      wrap: (text, field) =>
+        field === 'subject'
+          ? wrapField(text, 'subject', envelope)
+          : field === 'filename'
+            ? filenameField(text, envelope)
+            : addressField(text, field, envelope),
+      ...(outcome.approval.channel === 'gmail' ? { usedSaid: (at: string) => `sent at ${at}` } : {}),
+    }),
+    inbox,
+  };
 }
 
 /**

@@ -53,6 +53,7 @@ test('B3 retained test, reset resume, and held decision reach only their named h
       argv: ['held', 'decide', 'held-1', 'accept'],
       operation: 'decideHeld',
       args: { decisionId: 'held-1', decision: 'accept' },
+      origin: 'interactive-terminal' as const,
       reply: { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' },
     },
   ] as const;
@@ -74,7 +75,13 @@ test('B3 retained test, reset resume, and held decision reach only their named h
       }),
     );
     assert.equal(completed.code, 0, `${item.operation} succeeds at its permitted terminal leaf`);
-    assert.deepEqual(seen, [{ operation: item.operation, args: item.args }]);
+    assert.deepEqual(seen, [
+      {
+        operation: item.operation,
+        args: item.args,
+        ...('origin' in item && item.origin !== undefined ? { origin: item.origin } : {}),
+      },
+    ]);
   }
 });
 

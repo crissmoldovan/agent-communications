@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventSecretOwner, EventSecretPurpose, EventSecretStore } from '../store/event-secrets.ts';
 import type { EventRecordCipher } from '../store/records.ts';
 
@@ -39,7 +40,7 @@ function expectedSlots(
   if (owner.kind === 'subscriber') return { owner: { ...owner, digest: row.digest }, slots: ['sse-bearer'] };
   return {
     owner: { ...owner, digest: row.digest },
-    slots: document.kind === 'typesafe' ? ['judge-key'] : [],
+    slots: document.kind === JUDGE_KIND_TYPESAFE ? ['judge-key'] : [],
   };
 }
 

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { access, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -36,12 +35,9 @@ function present<T>(value: T | undefined): T {
 }
 
 const alias = 'rgc/slack';
+let nextManifestPort = 45_000;
 async function freePort() {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, 'localhost', done));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>((done) => server.close(() => done()));
-  return port;
+  return nextManifestPort++;
 }
 
 async function fixture(mode: InstallMode = 'read') {

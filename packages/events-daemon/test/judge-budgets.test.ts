@@ -103,10 +103,13 @@ async function fixture(
   });
   versions.createJudgeBudget(budgetDocument);
   versions.createRule({ ...rule(1), agentic: { ...rule(1).agentic, ...sourceLimits } });
-  store.database.exec(`INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+  store.database.exec(`UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+    INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
     VALUES ('judge-budget', 'judge-budget', 1, 'judge-budget@1', 1);
     INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
-    VALUES ('judge-kind', 'typesafe', 1, 'judge-kind:typesafe@1', 1);`);
+    VALUES ('judge-kind', 'typesafe', 1, 'judge-kind:typesafe@1', 1);
+    INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+    VALUES ('rule', 'rule-e5-budget', 1, 'rule-e5-budget@1', 1);`);
   return { root, store, versions, limits: sourceLimits };
 }
 
@@ -150,13 +153,17 @@ function reserve(
   id: string,
   eventId: string,
   now: number = NOW,
-  overrides: Partial<{ readonly finalEnvelope: Uint8Array; readonly maxInputTokens: number }> = {},
+  overrides: Partial<{
+    readonly finalEnvelope: Uint8Array;
+    readonly maxInputTokens: number;
+    readonly workId: string;
+  }> = {},
 ) {
-  const { finalEnvelope, maxInputTokens } = overrides;
+  const { finalEnvelope, maxInputTokens, workId } = overrides;
   return reserveJudgeWork({
     store: setup.store,
     id,
-    workId: `work:${id}`,
+    workId: workId ?? `work:${id}`,
     scope: sourceWork(eventId),
     judge,
     limits: { ...setup.limits, ...(maxInputTokens === undefined ? {} : { maxInputTokens }) },
@@ -268,6 +275,128 @@ test('E5 budget: rolling call and token windows include reserved, in-flight, and
           .get() as { tokens: number }
       ).tokens,
       8,
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('E5 attempt ledger: a released attempt stays terminal while one retry row owns and counts the logical work', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({
+    limits: { callsPerRollingHour: 1, inputTokensPerRolling30Days: 4, concurrency: 1 },
+    budget: { callsPerRollingHour: 1, inputTokensPerRolling30Days: 4, concurrency: 1 },
+  });
+  const logicalWorkId = 'logical:released-retry';
+  try {
+    addProjection(setup, { eventId: 'event-e5-released-retry' });
+    const first = reserve(setup, 'released-attempt-one', 'event-e5-released-retry', NOW, {
+      finalEnvelope: Buffer.from('one'),
+      workId: logicalWorkId,
+    });
+    assert.equal(first.id, 'released-attempt-one', 'the first attempt uses its supplied attempt identity');
+    assert.equal(
+      releaseJudgeWork({ store: setup.store, reservationId: first.id, now: NOW + 1 }),
+      true,
+      'the pre-I/O first attempt releases exactly once',
+    );
+
+    const second = reserve(setup, 'released-attempt-two', 'event-e5-released-retry', NOW + 2, {
+      finalEnvelope: Buffer.from('two'),
+      workId: logicalWorkId,
+    });
+    assert.equal(second.id, 'released-attempt-two', 'a retry receives a new durable attempt identity');
+    assert.deepEqual(
+      setup.store.database
+        .prepare(
+          `SELECT id, work_id, state, concurrency_owned
+             FROM judge_budget_reservations
+            WHERE work_id = ?
+            ORDER BY reserved_at, id`,
+        )
+        .all(logicalWorkId)
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        {
+          id: 'released-attempt-one',
+          work_id: logicalWorkId,
+          state: 'released',
+          concurrency_owned: 0,
+        },
+        {
+          id: 'released-attempt-two',
+          work_id: logicalWorkId,
+          state: 'reserved',
+          concurrency_owned: 1,
+        },
+      ],
+      'the released row remains terminal beside the retry row',
+    );
+    assert.throws(
+      () =>
+        reserve(setup, 'released-attempt-three', 'event-e5-released-retry', NOW + 3, {
+          finalEnvelope: Buffer.from('two'),
+          workId: logicalWorkId,
+        }),
+      expectBudget('JUDGE_WORK_OWNER_HELD'),
+      'the logical-work fence refuses a second live attempt',
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare(
+            `SELECT COUNT(*) AS calls,
+                    SUM(COALESCE(actual_input_tokens, estimated_input_tokens)) AS tokens,
+                    SUM(concurrency_owned) AS concurrency
+               FROM judge_budget_reservations
+              WHERE work_id = ? AND state IN ('reserved', 'in-flight', 'settled')`,
+          )
+          .get(logicalWorkId) as object),
+      },
+      { calls: 1, tokens: 3, concurrency: 1 },
+      'the rolling and concurrency ledgers count the retry attempt exactly once and the released attempt never',
+    );
+    assert.equal(
+      beginJudgeTransport({ store: setup.store, reservationId: second.id, now: NOW + 4 }),
+      true,
+      'the one live retry can enter the physical-I/O state',
+    );
+    assert.equal(
+      settleJudgeWork({
+        store: setup.store,
+        reservationId: second.id,
+        result: 'completed',
+        actualInputTokens: 3,
+        now: NOW + 5,
+      }),
+      true,
+      'the one charged retry settles exactly once',
+    );
+    assert.throws(
+      () =>
+        reserve(setup, 'released-attempt-three', 'event-e5-released-retry', NOW + 6, {
+          finalEnvelope: Buffer.from('two'),
+          workId: logicalWorkId,
+        }),
+      expectBudget('GLOBAL_CALLS_PER_ROLLING_HOUR_EXHAUSTED'),
+      'the settled retry alone exhausts the one-call rolling ceiling',
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare(
+            `SELECT COUNT(*) AS calls,
+                    SUM(COALESCE(actual_input_tokens, estimated_input_tokens)) AS tokens,
+                    SUM(concurrency_owned) AS concurrency
+               FROM judge_budget_reservations
+              WHERE work_id = ? AND state IN ('reserved', 'in-flight', 'settled')`,
+          )
+          .get(logicalWorkId) as object),
+      },
+      { calls: 1, tokens: 3, concurrency: 0 },
+      'the failed retry adds neither a rolling charge nor a concurrency owner',
     );
   } finally {
     setup.store.close();
@@ -663,6 +792,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
         finalEnvelope: Buffer.from('x'),
         switchGeneration: 0,
         now: NOW,
+        authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
       });
       beginJudgeTransport({ store: setup.store, reservationId: reservation.id, now: NOW });
       settleJudgeWork({ store: setup.store, reservationId: reservation.id, result: 'unknown', now: NOW });
@@ -678,6 +808,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
           finalEnvelope: Buffer.from('x'),
           switchGeneration: 0,
           now: NOW,
+          authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
         }),
       expectBudget('JUDGE_TEST_RATE_EXHAUSTED'),
     );
@@ -691,6 +822,7 @@ test('E5 budget: judge tests have an exact-version unrefundable ten-per-hour cha
       finalEnvelope: Buffer.from('x'),
       switchGeneration: 0,
       now: NOW,
+      authority: { ruleId: 'rule-e5-budget', ruleVersion: 1 },
     });
     assert.equal(nextVersion.provider, null);
     assert.equal(

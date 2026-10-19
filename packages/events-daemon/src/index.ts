@@ -1,4 +1,4 @@
-/** Public entry for the held local event-emission service. */
+/** Public entry for the local event-emission service. */
 export { createEventsMcpServer, type EventsMcpServer } from './mcp/server.ts';
 export {
   B3_APPROVAL_VIEW_VARIANTS,

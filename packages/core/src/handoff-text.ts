@@ -85,7 +85,9 @@ export function handoffText(handoff: Handoff | ExternalCommand): string {
  */
 export function handoffTextToFill(handoff: Handoff | ExternalCommand, toFill: readonly string[]): string {
   if (!isCommand(handoff)) return handoff.message;
-  return lineWithWordsToFill(handoff, ...toFill) ?? quotedText(quotedWithWordsToFill(handoff, toFill));
+  const line = lineWithWordsToFill(handoff, ...toFill);
+  if (line === null) return quotedText(quotedWithWordsToFill(handoff, toFill));
+  return handoff.shell === 'powershell' ? `PowerShell:\n${line}` : line;
 }
 
 /** The brand of a `Remedy`: only `remedy` makes one. */
@@ -152,7 +154,7 @@ export function handoffSentenceToFill(
 ): string {
   if (!isCommand(handoff)) return noCommand(handoff, options);
   const line = lineWithWordsToFill(handoff, ...toFill);
-  if (line !== null) return say(`\`${line}\``);
+  if (line !== null) return say(`\`${line}\`${handoff.shell === 'powershell' ? ' (PowerShell)' : ''}`);
   return say(inlineQuoted(quotedWithWordsToFill(handoff, toFill)));
 }
 

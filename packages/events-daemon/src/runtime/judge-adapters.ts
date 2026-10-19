@@ -1,10 +1,11 @@
 import { canonicalJson } from '@agentcomms/core';
 import { getPointer, type JsonValue, parsePointer } from '@agentcomms/events';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 
 export const JUDGE_MAX_REQUEST_BYTES = 65_536;
 export const JUDGE_MAX_RESPONSE_BYTES = 65_536;
 
-export type JudgeWireAdapter = 'typesafe' | 'ollama';
+export type JudgeWireAdapter = typeof JUDGE_KIND_TYPESAFE | 'ollama';
 export type JudgeResponseAdapter = JudgeWireAdapter | 'generic-json-score';
 
 export interface JudgeAdapterReference {
@@ -187,7 +188,7 @@ export function buildJudgeWireRequest(input: JudgeWireRequestInput): JudgeWireRe
   const questions = Object.create(null) as Record<string, { readonly type: 'noul'; readonly instructions: string }>;
   questions[input.questionName] = { type: 'noul', instructions: input.instructions };
   const body = Buffer.from(canonicalJson({ model: input.model, questions, state: input.state }), 'utf8');
-  if (input.adapter === 'typesafe') {
+  if (input.adapter === JUDGE_KIND_TYPESAFE) {
     if (!text(input.hostedApiKey)) throw new TypeError('the hosted adapter needs its boundary key');
     if (/[\r\n]/u.test(input.hostedApiKey)) throw new TypeError('the hosted adapter needs a single-line boundary key');
     return {

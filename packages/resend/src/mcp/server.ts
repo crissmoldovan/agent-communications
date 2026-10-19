@@ -6,10 +6,9 @@ import {
   gatedChange,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
-  SEND_LOOKUP,
   strictToolArguments,
   toCommsError,
-  updateToolGate,
+  updateToolNotice,
   waitCallOptions,
   waitForApproval,
 } from '@agentcomms/core';
@@ -158,22 +157,17 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
 
   // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
   // in the envelope above — before its handler runs.
-  // Then the daily update check's stop (design 2026-09-28): an update that is out stops every tool but this server's
-  // doctor, and the check itself runs in the background, never delaying a call.
+  // Then the update notice (design 2026-10-16, U1): nothing is refused for being behind; the first result of this
+  // process that finds a newer release carries one line beside it, and the check runs in the background.
   strictToolArguments(
     server,
     fail,
-    updateToolGate({
+    updateToolNotice({
       core: context.core,
       env: context.env,
-      server: 'agent-resend',
       channel: 'resend',
       running: VERSION,
       exempt: ['resend_doctor'],
-      // The status of a send is asked by the approval it went under, used or failed as it may be: a look-up of that
-      // send, which goes past the stop as the send itself did — and only with a send's approval.
-      // A wait only looks: it answers while an update is out, for any approval this machine can read (decision 7).
-      approvals: { resend_send_status: SEND_LOOKUP, resend_send_wait: { lookup: true } },
       refresh: () => checkForUpdates(context.core, context.env),
     }),
   );
@@ -475,7 +469,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     {
       title: 'Prepare an email',
       description:
-        'Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Show the preview in full and wait for the person’s yes.',
+        'Build an email and return the exact preview — every recipient, BCC included, the reach and the From domain — with an approval id. Nothing is sent. Its From is labelled `<name> (agent)` — the From’s name, or the person’s label name for a bare address — unless `as` is `me`, and the preview’s first line says which. Show the preview in full and wait for the person’s yes.',
       inputSchema: {
         ...accountArg,
         from: z.string().describe('the sender at a verified domain: `Name <you@example.com>` or a bare address'),
@@ -493,6 +487,14 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
         inReplyTo: z.string().optional().describe('the Message-ID this replies to, to keep the thread'),
         references: z.array(z.string()).optional(),
         scheduledAt: z.string().optional().describe('send later: an ISO 8601 time with a zone, at most 30 days ahead'),
+        // A word, checked by the operation: a word that is not one is refused as USAGE from either surface.
+        as: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'who it appears to come from: agent (From labelled "<name> (agent)") or me (From as given). Pass `me` only when the person said so for this email; left out, their rules decide, and then agent',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -511,6 +513,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
         inReplyTo?: string | undefined;
         references?: string[] | undefined;
         scheduledAt?: string | undefined;
+        as?: string | undefined;
       }) => {
         const { account, ...input } = args;
         return prepareSend(context, await resolve(account), input);
@@ -523,7 +526,7 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     {
       title: 'Send a prepared email',
       description:
-        'Send a prepared email, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. `expect` restates the recipients and subject shown. Never call it again for an email whose outcome is unknown: use `resend_send_status`.',
+        'Send by approval id the email bound by resend_send_prepare, once, after the person approved its preview. Under `confirm` the person must first run the approve command `resend_send_prepare` gave, at their own terminal — you cannot approve it yourself. Pass the approval id; legacy callers may also pass expect, which must still match exactly. Never call it again for an email whose outcome is unknown: use resend_send_status.',
       inputSchema: {
         ...accountArg,
         approvalId: z.string().describe('the approval `resend_send_prepare` returned'),
@@ -534,7 +537,8 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
             bcc: z.array(z.string()),
             subject: z.string(),
           })
-          .describe('the recipients and subject the preview showed'),
+          .optional()
+          .describe('legacy exact check for recipients and subject; otherwise read from the approval'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -542,11 +546,14 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
       async (args: {
         account?: string | undefined;
         approvalId: string;
-        expect: { to: string[]; cc: string[]; bcc: string[]; subject: string };
+        expect?: { to: string[]; cc: string[]; bcc: string[]; subject: string } | undefined;
       }) => {
         // Another account's approval is refused by `executeSend` itself, before the record is touched.
         const name = await resolve(args.account);
-        return executeSend(context, name, { approvalId: args.approvalId, expect: args.expect });
+        return executeSend(context, name, {
+          approvalId: args.approvalId,
+          ...(args.expect === undefined ? {} : { expect: args.expect }),
+        });
       },
     ),
   );

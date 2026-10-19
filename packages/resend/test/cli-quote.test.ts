@@ -42,6 +42,9 @@ async function addAccount(
     USERPROFILE: root,
     NO_COLOR: '1',
     CLAUDECODE: '1',
+    // This process's PATH, as the harness gives it: a command names this Node from it (CUE-492), and the expected
+    // commands in `support/handoffs.ts` are made from it too.
+    PATH: process.env.PATH ?? '',
   };
   const core = openCore({ env, caller: RESEND_CALLER });
   let stdout = '';

@@ -16,7 +16,7 @@ import {
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import { JUDGE_BUDGET_ID, type LayaEnablementInputs } from '../domain/judges.ts';
-import { assertJudgeKindEnabled } from '../domain/lifecycle.ts';
+import { assertJudgeKindEnabled, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { SourceScope } from '../sources/contracts.ts';
@@ -323,6 +323,8 @@ export class ActivationRuntime {
         };
       }
       const oldId = `${input.ruleId}@${active.version}`;
+      // An earlier update whose approval lapsed unused would hold this rule's one replacement slot for good.
+      await this.#settleLapsedApprovals(oldId);
       const pending = this.#store.database
         .prepare(
           "SELECT 1 AS present FROM activation_intents WHERE replacement_of_version = ? AND status IN ('pending', 'pending-completion')",
@@ -552,21 +554,34 @@ export class ActivationRuntime {
   }
 
   /** A narrowing revocation is allowed to win over a claimed completion, but no other pointer mutation is. */
-  async cancelForRevocation(input: { readonly ruleId?: string; readonly targetId?: string }): Promise<void> {
+  async cancelForRevocation(input: {
+    readonly ruleId?: string;
+    readonly targetId?: string;
+    readonly judgeId?: string;
+  }): Promise<void> {
+    this.#store.immediate(() => {
+      this.cancelForRevocationInTransaction(input);
+    });
+  }
+
+  /** A caller already holding the removal transaction cancels every matching intent before revocation commits. */
+  cancelForRevocationInTransaction(input: {
+    readonly ruleId?: string;
+    readonly targetId?: string;
+    readonly judgeId?: string;
+  }): number {
     const rows = this.#store.database
       .prepare(
         "SELECT id, document FROM activation_intents WHERE status IN ('pending', 'pending-completion') ORDER BY id",
       )
       .all() as Array<{ id: string; document: string }>;
-    const cancelled: string[] = [];
+    let cancelled = 0;
     for (const row of rows) {
       if (!this.#isRevokedBinding(JSON.parse(row.document) as ActivationDocumentV1, input)) continue;
-      cancelled.push(row.id);
+      this.#cancel(row.id, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
+      cancelled += 1;
     }
-    if (cancelled.length === 0) return;
-    this.#store.immediate(() => {
-      for (const intentId of cancelled) this.#cancel(intentId, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
-    });
+    return cancelled;
   }
 
   /** Called by the kind-disable transaction; no pending kind approval may recreate the pointer after disable wins. */
@@ -581,7 +596,8 @@ export class ActivationRuntime {
       const document = JSON.parse(row.document) as ActivationDocumentV1;
       const bound =
         (document.kind === 'judge-kind' && document.enablement.kind === kind) ||
-        (document.kind === 'rule' && document.rule.agentic?.judge.kind === kind);
+        (document.kind === 'rule' && document.rule.agentic?.judge.kind === kind) ||
+        (document.kind === 'enable-all' && this.#ruleVersionsBindJudgeKind(document.ruleVersions, kind));
       if (bound) {
         this.#cancel(row.id, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
         cancelled += 1;
@@ -627,6 +643,7 @@ export class ActivationRuntime {
         this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
+      if (this.#settleLapsedApproval(intent.id, intent.approval_id, record)) continue;
       if (record.record.state === 'approved') {
         const binding = this.#settleOnDrift(intent);
         if (binding === null) continue;
@@ -673,7 +690,8 @@ export class ActivationRuntime {
 
   /**
    * A live owner retries only work that core has already marked used. Unlike startup recovery this never claims an
-   * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path.
+   * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path. After
+   * that claimed work, it settles every unclaimed intent whose approval lapsed unused, as startup recovery does.
    */
   async resumeClaimedCompletions(): Promise<void> {
     const rows = this.#store.database
@@ -711,6 +729,48 @@ export class ActivationRuntime {
         throw error;
       }
     }
+    await this.#settleLapsedApprovals();
+  }
+
+  /** Settles the unclaimed pending intents — of one replacement slot, or every one — whose approval lapsed unused. */
+  async #settleLapsedApprovals(replacementOfVersion?: string): Promise<void> {
+    const rows = this.#store.database
+      .prepare(
+        "SELECT id, approval_id, replacement_of_version FROM activation_intents WHERE status = 'pending' AND claimed_at IS NULL AND approval_id IS NOT NULL ORDER BY id",
+      )
+      .all() as Array<{ id: string; approval_id: string; replacement_of_version: string | null }>;
+    for (const row of rows) {
+      if (replacementOfVersion !== undefined && row.replacement_of_version !== replacementOfVersion) continue;
+      this.#settleLapsedApproval(row.id, row.approval_id, await this.#approvals.get(row.approval_id));
+    }
+  }
+
+  /**
+   * CUE-491: a disclosure approval that core reads as expired or revoked can never be approved or claimed again, so
+   * its unclaimed intent is cancelled (D2: expired, revoked and absent drop). Left pending, every pass would carry it
+   * for good, and an update's would hold its rule's one replacement slot, refusing the next update as
+   * REPLACEMENT_PENDING. Core's answer crossed an await: the write re-reads the intent under its transaction and
+   * settles only the same unclaimed pending one. The failure code reuses APPROVAL_ABSENT — no usable approval
+   * remains, as the claimed path already records for a non-used one — because the B3 control and doctor v1 schemas
+   * that close the code set are pinned.
+   */
+  #settleLapsedApproval(
+    intentId: string,
+    approvalId: string,
+    record: Awaited<ReturnType<ActivationRuntimeOptions['approvals']['get']>>,
+  ): boolean {
+    if (record?.form !== 'v2' || record.record.kind !== 'disclosure') return false;
+    if (record.record.state !== 'expired' && record.record.state !== 'revoked') return false;
+    let settled = false;
+    this.#store.immediate(() => {
+      const latest = this.#store.database
+        .prepare('SELECT status, approval_id, claimed_at FROM activation_intents WHERE id = ?')
+        .get(intentId) as Pick<IntentRow, 'status' | 'approval_id' | 'claimed_at'> | undefined;
+      if (latest?.status !== 'pending' || latest.claimed_at !== null || latest.approval_id !== approvalId) return;
+      this.#cancel(intentId, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+      settled = true;
+    });
+    return settled;
   }
 
   /**
@@ -737,25 +797,28 @@ export class ActivationRuntime {
     const intentId = this.#newIntentId();
     const binding = disclosureBindingFor(intentId, document, this.#layaInputs);
     const now = this.#now();
-    const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
+    const plannedAccounts = [
+      ...new Map(points.map((point) => [`${point.source}\u0000${point.accountId}`, point] as const)).values(),
+    ];
     this.#store.immediate(() => {
+      // Secret and configuration checks above awaited. Re-read every bound rule under the intent-write transaction,
+      // so a judge removal or kind disable cannot land in that gap and leave a stale approval to clean up later.
+      this.#assertBoundRuleAuthority(document);
+      this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
       this.#assertJudgeActivationLive(document, effect);
       // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
       // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
       // low-resolution clock has not ticked.  This records the ordering needed to distinguish its fresh approval
       // from an old approval that named the removed account.
-      const latestRevocation =
-        plannedAccountIds.length === 0
-          ? undefined
-          : ((
-              this.#store.database
-                .prepare(
-                  `SELECT MAX(revoked_at) AS revoked_at
-                 FROM account_revocations
-                 WHERE account_id IN (${plannedAccountIds.map(() => '?').join(', ')})`,
-                )
-                .get(...plannedAccountIds) as { revoked_at: number | null }
-            ).revoked_at ?? undefined);
+      const latestRevocation = plannedAccounts.reduce<number | undefined>((latest, point) => {
+        const row = this.#store.database
+          .prepare(
+            `SELECT MAX(revoked_at) AS revoked_at FROM account_revocations
+              WHERE account_id = ? AND (source IS NULL OR source = ?)`,
+          )
+          .get(point.accountId, point.source) as { revoked_at: number | null };
+        return row.revoked_at === null ? latest : Math.max(latest ?? row.revoked_at, row.revoked_at);
+      }, undefined);
       const createdAt = Math.max(now, latestRevocation === undefined ? now : latestRevocation + 1);
       this.#store.database
         .prepare(
@@ -777,11 +840,41 @@ export class ActivationRuntime {
         );
     });
     const approval = await this.#approvals.createDisclosure(binding);
+    let settled: unknown;
     this.#store.immediate(() => {
-      this.#store.database
-        .prepare('UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND approval_id IS NULL')
-        .run(approval.approvalId, this.#now(), intentId);
+      const latest = this.#intent(intentId);
+      const linkApproval = () =>
+        this.#store.database
+          .prepare('UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND approval_id IS NULL')
+          .run(approval.approvalId, this.#now(), intentId).changes;
+      if (latest.status !== 'pending') {
+        if (linkApproval() !== 1)
+          throw new CommsError('APPROVAL_VOID', 'the cancelled activation could not retain its disclosure link');
+        settled = new CommsError('APPROVAL_VOID', 'the activation was cancelled before its approval could be linked');
+        return;
+      }
+      // Approval creation awaited another store. Repeat the complete authority and pointer-plan fences before this
+      // local write. If either moved, retain the cross-store link but settle the intent as unusable in this commit.
+      try {
+        this.#assertBoundRuleAuthority(document);
+        this.#assertPreparationPlanLive(document, effect, replacementOfVersion);
+        this.#assertJudgeActivationLive(document, effect);
+      } catch (error) {
+        if (linkApproval() !== 1)
+          throw new CommsError('APPROVAL_VOID', 'the stale activation could not retain its disclosure link');
+        this.#cancel(intentId, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
+        settled = error;
+        return;
+      }
+      const linked = this.#store.database
+        .prepare(
+          "UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND status = 'pending' AND approval_id IS NULL",
+        )
+        .run(approval.approvalId, this.#now(), intentId).changes;
+      if (linked !== 1)
+        throw new CommsError('APPROVAL_VOID', 'the activation approval link changed before it could be written');
     });
+    if (settled !== undefined) throw settled;
     return {
       intentId,
       approvalId: approval.approvalId,
@@ -817,7 +910,7 @@ export class ActivationRuntime {
       // Core claiming is another await boundary.  This transaction owns the local claim, so it must fence a judge
       // kind disabled after the core claim but before any provider baseline or local state mutation.
       const document = this.#document(row);
-      this.#assertRuleJudgeKindEnabled(document);
+      this.#assertBoundRuleAuthority(document);
       if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
         try {
           this.#assertJudgeActivationLive(document, JSON.parse(row.effect) as ActivationEffect);
@@ -834,7 +927,9 @@ export class ActivationRuntime {
           `SELECT 1 AS present
            FROM activation_intents AS planned
            JOIN json_each(planned.required_points) AS point
-           JOIN account_revocations AS revocation ON revocation.account_id = json_extract(point.value, '$.accountId')
+           JOIN account_revocations AS revocation
+             ON revocation.account_id = json_extract(point.value, '$.accountId')
+            AND (revocation.source IS NULL OR revocation.source = COALESCE(json_extract(point.value, '$.source'), 'gmail'))
            WHERE planned.id = ? AND revocation.revoked_at >= planned.created_at
            LIMIT 1`,
         )
@@ -1083,7 +1178,7 @@ export class ActivationRuntime {
       }
       // Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
       // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
-      this.#assertRuleJudgeKindEnabled(document);
+      this.#assertBoundRuleAuthority(document);
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
       if (
@@ -1297,6 +1392,7 @@ export class ActivationRuntime {
     if (binding.digest !== intent.digest || activationDocumentDigest(document, this.#layaInputs) !== intent.digest) {
       throw new CommsError('APPROVAL_VOID', 'the activation document changed after preparation');
     }
+    this.#assertBoundRuleAuthority(document);
     if (document.kind === 'rule') {
       const versions = this.#versions();
       const active = versions.activeVersion('rule', document.rule.ruleId);
@@ -1306,9 +1402,6 @@ export class ActivationRuntime {
           `${document.rule.ruleId}@${active.version}` !== intent.replacement_of_version)
       )
         throw new CommsError('APPROVAL_VOID', 'the rule gained an active pointer after preparation');
-      const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
-      if (canonicalJson(live) !== canonicalJson(document))
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
     } else if (document.kind === 'enable-all') {
       const current = this.#switch();
       const live = this.#store.database
@@ -1375,12 +1468,69 @@ export class ActivationRuntime {
     return row?.generation ?? 0;
   }
 
-  /** The absence of the sole judge-kind pointer is disabled; deterministic-only rules need no kind check. */
-  #assertRuleJudgeKindEnabled(document: ActivationDocumentV1): void {
-    if (document.kind !== 'rule' || document.rule.agentic === undefined) return;
-    const kind = document.rule.agentic.judge.kind;
+  /** Re-read every exact bound rule, including its embedded judge revocation and kind pointer, at each authority gate. */
+  #assertBoundRuleAuthority(document: ActivationDocumentV1): void {
+    if (document.kind !== 'rule' && document.kind !== 'enable-all') return;
     const versions = this.#versions();
-    assertJudgeKindEnabled(kind, versions.activeVersion('judge-kind', kind) !== null);
+    if (document.kind === 'rule') {
+      const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
+      if (canonicalJson(live) !== canonicalJson(document))
+        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
+      return;
+    }
+    for (const entry of document.ruleVersions) versions.prepareRule(entry.ruleId, entry.ruleVersion);
+  }
+
+  /** Preparation may await local stores; the exact pointer plan captured before those awaits must still be current. */
+  #assertPreparationPlanLive(
+    document: ActivationDocumentV1,
+    effect: ActivationEffect,
+    replacementOfVersion?: string,
+  ): void {
+    if (document.kind === 'rule') {
+      const active = this.#versions().activeVersion('rule', document.rule.ruleId);
+      const current = active === null ? null : `${document.rule.ruleId}@${active.version}`;
+      if (current !== (replacementOfVersion ?? null) || this.#switch().generation !== effect.switchGeneration)
+        throw new CommsError('APPROVAL_VOID', 'the rule activation pointer plan changed during preparation');
+      return;
+    }
+    if (document.kind !== 'enable-all') return;
+    const settings = this.#switch();
+    const live = this.#store.database
+      .prepare(
+        "SELECT object_id, version, current_cutover_id FROM active_versions WHERE kind = 'rule' ORDER BY object_id, version",
+      )
+      .all() as Array<{ object_id: string; version: number; current_cutover_id: string | null }>;
+    if (
+      settings.enabled ||
+      settings.generation !== document.switchGeneration ||
+      settings.generation !== effect.switchGeneration ||
+      canonicalJson(live.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version }))) !==
+        canonicalJson(document.ruleVersions) ||
+      canonicalJson(
+        live.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version, cutoverId: row.current_cutover_id })),
+      ) !== canonicalJson(effect.currentCutovers ?? [])
+    )
+      throw new CommsError('APPROVAL_VOID', 'the global enablement pointer plan changed during preparation');
+  }
+
+  /** A damaged captured rule row cannot prove that a kind disable is unrelated, so cancellation is fail-closed. */
+  #ruleVersionsBindJudgeKind(
+    entries: Extract<ActivationDocumentV1, { kind: 'enable-all' }>['ruleVersions'],
+    kind: string,
+  ): boolean {
+    for (const entry of entries) {
+      const row = this.#store.database
+        .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
+        .get(entry.ruleId, entry.ruleVersion) as { document: string } | undefined;
+      if (row === undefined) return true;
+      try {
+        if (canonicalFullRuleDocument(JSON.parse(row.document)).agentic?.judge.kind === kind) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
   }
 
   #document(intent: IntentRow): ActivationDocumentV1 {
@@ -1453,7 +1603,7 @@ export class ActivationRuntime {
       });
     }
     for (const judge of rule.judges) {
-      if (judge.kind === 'typesafe')
+      if (judge.kind === JUDGE_KIND_TYPESAFE)
         await this.#assertObjectSecretReady({ owner: { kind: 'judge', id: judge.judgeId, version: judge.version } });
     }
   }
@@ -1488,24 +1638,30 @@ export class ActivationRuntime {
 
   #isRevokedBinding(
     document: ActivationDocumentV1,
-    input: { readonly ruleId?: string; readonly targetId?: string },
+    input: { readonly ruleId?: string; readonly targetId?: string; readonly judgeId?: string },
   ): boolean {
     if (document.kind === 'rule') {
       return (
         document.rule.ruleId === input.ruleId ||
-        (input.targetId !== undefined && document.rule.targets.some((target) => target.targetId === input.targetId))
+        (input.targetId !== undefined && document.rule.targets.some((target) => target.targetId === input.targetId)) ||
+        (input.judgeId !== undefined && document.rule.agentic?.judge.judgeId === input.judgeId)
       );
     }
     if (document.kind !== 'enable-all') return false;
     if (input.ruleId !== undefined) return document.ruleVersions.some((entry) => entry.ruleId === input.ruleId);
-    if (input.targetId === undefined) return false;
+    if (input.targetId === undefined && input.judgeId === undefined) return false;
     for (const entry of document.ruleVersions) {
       const row = this.#store.database
         .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
         .get(entry.ruleId, entry.ruleVersion) as { document: string } | undefined;
       if (!row) continue;
-      const rule = JSON.parse(row.document) as { targets?: Array<{ targetId?: unknown }> };
-      if (rule.targets?.some((target) => target.targetId === input.targetId)) return true;
+      const rule = JSON.parse(row.document) as {
+        targets?: Array<{ targetId?: unknown }>;
+        agentic?: { judge?: { judgeId?: unknown } };
+      };
+      if (input.targetId !== undefined && rule.targets?.some((target) => target.targetId === input.targetId))
+        return true;
+      if (input.judgeId !== undefined && rule.agentic?.judge?.judgeId === input.judgeId) return true;
     }
     return false;
   }

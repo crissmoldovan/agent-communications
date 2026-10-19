@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  type ActDecision,
   type ApprovalExpectation,
   type ApprovalObject,
   type ApprovalOutcome,
@@ -11,6 +12,7 @@ import {
   type ClaimOptions,
   type CliHandoffs,
   CommsError,
+  type Config,
   type CreateApprovalInput,
   canonicalJson,
   type Expectation,
@@ -41,7 +43,41 @@ import type { SlackDraft } from '../compose/drafts.ts';
 import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/files.ts';
 import { mentionedUserIds, previewOf, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
+import type { AppPostRecord } from './app-posts.ts';
+import { appTokenRefusal } from './app-token.ts';
+import {
+  actRefusal,
+  allowedHere,
+  type BehaviourCheck,
+  type BehaviourDeps,
+  behaviourBinding,
+  boundDigest,
+  landingOf,
+  placeNamesOf,
+  postCheck,
+  requireAllowed,
+  rulesNamePeople,
+  type SlackPreview,
+} from './behaviour.ts';
 import { requireConversation } from './destination.ts';
+import {
+  appNameOf,
+  decideLabel,
+  identityLine,
+  type LabelDeps,
+  labelBinding,
+  labelledPayload,
+  reactionBinding,
+  reactionFlags,
+  reactionLabelOf,
+  reactionLine,
+  requestedOf,
+  requestFlags,
+  type SlackIcon,
+  type SlackLabel,
+  unlabelled,
+} from './label.ts';
+import { isMessageTs } from './message.ts';
 import { type Channel, channelOf, type NameBook } from './people.ts';
 
 /**
@@ -76,10 +112,39 @@ export function expectationFor(payload: { channel: string }, notifies: { estimat
   return { to: [payload.channel], cc: [], bcc: [], subject: `reaches ${notifies.estimated}` };
 }
 
+/**
+ * Who a prepared act will appear to come from, as its result says it (design 2026-10-15 S7): the identity, the route,
+ * the phrase and icon an app post goes out with, and why an `agent` act takes the fallback. Bound in its approval.
+ */
+export interface LabelView {
+  readonly identity: 'agent' | 'me';
+  readonly route: 'app' | 'fallback' | 'person';
+  readonly phrase?: string | undefined;
+  readonly icon?: SlackIcon | undefined;
+  readonly reason?: string | undefined;
+  /** The preview's first line, exactly. */
+  readonly line: string;
+}
+
+/** A label as a result reports it. */
+export function labelView(label: SlackLabel, line: string): LabelView {
+  return {
+    identity: label.identity,
+    route: label.route,
+    ...(label.phrase === undefined ? {} : { phrase: label.phrase }),
+    ...(label.icon === undefined ? {} : { icon: label.icon }),
+    ...(label.reason === undefined ? {} : { reason: label.reason }),
+    line,
+  };
+}
+
 export interface PreparedPost {
   readonly approvalId: string;
   readonly draftId: string;
-  readonly preview: ChannelPreview;
+  /** With the `Allowed here:` line (design 2026-10-19-agent-behaviour-rules, B4): `renderSlackPreview` shows it. */
+  readonly preview: SlackPreview;
+  /** Who it will appear to come from (design 2026-10-15 S7). Absent only for a gate built without the label's deps. */
+  readonly label?: LabelView | undefined;
   readonly expect: Expectation;
   readonly policy: SendPolicy;
   readonly requiredPolicy: SendPolicy;
@@ -130,6 +195,12 @@ export interface PrepareDeps {
    */
   readonly sendEpoch: number;
   /**
+   * The configuration as it is now, read for the behaviour rules (design 2026-10-19-agent-behaviour-rules, B4) each time
+   * one is asked: at prepare, and again just before an approval is claimed, so a rule tightened after the yes stops the
+   * act. Required, so no gate can be built that skips them: `gateDepsFor` reads the configuration file each time.
+   */
+  readonly currentConfig: () => Promise<Config>;
+  /**
    * What the workspace was connected as, and what Slack granted it — for a post with files, which needs both `send` and
    * `files:write`. Read from the configuration by `gateDepsFor`; a post of text alone does not look at them.
    */
@@ -142,6 +213,21 @@ export interface PrepareDeps {
     /** D8's object for a record this call just wrote or finished: what its result reports. */
     approvalOf(record: ApprovalRecord): Promise<ApprovalObject>;
   };
+  /**
+   * What decides who an act appears to come from (design 2026-10-15): the person's label settings and the account's
+   * app. `gateDepsFor` always sets it. A gate built by hand without it — a unit test of the gate's own mechanics — acts
+   * as the person did before the label, and is never what a surface runs.
+   */
+  readonly label?: LabelDeps | undefined;
+  /** This account's own record of what its app posted (S5): written after an app post, read before an app edit. */
+  readonly appPosts?: AppPostRecord | undefined;
+  /**
+   * The line a post preview opens with when a security fix is out and this machine does not install it on its own
+   * (design 2026-10-16, U7): core's `securityNotice`, asked until the person answers a post that carried it — given the
+   * post's approval, whose yes is the answer. `gateDepsFor` always sets it; a gate built by hand
+   * without it shows none. Display only — never in the digest.
+   */
+  readonly securityNotice?: ((act: 'post', approvalId: string) => Promise<string | null>) | undefined;
 }
 
 /** The channel, and how many people are in it — or why that could not be established. */
@@ -228,12 +314,83 @@ export function risksOf(
 
 /** A post as it would go now: what a person is shown, and the digest that binds exactly that. */
 export interface PostView {
-  readonly preview: ChannelPreview;
+  /** With the line saying what the rules allow where it lands (design 2026-10-19-agent-behaviour-rules, B4). */
+  readonly preview: SlackPreview;
+  /** Binds the post, and where it lands for the rules: for a DM, the person it is with (`behaviourBinding`). */
   readonly digest: string;
   /** Why the room could not be read, when it could not — so its reach is a gap, not a number. */
   readonly roomUnread: string | undefined;
-  /** What posts: the one payload the preview was rendered from and the digest was taken over. */
+  /** What the draft composes to: the payload the preview's words, reach and flags were read from. */
   readonly payload: ComposedPayload;
+  /** Who it appears to come from (design 2026-10-15): undefined only for a gate built without the label's deps. */
+  readonly label: SlackLabel | undefined;
+  /** Exactly what goes to Slack, and with which token: the payload labelled as the route says. Bound. */
+  readonly sent: SentPost;
+  /** What the behaviour rules are asked of it (B2–B4): `post` or `reply`, `file` for files, where it lands. Bound. */
+  readonly check: BehaviourCheck;
+  /** What the rules allow there now: what its preview's line says, and what prepare refuses by. */
+  readonly decision: ActDecision;
+}
+
+/**
+ * A post's view before the behaviour rules are asked of it: what `viewPost` and an edit's view share, since an edit's
+ * words are read as a post of them would be, and its acts are its own (`viewEdit`).
+ */
+export interface ComposedPost extends Omit<PostView, 'preview' | 'digest' | 'check' | 'decision'> {
+  readonly preview: ChannelPreview;
+  /** The post's own digest, which binds no acts. */
+  readonly digest: string;
+  /** Where it lands, as the rules match it (`landingOf`), and those places by the names a person knows (`placeNamesOf`). */
+  readonly places: string[][];
+  /** Its places whose people Slack did not say: held to every person's rule (`heldPlaces`). */
+  readonly unread: string[];
+  readonly names: Readonly<Record<string, string>>;
+}
+
+/**
+ * What a post sends (design 2026-10-15 S3, S4): with the person's token, the payload — labelled in its words for the
+ * fallback — or with the app's bot token, the payload with the phrase as its `username` and the account's icon.
+ */
+export interface SentPost {
+  readonly via: 'person' | 'app';
+  readonly payload: ComposedPayload;
+  readonly username?: string | undefined;
+  readonly icon?: SlackIcon | undefined;
+}
+
+/** What a label makes of a payload: the request the route sends. */
+export function sentPost(payload: ComposedPayload, label: SlackLabel | undefined): SentPost {
+  if (label === undefined || label.identity === 'me' || label.phrase === undefined) return { via: 'person', payload };
+  if (label.route === 'app') {
+    return { via: 'app', payload, username: label.phrase, ...(label.icon === undefined ? {} : { icon: label.icon }) };
+  }
+  return { via: 'person', payload: labelledPayload(payload, label.phrase) };
+}
+
+/**
+ * The digest's payload half: the exact bytes `postPrepared` sends, so a change to any field of them counts as a change.
+ * An act as the person, unlabelled, is bound exactly as every post before the label was; any other binds the request
+ * its route sends and the label itself — identity, route, phrase, icon — so nothing changes them unnoticed (§L3).
+ */
+export function sentSha256(payload: ComposedPayload, sent: SentPost, label: SlackLabel | undefined): string {
+  if (label === undefined || (label.identity === 'me' && label.route === 'person')) {
+    return sha256Hex(JSON.stringify(payload));
+  }
+  return sha256Hex(JSON.stringify({ sent, label: labelBinding(label) }));
+}
+
+/** The kind of act a post is, for the rules (L4): a file post, a reply in a thread, or a new post. */
+export function postKind(payload: ComposedPayload, files: number): 'file' | 'reply' | 'post' {
+  if (files > 0) return 'file';
+  return payload.thread_ts === undefined ? 'post' : 'reply';
+}
+
+/** Warnings an `agent` post's preview carries, beside its first line (S7): what the fallback puts in the message. */
+function labelWarnings(label: SlackLabel | undefined): string[] {
+  if (label?.identity !== 'agent' || label.route !== 'fallback' || label.phrase === undefined) return [];
+  return [
+    `This goes out as you, labelled in the message: its words and its notification both begin "${label.phrase}:". The app does not post it, because ${label.reason ?? 'it cannot here'}.`,
+  ];
 }
 
 /**
@@ -257,9 +414,27 @@ export function postedPayload(draft: SlackDraft, handoffs: CliHandoffs): Compose
   const stored = draft.payload;
   const threadTs: unknown = stored.thread_ts;
   if (threadTs !== undefined && typeof threadTs !== 'string') throw notComposed(draft, handoffs);
+  // A string that is no message ts: the composer now refuses one (`draftPayload`), so it was written before, or by hand.
+  if (threadTs !== undefined && !isMessageTs(threadTs)) throw notAThread(draft, threadTs, handoffs);
   const posted = payloadOf(stored.text, stored.channel, threadTs);
   if (canonicalJson(stored) !== canonicalJson(posted)) throw notComposed(draft, handoffs);
   return posted;
+}
+
+/**
+ * The gate's refusal of a draft whose thread is no message ts (review of spec 2, finding 9): Slack would post it as a
+ * new message at the top of the conversation, which is not what a preview of a reply shows. Nothing can be mended in
+ * it, since an update starts from what the draft posts: it is composed again.
+ */
+function notAThread(draft: SlackDraft, threadTs: string, handoffs: CliHandoffs): CommsError {
+  return new CommsError(
+    'BAD_DATA',
+    `nothing was sent: draft "${draft.draftId}" replies in a thread at "${truncateDisplay(threadTs, 40)}", which is not a message timestamp`,
+    {
+      hint: `${recomposeSentence(draft.draftId, handoffs)} Give the thread as its first message’s ts, exactly as a read returned it, such as 1700000000.000100.`,
+      details: { draftId: draft.draftId, reason: 'not-a-ts' },
+    },
+  );
 }
 
 /** The gate's refusal of a draft that is not what its text composes to — one wording, whichever part of it differs. */
@@ -278,13 +453,17 @@ function notComposed(draft: SlackDraft, handoffs: CliHandoffs): CommsError {
  * the gate would post it — so the advice cannot differ between showing a draft and trying to post it.
  */
 export function changedOutsideHint(draftId: string, handoffs: CliHandoffs): string {
-  const remove = handoffSentenceToFill(
+  return `It was changed outside agent-communications. ${recomposeSentence(draftId, handoffs)}`;
+}
+
+/** The one way to mend a draft the gate refuses: delete it, located, and compose it again. */
+function recomposeSentence(draftId: string, handoffs: CliHandoffs): string {
+  return handoffSentenceToFill(
     handoffs.own(['draft', 'delete', draftId, '--workspace']),
     ['<name>'],
     (command) => `Delete it with ${command} and compose it again.`,
     { instead: 'Delete it with slack_draft_delete from a chat and compose it again.' },
   );
-  return `It was changed outside agent-communications. ${remove}`;
 }
 
 /**
@@ -294,12 +473,52 @@ export function changedOutsideHint(draftId: string, handoffs: CliHandoffs): stri
  * copies, and the approval screen, which had neither, rendered a room of four hundred as a count it could not read:
  * the person typing the code was never shown the reach their approval bound. Built in one place, what is shown and
  * what is bound cannot drift apart between the three.
+ *
+ * The behaviour rules are asked here too (design 2026-10-19-agent-behaviour-rules, B4), on the configuration as it is
+ * now: the post's acts where it lands, bound into its digest, and the preview's line saying what is allowed there. This
+ * refuses nothing itself — preparing refuses by its decision, and posting asks again just before the claim
+ * (`claimOrHandOver`).
  */
 export async function viewPost(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs'>,
+  deps: Pick<
+    PrepareDeps,
+    'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label' | 'accountId' | 'currentConfig'
+  >,
   draft: SlackDraft,
   book: NameBook,
+  /** What the message asked for (L3 step 1): `as` at prepare, read back from the approval at send and approval. */
+  requested?: 'agent' | 'me' | undefined,
 ): Promise<PostView> {
+  const { places, unread, names, ...view } = await composedPost(deps, draft, book, requested);
+  // `reply` only where Slack has the thread in that conversation, when the rules tell a reply from a post (finding 9).
+  const check = await postCheck(
+    deps,
+    { channel: view.payload.channel, threadTs: view.payload.thread_ts, files: (draft.files ?? []).length },
+    { places, unread, names },
+  );
+  const here = await allowedHere(deps, check);
+  return {
+    ...view,
+    preview: { ...view.preview, allowedHere: here.line },
+    digest: boundDigest(view.digest, check),
+    check,
+    decision: here.decision,
+  };
+}
+
+/**
+ * {@link viewPost} before the rules are asked: the room read once, the preview and the post's own digest from that one
+ * reading, and where the post lands. An edit reads its words through this, and asks the rules of its own acts.
+ */
+export async function composedPost(
+  deps: Pick<
+    PrepareDeps,
+    'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label' | 'accountId' | 'currentConfig'
+  >,
+  draft: SlackDraft,
+  book: NameBook,
+  requested?: 'agent' | 'me' | undefined,
+): Promise<ComposedPost> {
   // Before Slack is asked anything: a draft that is not what its text composes to is shown to nobody.
   const payload = postedPayload(draft, deps.handoffs);
   // A draft stored before 0.12.0, or written by hand, may name a user: refused here too, before Slack is asked.
@@ -308,18 +527,44 @@ export async function viewPost(
   // Here, so preparing, the approval screen and posting all refuse it — and posting before the approval is claimed.
   if (channel) requireMember(channel, payload.channel);
   if (channel) book.addChannel(channel);
+  // Who it appears to come from, decided before anything is shown (design 2026-10-15 S2): the route never changes after.
+  const label =
+    deps.label === undefined
+      ? undefined
+      : await decideLabel(
+          { call: deps.call, postingAs: deps.postingAs, label: deps.label },
+          {
+            kind: postKind(payload, (draft.files ?? []).length),
+            channelId: payload.channel,
+            channel,
+            requested,
+          },
+        );
+  const sent = sentPost(payload, label);
+  const appName =
+    label?.route === 'app' && label.botUserId !== undefined ? await appNameOf(deps.call, label.botUserId) : undefined;
 
-  const preview = previewOf({
+  const shown = previewOf({
     // Rendered from the payload that posts, not from the file it was checked against.
     draft: { ...draft, payload },
     workspace: deps.workspaceName,
-    postingAs: deps.postingAs,
+    // The first line names who it will appear to come from (S7); a gate without the label's deps names the account.
+    postingAs: label === undefined ? deps.postingAs : identityLine(label, appName),
     channel,
     book,
     memberCount: members,
     countUnknown: why,
     membershipUnchecked: why,
   });
+  // The body as the room reads it: with the label at its front, for the fallback (S3); otherwise the words themselves.
+  const preview: ChannelPreview =
+    label === undefined
+      ? shown
+      : {
+          ...shown,
+          ...(sent.payload === payload ? {} : { body: decodeSlackText(sent.payload.text, book.names()).text }),
+          warnings: [...labelWarnings(label), ...(shown.warnings ?? [])],
+        };
 
   const canonical: CanonicalChannelMessage = {
     kind: 'channel',
@@ -329,8 +574,8 @@ export async function viewPost(
     ...(channel?.name?.text ? { channelName: channel.name.text } : {}),
     ...(payload.thread_ts ? { threadTs: payload.thread_ts } : {}),
     visibleText: preview.body,
-    // The exact bytes `postPrepared` sends, so a change to any field of them counts as a change.
-    payloadSha256: sha256Hex(JSON.stringify(payload)),
+    // The exact bytes `postPrepared` sends, and with which token and label (see `sentSha256`).
+    payloadSha256: sentSha256(payload, sent, label),
     notifies: {
       here: preview.notifies.here,
       channel: preview.notifies.channel,
@@ -351,7 +596,18 @@ export async function viewPost(
       sha256: file.sha256,
     })),
   };
-  return { preview, digest: messageDigest(canonical), roomUnread: why, payload };
+  return {
+    preview,
+    digest: messageDigest(canonical),
+    roomUnread: why,
+    payload,
+    label,
+    sent,
+    // A DM is matched by the person it is with as well as by itself (B4), and a group DM by each person in it: what
+    // the room says, read above, and for a group DM who Slack says is in it, where a rule names a person.
+    ...(await landingOf(deps, payload.channel, channel)),
+    names: placeNamesOf(payload.channel, channel, book),
+  };
 }
 
 /**
@@ -459,8 +715,17 @@ export async function filesAsRecorded(
  * Nothing is posted here and nothing can be: the permit stays closed, and the only Slack call made is a read of
  * the channel so the reach can be counted. A post with files is checked first — the workspace can send them, and each
  * is still the file the draft recorded — so a refusal asks Slack nothing.
+ *
+ * Then the behaviour rules (design 2026-10-19-agent-behaviour-rules, B4): a `post`, a `reply`, or either with `file`,
+ * where the room says it lands — refused with `ACT_NOT_ALLOWED` before any approval is made or any preview returned.
  */
-export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: NameBook): Promise<PreparedPost> {
+export async function preparePost(
+  deps: PrepareDeps,
+  draft: SlackDraft,
+  book: NameBook,
+  /** `as`: the person's word for this one message (design 2026-10-15 L3). */
+  requested?: 'agent' | 'me' | undefined,
+): Promise<PreparedPost> {
   if (deps.policy === 'never') {
     throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)', {
       hint: 'The preview below is pasteable — send it yourself in Slack, or change the policy at a terminal.',
@@ -471,9 +736,11 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     requireFileSending(deps);
     await filesAsRecorded(deps, draft);
   }
-  const { preview, digest, payload } = await viewPost(deps, draft, book);
+  const { preview, digest, payload, label, check, decision } = await viewPost(deps, draft, book, requested);
+  if (!decision.allowed) throw await actRefusal(deps, decision, check);
 
-  const riskFlags = risksOf(payload, preview.notifies, files.length);
+  // What the message asked for rides in the flags, so the send and the approval screen decide as this did.
+  const riskFlags = [...risksOf(payload, preview.notifies, files.length), ...requestFlags(requested)];
   /*
    * A broadcast raises the ceremony by itself.
    *
@@ -513,14 +780,18 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     ...(deps.surface ? { surface: deps.surface } : {}),
   });
 
+  // Asked once the approval exists, until the person answers one that carried it (design 2026-10-16, U7).
+  const security = (await deps.securityNotice?.('post', record.approvalId)) ?? null;
   return {
     approvalId: record.approvalId,
     draftId: draft.draftId,
     preview: {
+      ...(security === null ? {} : { security }),
       ...preview,
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describePolicy(stricterPolicy(deps.policy, requiredPolicy)),
     },
+    ...(label === undefined ? {} : { label: labelView(label, preview.postingAs) }),
     expect: record.expect,
     policy: deps.policy,
     requiredPolicy,
@@ -574,6 +845,57 @@ export interface PostDeps extends PrepareDeps {
   readonly signal?: AbortSignal | undefined;
   /** How a throttled act waits before it tries again (design 2026-10-08 §R2): core's pacing when left out. */
   readonly sendPacing?: (() => SendPacing) | undefined;
+  /**
+   * The standing approval this act is one use of (design 2026-10-19-standing-approvals, S9): set by `ack` alone, the one
+   * caller whose approval is a standing approval's child. Every other caller leaves it out, and is refused a child —
+   * so a child is sent only on the path that counts it, records its outcome and raises its notice.
+   */
+  readonly standingUse?: { readonly standingId: string } | undefined;
+}
+
+/** Whether `record` is one use of a standing approval: a child `ack` minted, by any of the marks only a child has. */
+export function isStandingChild(record: ApprovalRecord | null | undefined): boolean {
+  if (record === null || record === undefined) return false;
+  return record.route === 'standing' || record.approvedVia === 'standing' || record.standingId !== undefined;
+}
+
+/**
+ * Refuses an approval on the wrong path (S9): a standing child on any path but `ack`'s, and anything but the child of
+ * the standing approval `ack` is using on its own. Before anything is asked of Slack and before the claim, so the
+ * refusal spends nothing: a child handed to `post send` is still there for the acknowledgement it was minted for.
+ */
+export function requireClaimRoute(
+  deps: Pick<PostDeps, 'standingUse'>,
+  approvalId: string,
+  record: ApprovalRecord | null | undefined,
+): void {
+  const wanted = deps.standingUse?.standingId;
+  const child = isStandingChild(record);
+  if (wanted === undefined) {
+    if (!child) return;
+    throw new CommsError(
+      'APPROVAL_VOID',
+      'nothing was sent: this approval is one use of a standing approval, and only its acknowledgement sends it',
+      {
+        hint: 'Prepare this act itself and show the person its preview. An acknowledgement under a standing approval is made with slack_ack, or the ack command, and nothing else.',
+        details: { approvalId, reason: 'standing-child' },
+      },
+    );
+  }
+  if (record === null || record === undefined || (child && record.standingId === wanted)) return;
+  throw new CommsError('UNEXPECTED', 'nothing was sent: an acknowledgement was handed an approval it did not mint', {
+    hint: 'This is a bug — please report it.',
+    details: { approvalId, reason: 'not-this-standing-child' },
+  });
+}
+
+/** The approval as the claim will find it, read without claiming: `null` when it cannot be read, for the claim to say. */
+async function recordForClaim(deps: PostDeps, approvalId: string): Promise<ApprovalRecord | null> {
+  try {
+    return (await deps.approvals.inspect(approvalId, { kind: 'send', owner: deps.accountId })).outcome.record ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export interface PostedMessage {
@@ -764,21 +1086,31 @@ export function providerId(value: unknown): string | undefined {
  * `unclaimed` is what a cancellation before the claim says, in the words of the act: a post's, unless an edit or a
  * deletion gives its own (design 2026-10-06), so nobody is told "nothing was posted" about a message they asked to
  * delete.
+ *
+ * Before any of it, the behaviour rules are asked again (design 2026-10-19-agent-behaviour-rules, B4) — here, because
+ * this is the one point a post, a reaction, an edit and a deletion all pass on their way to Slack. `check` is the act's
+ * acts and places as its view decided them now, and the digest the claim compares binds everything they are decided
+ * from (`behaviourBinding`): so what is asked is exactly what the person said yes to. Asked on the configuration as it is now, so a rule tightened after the yes
+ * refuses with `ACT_NOT_ALLOWED`, before the claim: the approval is unused, and Slack is asked nothing.
  */
 export async function claimOrHandOver(
   deps: PostDeps,
   approvalId: string,
   live: Parameters<PostDeps['approvals']['claimForSend']>[1],
+  check: BehaviourCheck,
   pendingHint: string,
   unclaimed: () => CommsError = () => cancelledPost(NOT_USED),
 ): Promise<{ claimToken: string; claimed: ApprovalObject }> {
+  // A standing child only on `ack`'s path, and nothing else there (S9): every act comes through here to be claimed.
+  requireClaimRoute(deps, approvalId, await recordForClaim(deps, approvalId));
+  await requireAllowed(deps, check);
+  let claim: SendClaim;
   try {
-    const { claimToken, approval } = await deps.approvals.claimForSend(approvalId, live, {
+    claim = await deps.approvals.claimForSend(approvalId, live, {
       pendingHint,
       signal: deps.signal,
       platform: deps.handoffs.platform,
     });
-    return { claimToken, claimed: approval };
   } catch (error) {
     if (isCancelledPost(error)) throw withApproval(unclaimed(), approvalOfError(error));
     if (!(error instanceof CommsError) || error.code !== 'APPROVAL_PENDING') throw error;
@@ -789,6 +1121,22 @@ export async function claimOrHandOver(
       details: { ...error.details, command: approveCommand(approvalId, deps.handoffs) },
     });
   }
+  /*
+   * The record as the claim took it, held to the same rule: a record that was not what the look before the claim read
+   * — written over in between — is not sent on this path either. Claimed, it cannot be put back, so it is recorded as
+   * failed: nothing was sent.
+   */
+  try {
+    requireClaimRoute(deps, approvalId, claim.record);
+  } catch (refused) {
+    try {
+      await deps.approvals.complete(approvalId, claim.claimToken, { error: messageOf(refused) });
+    } catch {
+      // Left sending, it reads unknown once its lease runs out: never sent either way.
+    }
+    throw refused;
+  }
+  return { claimToken: claim.claimToken, claimed: claim.approval };
 }
 
 /**
@@ -837,7 +1185,9 @@ export async function postPrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
-    return await postClassified(deps, draft, approvalId, expectChannel, book);
+    // A standing child goes only through `ack`, and `ack` only with its own (S9): refused before Slack is asked.
+    requireClaimRoute(deps, approvalId, outcome.record);
+    return await postClassified(deps, draft, approvalId, expectChannel, book, requestedOf(outcome.record?.riskFlags));
   } catch (error) {
     throw withApproval(error, outcome.approval);
   }
@@ -850,6 +1200,7 @@ async function postClassified(
   approvalId: string,
   expectChannel: string,
   book: NameBook,
+  requested: 'agent' | 'me' | undefined,
 ): Promise<PostedMessage | PostedFiles> {
   /*
    * The caller restates the destination; this builds the rest.
@@ -877,7 +1228,11 @@ async function postClassified(
   const policy = files.length > 0 ? attachPolicyFor(deps) : undefined;
   if (files.length > 0) requireFileSending(deps);
   // The payload sent below is this one: checked against the file, previewed, and the one the digest is taken over.
-  const { preview, digest, payload } = await viewPost(deps, draft, book);
+  // Decided again, as prepare decided it: a label or route that differs now is a different post, and is refused.
+  const { preview, digest, payload, sent, check } = await viewPost(deps, draft, book, requested);
+  // The call that posts it: the app's, for an app post, opened before the claim so nothing is spent on a token that
+  // cannot be read (design 2026-10-15 S4). It was opened to decide the route, so this asks nothing more of the store.
+  const poster = sent.via === 'app' ? await appCall(deps) : deps.call;
 
   // Cancelled while the room was looked up: the claim is next, and is not made. The store asks again as it claims.
   if (deps.signal?.aborted) throw cancelledPost(NOT_USED);
@@ -892,12 +1247,14 @@ async function postClassified(
       // Built from the live values, the same way `preparePost` built the stored one — one source, so they agree.
       expect: expectationFor(payload, preview.notifies),
     },
+    check,
     waitingHint('post', deps.surface, approvalId, deps.handoffs),
   );
   // Claimed: from here until its outcome is recorded, the claim's lease is renewed while Slack's work is outstanding.
   return withSendingLease(deps.approvals, approvalId, claimToken, async () => {
     if (policy !== undefined) {
-      return postFiles(deps, approvalId, { claimToken, claimed }, draft.draftId, payload, files, policy);
+      // Files always go out as the person, labelled in their words when the post is an agent's (S2, S3).
+      return postFiles(deps, approvalId, { claimToken, claimed }, draft.draftId, sent.payload, files, policy);
     }
 
     const where = { channel: payload.channel };
@@ -914,20 +1271,16 @@ async function postClassified(
       // Without the signal, deliberately: this is the request that posts, and it is never abandoned once it is out.
       () =>
         spendOn(deps.permit, approvalId, 'chat.postMessage', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.postMessage', {
-            channel: payload.channel,
-            text: payload.text,
-            blocks: JSON.stringify(payload.blocks),
-            thread_ts: payload.thread_ts,
-            unfurl_links: payload.unfurl_links,
-            unfurl_media: payload.unfurl_media,
-          }),
+          callSlack({ ...poster, permit: deps.permit }, 'chat.postMessage', postParams(sent)),
         ),
     );
     if (!attempted.ok) {
       const { error } = attempted;
-      if (certainlyRefused(error, 'chat.postMessage'))
-        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, error);
+      if (certainlyRefused(error, 'chat.postMessage')) {
+        // The app's token refused by Slack is forgotten here, and the refusal says so (CUE-493): never a second post.
+        const refused = sent.via === 'app' ? await appTokenRefusal(deps, 'post', error) : error;
+        throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, refused);
+      }
       throw await recordMaybePosted(deps, approvalId, claimed, where, error, 'it was posted');
     }
     const response: SlackResponse = attempted.value;
@@ -938,7 +1291,9 @@ async function postClassified(
       channel: payload.channel,
       ...(ts === undefined ? {} : { ts }),
     });
-    const note = noteOf([ts === undefined ? NO_ID : undefined, late, ...unrecorded]);
+    // An app post goes in this account's own record, which is what lets it be edited or deleted from here (S5).
+    const unheld = sent.via === 'app' ? await recordAppPost(deps, approvalId, payload.channel, ts) : undefined;
+    const note = noteOf([ts === undefined ? NO_ID : undefined, late, ...unrecorded, unheld]);
     return {
       approvalId,
       channel: payload.channel,
@@ -947,6 +1302,64 @@ async function postClassified(
       approval,
     };
   });
+}
+
+/**
+ * The call carrying the app's bot token, for an act the gate routed to the app (design 2026-10-15 S4). A gate with no
+ * app never routes one there; reaching this without one is a bug, refused rather than posted as the person.
+ */
+export async function appCall(deps: Pick<PrepareDeps, 'label'>): Promise<SlackCall> {
+  const app = deps.label?.app;
+  if (app === undefined) {
+    throw new CommsError(
+      'SEND_REFUSED',
+      'nothing was sent: this act was routed to an app this workspace does not have',
+      {
+        hint: 'This is a bug — please report it.',
+      },
+    );
+  }
+  return app.call();
+}
+
+/**
+ * What `chat.postMessage` is sent (S3, S4): the composer's payload as the route labels it, and for an app post the
+ * phrase as its `username` and one icon — `icon_emoji` for the account's agent emoji, else `icon_url` for its photo.
+ * Never both: Slack lets the emoji win, and the approval binds the one that shows.
+ */
+export function postParams(sent: SentPost): Record<string, string | boolean | undefined> {
+  const { payload } = sent;
+  return {
+    channel: payload.channel,
+    text: payload.text,
+    blocks: JSON.stringify(payload.blocks),
+    thread_ts: payload.thread_ts,
+    unfurl_links: payload.unfurl_links,
+    unfurl_media: payload.unfurl_media,
+    ...(sent.via === 'app' && sent.username !== undefined ? { username: sent.username } : {}),
+    ...(sent.via === 'app' && sent.icon !== undefined
+      ? 'emoji' in sent.icon
+        ? { icon_emoji: sent.icon.emoji }
+        : { icon_url: sent.icon.url }
+      : {}),
+  };
+}
+
+/** Records an app post in this account's own record (S5), returning what its result should say when that fails. */
+async function recordAppPost(
+  deps: PostDeps,
+  approvalId: string,
+  channel: string,
+  ts: string | undefined,
+): Promise<string | undefined> {
+  if (ts === undefined) return 'Slack gave the app’s post no ts, so it cannot be edited or deleted from here';
+  if (deps.appPosts === undefined) return undefined;
+  try {
+    await deps.appPosts.add({ channel, ts, approvalId, at: new Date().toISOString() });
+    return undefined;
+  } catch (error) {
+    return `the app’s post could not be recorded (${messageOf(error)}), so it cannot be edited or deleted from here`;
+  }
 }
 
 /**
@@ -1217,7 +1630,12 @@ async function recordPosted(
       alias: deps.workspaceName,
       operation: 'slack.post',
       outcome: 'ok',
-      ids,
+      /*
+       * Whom it was posted for, by their Slack user id and team (design 2026-10-19-standing-approvals, the lead's call
+       * after review): what a standing approval reads to know a message was this product's, not the person's own —
+       * past the account id, which a workspace removed and added again does not keep.
+       */
+      ids: { ...ids, user: deps.postingAs, team: deps.workspaceId },
       approvalId,
       ...(reason === undefined ? {} : { reason }),
       ...(deps.surface ? { surface: deps.surface } : {}),
@@ -1607,12 +2025,25 @@ export interface PreparedReaction {
   readonly remove: boolean;
   readonly requiredPolicy: SendPolicy;
   readonly expect: Expectation;
+  /** Who it comes from (design 2026-10-15 S6): the app, or the person — unlabelled, which it says. */
+  readonly label?: LabelView | undefined;
+  /** What the rules allow where it lands (design 2026-10-19-agent-behaviour-rules, B4): `Allowed here: …`. */
+  readonly allowedHere: string;
   /** Where its approval stands (design 2026-10-05 §D8): pending, and whether a yes in the chat makes it. */
   readonly approval: ApprovalObject;
 }
 
-/** What a reaction's approval is bound to: this emoji, on this message, in this workspace, as this account. */
-function reactionDigest(deps: { workspaceId: string; postingAs: string }, options: ReactionOptions): string {
+/**
+ * What a reaction's approval is bound to: this emoji, on this message, in this workspace, as this account — who
+ * reacts, the app or the person, for any reaction but one the person makes as before the label (design 2026-10-15 S6)
+ * — and what the behaviour rules are asked of it, a `reaction` where it lands (design 2026-10-19, B4).
+ */
+function reactionDigest(
+  deps: { workspaceId: string; postingAs: string },
+  options: ReactionOptions,
+  label: SlackLabel | undefined,
+  check: BehaviourCheck,
+): string {
   return sha256Hex(
     JSON.stringify({
       kind: 'reaction',
@@ -1622,7 +2053,115 @@ function reactionDigest(deps: { workspaceId: string; postingAs: string }, option
       ts: options.ts,
       name: options.name,
       remove: options.remove === true,
+      ...(unlabelled(label) ? {} : { label: reactionBinding(label as SlackLabel) }),
+      // Where it lands, for the rules (B4): for a DM, the person it is with — the channel is bound above.
+      ...behaviourBinding(check),
     }),
+  );
+}
+
+/**
+ * The flag on a reaction's approval in a DM, naming the person the DM is with: part of where it lands (B4), bound in its
+ * digest, and read back by the approval screen, which asks Slack nothing. A reaction in a group DM whose members were
+ * read carries one for each of them, read back the same way and bound by nothing: they are read again at the claim.
+ */
+export const REACTS_IN_DM_WITH = 'dm-with:';
+
+/**
+ * The flag on a reaction's approval in a room whose people Slack did not say — a group DM's members, unread — so the
+ * approval screen holds it to every person's rule, as the claim does. Display only: never bound.
+ */
+export const REACTS_WITH_PEOPLE_UNREAD = 'people-unread';
+
+/** The room of one reaction, read at most once however many ask: the label, the rules, the names they show. */
+type RoomOnce = () => ReturnType<typeof roomOf>;
+
+function roomOnce(call: SlackCall, channelId: string): RoomOnce {
+  let read: ReturnType<typeof roomOf> | undefined;
+  return () => {
+    read ??= roomOf(call, channelId);
+    return read;
+  };
+}
+
+/**
+ * Where a reaction lands, as the rules match it (`placesOf`). A DM's room is read for the person it is with; a `G…`
+ * room, for whether it is a group DM and who is in it — only while a rule names a person (`landingOf`), and otherwise
+ * held, which adds nothing until one does. Any other room is read only when a refusal or the preview's line names it, so
+ * a reaction where no rule speaks asks Slack nothing more.
+ */
+async function reactionCheckOf(
+  deps: BehaviourDeps & { readonly call: SlackCall; readonly postingAs: string },
+  options: ReactionOptions,
+  room: RoomOnce,
+): Promise<BehaviourCheck> {
+  const id = options.channel;
+  if (id.startsWith('D') || (id.startsWith('G') && (await rulesNamePeople(deps)))) {
+    const { channel } = await room();
+    return { acts: ['reaction'], ...(await landingOf(deps, id, channel)), names: placeNamesOf(id, channel) };
+  }
+  return {
+    acts: ['reaction'],
+    places: [[id]],
+    unread: id.startsWith('G') ? [id] : [],
+    names: async () => placeNamesOf(id, (await room()).channel),
+  };
+}
+
+/** A reaction's check as its approval records it: its channel, and the people there from its flags. */
+function recordedReactionCheck(record: ApprovalRecord, options: ReactionOptions): BehaviourCheck {
+  const id = options.channel;
+  const people = record.riskFlags
+    .filter((flag) => flag.startsWith(REACTS_IN_DM_WITH))
+    .map((flag) => flag.slice(REACTS_IN_DM_WITH.length))
+    .filter((person) => person !== '');
+  const unread = record.riskFlags.includes(REACTS_WITH_PEOPLE_UNREAD) ? [id] : [];
+  if (people.length === 0) return { acts: ['reaction'], places: [[id]], unread };
+  // A DM's one person shares its place; each of a group DM's people is a place of its own, with the room.
+  if (id.startsWith('D')) return { acts: ['reaction'], places: [[id, people[0] as string]] };
+  return { acts: ['reaction'], places: people.map((person) => [id, person]) };
+}
+
+/** The flags naming the people where a reaction lands, and whether they were unread: see `recordedReactionCheck`. */
+function reactionPlaceFlags(check: BehaviourCheck): string[] {
+  const people = check.places.flatMap((aliases) => (aliases.length > 1 ? aliases.slice(1) : []));
+  return [
+    ...people.map((person) => `${REACTS_IN_DM_WITH}${person}`),
+    ...((check.unread ?? []).length > 0 ? [REACTS_WITH_PEOPLE_UNREAD] : []),
+  ];
+}
+
+/**
+ * What the rules allow where an approved reaction lands, for the approval screen: read from the approval, so the screen
+ * asks Slack nothing, and named by ids.
+ */
+export async function reactionAllowedHere(
+  deps: Pick<PrepareDeps, 'currentConfig' | 'accountId' | 'workspaceName' | 'handoffs'>,
+  record: ApprovalRecord,
+  options: ReactionOptions,
+): Promise<string> {
+  return (await allowedHere(deps, recordedReactionCheck(record, options))).line;
+}
+
+/**
+ * Who a reaction comes from, decided as a post's identity is (design 2026-10-15 S6): `agent` reacts as the app where
+ * the app can post, and as the person elsewhere. The room is read only when that depends on it.
+ */
+async function reactionLabel(
+  deps: Pick<PrepareDeps, 'call' | 'postingAs' | 'label'>,
+  options: ReactionOptions,
+  requested: 'agent' | 'me' | undefined,
+  room: RoomOnce,
+): Promise<SlackLabel | undefined> {
+  if (deps.label === undefined) return undefined;
+  return decideLabel(
+    { call: deps.call, postingAs: deps.postingAs, label: deps.label },
+    {
+      kind: 'reaction',
+      channelId: options.channel,
+      room: async () => (await room()).channel,
+      requested,
+    },
   );
 }
 
@@ -1635,6 +2174,8 @@ export interface ReactionOptions {
 
 export interface ReactionResult {
   readonly approvalId: string;
+  /** Who reacted (design 2026-10-15 S6): the app, or the person — unlabelled, which it says. */
+  readonly label?: LabelView | undefined;
   readonly note?: string | undefined;
   /** Where the approval stands now (design 2026-10-05 §D8): `used`, or still `sending` when that was not recorded. */
   readonly approval: ApprovalObject;
@@ -1650,6 +2191,34 @@ function reactionDraftId(options: ReactionOptions): string {
 }
 
 /**
+ * What a reaction's approval is bound to, for one minted rather than prepared — a standing approval's child (design
+ * 2026-10-19-standing-approvals, S9): the fields `prepareReaction` gives its record, from the same functions, so the
+ * claim `reactPrepared` makes of it compares exactly what it compares of any reaction. With the check the rules are
+ * asked of it, which its digest binds.
+ */
+export async function reactionApprovalFields(
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'postingAs'> & BehaviourDeps,
+  options: ReactionOptions,
+  label: SlackLabel | undefined,
+): Promise<{
+  draftId: string;
+  draftMessageId: string;
+  contentDigest: string;
+  expect: Expectation;
+  check: BehaviourCheck;
+}> {
+  const check = await reactionCheckOf(deps, options, roomOnce(deps.call, options.channel));
+  const digest = reactionDigest(deps, options, label, check);
+  return {
+    draftId: reactionDraftId(options),
+    draftMessageId: digest,
+    contentDigest: digest,
+    expect: reactionExpectation(options),
+    check,
+  };
+}
+
+/**
  * The reaction an approval was prepared for, read back from the record — or `undefined` when it is a post's.
  *
  * A reaction has no draft file: what it is lives in the record itself, spread over fields the approval store
@@ -1660,7 +2229,12 @@ function reactionDraftId(options: ReactionOptions): string {
  * What comes back is only believed once it reproduces the record's own digest. That is what makes the one line a
  * person reads the act the approval permits, rather than a reading of some fields that happen to sit near it.
  */
-export function reactionOfApproval(record: ApprovalRecord, workspaceId: string): ReactionOptions | undefined {
+export function reactionOfApproval(
+  record: ApprovalRecord,
+  workspaceId: string,
+  /** The bot user this account's app reacts as, for a reaction its approval says the app makes (S6). */
+  botUserId?: string | undefined,
+): ReactionOptions | undefined {
   const where = /^reaction:([^:]+):(.+)$/.exec(record.draftId);
   if (!where) return undefined;
   const what = /^:(.+): on (.+)$/.exec(record.expect.subject);
@@ -1670,7 +2244,16 @@ export function reactionOfApproval(record: ApprovalRecord, workspaceId: string):
     name: what?.[1] ?? '',
     remove: record.riskFlags.includes('removes-reaction'),
   };
-  if (!what || reactionDigest({ workspaceId, postingAs: record.inboxSub ?? '' }, options) !== record.contentDigest) {
+  const label = reactionLabelOf(record.riskFlags, botUserId);
+  if (
+    !what ||
+    reactionDigest(
+      { workspaceId, postingAs: record.inboxSub ?? '' },
+      options,
+      label,
+      recordedReactionCheck(record, options),
+    ) !== record.contentDigest
+  ) {
     throw new CommsError('BAD_DATA', 'this approval does not describe the reaction it is bound to', {
       hint: 'Nothing was approved. Ask for the reaction again, for a new approval.',
       details: { approvalId: record.approvalId },
@@ -1679,11 +2262,24 @@ export function reactionOfApproval(record: ApprovalRecord, workspaceId: string):
   return options;
 }
 
-export async function prepareReaction(deps: PrepareDeps, options: ReactionOptions): Promise<PreparedReaction> {
+export async function prepareReaction(
+  deps: PrepareDeps,
+  options: ReactionOptions,
+  /** `as`: the person's word for this one reaction (design 2026-10-15 L3). */
+  requested?: 'agent' | 'me' | undefined,
+): Promise<PreparedReaction> {
   if (deps.policy === 'never') {
     throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)');
   }
-  const digest = reactionDigest(deps, options);
+  // A conversation by its id, never by its name: a name would be held to no rule (review of spec 2, finding 8).
+  requireConversation(options.channel, deps.workspaceName, deps.handoffs);
+  const room = roomOnce(deps.call, options.channel);
+  // The behaviour rules first (design 2026-10-19, B4): a reaction they do not allow here makes no approval.
+  const check = await reactionCheckOf(deps, options, room);
+  const here = await allowedHere(deps, check);
+  if (!here.decision.allowed) throw await actRefusal(deps, here.decision, check);
+  const label = await reactionLabel(deps, options, requested, room);
+  const digest = reactionDigest(deps, options, label, check);
   const record = await deps.approvals.create({
     channel: 'slack',
     inboxId: deps.accountId,
@@ -1702,7 +2298,12 @@ export async function prepareReaction(deps: PrepareDeps, options: ReactionOption
      * typed approval a message needs.
      */
     requiredPolicy: 'chat',
-    riskFlags: options.remove ? ['removes-reaction'] : [],
+    riskFlags: [
+      ...(options.remove ? ['removes-reaction'] : []),
+      ...reactionFlags(label),
+      ...requestFlags(requested),
+      ...reactionPlaceFlags(check),
+    ],
     expect: reactionExpectation(options),
   });
   return {
@@ -1713,6 +2314,8 @@ export async function prepareReaction(deps: PrepareDeps, options: ReactionOption
     remove: options.remove === true,
     requiredPolicy: 'chat',
     expect: record.expect,
+    ...(label === undefined ? {} : { label: labelView(label, reactionLine(label)) }),
+    allowedHere: here.line,
     approval: await deps.approvals.approvalOf(record),
   };
 }
@@ -1873,7 +2476,24 @@ export async function reactPrepared(
   approvalId: string,
   options: ReactionOptions,
 ): Promise<ReactionResult> {
-  const digest = reactionDigest(deps, options);
+  // Refused as at prepare, before Slack is asked anything: an approval made before the check cannot carry a name past it.
+  requireConversation(options.channel, deps.workspaceName, deps.handoffs);
+  /*
+   * The approval, read without claiming, so the claim that follows refuses exactly as it always did: what the message
+   * asked for, which nothing here believes on its own — the digest decides — and whether it is a standing child, which
+   * only `ack` sends (S9), refused before Slack is asked anything.
+   */
+  const record = await recordForClaim(deps, approvalId);
+  requireClaimRoute(deps, approvalId, record);
+  const room = roomOnce(deps.call, options.channel);
+  // Where it lands, decided again as it was prepared, and bound: a DM read as with someone else is a different act.
+  const check = await reactionCheckOf(deps, options, room);
+  // Who reacts, decided again as it was prepared: a reaction the app can no longer make is a different act, refused.
+  const label =
+    deps.label === undefined ? undefined : await reactionLabel(deps, options, requestedOf(record?.riskFlags), room);
+  const digest = reactionDigest(deps, options, label, check);
+  // The app's call for a reaction the app makes, opened before the claim (S6); the person's otherwise.
+  const reactor = label?.route === 'app' ? await appCall(deps) : deps.call;
   const claim = await claimOrHandOver(
     deps,
     approvalId,
@@ -1884,10 +2504,11 @@ export async function reactPrepared(
       inboxSub: deps.postingAs,
       expect: reactionExpectation(options),
     },
+    check,
     waitingHint('reaction', deps.surface, approvalId, deps.handoffs),
   );
   // Claimed: the lease is renewed while Slack's answer is outstanding.
-  return withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
+  const done = await withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
     const method: PostingMethod = options.remove ? 'reactions.remove' : 'reactions.add';
     const attempted = await throttledRequest(
       deps,
@@ -1898,7 +2519,7 @@ export async function reactPrepared(
       () => fenceFirstStep(deps, approvalId, claim, reactionOperation(options), reactionIds(options)),
       () =>
         spendOn(deps.permit, approvalId, method, () =>
-          callSlack({ ...deps.call, permit: deps.permit }, method, {
+          callSlack({ ...reactor, permit: deps.permit }, method, {
             channel: options.channel,
             timestamp: options.ts,
             name: options.name,
@@ -1938,10 +2559,14 @@ export async function reactPrepared(
         );
       }
       if (error instanceof CommsError && certainlyRefused(error, method)) {
-        throw await recordReactionRefused(deps, approvalId, claim, options, error);
+        const refused = label?.route === 'app' ? await appTokenRefusal(deps, 'reaction', error) : error;
+        throw await recordReactionRefused(deps, approvalId, claim, options, refused as CommsError);
       }
       throw await recordReactionUnknown(deps, approvalId, claim.claimed, options, error);
     }
     return recordReactionChanged(deps, approvalId, claim, options);
   });
+  // Said for an agent's reaction — the app's, or the person's with nothing on it to say so; one as the person is the
+  // reaction it always was.
+  return label?.identity === 'agent' ? { ...done, label: labelView(label, reactionLine(label)) } : done;
 }

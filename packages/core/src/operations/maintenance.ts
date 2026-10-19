@@ -1,32 +1,62 @@
 import { access, constants, stat } from 'node:fs/promises';
 import { type PublicApprovalView, publicApproval } from '../approval-outcome.ts';
-import { integrityRefusal, kindOf } from '../approval-stored.ts';
+import { integrityRefusal, kindOf, type StoredApproval } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
+import { behaviourAccountsOf, readBehaviourSettings } from '../behaviour.ts';
 import { revokeChange } from '../changes.ts';
-import { type Channel, channelServer } from '../channel-servers.ts';
+import { type Channel, type ServerId, serverFacts } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
+import { stripInvisible } from '../chars.ts';
 import { inlineCommand } from '../cli-runtime.ts';
 import { externalCommand } from '../command-brands.ts';
 import { type Config, emptyConfig, hasNames, secretsStoreOf } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { isGroupOrWorldAccessible } from '../fs.ts';
-import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requireHandoffs } from '../handoffs.ts';
-import { resolveName } from '../names.ts';
-import { organisationDrift, organisationsOf, orphanMarkedRows, shownText } from '../organisations.ts';
+import {
+  type CliHandoffs,
+  handoffSentence,
+  handoffSentenceToFill,
+  isCommand,
+  type Remedy,
+  remedy,
+  requireHandoffs,
+} from '../handoffs.ts';
+import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
+import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
+import { managedRuntimeEntry } from '../mcp-install.ts';
+import { findById, resolveName } from '../names.ts';
+import { nodeProgram } from '../node-program.ts';
+import { compareVersions } from '../npm.ts';
+import {
+  ignoredListOf,
+  ignoredOf,
+  notAppliedDetail,
+  organisationDrift,
+  organisationsOf,
+  orphanMarkedRows,
+  shownPath,
+  shownText,
+} from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
+import { endStanding } from '../standing-flow.ts';
+import { newBoundary, wrapUntrusted } from '../untrusted.ts';
+import { inspectUpdateJob, type UpdateJobDeps, updateJobContext, updateJobHealth } from '../update-job.ts';
 import {
   countedLatest,
+  effectiveUpdates,
+  localStamp,
+  pauseEnd,
   readUpdateCheck,
-  UPDATE_CHECK_ENV,
-  updateCheckEnabled,
-  updateSnoozed,
+  securityRelease,
   updateVerdict,
 } from '../update-state.ts';
 import { VERSION } from '../version.ts';
+import { orphanedBehaviourRules } from './behaviour.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
+import { type StandingReport, standingReport } from './standing.ts';
 
 /**
  * The core's own read-only and housekeeping operations: where things live, whether this machine is healthy, what the
@@ -69,6 +99,15 @@ export interface DoctorOptions {
   keyring?: KeyringModule | null | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */
   platform?: NodeJS.Platform | undefined;
+  /** For a test: the runner the background update job's scheduler is asked through, so none is real. */
+  updateJob?: UpdateJobDeps | undefined;
+  /**
+   * False when an organisation profile here says `updates.background: false` (design 2026-10-16 U8). Left out, read
+   * from the configuration's organisations, as the notice reads them (`effectiveUpdates`); a test hands it in.
+   */
+  background?: boolean | undefined;
+  /** For a test: the clock whether the background job has run lately is read on. */
+  now?: (() => Date) | undefined;
 }
 
 /**
@@ -101,10 +140,12 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   const handoffs = await requireHandoffs(core, platform).registered();
   const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
   const nodeOk = major > 22 || (major === 22 && minor >= 12);
+  // The Node as a command names it — a link on PATH stays the link — and, when that is a link, the file it is (CUE-492).
+  const node = nodeProgram(env);
   checks.push({
     name: 'node',
     ok: nodeOk,
-    detail: `Node ${process.versions.node} at ${process.execPath}`,
+    detail: `Node ${process.versions.node} at ${node}${node === process.execPath ? '' : `, which resolves to ${process.execPath}`}`,
     ...(nodeOk ? {} : { fix: remedy('Install Node 22.12 or newer.') }),
   });
 
@@ -178,6 +219,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   });
 
   if (readable) checks.push(...organisationChecks(config, handoffs));
+  if (readable) checks.push(...behaviourChecks(config, handoffs));
 
   /*
    * Approval records that cannot be used (design 2026-10-05 §D2): a file that cannot be read, or a record whose binding
@@ -235,6 +277,9 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     });
   }
 
+  checks.push(await standingCheck(core, readable, handoffs));
+  checks.push(...(await standingLedgerChecks(core, readable ? config : null, handoffs)));
+
   const keyring = options.keyring !== undefined ? options.keyring : await loadKeyringModule();
   // `probeKeychain` loads the real module when handed none, so a machine without it is answered here instead.
   const probe = keyring
@@ -261,9 +306,151 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     ok: true,
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
-  checks.push(await updateCheckLine(core, env, handoffs));
-  checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs)));
+  checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
+  checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
+  checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
+}
+
+/**
+ * The standing approvals in force (design 2026-10-19-standing-approvals, S10): each one, its workspace and when it
+ * ends — or `none`. Something to know, never a fault, and read here, from the records and the configuration, rather
+ * than from anything the agent that uses them says. One waiting for its code, or ended, is not in force.
+ */
+async function standingCheck(core: Core, readable: boolean, handoffs: CliHandoffs): Promise<DoctorCheck> {
+  const name = 'standing approvals';
+  if (!readable) return { name, ok: true, detail: 'unknown — the configuration could not be read' };
+  let report: StandingReport;
+  try {
+    report = await standingReport(core);
+  } catch (error) {
+    return {
+      name,
+      ok: true,
+      warn: true,
+      detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const active = report.approvals.filter((view) => view.state === 'active');
+  if (active.length === 0) return { name, ok: true, detail: 'none' };
+  const list = handoffSentence(handoffs.core(['standing', 'list']), (command) => `${command} shows what each covers`);
+  return {
+    name,
+    ok: true,
+    detail: `${active.length} in force, each letting an agent acknowledge without asking: ${active
+      .map((view) => `${view.id} on ${shownText(view.workspace, 64)} until ${view.expiresAt}`)
+      .join('; ')}`,
+    fix: remedy(
+      handoffSentence(handoffs.core(['standing', 'off']), (command) => `${list}; ${command} ends every one at once.`, {
+        instead: `${list}.`,
+      }),
+    ),
+  };
+}
+
+/**
+ * Each account's acknowledgement ledger that holds a line this release cannot read (design
+ * 2026-10-19-standing-approvals, the lead's call after review): a row each, naming the account, its lines and where
+ * the file is. While one does, no standing approval of that account can be used — its counts cannot be known, and a
+ * count is never guessed downwards — and nothing but this says why. Something to put right, not a fault of the
+ * machine, so a warning. The way back is the person's: end that account's standing approvals, then move the file
+ * aside; a new one starts empty. Nothing at all when every ledger reads whole.
+ */
+async function standingLedgerChecks(core: Core, config: Config | null, handoffs: CliHandoffs): Promise<DoctorCheck[]> {
+  let found: Awaited<ReturnType<Core['acks']['unreadable']>>;
+  try {
+    found = await core.acks.unreadable();
+  } catch (error) {
+    return [
+      {
+        name: 'standing ledger',
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  return found.map(({ accountId, path, lines }) => {
+    const account = config === null ? undefined : findById(config, 'account', accountId)?.alias;
+    const named = account === undefined ? accountId : `${shownText(account, 64)} (${accountId})`;
+    const which =
+      lines.length === 1
+        ? `line ${lines[0]}`
+        : `lines ${lines.slice(0, 10).join(', ')}${lines.length > 10 ? ', …' : ''}`;
+    const end = handoffSentence(
+      handoffs.core(['standing', 'off']),
+      (off) =>
+        `End ${account === undefined ? "this account's" : `${shownText(account, 64)}'s`} standing approvals — ${off}, or standing revoke for each`,
+      { instead: "End this account's standing approvals with standing off, or standing revoke for each" },
+    );
+    return {
+      name: 'standing ledger',
+      ok: true,
+      warn: true,
+      detail: `${named}: ${which} of its acknowledgement ledger cannot be read, so none of its standing approvals can be used until it reads whole — ${shownPath(path)}`,
+      fix: remedy(
+        `${end}; then move the file aside (rename it, or move it out of its folder): ${shownPath(path)}. A new ledger starts empty, and its counts start again.`,
+      ),
+    };
+  });
+}
+
+/**
+ * What would keep a behaviour rule from holding as the person meant it (design 2026-10-19-agent-behaviour-rules, B3):
+ *
+ *  - a rule this release cannot read holds its account — or, naming none, every account — to nothing, so nothing can be
+ *    done there until it is corrected: a failure;
+ *  - a rule whose account is not connected now still holds, by name, whatever account takes that name: safe, since a
+ *    restriction held more widely is, but something to look at.
+ *
+ * Nothing at all on a machine with no rule, so every other doctor reads as it always did. The third row, servers that
+ * enforce no rule, is read with the registrations (`registrationChecks`).
+ */
+function behaviourChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const listing = handoffSentence(handoffs.core(['behaviour']), (command) => ` ${command} lists every rule.`);
+  const { unreadable } = readBehaviourSettings(config);
+  if (unreadable.length > 0) {
+    // Its reason is fixed words; the account is the file's, shown made safe.
+    const held = unreadable.map(
+      (entry) =>
+        `${entry.reason}, so ${entry.account === null ? 'every account' : shownText(entry.account, 64)} allows nothing`,
+    );
+    checks.push({
+      name: 'behaviour rules',
+      ok: false,
+      detail: `${held.join('; ')} until it is corrected`,
+      fix: remedy(
+        `Correct or remove ${unreadable.length === 1 ? 'it' : 'them'} in behaviour.rules in config.json — or, if a later release wrote ${unreadable.length === 1 ? 'it' : 'them'}, update agent-communications.${listing}`,
+      ),
+    });
+  }
+  const orphans = orphanedBehaviourRules(config);
+  if (orphans.length > 0) {
+    const names = new Set(behaviourAccountsOf(config).map((account) => account.account));
+    const held = orphans.map((rule) => {
+      const account = shownText(rule.account, 64);
+      const place = rule.conversation === undefined ? account : `${account} in ${shownText(rule.conversation, 64)}`;
+      return names.has(rule.account)
+        ? `${place} applies by name to ${account}, the account connected under that name now`
+        : `${place} applies to no account connected now, and will to one connected under that name`;
+    });
+    checks.push({
+      name: 'orphaned behaviour rules',
+      ok: true,
+      warn: true,
+      detail: `${orphans.length === 1 ? 'a rule whose account is' : 'rules whose account is'} not connected now still ${orphans.length === 1 ? 'holds' : 'hold'}, by name — a restriction held more widely is safe: ${held.join('; ')}`,
+      fix: remedy(
+        handoffSentenceToFill(
+          handoffs.core(['behaviour', 'allow']),
+          ['<account>', '<act,…|none>'],
+          (command) =>
+            `To bind one to the account connected under its name now, set it again for that account: ${command}.${listing}`,
+        ),
+      ),
+    });
+  }
+  return checks;
 }
 
 /**
@@ -278,6 +465,10 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
  * an organisation with no record is something to look at too: the row is an ordinary client again.
  *
  * Nothing at all is said on a machine with no profile, so every other doctor reads as it always did.
+ *
+ * An entry of a profile's `extensions` that this release did not apply is said too, on a line of its own: information,
+ * never a failure — the rest of the profile is in force, and the release that applies it is named (design 2026-10-19,
+ * X7).
  */
 function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
@@ -291,7 +482,6 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
         ok: true,
         detail: `${shownText(record?.label ?? '', 64)}: ${active === null ? 'no Google client' : `new mailboxes get "${active}"`}${record?.slack ? `; Slack workspace ${shownText(record.slack.workspace, 40)}` : ''}`,
       });
-      continue;
     }
     for (const item of drift) {
       checks.push({
@@ -300,6 +490,34 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
         ...(item.kind === 'report' ? { warn: true as const } : {}),
         detail: item.detail,
         fix: item.fix,
+      });
+    }
+    const ignored = ignoredOf(record);
+    if (ignored.length > 0) {
+      checks.push({
+        name: `organisation ${organisation}`,
+        ok: true,
+        detail: `${ignored.length} ${ignored.length === 1 ? 'extension' : 'extensions'} not applied here: ${ignored
+          .map((entry) => notAppliedDetail(entry))
+          .join('; ')}`,
+      });
+    }
+    // A list of skipped entries this release cannot read in part is read without that part: nothing applies from it,
+    // so the check is something to look at, not a failure, and `org update` writes the list again from the profile.
+    if (ignoredListOf(record).malformed) {
+      checks.push({
+        name: `organisation ${organisation}`,
+        ok: true,
+        warn: true,
+        detail:
+          'its record of the extensions not applied here holds something this release cannot read, so that part is ignored; no extension applies from it',
+        fix: remedy(
+          handoffSentence(
+            handoffs.core(['org', 'update', organisation]),
+            (command) => `Run ${command} to write it again from the profile.`,
+            { instead: 'Call comms_org_update from a chat to write it again from the profile.' },
+          ),
+        ),
       });
     }
   }
@@ -324,36 +542,66 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
 }
 
 /**
- * The daily update check, in one line (design 2026-09-28 §4): on or off — and what turned it off — when the registry
- * was last asked, the latest release it named, and the release running here. Never a failure: an update that is out
- * is something to look at, with the two ways on, and the rest is information.
+ * How this machine updates, in one line (design 2026-09-28 §4, 2026-10-16 U2 and U3): the level — and what set it — when
+ * the registry was last asked, the latest release it named, the release running here, and a pause with when it ends.
+ * Never a failure: an update that is out is something to look at, with the way on, and the rest is information.
  */
-async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: CliHandoffs): Promise<DoctorCheck> {
-  const enabled = await updateCheckEnabled(core, env);
+async function updateCheckLine(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  now: Date,
+): Promise<DoctorCheck> {
+  const updates = await effectiveUpdates(core, env, now);
   const record = await readUpdateCheck(core.paths.stateDir);
-  const now = new Date();
-  const off = enabled.on
-    ? 'on'
-    : `off (${enabled.by === 'setting' ? 'set off with update --auto off' : enabled.by === 'CI' ? 'CI is set' : `${UPDATE_CHECK_ENV} is set`})`;
-  const latest =
-    record.latest === null
-      ? 'unknown'
-      : countedLatest(record) === null
-        ? `${record.latest} (a prerelease, not counted)`
-        : record.latest;
-  const snoozed = updateSnoozed(record, now);
-  const parts = [off, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
-  if (snoozed && record.snoozedUntil !== null) parts.push(`put off until ${record.snoozedUntil}`);
+  // Where a cap or a profile's `background: false` comes from (design 2026-10-16, U8): the organisation and its file.
+  const fromProfile = (where: { organisation: string; source: string }) =>
+    `${shownText(where.organisation, 40)}’s profile, ${shownPath(where.source)}`;
+  const level =
+    updates.by !== 'setting'
+      ? `never (${updates.by === 'CI' ? 'CI is set' : `${updates.by} is set`})`
+      : updates.cap
+        ? `${updates.level} (capped by ${fromProfile(updates.cap)})`
+        : updates.level === 'auto' && !updates.background
+          ? updates.backgroundOff
+            ? `auto (a daily check with a notice: background updates off by ${fromProfile(updates.backgroundOff)})`
+            : updates.jobSilent
+              ? `auto (a daily check with a notice: background updates have not run since ${localStamp(new Date(updates.jobSilent.since))})`
+              : updates.unreadableConfig
+                ? 'auto (a daily check with a notice)'
+                : 'auto (a daily check with a notice: background updates are not set up)'
+          : updates.level;
+  // Only ever a plain release (`readUpdateCheck`): the registry's text otherwise names none.
+  const latest = countedLatest(record) ?? 'unknown';
+  const pause = pauseEnd(record, now);
+  const security = securityRelease(record, VERSION);
+  const parts = [level, `last checked ${record.lastChecked ?? 'never'}`, `latest ${latest}`, `running ${VERSION}`];
+  // An unreadable configuration lifts no cap (U8, failing closed): say what stands in for it.
+  const unreadable = updates.unreadableConfig;
+  if (unreadable !== undefined) {
+    parts.push(
+      unreadable.read > 0
+        ? `config.json could not be read, so the caps of the organisation files still readable hold, and nothing installs in the background (${unreadable.reason})`
+        : `config.json could not be read, and no organisation’s caps could be read in its place, so the default holds and nothing installs in the background (${unreadable.reason})`,
+    );
+  }
+  if (updates.backgroundOff && !(updates.level === 'auto' && !updates.cap)) {
+    parts.push(`background updates off by ${shownText(updates.backgroundOff.organisation, 40)}’s profile`);
+  }
+  if (security !== null) parts.push(`${security} fixes a security problem`);
+  if (pause !== null) parts.push(`paused until ${localStamp(pause)}`);
   if (record.lastError !== null) parts.push(`the last check got no answer: ${record.lastError}`);
-  // The core's server and its command, each as its own stop reads it: installed only when both would start `latest`.
+  // The core's server and its command, each as its own notice reads it: installed only when both would start `latest`.
   const verdict = (surface: 'server' | 'command') =>
-    enabled.on && !snoozed ? updateVerdict(record, VERSION, { channel: 'core', surface }) : null;
+    updates.level !== 'never' || security !== null
+      ? updateVerdict(record, VERSION, { channel: 'core', surface })
+      : null;
   const [asServer, asCommand] = [verdict('server'), verdict('command')];
   const pending = asServer ?? asCommand;
   return {
     name: 'update check',
     ok: true,
-    ...(pending ? { warn: true as const } : {}),
+    ...(pending || unreadable ? { warn: true as const } : {}),
     detail: parts.join(' · '),
     ...(pending === null
       ? {}
@@ -363,13 +611,144 @@ async function updateCheckLine(core: Core, env: NodeJS.ProcessEnv, handoffs: Cli
               ? `${pending.latest} is installed on this machine: restart the MCP clients, and run commands from it.`
               : handoffSentence(handoffs.core(['update']), (update) =>
                   handoffSentence(
-                    handoffs.core(['update', '--later']),
-                    (later) => `Run ${update} (comms_update from a chat), or ${later} to put it off until tomorrow.`,
+                    handoffs.core(['update', '--pause']),
+                    (later) =>
+                      `Run ${update} (comms_update from a chat) when it suits you, or ${later} to hold the notice for a week.`,
                   ),
                 ),
           ),
         }),
   };
+}
+
+/**
+ * The background update job (design 2026-10-16 U4): installed, missing, foreign or stale, each with what fixes it — and
+ * nothing at all on a machine that never set one up, so every other doctor reads as it always did.
+ *
+ * Read from its files on macOS and Linux, so the doctor starts no program there. On Windows the scheduler is asked
+ * only when this installation recorded a job; a task another installation registered with no record here is not
+ * looked for. A job that cannot be read is something to look at, never a failure: the machine works without it.
+ */
+async function updateJobLines(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  platform: NodeJS.Platform,
+  options: DoctorOptions,
+): Promise<DoctorCheck[]> {
+  const name = 'background update job';
+  const context = updateJobContext(core, env, { platform, deps: options.updateJob });
+  let seen: Awaited<ReturnType<typeof inspectUpdateJob>>;
+  try {
+    seen = await inspectUpdateJob(context, { query: 'when-recorded' });
+  } catch (error) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  const on = handoffs.core(['update', '--background-job', 'on']);
+  const off = handoffs.core(['update', '--background-job', 'off']);
+  const since =
+    seen.marker === null
+      ? ''
+      : ` (set up ${seen.marker.installedAt}${seen.marker.lastRun ? `, last ran ${seen.marker.lastRun}` : ''})`;
+  const background = options.background ?? (await effectiveUpdates(core, env)).backgroundOff === undefined;
+  // A profile that came after the job (Review focus 5): the job's next run removes it, and this says so before then.
+  if (!background && (seen.state === 'installed' || seen.state === 'stale' || seen.state === 'missing')) {
+    return [
+      {
+        name,
+        ok: true,
+        warn: true,
+        detail: `an organisation profile turns background updates off here: ${seen.where} is still set up${since}, and its next run removes it`,
+        fix: remedy(handoffSentence(off, (command) => `Remove it now with ${command}.`)),
+      },
+    ];
+  }
+  switch (seen.state) {
+    case 'not-set-up':
+      return [];
+    case 'installed': {
+      const health = await updateJobHealth(core.paths.stateDir, (options.now ?? (() => new Date()))());
+      // Installed as it should be, and silent: switched off in Login Items, a timer that never fires (U4, U7).
+      if (health !== null && !health.working) {
+        return [
+          {
+            name,
+            ok: true,
+            warn: true,
+            detail: `installed, and has not run since ${health.since}${health.marker.lastRun ? '' : ', when it was set up'}: ${seen.where} runs ${context.launcher} update --background, and nothing has run it in 48 hours, so every notice and the security line are given as though there were no job`,
+            fix: remedy(
+              handoffSentence(
+                on,
+                (again) =>
+                  `${silentWhere(platform)} If it is there and allowed, set it up again with ${again}, and run the doctor tomorrow.`,
+              ),
+            ),
+          },
+        ];
+      }
+      return [
+        { name, ok: true, detail: `installed: ${seen.where} runs ${context.launcher} update --background${since}` },
+      ];
+    }
+    case 'missing':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `missing: set up${since}, and ${seen.where} is gone, so nothing installs in the background`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (forget) => `Set it up again with ${again}, or forget it with ${forget}.`),
+            ),
+          ),
+        },
+      ];
+    case 'foreign':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `foreign: ${seen.where} is not this installation's — ${seen.reason}`,
+          fix: remedy(
+            'This installation leaves it alone. If it is not wanted, remove it with the installation that set it up, or by hand.',
+          ),
+        },
+      ];
+    case 'stale':
+      return [
+        {
+          name,
+          ok: true,
+          warn: true,
+          detail: `stale: ${seen.where} is this installation's, but ${seen.reason}${since}`,
+          fix: remedy(
+            handoffSentence(on, (again) =>
+              handoffSentence(off, (remove) => `Write it again with ${again}, or remove it with ${remove}.`),
+            ),
+          ),
+        },
+      ];
+  }
+}
+
+/** Where a person looks for a background job that does not run, in words: each platform's own place. */
+function silentWhere(platform: NodeJS.Platform): string {
+  if (platform === 'darwin') {
+    return 'Check Login Items (System Settings → General → Login Items): macOS lists the job there, and it runs only while allowed.';
+  }
+  if (platform === 'linux') {
+    return 'Check that the agentcomms-update timer is enabled for your user, and that your user’s systemd instance runs.';
+  }
+  return 'Check the agentcomms-update task in Task Scheduler: that it is enabled, and what its last run result was.';
 }
 
 /**
@@ -393,6 +772,7 @@ async function registrationChecks(
   env: NodeJS.ProcessEnv,
   config: Config | null,
   handoffs: CliHandoffs,
+  platform: NodeJS.Platform,
 ): Promise<DoctorCheck[]> {
   const REGISTRATION_PATH_KEYS = ['configDir', 'stateDir', 'dataDir', 'secretsDir'] as const;
   const report = await channelsAvailable(core, env);
@@ -406,8 +786,69 @@ async function registrationChecks(
   const blind = report.unreadable.map((file) => file.path);
   const where = (entry: ChannelRegistration) =>
     `${entry.client} as "${entry.name}" in ${entry.path}${entry.scope === 'project' ? ' (for one project)' : ''}`;
+  if (!managedShimsSupported({ platform })) {
+    checks.push({
+      name: 'managed CLI shims',
+      ok: true,
+      warn: true,
+      detail: managedShimUnsupportedNotice({ platform }),
+    });
+  }
+  const unenforced: string[] = [];
   for (const channel of report.channels) {
     const name = `${channel.channel} server`;
+    if (actsOnOthers(channel.channel)) {
+      for (const entry of channel.registered) {
+        // A registration whose release cannot be read — none named, or not one — may be any release, an older one
+        // too: it is not counted as enforcing (fail closed), and said in words of its own.
+        const enforces = enforcementOf(entry.version);
+        if (enforces === 'unknown') {
+          unenforced.push(
+            `the ${channel.label} server registered with ${where(entry)} names no release that can be read, so it may enforce no behaviour rule`,
+          );
+        } else if (enforces === 'older') {
+          unenforced.push(
+            `the ${channel.label} server registered with ${where(entry)} is ${entry.version}, which enforces no behaviour rule`,
+          );
+        }
+      }
+    }
+    const latestRuntime = channel.runtimes.reduce<(typeof channel.runtimes)[number] | null>(
+      (latest, runtime) =>
+        latest === null || (compareVersions(runtime.version, latest.version) ?? 0) > 0 ? runtime : latest,
+      null,
+    );
+    if (latestRuntime !== null && managedShimsSupported({ platform })) {
+      /*
+       * A shim starts the stable launcher once there is one (design 2026-10-16, U6), so one naming a runtime is stale;
+       * before it, the newest runtime, with this Node as a command names it — a shim naming the file a link resolves to
+       * is stale too (CUE-492).
+       */
+      const name = launcherName(channel.package);
+      const expected = (await launcherExists(core.paths.dataDir, name))
+        ? { expectedEntry: launcherPaths(core.paths.dataDir, name).launcher }
+        : {
+            expectedEntry: managedRuntimeEntry(core.paths.dataDir, channel.package, latestRuntime.version),
+            expectedNode: nodeProgram(env),
+          };
+      const shim = await inspectManagedShim(
+        { env, dataDir: core.paths.dataDir, platform },
+        { binary: channel.binary, ...expected },
+      );
+      if (shim.status !== 'current') {
+        checks.push({
+          name: `CLI shim at ${shim.path}`,
+          ok: true,
+          warn: true,
+          detail: `${shim.status}: ${shim.path}; ${shim.detail}`,
+          fix: remedy(
+            shim.status === 'foreign'
+              ? `Confirm who owns ${shim.path}, then move it aside if this installation should provide that command. A managed install or update will create the shim without overwriting a foreign file.`
+              : `Run a managed install or update for ${channel.label}; it will ${shim.status === 'missing' ? 'create' : 'repoint'} the owned shim.`,
+          ),
+        });
+      }
+    }
     for (const entry of channel.registered) {
       const missingPins = REGISTRATION_PATH_KEYS.filter((key) => entry.pathPins[key] === undefined);
       const unpinned =
@@ -466,7 +907,45 @@ async function registrationChecks(
       })(),
     });
   }
+  // B4: a rule is enforced only by servers of 0.22.0 and later, and only once their client has started them again.
+  const settings = config === null ? null : readBehaviourSettings(config);
+  if (settings !== null && settings.rules.length + settings.unreadable.length > 0 && unenforced.length > 0) {
+    const clients = [...new Set(report.channels.flatMap((channel) => channel.registered.map((entry) => entry.client)))];
+    checks.push({
+      name: 'behaviour enforcement',
+      ok: true,
+      warn: true,
+      detail: `${unenforced.join('; ')}: an agent there may start any act, each still waiting for the person's yes`,
+      fix: remedy(
+        handoffSentence(
+          handoffs.core(['update']),
+          (command) =>
+            `Bring every registration to the latest release with ${command}, then restart ${listed(clients, 'and')}: a server started before ${BEHAVIOUR_ENFORCED_SINCE} enforces no rule until its client restarts it.`,
+        ),
+      ),
+    });
+  }
   return checks;
+}
+
+/** The release whose servers enforce the behaviour rules (B4). */
+const BEHAVIOUR_ENFORCED_SINCE = '0.22.0';
+
+/**
+ * Whether a registration's release enforces the behaviour rules: `older` before 0.22.0, which enforces none. A
+ * prerelease of 0.22.0 or later — a branch's build — has the code that enforces them, so it is read as its release.
+ * `unknown` when it names no release, or one that cannot be read: it may be an older one, so it is never counted as
+ * enforcing.
+ */
+function enforcementOf(version: string | null): 'enforces' | 'older' | 'unknown' {
+  if (version === null) return 'unknown';
+  const order = compareVersions(version.replace(/[-+].*$/u, ''), BEHAVIOUR_ENFORCED_SINCE);
+  return order === null ? 'unknown' : order < 0 ? 'older' : 'enforces';
+}
+
+/** A channel whose accounts can act on other people — one with a `send` mode — and so whose server enforces rules. */
+function actsOnOthers(channel: Channel): boolean {
+  return manifestOf(channel)?.accounts?.modes.includes('send') === true;
 }
 
 /** The names of a channel's accounts on this machine, from the map its manifest keeps them in; none for the core. */
@@ -485,21 +964,26 @@ function accountsOf(config: Config, channel: Channel): string[] {
  * the flags `mcp install`'s own hint repeats when it refuses to replace an entry without `--force`, so following it
  * narrows or widens nothing. A project's entry is not one `mcp install` writes, and is said to be where it is instead.
  */
-function registerAgain(channel: Channel, entry: ChannelRegistration, handoffs: CliHandoffs): Remedy {
+function registerAgain(channel: ServerId, entry: ChannelRegistration, handoffs: CliHandoffs): Remedy {
   if (entry.scope === 'project') {
     return remedy(
       `It is registered for one project, in ${entry.path}, and \`mcp install\` registers at user scope only: remove it or register it again there, with ${entry.client}'s own command.`,
     );
   }
-  const facts = channelServer(channel);
+  const facts = serverFacts(channel);
   const words = ['mcp', 'install', '--client', entry.client];
   if (entry.name !== facts.defaultServerName) words.push('--name', entry.name);
   words.push(...entry.narrowing);
   if (entry.launcher === 'npx' || entry.launcher === 'local') words.push('--launcher', entry.launcher);
   words.push('--force');
+  // Core's own command, located, for every server (re-review of 0.20.0, severity 3): a channel's own `mcp install`
+  // registers the release that command is, and the one found here may be the old one an entry behind still starts.
   // The entry's name and pins are read from the client's file, which may hold anything: a located command shows them
-  // as words to type where no Windows line is safe, and a product not locatable here says so instead.
-  return remedy(handoffSentence(handoffs.of(channel, words), (command) => `Register it again: ${command}.`));
+  // as words to type where no Windows line is safe.
+  const handoff = handoffs.core(
+    channel === 'core' ? words : ['mcp', 'install', '--server', channel, ...words.slice(2)],
+  );
+  return remedy(handoffSentence(handoff, (command) => `Register it again: ${command}.`));
 }
 
 /** An inbox's id from its name — the current one, so a former name is answered with what it is called now. */
@@ -514,6 +998,23 @@ export interface AuditTailOptions {
   limit?: number | undefined;
 }
 
+/** The same strict plain-address grammar the sending channels use for an address returned outside an envelope. */
+const PLAIN_AUDIT_ADDRESS = /^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/i;
+
+function auditRecipient(address: string, record: AuditRecord, boundary: string): string {
+  if (PLAIN_AUDIT_ADDRESS.test(address)) return address;
+  const text = stripInvisible(address).text.slice(0, 500);
+  return wrapUntrusted(
+    text,
+    {
+      field: 'recipient',
+      inbox: record.alias || record.inboxId,
+      ...(record.approvalId === undefined ? {} : { id: record.approvalId }),
+    },
+    boundary,
+  );
+}
+
 export async function auditTail(core: Core, options: AuditTailOptions = {}): Promise<AuditRecord[]> {
   const limit = options.limit ?? 50;
   if (!Number.isInteger(limit) || limit < 1) {
@@ -524,11 +1025,17 @@ export async function auditTail(core: Core, options: AuditTailOptions = {}): Pro
   // the returned array instead meant a quiet inbox's history was read as empty whenever a busier one had produced
   // `limit` records since — and raising `--limit` changed the answer, which is the tell. This is what someone asks
   // to find out what was sent from a mailbox.
-  return core.audit.tail({
+  const records = await core.audit.tail({
     limit,
     ...(inboxId ? { inbox: inboxId } : {}),
     ...(options.since ? { since: options.since } : {}),
   });
+  const boundary = newBoundary();
+  return records.map((record) =>
+    record.recipients === undefined
+      ? record
+      : { ...record, recipients: record.recipients.map((address) => auditRecipient(address, record, boundary)) },
+  );
 }
 
 /** Every state a listing can be filtered by: the stored states, and `corrupt` for a record that cannot be used. */
@@ -572,11 +1079,13 @@ export async function listApprovals(
 }
 
 /**
- * Revokes an approval of either kind. Refusing is never the dangerous direction, so this asks nobody.
+ * Revokes an approval of any kind. Refusing is never the dangerous direction, so this asks nobody.
  *
  * A change approval is revoked through `revokeChange`, which records it in the audit log as every other step of a
- * change approval is; a send approval as it always was. Either from an earlier release is retired in its own shape. A
- * corrupt or unreadable record is refused, with only its stub, and nothing is written to it.
+ * change approval is; a standing approval through `endStanding`, which ends every unused child of it with it, so none
+ * minted before the revoke can still be claimed in the minutes it lasts (design 2026-10-19-standing-approvals, S8); a
+ * send approval as it always was. Any from an earlier release is retired in its own shape. A corrupt or unreadable
+ * record is refused, with only its stub, and nothing is written to it.
  *
  * What it returns is the record's public object, as a status shows it (`publicApproval`): what a sender wrote — the
  * recipients and subject, a question's file names — only inside the untrusted-content envelope, never the stored record.
@@ -591,9 +1100,12 @@ export async function revokeApproval(
   const { stored: existing } = await core.approvals.inspect(approvalId);
   if (existing.form === 'corrupt' || existing.form === 'unreadable') throw integrityRefusal(existing);
   const reason = 'revoked by the user';
-  const stored =
-    kindOf(existing) === 'change'
+  const kind = kindOf(existing);
+  const stored: StoredApproval =
+    kind === 'change'
       ? await revokeChange(core, approvalId, reason, { surface, disposition: 'person' })
-      : await core.approvals.revoke(approvalId, reason, { disposition: 'person' });
+      : kind === 'standing' && existing.form === 'v2'
+        ? { form: 'v2', record: await endStanding(core, approvalId, reason) }
+        : await core.approvals.revoke(approvalId, reason, { disposition: 'person' });
   return publicApproval(stored, await core.approvals.outcomeOf(stored));
 }

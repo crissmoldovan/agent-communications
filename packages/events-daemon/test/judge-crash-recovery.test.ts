@@ -3,11 +3,12 @@ import { rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { ImmutableVersions } from '../src/domain/versions.ts';
-import { beginJudgeTransport, reserveJudgeWork, settleJudgeWork } from '../src/runtime/judge-budget.ts';
+import { JudgeReservationIoGate, reserveJudgeWork, settleJudgeWork } from '../src/runtime/judge-budget.ts';
 import { recoverJudgeWork } from '../src/runtime/judge-recovery.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { JUDGE_CRASH_POINTS, type JudgeCrashPoint } from './fixtures/judges/crash-recovery/points.ts';
+import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const NOW = 1_800_000_000_000;
@@ -82,7 +83,8 @@ async function fixture() {
     providers: [{ provider: 'typesafe', ...budgetLimits }],
   });
   versions.createRule(rule());
-  store.database.exec(`INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES
+  store.database.exec(`UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 0 WHERE singleton = 1;
+    INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES
     ('judge-budget', 'judge-budget', 1, 'judge-budget@1', 1), ('judge-kind', 'typesafe', 1, 'judge-kind:typesafe@1', 1);
     INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
     VALUES ('event-e5-crash', '${store.installationId}', 'gmail.message.received', 1, '${ACCOUNT}', 'e5-crash', ${NOW}, ${NOW}, ${NOW});
@@ -118,6 +120,15 @@ function crashesBeforeTransport(point: JudgeCrashPoint): boolean {
   return point === 'after-reserve' || point === 'before-transport';
 }
 
+function enterHostedDns(setup: Awaited<ReturnType<typeof fixture>>, reservationId: string): void {
+  new JudgeReservationIoGate({
+    store: setup.store,
+    reservationId,
+    judgeKind: 'typesafe',
+    now: () => NOW,
+  }).finalGate('dns');
+}
+
 test('E5 crash: every named interruption leaves either a pre-I/O release or one post-I/O pessimistic terminalisation', {
   skip: WINDOWS_SKIP,
 }, async (context) => {
@@ -127,7 +138,7 @@ test('E5 crash: every named interruption leaves either a pre-I/O release or one 
       try {
         reserve(setup, `crash:${point}`);
         if (!crashesBeforeTransport(point)) {
-          beginJudgeTransport({ store: setup.store, reservationId: `crash:${point}`, now: NOW });
+          enterHostedDns(setup, `crash:${point}`);
           assert.throws(
             () =>
               settleJudgeWork({
@@ -198,7 +209,7 @@ test('E5 crash: a late result cannot settle a recovery-terminalised work item or
   const setup = await fixture();
   try {
     reserve(setup, 'late-result');
-    beginJudgeTransport({ store: setup.store, reservationId: 'late-result', now: NOW });
+    enterHostedDns(setup, 'late-result');
     setup.store.immediate(() => recoverJudgeWork({ database: setup.store.database, now: NOW + 1 }));
     assert.equal(
       settleJudgeWork({
@@ -241,13 +252,14 @@ test('E5 crash: owner startup does not issue a judge-ledger statement before the
   try {
     setup = await fixture();
     reserve(setup, 'owner-recovery');
-    beginJudgeTransport({ store: setup.store, reservationId: 'owner-recovery', now: NOW });
+    enterHostedDns(setup, 'owner-recovery');
     setup.store.database.prepare("DELETE FROM active_versions WHERE kind = 'judge-kind'").run();
     setup.store.close();
     phase = 'owner-start';
     try {
       owner = await startEventOwner({
         stateDir: setup.root,
+        configDir: await emptyConfigDir(setup.root),
         tickMs: 60_000,
         now: () => NOW + 1,
       });
@@ -296,10 +308,15 @@ test('E7 owner: startup recovers in-flight judge work only after an active kind 
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     reserve(setup, 'owner-e7-recovery');
-    beginJudgeTransport({ store: setup.store, reservationId: 'owner-e7-recovery', now: NOW });
+    enterHostedDns(setup, 'owner-e7-recovery');
     setup.store.close();
     try {
-      owner = await startEventOwner({ stateDir: setup.root, tickMs: 60_000, now: () => NOW + 1 });
+      owner = await startEventOwner({
+        stateDir: setup.root,
+        configDir: await emptyConfigDir(setup.root),
+        tickMs: 60_000,
+        now: () => NOW + 1,
+      });
     } catch (error) {
       if (!(error instanceof Error) || !/EPERM/u.test(error.message)) throw error;
     }

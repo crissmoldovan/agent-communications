@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events",
-  "version": "0.15.2",
+  "version": "0.24.0",
   "description": "The event catalogue, conditions and mapping templates of agent-communications' local event emission: isomorphic, with no I/O and no Node imports.",
   "type": "module",
   "license": "MIT",
@@ -42,14 +42,11 @@
   },
   "devDependencies": {
     "ajv": "8.20.0",
-    "playwright": "1.61.1",
+    "playwright": "1.64.0",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   },
   "agentcommsPackage": {
     "kind": "library"
-  },
-  "agentcommsRelease": {
-    "hold": "Held until the first package that depends on it ships; its first version is then published by hand (docs/RELEASING.md, A package held back from release)."
   }
 }

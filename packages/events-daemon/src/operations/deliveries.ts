@@ -24,5 +24,11 @@ export async function decideHeld(
   decision: 'accept' | 'reject',
   options: Options = {},
 ): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir }).request('decideHeld', { decisionId, decision });
+  return new EventControlClient({ stateDir: options.stateDir, clientName: 'interactive-terminal' }).request(
+    'decideHeld',
+    {
+      decisionId,
+      decision,
+    },
+  );
 }

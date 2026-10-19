@@ -26,15 +26,6 @@ async function listen(server: ReturnType<typeof createServer>): Promise<number> 
   return address.port;
 }
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  const port = await listen(server);
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error === undefined ? resolve() : reject(error))),
-  );
-  return port;
-}
-
 async function close(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve, reject) =>
     server.close((error) => (error === undefined ? resolve() : reject(error))),
@@ -83,9 +74,10 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
   };
   const pageServer = createServer(pageHandler(true));
   const unlistedPageServer = createServer(pageHandler(false));
+  const sseServer = createServer();
   const pagePort = await listen(pageServer);
   const unlistedPagePort = await listen(unlistedPageServer);
-  const ssePort = await freeLoopbackPort();
+  const ssePort = await listen(sseServer);
   const stateDir = await shortTempDir('events-browser-sse-');
   const store = await openEventDatabase({ stateDir });
   const subscriber = {
@@ -188,6 +180,7 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
          'replay', '${accountId}', NULL, NULL, X'7B226964223A227265706C6179227D', ${deliveredAt + 1}, ${deliveredAt + 60_001}, 1);
     `);
     const listener = await startSseServer({
+      listener: sseServer,
       store,
       subscriberId: subscriber.subscriberId,
       subscriberVersion: subscriber.version,
@@ -211,6 +204,7 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
       preflightCount: () => listener.preflightCount(),
       close: async () => {
         await listener.close();
+        await close(sseServer);
         await close(pageServer);
         await close(unlistedPageServer);
         store.close();
@@ -221,6 +215,7 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
     store.close();
     await close(pageServer).catch(() => undefined);
     await close(unlistedPageServer).catch(() => undefined);
+    await close(sseServer).catch(() => undefined);
     await rm(stateDir, { recursive: true, force: true });
     throw error;
   }

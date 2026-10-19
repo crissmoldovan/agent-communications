@@ -183,6 +183,31 @@ test('B3 target test refuses an unreferenced exact version before its synthetic 
   }
 });
 
+test('CUE-475: a target test while collection is switched off says to switch it on, and sends nothing', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-b3-target-switched-off-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    installLiveDryRunTarget(store, 'target-off', [1]);
+    store.database.exec('UPDATE event_settings SET enabled = 0 WHERE singleton = 1');
+    let sends = 0;
+    const control = targetTestControl(store, {
+      transport: async () => {
+        sends += 1;
+      },
+    });
+    await assert.rejects(
+      () => control.test({ kind: 'active', targetId: 'target-off', targetVersion: 1 }),
+      /collection is switched off: switch it on with enable-all first, or approve without the test/,
+    );
+    assert.equal(sends, 0);
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('B3 target test refuses a revoked bound target instead of inferring safety from its active rule pointer', {
   skip: WINDOWS_SKIP,
 }, async () => {

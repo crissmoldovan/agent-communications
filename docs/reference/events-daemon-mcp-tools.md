@@ -17,7 +17,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_resume`](#events_resume) | Resumes work retained by an operational pause. |
 | [`events_disable_all`](#events_disable_all) | Disables collection, advances the global generation and purges B1 work. |
 | [`events_enable_all`](#events_enable_all) | Reports that a standing disclosure approval is required before enablement. |
-| [`events_doctor`](#events_doctor) | Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health. |
+| [`events_doctor`](#events_doctor) | Reports content-free lineage, retry, recovery, judge authority, hold-clock and protocol health. |
 | [`events_catalogue_list`](#events_catalogue_list) | Lists selectable local event definitions. |
 | [`events_approval_view`](#events_approval_view) | Returns the daemon-authoritative preview and fresh challenge without claiming it. |
 | [`events_rule_test`](#events_rule_test) | Locally evaluates one selectable catalogue example without provider or judge I/O. |
@@ -26,22 +26,22 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_subscriber_add`](#events_subscriber_add) | Creates one immutable subscriber version. |
 | [`events_subscriber_update`](#events_subscriber_update) | Creates one replacement immutable subscriber version. |
 | [`events_subscriber_remove`](#events_subscriber_remove) | Revokes every live version of one subscriber and closes its streams. |
-| [`events_judges_list`](#events_judges_list) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_add`](#events_judge_add) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_update`](#events_judge_update) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_remove`](#events_judge_remove) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_test`](#events_judge_test) | Returns the typed Phase-E unavailable result. |
-| [`events_budget_show`](#events_budget_show) | Returns the typed Phase-E unavailable result. |
-| [`events_budget_update`](#events_budget_update) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_kinds_list`](#events_judge_kinds_list) | Returns the typed Phase-E unavailable result. |
-| [`events_judge_kind_enable`](#events_judge_kind_enable) | Returns the typed Phase-E or E2 unavailable result. |
-| [`events_judge_kind_disable`](#events_judge_kind_disable) | Returns the typed Phase-E or E2 unavailable result. |
+| [`events_judges_list`](#events_judges_list) | Lists content-free immutable judge metadata. |
+| [`events_judge_add`](#events_judge_add) | Creates an immutable, initially inactive judge version. |
+| [`events_judge_update`](#events_judge_update) | Creates an immutable replacement judge version. |
+| [`events_judge_remove`](#events_judge_remove) | Removes every live immutable version of one judge. |
+| [`events_judge_test`](#events_judge_test) | Tests one active exact judge version with the daemon-fixed synthetic event. |
+| [`events_budget_show`](#events_budget_show) | Lists immutable judge budgets and the active singleton. |
+| [`events_budget_update`](#events_budget_update) | Creates a pending immutable global budget and prepares its approval. |
+| [`events_judge_kinds_list`](#events_judge_kinds_list) | Lists disabled/enabled judge kinds and the typed Laya E2 seam. |
+| [`events_judge_kind_enable`](#events_judge_kind_enable) | Prepares, but never approves or claims, judge-kind enablement. |
+| [`events_judge_kind_disable`](#events_judge_kind_disable) | Immediately disables one available judge kind; Laya remains typed E2-unavailable. |
 | [`events_judge_model_status`](#events_judge_model_status) | Returns the typed Phase-E2 unavailable result. |
 | [`events_judge_model_remove`](#events_judge_model_remove) | Returns the typed Phase-E2 unavailable result. |
 | [`events_deliveries_list`](#events_deliveries_list) | Lists content-free delivery metadata. |
 | [`events_delivery_retry`](#events_delivery_retry) | Retries one exact retryable delivery. |
 | [`events_delivery_drop`](#events_delivery_drop) | Drops one exact dead-letter delivery and its retained payload. |
-| [`events_held_list`](#events_held_list) | Returns the typed empty held-decision result before Phase E. |
+| [`events_held_list`](#events_held_list) | Lists content-free held-decision metadata; only a terminal/app may resolve one. |
 | [`events_catalogue_show`](#events_catalogue_show) | Shows one selectable local event definition. |
 | [`events_sources_list`](#events_sources_list) | Lists configured local event sources. |
 | [`events_source_show`](#events_source_show) | Shows one configured local event source. |
@@ -107,7 +107,7 @@ Takes no arguments.
 
 ### `events_doctor`
 
-Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health.
+Reports content-free lineage, retry, recovery, judge authority, hold-clock and protocol health.
 
 *writes · idempotent*
 
@@ -194,7 +194,7 @@ Revokes every live version of one subscriber and closes its streams.
 
 ### `events_judges_list`
 
-Returns the typed Phase-E unavailable result.
+Lists content-free immutable judge metadata.
 
 *read-only · idempotent*
 
@@ -202,7 +202,7 @@ Takes no arguments.
 
 ### `events_judge_add`
 
-Returns the typed Phase-E unavailable result.
+Creates an immutable, initially inactive judge version.
 
 *writes · destructive*
 
@@ -212,7 +212,7 @@ Returns the typed Phase-E unavailable result.
 
 ### `events_judge_update`
 
-Returns the typed Phase-E unavailable result.
+Creates an immutable replacement judge version.
 
 *writes · destructive*
 
@@ -222,7 +222,7 @@ Returns the typed Phase-E unavailable result.
 
 ### `events_judge_remove`
 
-Returns the typed Phase-E unavailable result.
+Removes every live immutable version of one judge.
 
 *writes · destructive*
 
@@ -232,7 +232,7 @@ Returns the typed Phase-E unavailable result.
 
 ### `events_judge_test`
 
-Returns the typed Phase-E unavailable result.
+Tests one active exact judge version with the daemon-fixed synthetic event.
 
 *read-only · idempotent*
 
@@ -243,7 +243,7 @@ Returns the typed Phase-E unavailable result.
 
 ### `events_budget_show`
 
-Returns the typed Phase-E unavailable result.
+Lists immutable judge budgets and the active singleton.
 
 *read-only · idempotent*
 
@@ -251,7 +251,7 @@ Takes no arguments.
 
 ### `events_budget_update`
 
-Returns the typed Phase-E unavailable result.
+Creates a pending immutable global budget and prepares its approval.
 
 *writes · destructive*
 
@@ -261,7 +261,7 @@ Returns the typed Phase-E unavailable result.
 
 ### `events_judge_kinds_list`
 
-Returns the typed Phase-E unavailable result.
+Lists disabled/enabled judge kinds and the typed Laya E2 seam.
 
 *read-only · idempotent*
 
@@ -269,7 +269,7 @@ Takes no arguments.
 
 ### `events_judge_kind_enable`
 
-Returns the typed Phase-E or E2 unavailable result.
+Prepares, but never approves or claims, judge-kind enablement.
 
 *writes · destructive*
 
@@ -279,7 +279,7 @@ Returns the typed Phase-E or E2 unavailable result.
 
 ### `events_judge_kind_disable`
 
-Returns the typed Phase-E or E2 unavailable result.
+Immediately disables one available judge kind; Laya remains typed E2-unavailable.
 
 *writes · destructive*
 
@@ -333,7 +333,7 @@ Drops one exact dead-letter delivery and its retained payload.
 
 ### `events_held_list`
 
-Returns the typed empty held-decision result before Phase E.
+Lists content-free held-decision metadata; only a terminal/app may resolve one.
 
 *read-only · idempotent*
 

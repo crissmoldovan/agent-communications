@@ -93,6 +93,10 @@
       "operation": "doctor",
       "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
+      "overlayInputs": [
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v2.schema.json"
+      ],
       "mutation": { "from": "ruleId: row.rule_id,", "to": "ruleId: row.document," },
       "mutationTest": "B3 doctor projection has a closed content-free data surface",
       "loadedMarker": "doctor-never-serializes-forbidden-document-content"
@@ -164,7 +168,14 @@
       "operation": "doctor",
       "productionEntry": "packages/events-daemon/src/cli/program.ts",
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
-      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "overlayInputs": [
+        "package.json",
+        "capabilities.json",
+        "packages/*/package.json",
+        "scripts/**",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v2.schema.json"
+      ],
       "mutation": {
         "from": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${terminalSafeJson(result)}\\n`);",
         "to": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) {\n          streams.stderr.write('doctor-secret-marker\\n');\n          streams.stdout.write(`${terminalSafeJson(result)}\\n`);\n        }"
@@ -197,7 +208,14 @@
       "operation": "doctor",
       "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
-      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "overlayInputs": [
+        "package.json",
+        "capabilities.json",
+        "packages/*/package.json",
+        "scripts/**",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v2.schema.json"
+      ],
       "mutation": {
         "from": "    case OWNER_CONTROL_WIRES.doctor:\n      return doctorReport();",
         "to": "    case OWNER_CONTROL_WIRES.doctor:\n      process.stderr.write('doctor-secret-marker\\n');\n      return doctorReport();"
@@ -210,10 +228,17 @@
       "operation": "doctor",
       "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
-      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "overlayInputs": [
+        "package.json",
+        "capabilities.json",
+        "packages/*/package.json",
+        "scripts/**",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v2.schema.json"
+      ],
       "mutation": {
-        "from": "    return projectB3Doctor({",
-        "to": "    await core.audit.append({ inboxId: '', operation: 'doctor-secret-marker', outcome: 'ok' });\n    return projectB3Doctor({"
+        "from": "    return projectE9Doctor({",
+        "to": "    await core.audit.append({ inboxId: '', operation: 'doctor-secret-marker', outcome: 'ok' });\n    return projectE9Doctor({"
       },
       "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
       "loadedMarker": "doctor-scans-audit-for-content"

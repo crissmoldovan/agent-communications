@@ -20,7 +20,7 @@ documentation ends up describing a human in a loop they are not in.
 What guards the release instead is stated rather than implied: the environment accepts `v*` tags and nothing else,
 the tag must match the declared version and still name the commit the run started from, six platform legs must pass
 before the publish job starts — and so must one more on exactly Node 22.12.0, the oldest the packages claim, which
-runs the printed commands a source checkout's registration needs there and the held event service's built status
+runs the printed commands a source checkout's registration needs there and the event service's built status
 command through Node's SQLite module, and one on macOS that runs the event library's vectors plus loopback daemon
 SSE/CORS in Chromium and WebKit (`pnpm verify:browser`) — and every version carries provenance naming the commit and
 the workflow run that built it. If a bad version ever went out, that attestation is what makes it traceable.
@@ -105,8 +105,8 @@ its core's is on the registry, a first version included: published by hand from 
 
 ## The packages
 
-**One list, in `scripts/packages.mjs`, in two widths.** `PACKAGES` is what a tag publishes: `core`, `gmail`,
-`gmail-mcp`, `resend`, `slack`, `whatsapp`, in that order, and what `node scripts/packages.mjs` prints. `PUBLISHABLE`
+**One list, in `scripts/packages.mjs`, in two widths.** `PACKAGES` is what a tag publishes: `core`, `events`,
+`gmail`, `gmail-mcp`, `resend`, `slack`, `whatsapp`, `events-daemon`, in that order, and what `node scripts/packages.mjs` prints. `PUBLISHABLE`
 is every package this repository publishes, in the same order — `PACKAGES` and any package
 [held back from release](#a-package-held-back-from-release). Both are derived from the packages' own manifests
 (`scripts/channels.mjs`), in an order computed from their dependencies, so a new channel or library is on them by
@@ -241,23 +241,22 @@ earlier, if the owner decides to publish it on its own:
 Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
 [a new package's first version](#a-new-packages-first-version), reached by lifting the hold.
 
-### The held event library and daemon
+### The event library and daemon
 
-`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1, B2 and Phase D. A B1, B2 or Phase D
-merge publishes neither package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and
-packed-tarball consumer checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths
-do not read their packuments.
+`@agentcomms/events` and `@agentcomms/events-daemon` were both held throughout phases A, B1, B2, B3 and D, and are
+released together from 0.16.0. While held, both stayed in `PUBLISHABLE` for builds, licences, version
+synchronisation and packed-tarball consumer checks, but neither was in `PACKAGES`, so no release read, sent or
+confirmed them.
 
-The B2 runtime's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS
-browser gate. It remains a release requirement while the packages are held; it is not a publish surface or a reason to
-lift either hold.
+The daemon's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS browser
+gate, and remains a release requirement.
 
-When the owner decides to release the first daemon consumer, they remove both holds in one normal version/release
-commit and tag it only after the complete release checks pass. From that same checked tag, the owner first publishes
-`@agentcomms/events`, then publishes `@agentcomms/events-daemon` with the same checked tag and command form. The order
-is required: the daemon pins its runtime dependency on the library to exactly that version. The owner then configures
-trusted publishing for each package and re-runs the tagged release, as [a new package's first
-version](#a-new-packages-first-version) describes. Use `next`, rather than `latest`, for a prerelease.
+Their first release removed both holds in the 0.16.0 version commit, tagged only after the complete release checks
+passed. From that same checked tag, the owner first publishes `@agentcomms/events`, then publishes
+`@agentcomms/events-daemon` with the same checked tag and command form. The order is required: the daemon pins its
+runtime dependency on the library to exactly that version. The owner then configures trusted publishing for each
+package and re-runs the tagged release, as [a new package's first version](#a-new-packages-first-version) describes.
+From then on both are published by every release, like the channels.
 
 ## If a publish fails part way through
 
@@ -308,6 +307,111 @@ they import from `src/`.
   push the tag on the commit it published — the script prints the command — and the run finds every package already
   out from that commit, publishes nothing, proves nothing, confirms and makes the release. On any other commit it
   refuses.
+
+## The desktop app
+
+Agent Comms, the tray app in `apps/desktop`, is released on its own tag, `desktop-vX.Y.Z`, put on the commit of the
+`vX.Y.Z` release it ships with. Its version is the repository's (`pnpm sync:versions` writes its `tauri.conf.json`),
+and none of it goes to npm. A release of it holds:
+
+- **macOS:** a universal DMG, signed with the Developer ID in the owner's login keychain and notarised, and — once
+  the updater key is committed — the updater's signed archive with its `latest.json`. They are built on the owner's
+  Mac by `apps/desktop/scripts/release-desktop.sh` and published by `apps/desktop/scripts/publish-desktop.sh`. The
+  signing identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate. The app is signed
+  under the hardened runtime with one entitlement, `com.apple.security.automation.apple-events`
+  (`apps/desktop/src-tauri/Entitlements.plist`), and its `Info.plist` says why it asks to control Terminal: Approve in
+  Terminal drives Terminal through `osascript`, which a signed build may not do without both.
+- **Windows and Linux:** an NSIS `.exe`, an AppImage and a `.deb`, unsigned. `.github/workflows/desktop-release.yml`
+  builds them when the tag is pushed, once the four legs of `desktop.yml` have passed, and attaches them to the tag's
+  draft release. The builds have read-only access; a separate job, which checks nothing out, uploads their files, and
+  only while the release is a draft. The release notes say they are unsigned.
+- **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
+  `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
+
+**No agent runs these scripts.** They need the owner's keychain, the updater key, and the version typed back in a
+terminal; without a terminal they refuse.
+
+**A desktop release never takes Latest.** GitHub's Latest release is the CLI's, made by `release.yml`. Every desktop
+release command passes `--latest=false`, so a `desktop-v*` tag cannot move it. The app does not look for Latest: it
+finds its updates through the GitHub API, as the highest `desktop-v*` release that is neither a draft nor a
+prerelease and carries a `latest.json`. That is also why neither the workflow nor the scripts make a prerelease.
+
+**Updater artefacts come only from the signed build.** `createUpdaterArtifacts` is false in `tauri.conf.json`, so CI's
+unsigned builds need no key; `release-desktop.sh` turns it on with `--config`. An app built without the key, which is
+every CI build, has its updater off and says so in Settings. No token is baked into the app, because this repository
+is public.
+
+**The first signed release may have no updater.** With `plugins.updater.pubkey` in `tauri.conf.json` still empty,
+`release-desktop.sh` still builds, signs and notarises the DMG, but with updater artefacts off, and says so in a box
+you confirm by typing `off`; `publish-desktop.sh` then publishes it without `latest.json`, and says the updater stays
+off. Such a copy never updates itself: it is replaced by hand. To turn the updater on, do steps 1 and 2 below —
+generate the key, commit its `.pub` — and release the next version; from the release after that one, installed copies
+update themselves. `apps/desktop/scripts/updater-key.mjs` makes the decision: off with no pubkey; with one, the key
+must be there, mode 600, and its `.pub` the pubkey, or the release is refused before anything else is read or built.
+
+### The owner's steps
+
+Once (steps 1 and 2 turn the updater on, and may wait until after the first signed release; see above):
+
+1. Generate the updater key, and keep it readable by you alone:
+
+   ```bash
+   pnpm --filter @agentcomms/desktop tauri signer generate -w ~/.agentcomms/tauri-updater.key
+   chmod 600 ~/.agentcomms/tauri-updater.key
+   ```
+
+   It writes `tauri-updater.key.pub` beside the key. Back the key and its password up somewhere safe: every installed
+   copy accepts only updates signed with it, so without it each one has to be replaced by hand.
+2. Paste the contents of `tauri-updater.key.pub` into `plugins.updater.pubkey` in
+   `apps/desktop/src-tauri/tauri.conf.json`, and commit it. `release-desktop.sh` refuses a key whose `.pub` is not
+   that value.
+3. Create `.env.desktop-release.local` at the repository root, with mode 600 (`chmod 600 .env.desktop-release.local`);
+   git ignores it. It holds `APPLE_SIGNING_IDENTITY` (`Developer ID Application: …`), `APPLE_ID`, `APPLE_TEAM_ID`,
+   `APPLE_PASSWORD` (an app-specific password), which Tauri reads from its environment to notarise the app, and, if
+   the updater key has one, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE` and
+   `AGENTCOMMS_UPDATER_KEY_FILE` point the scripts elsewhere. Neither script prints any of these values.
+4. Store the notarisation credentials the DMG is submitted with in a notarytool keychain profile, so no password is
+   ever on a command line:
+
+   ```bash
+   xcrun notarytool store-credentials agentcomms-notary --apple-id <your Apple ID> --team-id <your team ID>
+   ```
+
+   It asks for the app-specific password and keeps it in the login keychain. `release-desktop.sh` uses the profile
+   `agentcomms-notary`, or the one `AGENTCOMMS_NOTARY_PROFILE` names, and refuses before building when it does not
+   answer.
+
+Each release, after `vX.Y.Z` is out:
+
+5. Tag `desktop-vX.Y.Z` on the `vX.Y.Z` commit, and push the tag:
+
+   ```bash
+   git tag desktop-vX.Y.Z vX.Y.Z && git push origin desktop-vX.Y.Z
+   ```
+
+   The Desktop release workflow checks that the tag is `desktop-v` plus the version in `tauri.conf.json`, runs the
+   four desktop legs, makes the draft release and attaches the Windows and Linux files. The release stays a draft.
+   If a leg fails for a reason outside the repository, re-run it: the draft is found again and uploads replace what
+   is there.
+6. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
+
+   ```bash
+   git checkout desktop-vX.Y.Z
+   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z
+   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
+   ```
+
+   Both refuse a dirty tree, a tag that is not the app's version, a HEAD that is not the tag's commit and a missing
+   terminal, and ask for the version to be typed back. `release-desktop.sh` decides the updater from the key first
+   (on, off, or refused), then reads the signing environment, builds the universal app, signs, notarises and staples
+   the app and the DMG, and stages them in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they
+   were built from and whether the updater is on. `publish-desktop.sh` refuses a release already published, whatever
+   it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft, and stops if the workflow's Windows and
+   Linux files are not attached yet; run it again once they are. Then, with the updater on, it uploads `latest.json`;
+   with it off, it says the updater stays off. It publishes the release, still not Latest.
+7. Update between two signed versions with the updater on. The first such release has nothing to update from, so from
+   the second on: with the previous one installed, choose Check for Updates… in the tray. It should find the new
+   release, check its signature against the key in the app, install it and restart.
 
 ## Do not run agents in this checkout during a release
 

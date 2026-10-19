@@ -1,0 +1,25 @@
+{
+  "checks": [
+    {
+      "id": "node",
+      "title": "Node",
+      "status": "ok",
+      "detail": "Node 22.18.0"
+    },
+    {
+      "id": "token-example/gmail",
+      "title": "example/gmail signs in",
+      "status": "fail",
+      "detail": "Google refused the refresh token",
+      "fix": "Remove the app at https://myaccount.google.com/connections and sign in again.",
+      "inbox": "example/gmail"
+    }
+  ],
+  "summary": {
+    "ok": 1,
+    "warn": 0,
+    "fail": 1,
+    "skipped": 0
+  },
+  "healthy": false
+}

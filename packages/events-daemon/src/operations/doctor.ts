@@ -1,6 +1,11 @@
 import { EventControlClient } from '../control/client.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import type { JudgeKind } from '../domain/lifecycle.ts';
+import type {
+  JUDGE_KIND_LAYA,
+  JUDGE_KIND_LOCAL_ENDPOINT,
+  JUDGE_KIND_TYPESAFE,
+  JudgeKind,
+} from '../domain/lifecycle.ts';
 import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
 
 /**
@@ -154,6 +159,36 @@ export interface DoctorReportV1 {
 }
 
 /**
+ * Phase E leaves doctor-v1 byte-for-byte intact for B3 consumers. The successor keeps every v1 property and
+ * narrows its boundary list to the one capability E still does not provide; `judge` adds only closed state.
+ */
+export interface DoctorReportV2 extends Omit<DoctorReportV1, 'schemaVersion'> {
+  readonly schemaVersion: 'doctor-v2';
+  readonly judge: {
+    readonly kinds: readonly (
+      | {
+          readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
+          readonly state: 'disabled' | 'enabled';
+          readonly version: number | null;
+        }
+      | { readonly kind: typeof JUDGE_KIND_LAYA; readonly state: 'unavailable'; readonly code: 'E2_REQUIRED' }
+    )[];
+    readonly budget: { readonly activeVersion: number | null };
+    /** Counts only; a doctor report never exposes a work id, request, prompt, event or provider response. */
+    readonly reservations: readonly {
+      readonly state: 'reserved' | 'in-flight' | 'settled' | 'released';
+      readonly count: number;
+    }[];
+    /** Content-free retention visibility; no decision, event, rule, prompt or provider field crosses doctor. */
+    readonly holds: {
+      readonly count: number;
+      readonly oldestCreatedAt: number | null;
+      readonly nextExpiresAt: number | null;
+    };
+  };
+}
+
+/**
  * The transport binding mirrors the root `additionalProperties: false` in doctor-v1.schema.json. Keeping this at
  * the production projection boundary makes an accidental diagnostic field fail closed before CLI or MCP can render
  * it; nested fields are constructed from closed object literals in the projection below that boundary.
@@ -179,6 +214,28 @@ export function assertDoctorReportV1(report: DoctorReportV1): DoctorReportV1 {
   return report;
 }
 
-export async function doctor(options: { readonly stateDir?: string | undefined } = {}): Promise<DoctorReportV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('doctor')) as DoctorReportV1;
+const DOCTOR_REPORT_V2_KEYS = [
+  'schemaVersion',
+  'owner',
+  'switch',
+  'lineages',
+  'superseded',
+  'points',
+  'awaitingReapproval',
+  'activationIntents',
+  'sources',
+  'recovery',
+  'judgeBoundary',
+  'judge',
+  'whatsapp',
+] as const;
+
+export function assertDoctorReportV2(report: DoctorReportV2): DoctorReportV2 {
+  if (Object.keys(report).some((key) => !DOCTOR_REPORT_V2_KEYS.includes(key as (typeof DOCTOR_REPORT_V2_KEYS)[number])))
+    throw new Error('doctor-v2 report is closed');
+  return report;
+}
+
+export async function doctor(options: { readonly stateDir?: string | undefined } = {}): Promise<DoctorReportV2> {
+  return (await new EventControlClient({ stateDir: options.stateDir }).request('doctor')) as DoctorReportV2;
 }

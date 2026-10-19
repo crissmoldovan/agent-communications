@@ -38,7 +38,6 @@ async function sent(options: { tier?: KeyPermission; scheduledAt?: string; to?: 
   });
   const result = await executeSend(context, 'acme/resend', {
     approvalId: prepared.approvalId,
-    expect: prepared.expect,
   });
   const id = result.resendId;
   assert.ok(id);
@@ -256,7 +255,6 @@ test('a send Resend accepted without an id: found by its tag with a key that can
       });
       const result = await executeSend(context, 'acme/resend', {
         approvalId: prepared.approvalId,
-        expect: prepared.expect,
       });
       assert.equal(result.said, 'sent; the provider returned no id');
       const id = harness.fake.sent[0]?.id;

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -1670,6 +1670,84 @@ test('the topological check fails on a cycle', () => {
   );
   assert.deepEqual(topologicalOrder(['a', 'b'], [['a', 'b']]), ['b', 'a']);
 });
+
+// ── CUE-492: this Node, named as PATH finds it, never by the file a link of it resolves to ───────────────────────────
+
+const POSIX_LINKED_NODE =
+  process.platform === 'win32' ? { skip: 'WINDOWS_SKIP: a `node` on PATH that is a symlink is a POSIX layout' } : {};
+
+/**
+ * A `bin` folder whose `node` is a symlink to this very Node — Homebrew's `/opt/homebrew/bin/node`, or a tool's
+ * `~/.local/bin/node` — and the real file it resolves to, which is what `process.execPath` reports.
+ */
+function linkedNode(): { bin: string; node: string; real: string } {
+  const bin = join(realTemp('linked-node-'), 'bin');
+  const node = link(process.execPath, join(bin, 'node'));
+  return { bin, node, real: realpathSync(process.execPath) };
+}
+
+test(
+  'a command names this Node by the link PATH finds it by, not by the file the link resolves to (CUE-492)',
+  POSIX_LINKED_NODE,
+  () => {
+    const { bin, node, real } = linkedNode();
+    const root = join(realTemp(), 'data', 'runtime', `${VERSION}-slack`, 'node_modules', '@agentcomms', 'slack');
+    writePackage(root, 'slack', { files: ['dist/cli.mjs'] });
+    const entry = join(root, 'dist', 'cli.mjs');
+    const own = request(moduleUrl(root, 'dist', 'cli.mjs'), 'slack', 'slack');
+    // An empty folder first, as most of a person's PATH is for `node`: the first `node` that is this one is named.
+    const empty = join(realTemp('no-node-'), 'bin');
+    mkdirSync(empty, { recursive: true });
+    const command = located(locateCliCommand({ ...own, env: { PATH: [empty, bin].join(delimiter) } }, NODE));
+    assert.deepEqual(command.words, [node, entry, ...PINS, 'approve', 'abc123'], 'the link, as PATH has it');
+    assert.notEqual(node, real, 'the fixture names this Node by a path other than its own');
+    assert.ok(
+      !(command.line ?? '').includes(real),
+      `the line never names the file the link resolves to: ${command.line}`,
+    );
+    // With no PATH to look on, the command names this process's own path, as it always has.
+    assert.equal(located(locateCliCommand(own, NODE)).words[0], process.execPath);
+  },
+);
+
+test(
+  'the version check still reads the real Node: a link is checked by its real file and never run (CUE-492)',
+  POSIX_LINKED_NODE,
+  () => {
+    const { bin, node } = linkedNode();
+    // A `node` first on PATH that is another program: another Node, a wrapper. It leaves a mark if anything runs it.
+    const decoy = markingProgram(join(realTemp('other-node-'), 'bin'), 'node');
+    const PATH = [dirname(decoy.path), bin].join(delimiter);
+    const temp = realTemp();
+    const fits = join(temp, 'fits', 'node_modules', '@agentcomms', 'slack');
+    writePackage(fits, 'slack', { files: ['dist/cli.mjs'] });
+    const major = Number(process.versions.node.split('.')[0]);
+    const newer = join(temp, 'newer', 'node_modules', '@agentcomms', 'slack');
+    writePackage(newer, 'slack', { files: ['dist/cli.mjs'], engines: `>=${major + 1}.0.0` });
+    const calls: string[] = [];
+    const restore = spyOnChildProcesses(calls);
+    let found: CliCommandResult;
+    let tooOld: CliCommandResult;
+    let onlyDecoy: CliCommandResult;
+    try {
+      // This process's own Node runtime: the version checked is `process.version`, the real file's.
+      found = locateCliCommand({ ...request(moduleUrl(fits, 'dist', 'cli.mjs'), 'slack', 'slack'), env: { PATH } });
+      tooOld = locateCliCommand({ ...request(moduleUrl(newer, 'dist', 'cli.mjs'), 'slack', 'slack'), env: { PATH } });
+      onlyDecoy = locateCliCommand({
+        ...request(moduleUrl(fits, 'dist', 'cli.mjs'), 'slack', 'slack'),
+        env: { PATH: dirname(decoy.path) },
+      });
+    } finally {
+      restore();
+    }
+    assert.deepEqual(calls, [], 'nothing on PATH is run, not even to ask its version');
+    assert.equal(decoy.ran(), false, 'the other node was never started');
+    assert.equal(located(found).words[0], node, 'past a `node` that is another file, to the link that is this Node');
+    const refused = notLocated(tooOld, 'engine', 'slack');
+    assert.ok(refused.detail.includes(`this is Node ${process.version}`), refused.detail);
+    assert.equal(located(onlyDecoy).words[0], process.execPath, 'with no link to this Node on PATH, its own path');
+  },
+);
 
 /** Removes a link itself, never what it points at. */
 function rmLink(path: string): void {

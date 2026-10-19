@@ -573,9 +573,165 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     ],
   },
   {
+    // A synthetic test is charged globally, but it is never authority-free: persist the exact active rule (or the
+    // pending-approval activation) so every post-await transport fence can prove it is still authorised.
+    version: 20,
+    name: 'event-judge-test-authority-binding-v1',
+    statements: [
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_rule_id TEXT',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_rule_version INTEGER CHECK (test_authority_rule_version > 0)',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_activation_id TEXT',
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_approval_id TEXT',
+      "ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_hash TEXT CHECK (test_authority_challenge_hash IS NULL OR (length(test_authority_challenge_hash) = 64 AND test_authority_challenge_hash NOT GLOB '*[^0-9a-f]*'))",
+      "ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_origin TEXT CHECK (test_authority_challenge_origin IN ('terminal', 'view'))",
+      'ALTER TABLE judge_budget_reservations ADD COLUMN test_authority_challenge_expires_at INTEGER',
+      `CREATE INDEX judge_budget_reservations_synthetic_authority
+        ON judge_budget_reservations(test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+          test_authority_approval_id, test_authority_challenge_hash)
+        WHERE work_scope = 'synthetic-test'`,
+      "UPDATE meta SET value = '20' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Account ids are provider-owned identifiers. A revocation therefore fences the exact discriminated source and
+    // account pair; migrated source-less rows remain a conservative wildcard for every source.
+    version: 21,
+    name: 'event-account-revocation-source-scope-v1',
+    statements: [
+      `CREATE TABLE account_revocations_v21 (
+        source TEXT CHECK (source IS NULL OR source IN ('gmail', 'slack', 'resend', 'whatsapp')),
+        account_id TEXT NOT NULL,
+        revoked_at INTEGER NOT NULL,
+        UNIQUE (source, account_id)
+      ) STRICT`,
+      `INSERT INTO account_revocations_v21 (source, account_id, revoked_at)
+       SELECT NULL, account_id, revoked_at FROM account_revocations`,
+      'DROP TABLE account_revocations',
+      'ALTER TABLE account_revocations_v21 RENAME TO account_revocations',
+      'CREATE INDEX account_revocations_account_source ON account_revocations(account_id, source)',
+      "UPDATE meta SET value = '21' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Reservation rows are physical attempts. Terminal attempts remain immutable history; one partial unique index
+    // fences only the live attempt for a logical work id, so a pre-I/O retry inserts a new row without resetting its
+    // predecessor or its rolling-ledger identity.
+    version: 22,
+    name: 'event-judge-budget-attempts-v1',
+    statements: [
+      `CREATE TABLE judge_budget_reservations_v22 (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL,
+        work_scope TEXT NOT NULL CHECK (work_scope IN ('source-owned', 'synthetic-test')),
+        source TEXT,
+        account_id TEXT,
+        event_id TEXT,
+        rule_id TEXT,
+        rule_version INTEGER CHECK (rule_version > 0),
+        judge_id TEXT NOT NULL,
+        judge_version INTEGER NOT NULL CHECK (judge_version > 0),
+        judge_kind TEXT NOT NULL CHECK (judge_kind IN (${JUDGE_KIND_SQL_VALUES})),
+        test_work_id TEXT,
+        budget_version INTEGER NOT NULL REFERENCES judge_budget_versions(version),
+        provider TEXT,
+        global_ledger_key TEXT NOT NULL CHECK (global_ledger_key = 'installation'),
+        state TEXT NOT NULL CHECK (state IN ('reserved', 'in-flight', 'settled', 'released')),
+        estimated_input_tokens INTEGER NOT NULL CHECK (estimated_input_tokens >= 0),
+        actual_input_tokens INTEGER CHECK (actual_input_tokens >= 0),
+        concurrency_owned INTEGER NOT NULL CHECK (concurrency_owned IN (0, 1)),
+        reserved_at INTEGER NOT NULL,
+        in_flight_at INTEGER,
+        settled_at INTEGER,
+        released_at INTEGER,
+        switch_generation INTEGER NOT NULL CHECK (switch_generation >= 0),
+        test_authority_rule_id TEXT,
+        test_authority_rule_version INTEGER CHECK (test_authority_rule_version > 0),
+        test_authority_activation_id TEXT,
+        test_authority_approval_id TEXT,
+        test_authority_challenge_hash TEXT CHECK (
+          test_authority_challenge_hash IS NULL
+          OR (length(test_authority_challenge_hash) = 64
+            AND test_authority_challenge_hash NOT GLOB '*[^0-9a-f]*')
+        ),
+        test_authority_challenge_origin TEXT CHECK (test_authority_challenge_origin IN ('terminal', 'view')),
+        test_authority_challenge_expires_at INTEGER,
+        FOREIGN KEY (rule_id, rule_version) REFERENCES rule_versions(rule_id, version),
+        FOREIGN KEY (judge_id, judge_version) REFERENCES judge_versions(judge_id, version),
+        CHECK (
+          (work_scope = 'source-owned'
+            AND source IS NOT NULL
+            AND source IN ('gmail', 'slack', 'resend', 'whatsapp')
+            AND account_id IS NOT NULL
+            AND event_id IS NOT NULL
+            AND rule_id IS NOT NULL
+            AND rule_version IS NOT NULL
+            AND test_work_id IS NULL
+            AND provider IS NOT NULL)
+          OR
+          (work_scope = 'synthetic-test'
+            AND source IS NULL
+            AND account_id IS NULL
+            AND event_id IS NULL
+            AND rule_id IS NULL
+            AND rule_version IS NULL
+            AND test_work_id IS NOT NULL
+            AND provider IS NULL)
+        )
+      ) STRICT`,
+      `INSERT INTO judge_budget_reservations_v22
+       (id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
+        judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+        actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation,
+        test_authority_rule_id, test_authority_rule_version, test_authority_activation_id, test_authority_approval_id,
+        test_authority_challenge_hash, test_authority_challenge_origin, test_authority_challenge_expires_at)
+       SELECT id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
+              judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+              actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at,
+              switch_generation, test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+              test_authority_approval_id, test_authority_challenge_hash, test_authority_challenge_origin,
+              test_authority_challenge_expires_at
+       FROM judge_budget_reservations`,
+      'DROP TABLE judge_budget_reservations',
+      'ALTER TABLE judge_budget_reservations_v22 RENAME TO judge_budget_reservations',
+      `CREATE UNIQUE INDEX judge_budget_reservations_live_work_identity
+        ON judge_budget_reservations(work_id)
+        WHERE state IN ('reserved', 'in-flight')`,
+      `CREATE INDEX judge_budget_reservations_rule_rolling
+        ON judge_budget_reservations(rule_id, reserved_at)
+        WHERE work_scope = 'source-owned'`,
+      `CREATE INDEX judge_budget_reservations_provider_rolling
+        ON judge_budget_reservations(provider, reserved_at)
+        WHERE provider IS NOT NULL`,
+      `CREATE INDEX judge_budget_reservations_global_rolling
+        ON judge_budget_reservations(global_ledger_key, reserved_at)`,
+      `CREATE UNIQUE INDEX judge_budget_reservations_source_scope
+        ON judge_budget_reservations(source, account_id, event_id, rule_id, rule_version)
+        WHERE work_scope = 'source-owned' AND state IN ('reserved', 'in-flight')`,
+      `CREATE INDEX judge_budget_reservations_synthetic_scope
+        ON judge_budget_reservations(test_work_id, judge_id, judge_version, state)
+        WHERE work_scope = 'synthetic-test'`,
+      `CREATE INDEX judge_budget_reservations_kind_scope
+        ON judge_budget_reservations(judge_kind, work_scope, state)`,
+      `CREATE INDEX judge_budget_reservations_synthetic_authority
+        ON judge_budget_reservations(test_authority_rule_id, test_authority_rule_version, test_authority_activation_id,
+          test_authority_approval_id, test_authority_challenge_hash)
+        WHERE work_scope = 'synthetic-test'`,
+      `CREATE TRIGGER judge_budget_reservations_state_machine
+       BEFORE UPDATE OF state ON judge_budget_reservations
+       WHEN NEW.state <> OLD.state AND NOT (
+         (OLD.state = 'reserved' AND NEW.state IN ('in-flight', 'released'))
+         OR (OLD.state = 'in-flight' AND NEW.state = 'settled')
+       )
+       BEGIN
+         SELECT RAISE(ABORT, 'invalid judge reservation state transition');
+       END`,
+      "UPDATE meta SET value = '22' WHERE key = 'schema_version'",
+    ],
+  },
+  {
     // E2 keeps model lifecycle state separate from the sole kind-enablement pointer.  It records no tree location
     // or model material: the pointer remains the authority and this table is only content-free progress state.
-    version: 20,
+    version: 23,
     name: 'event-laya-model-state-v1',
     statements: [
       `CREATE TABLE laya_models (
@@ -586,7 +742,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
         failure_code TEXT,
         updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
       ) STRICT`,
-      "UPDATE meta SET value = '20' WHERE key = 'schema_version'",
+      "UPDATE meta SET value = '23' WHERE key = 'schema_version'",
     ],
   },
 ];
@@ -599,20 +755,60 @@ function initialiseLedger(database: DatabaseSync): void {
   ) STRICT`);
 }
 
+/** The highest schema version a database's ledger records, or 0 when it has no ledger yet. It only reads. */
+export function recordedSchemaVersion(database: DatabaseSync): number {
+  const ledger = database
+    .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+    .get();
+  if (ledger === undefined) return 0;
+  const recorded = database.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as {
+    version: number | null;
+  };
+  return recorded.version ?? 0;
+}
+
+/** Refuses a recorded schema version newer than this binary's, naming both and nothing else. */
+export function refuseNewerVersion(
+  databaseVersion: number,
+  migrations: readonly EventMigration[] = EVENT_MIGRATIONS,
+): void {
+  const binaryVersion = migrations.at(-1)?.version ?? 0;
+  if (databaseVersion > binaryVersion)
+    throw new Error(
+      `event database schema version ${databaseVersion} is newer than this release's schema version ${binaryVersion}; only the newer release that migrated it can open it`,
+    );
+}
+
+/**
+ * Refuses a database a newer agent-events has migrated, by reading its ledger and nothing else: no table is created and
+ * nothing is written, so it runs before the opener sets a journal mode or this file creates its ledger. A database
+ * with no ledger yet is new, and passes.
+ */
+export function refuseNewerSchema(
+  database: DatabaseSync,
+  migrations: readonly EventMigration[] = EVENT_MIGRATIONS,
+): void {
+  refuseNewerVersion(recordedSchemaVersion(database), migrations);
+}
+
 /** Applies ordered daemon-owned migrations, one BEGIN IMMEDIATE transaction per version. */
 export function applyMigrations(
   database: DatabaseSync,
   migrations: readonly EventMigration[] = EVENT_MIGRATIONS,
   hooks: MigrationHooks = {},
 ): void {
+  refuseNewerSchema(database, migrations);
   initialiseLedger(database);
+  for (const [index, migration] of migrations.entries()) {
+    if (migration.version !== index + 1)
+      throw new Error('event migrations must have consecutive versions starting at 1');
+  }
   const applied = database.prepare('SELECT version, name FROM schema_migrations ORDER BY version').all() as Array<{
     version: number;
     name: string;
   }>;
-  for (const [index, migration] of migrations.entries()) {
-    if (migration.version !== index + 1)
-      throw new Error('event migrations must have consecutive versions starting at 1');
+  refuseNewerVersion(applied.at(-1)?.version ?? 0, migrations);
+  for (const migration of migrations) {
     const recorded = applied.find((entry) => entry.version === migration.version);
     if (recorded) {
       if (recorded.name !== migration.name)

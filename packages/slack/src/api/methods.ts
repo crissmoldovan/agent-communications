@@ -41,6 +41,17 @@ export const SLACK_ORIGIN = 'https://slack.com';
  */
 export const SLACK_FILES_ORIGIN = 'https://files.slack.com';
 
+/**
+ * Where Slack keeps people's profile photos: the third origin, and the one no token ever goes to.
+ *
+ * Reached for one thing only: a `GET` of the signed-in person's own photo, the `profile.image_512` that `users.info`
+ * just returned, inside a grant for exactly that URL (`avatarWith` in `guard.ts`) — so `icon make` can put a badge on
+ * it. The photo host serves the picture to anybody who has its address, so the request carries no credential at all,
+ * and the guard refuses one that does. A photo kept anywhere else — a Gravatar, Slack's default picture on another
+ * host — is not fetched.
+ */
+export const SLACK_AVATARS_ORIGIN = 'https://avatars.slack-edge.com';
+
 export type MethodClass =
   /** Reads. No permit, no approval. */
   | 'read'
@@ -183,6 +194,11 @@ const RULES: Readonly<Record<string, MethodRule>> = {
     requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
   },
   'users.info': { kind: 'read', requiredScopes: ['users:read'] },
+  /*
+   * Which app a bot belongs to (CUE-493): `workspace bot` asks it, with the member's own token, before keeping a pasted
+   * bot token for a workspace whose organisation names its agent app — so another app's token is refused by name.
+   */
+  'bots.info': { kind: 'read', requiredScopes: ['users:read'] },
   'users.list': { kind: 'read', requiredScopes: ['users:read'] },
   /*
    * `search.messages` is a user-token method and has no bot equivalent, which is one of the reasons this package
@@ -191,8 +207,19 @@ const RULES: Readonly<Record<string, MethodRule>> = {
   'search.messages': { kind: 'read', requiredScopes: ['search:read'] },
   'files.info': { kind: 'read', requiredScopes: ['files:read'] },
   'files.list': { kind: 'read', requiredScopes: ['files:read'] },
+  /*
+   * A link to one message, for the record of an acknowledgement a standing approval made (design
+   * 2026-10-19-standing-approvals, S10): it reads, posts nothing, and Slack asks no scope of it.
+   */
+  'chat.getPermalink': { kind: 'read' },
 
   // ── Writes: everything that puts a message in front of somebody ───────────────────────────────────────────
+  /*
+   * Four of these may carry the send app's bot token as well as the person's (design 2026-10-15 S1): `chat.postMessage`
+   * for an app post, `chat.update` and `chat.delete` for an app message this account posted, and `reactions.add` and
+   * `reactions.remove` for a reaction the app makes. The bot's scopes are the manifest's four and no more, and every
+   * request either token carries is a write here, behind the same permit — the token does not change the door.
+   */
   'chat.postMessage': { kind: 'write', requiredScopes: ['chat:write'] },
   // Editing a message that people have already read changes what they saw, after they saw it.
   'chat.update': { kind: 'write', requiredScopes: ['chat:write'] },

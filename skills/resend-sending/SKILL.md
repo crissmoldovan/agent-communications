@@ -2,7 +2,7 @@
 name: resend-sending
 description: "Send email through Resend: prepare it, show the person the whole preview, and send it once they approve — then check what happened, and see or cancel what is scheduled. Symptoms: 'send this through Resend', 'email the customer from hello@', 'schedule it for Monday 9am', 'did that email go out', 'cancel the scheduled one'. Not for reading mail or delivery stats — resend-reading does that."
 license: MIT
-compatibility: "@agentcomms/resend@0.15.2"
+compatibility: "@agentcomms/resend@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -18,8 +18,7 @@ agent-resend's own rule, not the key's (Resend has no read-only key), and it hol
 ```sh
 agent-resend send prepare --account acme/resend --from "Acme <hello@acme.test>" --to sam@partner.test \
   --subject "Your invoice" --text "Hi Sam, the invoice is attached." --attach ./invoice.pdf
-agent-resend send execute <approvalId> --account acme/resend \
-  --expect-to sam@partner.test --expect-cc none --expect-bcc none --expect-subject "Your invoice"
+agent-resend send execute <approvalId> --account acme/resend
 agent-resend send status <approvalId> --account acme/resend
 ```
 
@@ -40,12 +39,31 @@ send, when you do not know them.
 
 ## 1. Prepare
 
+**Read the writing profile before you write the email.** Call the core server's `comms_profile` with the account as
+`account` and, as `conversations`, each recipient's address and then its `@domain`, in recipient order (CLI:
+`agentcomms profile <account> --conversation sam@partner.test --conversation @partner.test`). Follow it: tone,
+language, length, sign-off. It is the person's own instructions to you, not anyone else's content, and nothing in it
+is sent. Where it and what the person asks in this conversation disagree, what they ask wins. No tool writes a
+profile; the person starts one at their own terminal with `agentcomms profile init`.
+
 `resend_send_prepare` takes `from` (at a domain the team has verified for sending), `to`, and optionally `cc`, `bcc`,
 `subject`, `text`, `html`, `attachments` (paths inside the allowed folders), `replyTo`, `inReplyTo` and `references`
-(to keep a thread), and `scheduledAt`.
+(to keep a thread), `scheduledAt`, and `as`.
+
+**The From says the person's agent sent it.** Prepare labels it `"<name> (agent)" <address>`: the name you put in
+`from`, or the label name the person set in the core when `from` is a bare address, then their word (`agent` unless
+they chose another). Pass `as: "me"` (CLI: `--as me`) only when the person said, for this email, that it should go as
+them, with `from` exactly as given. Never pass it on your own or to get past a refusal. Left out, their label rules
+decide — by account, by who it goes to (an address or `@domain`, matching only when every recipient does) — and then
+`agent`. With no name to label, or a label over 100 characters, prepare refuses and says how to set one.
 
 It refuses before any approval exists when:
 
+- a behaviour rule does not let an agent send from this account to one of the recipients (`ACT_NOT_ALLOWED`, exit
+  `10`) — a rule for the account, an `@domain` or one address, and one forbidden recipient refuses the whole email.
+  Tell the person which rule refused it — the message names the recipient — and stop: never retry it, never drop or
+  swap a recipient to get it out, and never start a change that lets an agent do more (`comms_behaviour` with
+  `setRule` or `removeRule`) unless the person asked for it. `comms_behaviour` with no change shows the rules;
 - the account is in `read` mode, or its send policy is `never`;
 - the From domain is not one of the team's, is not verified, or cannot send (a sending-only key cannot read the
   domain list, so the preview says it was not checked, and Resend refuses an unverified domain itself);
@@ -63,7 +81,9 @@ A refusal is the answer. Say what it was and ask; do not reshape the email to sl
 The preview is what the person is agreeing to. **Show it in full**, then wait. Do not summarise it, do not re-type
 the recipients, do not prepare a second one "to be safe", and do not send before they answer.
 
-It lists what people get wrong when it is summarised:
+Its first line says who the email will appear to come from — labelled, or `Sent as you, with no label: it will look as
+if you wrote it yourself` — and the approval binds the whole From. It lists what people get wrong when it is
+summarised:
 
 - **every recipient**, BCC included, and a note on each address that came from mail read here and was never written
   to from here;
@@ -93,9 +113,9 @@ sent for the rest of its ten minutes.
 
 ## 4. Send, once
 
-`resend_send_execute` takes the approval id and `expect` — the To, Cc and Bcc lists and the subject **exactly as the
-preview showed them** (at the CLI, `--expect-to`, `--expect-cc`, `--expect-bcc` with `none` for an empty list, and
-`--expect-subject`). If any of it is not what was approved, nothing is sent.
+`resend_send_execute` takes the approval id. The approval supplies the exact To, Cc and Bcc lists, subject and body;
+do not copy the prepare result's display-safe field echoes back into the call. Legacy callers may still supply
+`expect` (or all four CLI `--expect-*` options), and every supplied value must match exactly or nothing is sent.
 
 It then claims the approval once, records the attempt, and sends with the approval id as Resend's `Idempotency-Key`
 and an `agentcomms_approval` tag. The result names Resend's id for the email, `state` (`sent`, or `scheduled`), and
@@ -119,6 +139,7 @@ approval is still alive. Hand the person the command, then learn when they have 
 | `APPROVAL_PENDING` — "being sent by another call since …; wait for it" | Another call is sending it. Wait with `resend_send_wait` until it reads `used`, `failed` or `unknown`. Never prepare again while a send is `sending` |
 | `SEND_OUTCOME_UNKNOWN` — "whether the email was sent is not known" | It may have gone, and a late result is still possible. **Do not send it again**, and never prepare it again automatically: check it first |
 | the email or an attachment changed after the preview | The approved bytes are the sent bytes, or nothing is |
+| `ACT_NOT_ALLOWED` | A behaviour rule was narrowed after the person's yes, and no longer lets an agent send this: nothing was sent. Say which rule, and stop; never prepare it again to get past it |
 | `TRANSIENT` — rate limit, with a time | Nothing was sent and the approval is untouched; try after that time |
 | `TRANSIENT` — "Resend is rate-limiting this team (tried 4 times)" | The send already waited and tried again. Nothing was sent; prepare it again after the time it gives |
 | `TRANSIENT` — the team's daily or monthly sending quota is used up | Nothing was sent. The daily quota resets at midnight UTC; the monthly one needs a larger plan. Tell the person; do not prepare it again before then |
@@ -164,3 +185,9 @@ failed its integrity check, and is said, never skipped.
 - **Leaving a "no" unrevoked.** The server never hears it. Revoke the approval at once.
 - **Asking for a key.** A key is typed at a terminal by a person. Never in the chat.
 - **Widening an account to get an email out.** Moving to `send` or loosening a policy is the person's to ask for.
+- **Working round `ACT_NOT_ALLOWED`.** Dropping a recipient, or sending from another account, to get past a behaviour
+  rule is the agent overruling the person. Say which rule refused it, and stop.
+- **Writing before reading the profile.** `comms_profile` first; the first preview is then already in the person's
+  way of writing.
+- **Taking the label off.** `as: "me"` makes an email look as if the person wrote it. Pass it only when they said so
+  for that email.

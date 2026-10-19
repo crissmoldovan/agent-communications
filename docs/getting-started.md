@@ -216,6 +216,32 @@ code typed at a terminal, within thirty, and the agent then has 24 hours to send
 Gmail for you to send yourself. Under `confirm` the agent hands you the command to run and waits for it
 (`gmail_send_wait`) — you never have to tell it you approved. If you say no, it revokes the approval.
 
+## What an agent may do, and how it writes
+
+Every send waits for your yes. You can also decide ahead of time what an agent may start at all, per account and per
+conversation, and how it should write.
+
+**What it may do is a rule, and the tools hold it.** For example: let it reply and react in a Slack workspace, but
+never start a conversation, edit or delete; or never send mail to anyone at a client's domain.
+
+```bash
+agentcomms behaviour allow acme/slack reply,reaction
+agentcomms behaviour allow acme/gmail none --conversation @client.test
+agentcomms behaviour      # every rule, and what each account allows
+```
+
+An act no rule allows is refused before any preview, and again at send if you narrowed the rule after saying yes. The
+agent is told to say which rule stopped it and not to try again. A rule that only narrows applies at once; one that
+lets an agent do more is shown to you first. With no rule, everything is allowed, as before. A server started before
+0.22.0 holds no rule until its client restarts it, and `agentcomms doctor` names any that is.
+
+**How it writes is your writing profile:** plain Markdown files in `compose/` in the configuration directory — for
+every message, for a platform, for one account, or for one conversation. `agentcomms profile init acme/gmail` starts
+one from a starter (tone, language, length, sign-off, threads) and never overwrites a file;
+`agentcomms profile <mailbox> --conversation sam@partner.test --conversation @partner.test` shows what an agent would
+read before writing to Sam from that mailbox, and which files it looked for. The agent reads it before it writes and follows it, and
+what you ask in the conversation wins. No tool lets an agent change it.
+
 ## Slack
 
 The Slack package is separate and needs no Google account. You make a Slack app in your own workspace from a
@@ -232,6 +258,81 @@ agent-slack channels --workspace acme/slack
 
 The port must be the same number in the manifest and in `workspace add`. The default `read` mode gets a token
 Slack itself will not let post. The `slack-setup` skill walks all of this, including moving a workspace to `send`.
+
+### Messages sent without asking
+
+Nothing is sent without your yes until you make a **standing approval**: your yes in advance to a few
+acknowledgements, such as `eyes` or "Got it, I'll look at this and come back to you", on a Slack message that has
+just arrived from another person, in the places, counts and days you set.
+
+```bash
+agent-slack standing add --workspace acme/slack --reactions eyes --places C024BE7LR --expires 7d
+agentcomms standing list   # each one, its uses today and its last acts
+agentcomms standing off    # end every one, at once
+```
+
+`standing add` shows each content, place, member count, limit and the expiry, and you approve it only with the code
+it shows, typed at your terminal: never by a yes in chat. An agent then chooses only whether to acknowledge a message
+that has just arrived, and with which of your contents. Every act goes out as your agent, and raises a notification on
+your screen. Mail, top-level posts, edits, deletions and files are never sent this way. It holds against an agent
+acting through the tools, not against one with a shell running as you, and an agent misled by something it read can
+still say tens of bits an hour by which messages it acknowledges: do not make one for an agent that also reads
+sensitive mail, files or secrets in the same session. [SECURITY.md](../SECURITY.md) says what it does not defend.
+
+### An organisation's agent app, for administrators
+
+Members connected through an organisation's profile post as themselves, labelled "Name (agent)", because the
+organisation's shared send app has PKCE on and rotating tokens. To let their agents' posts appear as an app, the
+administrator sets up one bot-only **agent app** for the organisation. Nobody's existing connection changes, and a
+member who does nothing keeps the labelled posts.
+
+1. `agent-slack manifest --mode agent` prints the app: a bot user with the four posting scopes, no user scope, no
+   redirect, and token rotation off. Create it at <https://api.slack.com/apps> → **Create New App → From a manifest**,
+   with the organisation's name, such as "RGC agent".
+2. On **OAuth & Permissions**, press **Install to Workspace**, once.
+3. Share the **Bot User OAuth Token** (`xoxb-…`) with members privately, as a password. Never in the profile's
+   repository, and never in a chat with an agent.
+4. Name the app beside the profile, in `<profile>.agent-app.json` — for `rgc.agentcomms.json`,
+   `rgc.agentcomms.agent-app.json`:
+
+   ```json
+   { "agentcomms": "organisation-agent-app", "version": 1, "organisation": "rgc",
+     "slack": { "workspace": "T0123456789", "appId": "A0123456789" } }
+   ```
+
+   With it, `agent-slack workspace bot` refuses any other app's token, and `doctor` tells members to ask you for this
+   one. Members take it with `git pull` and `agentcomms org update rgc`, which asks before applying it. It is a separate
+   file because releases before 0.20.0 refuse a profile with any key they do not know; they never open this one, so a
+   member who has not updated keeps reading the profile.
+
+Each member then runs `agent-slack workspace bot rgc/slack` once, in their own terminal, and pastes the token.
+
+Weigh before sharing:
+
+- **One token for everyone.** Slack lets it post under any name, with the APP badge. These tools always name a post
+  after the member who approved it, but the token is not bound to anyone: share it only with members.
+- **When someone leaves**, revoke the token on **OAuth & Permissions**, install the app again for a new one, and share
+  that. In between, the first act a member's agent makes with the old token is refused, and nothing goes out under
+  another identity; the old token is then removed from their machine, so their agent's posts go out as them, labelled,
+  and `doctor` says when it was revoked, until they paste the new one.
+- **Slack's free plan holds at most 10 apps per workspace**, and the agent app is one of them.
+
+The [Slack README](../packages/slack/README.md#an-organisations-agent-app) has the details.
+
+### When your organisation's profile changes
+
+Run `git pull` in the organisation's repository, then `agentcomms org update <organisation>`. It shows what changed
+and asks before applying it. A repair of what was approved before, a tighter update cap and
+`--for-other-addresses off` apply at once.
+
+From 0.21.0 a profile may carry an `extensions` section, where later releases add new fields. An entry your release
+does not know is either skipped, and named as `not applied here`, or, when the organisation marks it required,
+`org update` stops, says which release it needs, and changes nothing. Update first, then run `org update` again.
+
+**For administrators:** nothing changes today. Members on 0.20.0 or older refuse any profile with `extensions`, and
+keep their last approved settings until they update, so add an extension only once your members run 0.21.0 or later.
+New fields go under `extensions`, never in another file beside the profile. [Upgrading](upgrading.md#0210-organisation-profiles-gain-extensions)
+has the rules.
 
 - [Sending and approvals](sending.md) — the gate in detail, and what it does not cover
 - [CLI reference](reference/cli.md) — every command · [Slack](reference/slack-cli.md)

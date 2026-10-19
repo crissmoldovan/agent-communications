@@ -41,8 +41,7 @@ async function world() {
     text: 'See you then.',
   });
   const approval = await prepareSend(context, 'work', draft.draftId);
-  const send = () =>
-    executeSend(context, 'work', { draftId: draft.draftId, approvalId: approval.approvalId, expect: approval.expect });
+  const send = () => executeSend(context, 'work', { draftId: draft.draftId, approvalId: approval.approvalId });
   const state = async () => asV2(await harness.core.approvals.get(approval.approvalId))?.state;
   const attempts = () => harness.google.requests.filter((request) => request.path === DRAFT_SEND_PATH).length;
   return { harness, context, draft, approval, send, state, attempts, waits };

@@ -4,6 +4,7 @@
  */
 interface JudgeTransportMutationId {
   readonly id: string;
+  readonly killingAssertion: string;
 }
 
 const ids: readonly string[] = [
@@ -37,8 +38,10 @@ const ids: readonly string[] = [
   'e6-a-allow-global-only-non-typesafe',
   'e6-m-accept-alias',
   'e6-m-substitute-constant-model',
+  'e-review-isatap-embedded-address',
+  'e-review-exact-deadline-socket-disposal',
 ];
 
 export const JUDGE_TRANSPORT_MUTATION_IDS: readonly JudgeTransportMutationId[] = Object.freeze(
-  ids.map((id): JudgeTransportMutationId => ({ id })),
+  ids.map((id): JudgeTransportMutationId => ({ id, killingAssertion: 'ERR_ASSERTION' })),
 );

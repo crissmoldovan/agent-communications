@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { rm } from 'node:fs/promises';
-import { createServer, request } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import { createConnection } from 'node:net';
 import { test } from 'node:test';
 import { canonicalJson, sha256Hex } from '@agentcomms/core';
@@ -17,19 +18,10 @@ assertLoopbackSeal();
 
 const accountId = 'account-sse-listener';
 const liveStreamId = 'stream-listener';
-/** A loopback port free when the suite starts, so the listener never collides with a fixed number already in use. */
-const PORT = await new Promise<number>((resolve, reject) => {
-  const probe = createServer();
-  probe.once('error', reject);
-  probe.listen(0, '127.0.0.1', () => {
-    const address = probe.address();
-    probe.close(() =>
-      typeof address === 'object' && address !== null ? resolve(address.port) : reject(new Error('no port')),
-    );
-  });
-});
+let PORT = 0;
+const injectedPort = 43_105;
 const allowedOrigin = 'http://127.0.0.1:38124';
-const subscriber = {
+let subscriber = {
   subscriberId: 'subscriber-listener',
   version: 1,
   kind: 'sse' as const,
@@ -38,29 +30,156 @@ const subscriber = {
   retentionMs: 60_000,
 };
 
-async function fixture() {
+class InjectedListener extends EventEmitter {
+  listening: boolean;
+  listenCalls = 0;
+  closeCalls = 0;
+  private bound: { address: string; family: string; port: number } | null;
+
+  constructor(bound: { address: string; family: string; port: number } | null, listening = bound !== null) {
+    super();
+    this.bound = bound;
+    this.listening = listening;
+  }
+
+  address(): { address: string; family: string; port: number } | null {
+    return this.bound;
+  }
+
+  listen(port: number, host: string, done: () => void): this {
+    this.listenCalls += 1;
+    this.bound = { address: host, family: host === '::1' ? 'IPv6' : 'IPv4', port };
+    this.listening = true;
+    done();
+    return this;
+  }
+
+  close(done?: (error?: Error) => void): this {
+    this.closeCalls += 1;
+    this.listening = false;
+    done?.();
+    return this;
+  }
+}
+
+async function injectedListenerFixture(listener: InjectedListener) {
+  const [{ startSseServer }, { openEventDatabase }] = await Promise.all([
+    import('../src/runtime/sse-server.ts'),
+    import('../src/store/database.ts'),
+  ]);
+  const stateDir = await shortTempDir('events-sse-listener-injected-');
+  const store = await openEventDatabase({ stateDir });
+  const injectedSubscriber = { ...subscriber, authority: { host: '127.0.0.1' as const, port: injectedPort } };
+  const document = canonicalJson(injectedSubscriber);
+  store.database
+    .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+    .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
+  const start = () =>
+    startSseServer({
+      listener: listener as unknown as Server,
+      store,
+      subscriberId: subscriber.subscriberId,
+      subscriberVersion: subscriber.version,
+      cipher: {
+        encrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+        decrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+      },
+      approvals: { get: async () => null },
+      config: { load: async () => ({}) } as never,
+      readBearerGenerations: async () => [],
+    });
+  return {
+    start,
+    async close() {
+      store.close();
+      await rm(stateDir, { recursive: true, force: true });
+    },
+  };
+}
+
+for (const refusal of [
+  {
+    name: 'a non-loopback bound address',
+    listener: () => new InjectedListener({ address: '0.0.0.0', family: 'IPv4', port: injectedPort }),
+  },
+  {
+    name: 'the wrong bound port',
+    listener: () => new InjectedListener({ address: '127.0.0.1', family: 'IPv4', port: injectedPort + 1 }),
+  },
+  {
+    name: 'a server that is not listening',
+    listener: () => new InjectedListener(null, false),
+  },
+]) {
+  test(`B2-T9: the injected SSE listener refuses ${refusal.name} without taking ownership`, {
+    skip: WINDOWS_SKIP,
+  }, async () => {
+    const listener = refusal.listener();
+    const setup = await injectedListenerFixture(listener);
+    try {
+      await assert.rejects(
+        setup.start(),
+        /injected SSE listener/,
+        'the test-only seam must refuse a server outside the persisted exact authority',
+      );
+      assert.equal(listener.listenCalls, 0, 'the SSE server must not bind an injected listener');
+      assert.equal(listener.closeCalls, 0, 'the SSE server must not close a refused injected listener');
+    } finally {
+      await setup.close();
+    }
+  });
+}
+
+test('B2-T9: closing an SSE server leaves its accepted injected listener open', { skip: WINDOWS_SKIP }, async () => {
+  const listener = new InjectedListener({ address: '127.0.0.1', family: 'IPv4', port: injectedPort });
+  const setup = await injectedListenerFixture(listener);
+  try {
+    const server = await setup.start();
+    await server.close();
+    assert.equal(listener.listening, true, 'the caller-owned listener must remain bound');
+    assert.equal(listener.closeCalls, 0, 'the SSE server must close only a listener it opened');
+  } finally {
+    await setup.close();
+  }
+});
+
+async function fixture(options: { readonly production?: boolean } = {}) {
   const [{ startSseServer }, { openEventDatabase }] = await Promise.all([
     import('../src/runtime/sse-server.ts'),
     import('../src/store/database.ts'),
   ]);
   const stateDir = await shortTempDir('events-sse-listener-');
-  const store = await openEventDatabase({ stateDir });
-  store.database.exec('UPDATE event_settings SET enabled = 1, switch_generation = 1');
-  const document = canonicalJson(subscriber);
-  store.database
-    .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
-    .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
-  // The secret ledger's lifecycle row is what a live stream's bearer generation is checked against at every frame.
-  store.database
-    .prepare(
-      `INSERT INTO event_secret_generations
+  const listener = createServer();
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', () => resolve());
+  });
+  // The production path binds the persisted authority itself. Its port is probed here and released, so another suite
+  // could take it in between: such a start is retried below on EADDRINUSE rather than reported as a failure.
+  const production = options.production === true;
+  let store: Awaited<ReturnType<typeof openEventDatabase>> | undefined;
+  try {
+    const address = listener.address();
+    if (address === null || typeof address === 'string') throw new Error('the SSE listener has no TCP address');
+    PORT = address.port;
+    subscriber = { ...subscriber, authority: { host: '127.0.0.1', port: PORT } };
+    store = await openEventDatabase({ stateDir });
+    store.database.exec('UPDATE event_settings SET enabled = 1, switch_generation = 1');
+    const document = canonicalJson(subscriber);
+    store.database
+      .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+      .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
+    // The secret ledger's lifecycle row is what a live stream's bearer generation is checked against at every frame.
+    store.database
+      .prepare(
+        `INSERT INTO event_secret_generations
        (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref, lifecycle,
         expires_at, created_at)
        VALUES ('subscriber', ?, ?, 'sse-bearer', 1, ?, 'secret-digest', X'00', 'current', NULL, 1)`,
-    )
-    .run(subscriber.subscriberId, subscriber.version, sha256Hex(document));
-  store.database.exec(
-    `INSERT INTO rule_versions
+      )
+      .run(subscriber.subscriberId, subscriber.version, sha256Hex(document));
+    store.database.exec(
+      `INSERT INTO rule_versions
        (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
      VALUES ('rule-listener@1', 'rule-listener', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
      INSERT INTO target_versions (id, target_id, version, document, digest)
@@ -77,21 +196,38 @@ async function fixture() {
      VALUES ('delivery-listener', 'decision-listener', '${accountId}', 'rule-listener', 1,
              'sse:target-listener:1:subscriber-listener:1', 'target-listener', 1, 'sse', 'plain', 'subscriber-listener', 1,
              X'00', 9999999999999, 'delivered', 1);`,
-  );
-  const server = await startSseServer({
-    store,
-    subscriberId: subscriber.subscriberId,
-    subscriberVersion: subscriber.version,
-    cipher: {
-      encrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
-      decrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
-    },
-    approvals: { get: async () => null },
-    config: { load: async () => ({ inboxes: { inbox: { id: accountId, provider: 'gmail' } } }) } as never,
-    readBearerGenerations: async () => [{ generation: 1, lifecycle: 'current' as const, material: 'listener-token' }],
-    fence: async () => undefined,
-  });
-  return { stateDir, store, server };
+    );
+    if (production) await new Promise<void>((resolve) => listener.close(() => resolve()));
+    const server = await startSseServer({
+      ...(production ? {} : { listener }),
+      store,
+      subscriberId: subscriber.subscriberId,
+      subscriberVersion: subscriber.version,
+      cipher: {
+        encrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+        decrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+      },
+      approvals: { get: async () => null },
+      config: { load: async () => ({ inboxes: { inbox: { id: accountId, provider: 'gmail' } } }) } as never,
+      readBearerGenerations: async () => [{ generation: 1, lifecycle: 'current' as const, material: 'listener-token' }],
+      fence: async () => undefined,
+    });
+    return { stateDir, store, server, listener };
+  } catch (error) {
+    store?.close();
+    if (listener.listening) await new Promise<void>((resolve) => listener.close(() => resolve()));
+    await rm(stateDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function closeFixture(setup: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+  await setup.server.close();
+  if (setup.listener.listening) {
+    await new Promise<void>((resolve, reject) =>
+      setup.listener.close((error) => (error === undefined ? resolve() : reject(error))),
+    );
+  }
 }
 
 test('B2-T9: an SSE connection reset after stream admission simply closes', { skip: WINDOWS_SKIP }, async (t) => {
@@ -136,7 +272,7 @@ test('B2-T9: an SSE connection reset after stream admission simply closes', { sk
     });
   } finally {
     client?.destroy();
-    await withSocketTestTimeout(setup.server.close(), 'the SSE listener to close after the reset-test socket closes');
+    await withSocketTestTimeout(closeFixture(setup), 'the SSE listener to close after the reset-test socket closes');
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
   }
@@ -179,7 +315,45 @@ test('B2-T9: loopback SSE listener rejects an invalid route, Host, query, cookie
       assert.equal(result.status, expected);
     }
   } finally {
-    await setup.server.close();
+    await closeFixture(setup);
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T9: the production listener binds exactly its persisted loopback authority and serves only there', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>> | undefined;
+  for (let attempt = 0; attempt < 5 && setup === undefined; attempt += 1) {
+    try {
+      setup = await fixture({ production: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM') {
+        t.skip(
+          'the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it',
+        );
+        return;
+      }
+      if (code !== 'EADDRINUSE') throw error;
+    }
+  }
+  assert.ok(setup, 'the production listener started within five probed ports');
+  try {
+    assert.deepEqual(
+      setup.server.boundAddress(),
+      { address: '127.0.0.1', family: 'IPv4', port: PORT },
+      'the production path listens on exactly the persisted loopback host and port',
+    );
+    const result = await requestSse({
+      port: PORT,
+      path: '/v1/streams/other',
+      headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer listener-token' },
+    });
+    assert.equal(result.status, 404, 'the production listener answers on its authority and refuses another route');
+  } finally {
+    await closeFixture(setup);
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
   }
@@ -229,7 +403,7 @@ test('B2-T9: exact-origin preflight reflects only the approved CORS contract wit
     });
     assert.equal(refused.status, 403);
   } finally {
-    await setup.server.close();
+    await closeFixture(setup);
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
   }
@@ -300,7 +474,7 @@ test('B2-T9: a bearer rotation persisted in the secret ledger ends an open strea
     assert.deepEqual(frames, ['data: before\n\n']);
     assert.equal(ended, true, 'the stream whose bearer generation the ledger retired is closed');
   } finally {
-    await setup.server.close();
+    await closeFixture(setup);
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
   }
@@ -353,7 +527,7 @@ test('B2-T9: rotation, pause and the per-frame writer gate prevent a registered 
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.deepEqual(frames, ['data: first\n\n']);
   } finally {
-    await setup.server.close();
+    await closeFixture(setup);
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
   }

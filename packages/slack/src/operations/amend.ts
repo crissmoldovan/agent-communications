@@ -1,8 +1,8 @@
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
   type AttachPolicy,
-  type ChannelPreview,
   CommsError,
   canonicalJson,
   type Expectation,
@@ -26,20 +26,46 @@ import { type ComposedPayload, payloadOf } from '../compose/blocks.ts';
 import type { SlackDraft } from '../compose/drafts.ts';
 import { checkRecordedFile, rereadFile, type SlackDraftFile } from '../compose/files.ts';
 import { FILE_POST_UNFURLS, urlsInWords } from '../compose/preview.ts';
+import { decodeSlackText } from '../text/decode.ts';
+import { appTokenRefusal } from './app-token.ts';
+import {
+  actRefusal,
+  allowedHere,
+  type BehaviourCheck,
+  behaviourBinding,
+  editActs,
+  landingOf,
+  placeNamesOf,
+  type SlackPreview,
+} from './behaviour.ts';
+import {
+  decideEditLabel,
+  editLine,
+  labelBinding,
+  labelledEditText,
+  requestedOf,
+  requestFlags,
+  type SlackLabel,
+  unlabelled,
+} from './label.ts';
 import { messageAt, requireOwnMessage, shownText, type TargetMessage, targetDigest } from './message.ts';
 import type { Channel, NameBook } from './people.ts';
 import {
   ACCEPTED_WITHOUT_ID,
   type Attempted,
   type AuditSink,
+  appCall,
   approvalNow,
   attachPolicyFor,
   CONTAINS_FILES,
   claimOrHandOver,
+  composedPost,
   discarded,
   fenceFirstStep,
   filesAsRecorded,
+  type LabelView,
   LINK_MAY_UNFURL,
+  labelView,
   messageOf,
   NO_ID,
   noteOf,
@@ -51,12 +77,12 @@ import {
   rateLimitedBeforeActing,
   refileCommand,
   refusalWithBookkeeping,
+  requireClaimRoute,
   requireFileSending,
   risksOf,
   roomOf,
   settledWith,
   throttledRequest,
-  viewPost,
   waitingHint,
 } from './send.ts';
 
@@ -272,9 +298,42 @@ export interface EditFiles {
   readonly add: readonly SlackDraftFile[];
 }
 
+/**
+ * Whose token acts on a message (design 2026-10-15 S5): `chat.update` and `chat.delete` act only on the caller's own,
+ * so an edit or a deletion goes out with the token that posted it. The person's for a message they posted, by hand or
+ * through the fallback. The app's for an app message — and only one this account's own record holds, because the bot
+ * token is the workspace's and everyone who installed the same app holds it: Slack cannot tell one person's agent from
+ * another's. Anything else is somebody else's message, refused before anything is shown (E2).
+ */
+async function actorOf(
+  deps: Pick<PrepareDeps, 'postingAs' | 'label' | 'appPosts'>,
+  message: TargetMessage,
+  act: 'edit' | 'delete',
+): Promise<'person' | 'app'> {
+  const app = deps.label?.app;
+  if (app === undefined || message.botId === undefined || message.userId !== app.userId) {
+    requireOwnMessage(message, deps.postingAs, act);
+    return 'person';
+  }
+  if (deps.appPosts !== undefined && (await deps.appPosts.holds({ channel: message.channel, ts: message.ts }))) {
+    return 'app';
+  }
+  const done = act === 'edit' ? 'changed' : 'deleted';
+  throw new CommsError(
+    'SCOPE_MISSING',
+    `nothing was ${done}: the app posted the message at ${message.ts}, but not for this account`,
+    {
+      hint: 'Only an app message this account posted is edited or deleted from here: the app is shared, and others who installed it post as it too.',
+      details: { channel: message.channel, ts: message.ts, reason: 'not-own-app-message' },
+    },
+  );
+}
+
 /** An edit as it would be made now: what a person is shown, and the digest that binds exactly that. */
 export interface EditView {
-  readonly preview: ChannelPreview;
+  /** With the line saying what the rules allow where the message is (design 2026-10-19-agent-behaviour-rules, B4). */
+  readonly preview: SlackPreview;
+  /** Binds the edit, and where it lands for the rules: for a DM, the person it is with (`behaviourBinding`). */
   readonly digest: string;
   readonly request: EditRequest;
   /** Why the room could not be read, when it could not — so its reach is a gap, not a number. */
@@ -284,6 +343,14 @@ export interface EditView {
   readonly files: EditFiles | null;
   /** The draft has no words: the message keeps its own, sent back exactly as Slack holds them. */
   readonly keepsWords: boolean;
+  /** Who the edit appears to come from (design 2026-10-15 S5): undefined for a gate built without the label's deps. */
+  readonly label: SlackLabel | undefined;
+  /** Whose token makes it: the person's, or the app's for an app message this account posted (S5). */
+  readonly via: 'person' | 'app';
+  /** What the behaviour rules are asked of it (B2–B4): `edit`, and `file` when it adds files, where the message is. */
+  readonly check: BehaviourCheck;
+  /** What the rules allow there now: what its preview's line says, and what prepare refuses by. */
+  readonly decision: ActDecision;
 }
 
 /**
@@ -389,17 +456,35 @@ function editWarnings(
  * A draft with no words keeps the message's: they are sent back exactly as Slack holds them — escaped, mentions as
  * spans — so a mention in them stays one, which words typed again from a read could not promise. They are previewed and
  * counted from that text, as a post of it would be.
+ *
+ * The behaviour rules are asked of the edit's own acts (design 2026-10-19-agent-behaviour-rules, B2–B4) — `edit`, and
+ * `file` when it adds files — where the message is, never of the post its words would be: bound into its digest, and
+ * the preview's line. Refusing is prepare's, and the claim's (`claimOrHandOver`).
  */
 export async function viewEdit(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs'>,
+  deps: Pick<
+    PrepareDeps,
+    | 'call'
+    | 'workspaceId'
+    | 'workspaceName'
+    | 'postingAs'
+    | 'handoffs'
+    | 'label'
+    | 'appPosts'
+    | 'accountId'
+    | 'currentConfig'
+  >,
   draft: SlackDraft,
   ts: string,
   removeFiles: readonly string[],
   book: NameBook,
+  /** What the edit asked for (design 2026-10-15 L3): `as` at prepare, read back from the approval after it. */
+  requested?: 'agent' | 'me' | undefined,
 ): Promise<EditView> {
   requireEditable(draft);
   const message = await messageAt(deps.call, { channel: draft.payload.channel, ts });
-  requireOwnMessage(message, deps.postingAs, 'edit');
+  const via = await actorOf(deps, message, 'edit');
+  if (via === 'app') requireAppEditable(draft, removeFiles, requested, ts);
   const files = filesOfEdit(message, draft, removeFiles);
   const keepsWords = draft.payload.text === '';
   if (keepsWords && files === null) {
@@ -410,18 +495,52 @@ export async function viewEdit(
   }
   // The post the edit's words and new files would be, checked, read and counted as a post of them is (§E6).
   const words = keepsWords ? { ...draft, payload: payloadOf(message.text, draft.payload.channel, undefined) } : draft;
-  const view = await viewPost(deps, words, book);
-  const request: EditRequest = { channel: view.payload.channel, ts, text: view.payload.text, parse: 'none' };
+  // The words as a post of them would be read, without a post's label: an edit's label is its own (S5), and so are its
+  // acts (B2).
+  const view = await composedPost({ ...deps, label: undefined }, words, book);
+  const check: BehaviourCheck = {
+    acts: editActs(files?.add.length ?? 0),
+    places: view.places,
+    unread: view.unread,
+    names: view.names,
+  };
+  const here = await allowedHere(deps, check);
+  // An app message stays the app's: its name already says an agent wrote it, and only its bot token can change it.
+  const label: SlackLabel | undefined =
+    via === 'app'
+      ? {
+          identity: 'agent',
+          source: requested === undefined ? 'default' : 'message',
+          route: 'app',
+          botUserId: deps.label?.app?.userId,
+          ...(message.username === undefined ? {} : { phrase: message.username }),
+        }
+      : deps.label === undefined
+        ? undefined
+        : await decideEditLabel(
+            { call: deps.call, postingAs: deps.postingAs, label: deps.label },
+            { channelId: view.payload.channel, channel: book.channel(view.payload.channel), requested },
+          );
+  // An agent's edit says so in its new words (S5): the fallback's prefix, at the front of what `chat.update` is sent.
+  const text =
+    label?.identity === 'agent' && label.route !== 'app' && label.phrase !== undefined
+      ? labelledEditText(view.payload.text, label.phrase)
+      : view.payload.text;
+  const wordsChange = !keepsWords || text !== view.payload.text;
+  const request: EditRequest = { channel: view.payload.channel, ts, text, parse: 'none' };
   // Every address in the words, bare or not: an edit cannot turn unfurling off, so any of them may unfurl.
   const urls = urlsInWords(request.text);
   const thread = threadShown(message);
-  const preview: ChannelPreview = {
+  const preview: SlackPreview = {
     ...view.preview,
+    allowedHere: here.line,
+    // Who it appears to come from (S7), and the words as they will read: the label in them, when it is there.
+    ...(label === undefined ? {} : { postingAs: editLine(label), body: decodeSlackText(text, book.names()).text }),
     ...(thread === undefined ? {} : { thread }),
     replaces: {
       ts,
       body: shownText(message, book),
-      ...(keepsWords ? { wordsUnchanged: true } : {}),
+      ...(wordsChange ? {} : { wordsUnchanged: true }),
       ...(files === null
         ? {}
         : { files: { keeps: files.keep.map((file) => file.name), removes: files.remove.map((file) => file.name) } }),
@@ -431,7 +550,7 @@ export async function viewEdit(
     warnings: [
       // The post's warning about links in a file post is not this edit's: its words go out through `chat.update`.
       ...(view.preview.warnings ?? []).filter((warning) => warning !== FILE_POST_UNFURLS),
-      ...editWarnings(message, view.preview.notifies, urls, files, keepsWords),
+      ...editWarnings(message, view.preview.notifies, urls, files, !wordsChange),
     ],
   };
   const digest = sha256Hex(
@@ -447,9 +566,51 @@ export async function viewEdit(
           ? null
           : { keep: files.keep.map((file) => file.id), remove: files.remove.map((file) => file.id) },
       message: targetDigest(message, 'edit'),
+      // Who it appears to come from, for any edit but one as the person, unlabelled, as every edit before the label was.
+      ...(unlabelled(label) ? {} : { label: labelBinding(label as SlackLabel) }),
+      // Where it lands, for the rules (B4): for a DM, the person it is with — the rest the fields above bind already.
+      ...behaviourBinding(check),
     }),
   );
-  return { preview, digest, request, roomUnread: view.roomUnread, payload: view.payload, message, files, keepsWords };
+  return {
+    preview,
+    digest,
+    request,
+    roomUnread: view.roomUnread,
+    payload: view.payload,
+    message,
+    files,
+    keepsWords,
+    label,
+    via,
+    check,
+    decision: here.decision,
+  };
+}
+
+/**
+ * Refuses an app message's edit that this cannot make as the app (S5): one that changes its files — the bot has no
+ * `files:write`, and a file the person uploads is theirs, not the app's — or one asked to go out as the person, which an
+ * app message never can: it stays the app's, under its name.
+ */
+function requireAppEditable(
+  draft: SlackDraft,
+  removeFiles: readonly string[],
+  requested: 'agent' | 'me' | undefined,
+  ts: string,
+): void {
+  if (requested === 'me') {
+    throw new CommsError('USAGE', `the app posted the message at ${ts}, so it is edited as the app, not as you`, {
+      hint: 'Leave `as` out to edit it as the app, or post your own words as you.',
+      details: { ts, reason: 'app-message-as-me' },
+    });
+  }
+  if ((draft.files ?? []).length > 0 || removeFiles.length > 0) {
+    throw new CommsError('USAGE', `the app posted the message at ${ts}, and its files cannot be changed from here`, {
+      hint: 'Edit its words alone, or delete it and post the files as a new message.',
+      details: { ts, reason: 'app-message-files' },
+    });
+  }
 }
 
 export interface PreparedEdit {
@@ -458,13 +619,18 @@ export interface PreparedEdit {
   /** The message it edits. */
   readonly channel: string;
   readonly ts: string;
-  /** The words it has now and the words it will have, its files, the reach, and what to notice. */
-  readonly preview: ChannelPreview;
+  /**
+   * The words it has now and the words it will have, its files, the reach, what to notice, and what the rules allow
+   * there (`renderSlackPreview` shows it).
+   */
+  readonly preview: SlackPreview;
   readonly expect: Expectation;
   readonly policy: SendPolicy;
   readonly requiredPolicy: SendPolicy;
   readonly riskFlags: readonly string[];
   readonly expiresAt: string;
+  /** Who it appears to come from (design 2026-10-15 S5, S7). */
+  readonly label?: LabelView | undefined;
   /** Where its approval stands (design 2026-10-05 §D8): pending, and whether a yes in the chat makes it. */
   readonly approval: ApprovalObject;
 }
@@ -478,6 +644,9 @@ function changesFiles(draft: SlackDraft, removeFiles: readonly string[]): boolea
  * Prepares one edit, and shows what it will be. Nothing is changed here: the permit stays closed, and Slack is only
  * read — the message, and the room. An edit that adds files reads each one again first, as a post with files does, so
  * nobody is shown a file that is no longer the one the draft recorded.
+ *
+ * An edit the behaviour rules do not allow where the message is — `edit`, or `file` for one that adds files — is
+ * refused with `ACT_NOT_ALLOWED` before any approval is made (design 2026-10-19-agent-behaviour-rules, B4).
  */
 export async function prepareMessageEdit(
   deps: PrepareDeps,
@@ -485,12 +654,22 @@ export async function prepareMessageEdit(
   ts: string,
   removeFiles: readonly string[],
   book: NameBook,
+  /** `as`: the person's word for this one edit (design 2026-10-15 L3). */
+  requested?: 'agent' | 'me' | undefined,
 ): Promise<PreparedEdit> {
   refuseNever(deps.policy, 'edit');
   requireChatWrite(deps, 'edit');
   if (changesFiles(draft, removeFiles)) requireFileSending(deps);
   await filesAsRecorded(deps, draft);
-  const { preview, digest, payload, message, files } = await viewEdit(deps, draft, ts, removeFiles, book);
+  const { preview, digest, payload, message, files, label, check, decision } = await viewEdit(
+    deps,
+    draft,
+    ts,
+    removeFiles,
+    book,
+    requested,
+  );
+  if (!decision.allowed) throw await actRefusal(deps, decision, check);
   const where = { channel: message.channel, ts };
   const riskFlags = [
     EDITS_MESSAGE,
@@ -498,6 +677,7 @@ export async function prepareMessageEdit(
     ...(files !== null && files.remove.length > 0 ? [REMOVES_FILES] : []),
     ...risksOf(payload, preview.notifies, 0).filter((flag) => flag !== 'contains-link'),
     ...((preview.links ?? []).length > 0 ? ['contains-link', LINK_MAY_UNFURL] : []),
+    ...requestFlags(requested),
   ];
   // What raises a post raises its edit (§E6): a broadcast, a large room, or a reach nobody could count.
   const broadcast = preview.notifies.channel || preview.notifies.here;
@@ -533,6 +713,7 @@ export async function prepareMessageEdit(
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describeActPolicy(stricterPolicy(deps.policy, requiredPolicy), 'edit'),
     },
+    ...(label === undefined ? {} : { label: labelView(label, preview.postingAs) }),
     expect: record.expect,
     policy: deps.policy,
     requiredPolicy,
@@ -609,6 +790,8 @@ export async function editPrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
+    // A standing child is sent only by `ack` (design 2026-10-19-standing-approvals, S9): refused before anything else.
+    requireClaimRoute(deps, approvalId, outcome.record);
     return await editClassified(deps, draft, approvalId, outcome.record, target, book);
   } catch (error) {
     throw withApproval(error, outcome.approval);
@@ -653,11 +836,14 @@ async function editClassified(
   const adding = draft.files ?? [];
   if (changesFiles(draft, bound.removeFiles)) requireFileSending(deps);
   const policy = adding.length > 0 ? attachPolicyFor(deps) : undefined;
-  // The request sent below is this one: the one previewed, and the one the digest is taken over.
-  const view = await viewEdit(deps, draft, target.ts, bound.removeFiles, book);
+  // The request sent below is this one: the one previewed, and the one the digest is taken over — its label decided
+  // again as it was prepared, with what the edit asked for read back from its approval.
+  const view = await viewEdit(deps, draft, target.ts, bound.removeFiles, book, requestedOf(record?.riskFlags));
   const where = { channel: view.request.channel, ts: target.ts };
   const ids = idsOf(where, draft.draftId);
 
+  // The token that posted it makes the edit (S5): the app's, opened before the claim, for an app message.
+  const editor = view.via === 'app' ? await appCall(deps) : deps.call;
   // Cancelled while Slack was read: the claim is next, and is not made. The store asks again as it claims.
   if (deps.signal?.aborted) throw cancelled('edit', notUsed('edit'));
   const claim = await claimOrHandOver(
@@ -670,6 +856,7 @@ async function editClassified(
       inboxSub: deps.postingAs,
       expect: editExpectation(where, view.preview.notifies, bound.removeFiles),
     },
+    view.check,
     waitingHint('edit', deps.surface, approvalId, deps.handoffs),
     () => cancelled('edit', notUsed('edit')),
   );
@@ -742,7 +929,7 @@ async function editClassified(
       // Without the signal, deliberately: this is the request that edits, and it is never abandoned once it is out.
       () =>
         spendOn(deps.permit, approvalId, 'chat.update', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.update', {
+          callSlack({ ...editor, permit: deps.permit }, 'chat.update', {
             ...view.request,
             ...(fileIds === undefined ? {} : { file_ids: JSON.stringify(fileIds) }),
           }),
@@ -751,7 +938,9 @@ async function editClassified(
     if (!attempted.ok) {
       const { error } = attempted;
       if (certainlyRefused(error, 'chat.update')) {
-        throw await recordNotChanged(deps, approvalId, claim, 'edit', auditIds, withLeftovers(error, added, false));
+        // The app's token refused by Slack is forgotten here, and the refusal says so (CUE-493).
+        const refused = view.via === 'app' ? await appTokenRefusal(deps, 'edit', error) : error;
+        throw await recordNotChanged(deps, approvalId, claim, 'edit', auditIds, withLeftovers(refused, added, false));
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'edit', auditIds, error, leftovers(added, true));
     }
@@ -1075,14 +1264,23 @@ export interface DeletionPreview {
   readonly files: readonly string[];
   readonly warnings: readonly string[];
   readonly context: { readonly workspace: string; readonly approvalId?: string | undefined; readonly note: string };
+  /** What the rules allow where the message is (design 2026-10-19-agent-behaviour-rules, B4): `Allowed here: …`. */
+  readonly allowedHere?: string | undefined;
   readonly policy?: string | undefined;
 }
 
 /** A deletion as it would be made now: what a person is shown, and the digest that binds exactly that. */
 export interface DeletionView {
   readonly preview: DeletionPreview;
+  /** Binds the deletion, and where it lands for the rules: for a DM, the person it is with (`behaviourBinding`). */
   readonly digest: string;
   readonly message: TargetMessage;
+  /** Whose token deletes it: the person's, or the app's for an app message this account posted (S5). */
+  readonly via: 'person' | 'app';
+  /** What the behaviour rules are asked of it (B2–B4): a `delete`, where the message is. */
+  readonly check: BehaviourCheck;
+  /** What the rules allow there now: what its preview's line says, and what prepare refuses by. */
+  readonly decision: ActDecision;
 }
 
 /** Where a deletion's approval says what it is for, in place of the draft an edit has: the message itself. */
@@ -1114,22 +1312,44 @@ function deletionWarnings(message: TargetMessage): string[] {
  * Reads the message and its conversation, and builds the deletion's preview and digest from that one reading — for
  * preparing, the approval screen and deleting alike, as `viewEdit` is for an edit.
  *
- * The conversation is read only for its name: a deletion reaches nobody, so there is no reach to count and no
- * membership to require. One that cannot be read is named by its id.
+ * The conversation is read only for its name, and — a DM — for the person it is with: a deletion reaches nobody, so
+ * there is no reach to count and no membership to require. One that cannot be read is named by its id.
+ *
+ * The behaviour rules are asked of it here (design 2026-10-19-agent-behaviour-rules, B4): a `delete`, where the
+ * message is — bound into its digest, and the preview's line. Refusing is prepare's, and the claim's.
  */
 export async function viewDeletion(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs'>,
+  deps: Pick<
+    PrepareDeps,
+    | 'call'
+    | 'workspaceId'
+    | 'workspaceName'
+    | 'postingAs'
+    | 'label'
+    | 'appPosts'
+    | 'handoffs'
+    | 'accountId'
+    | 'currentConfig'
+  >,
   where: { channel: string; ts: string },
   book: NameBook,
 ): Promise<DeletionView> {
   const message = await messageAt(deps.call, where);
-  requireOwnMessage(message, deps.postingAs, 'delete');
+  // The token that posted it deletes it (S5): the app's only for an app message this account's record holds.
+  const via = await actorOf(deps, message, 'delete');
   const { channel } = await roomOf(deps.call, where.channel);
   if (channel) book.addChannel(channel);
+  const check: BehaviourCheck = {
+    acts: ['delete'],
+    ...(await landingOf(deps, where.channel, channel)),
+    names: placeNamesOf(where.channel, channel, book),
+  };
+  const here = await allowedHere(deps, check);
   const thread = threadShown(message);
   const preview: DeletionPreview = {
     workspace: deps.workspaceName,
-    postingAs: deps.postingAs,
+    postingAs:
+      via === 'app' ? `${message.username ?? 'the app'} · posted by the app, which deletes it` : deps.postingAs,
     channel: channelShown(channel, where.channel, book),
     ts: where.ts,
     ...(thread === undefined ? {} : { thread }),
@@ -1138,6 +1358,7 @@ export async function viewDeletion(
     files: message.files.map((file) => file.name),
     warnings: deletionWarnings(message),
     context: { workspace: deps.workspaceName, note: 'nothing has been deleted' },
+    allowedHere: here.line,
   };
   const digest = sha256Hex(
     canonicalJson({
@@ -1147,9 +1368,13 @@ export async function viewDeletion(
       channel: where.channel,
       ts: where.ts,
       message: targetDigest(message, 'delete'),
+      // Who deletes it, for an app message: a deletion by the app's token is not the person's (S5).
+      ...(via === 'app' ? { via: 'app', botUserId: deps.label?.app?.userId ?? null } : {}),
+      // Where it lands, for the rules (B4): for a DM, the person it is with — the rest the fields above bind already.
+      ...behaviourBinding(check),
     }),
   );
-  return { preview, digest, message };
+  return { preview, digest, message, via, check, decision: here.decision };
 }
 
 /**
@@ -1189,6 +1414,8 @@ export function renderDeletionPreview(preview: DeletionPreview): string {
     '',
     `── deletes the message at ${truncateDisplay(preview.ts, 40)} in ${truncateDisplay(preview.channel, 60)}`,
   );
+  // What the rules allow here (B4), beside what has to happen before it is deleted, as a post's preview has it.
+  if (preview.allowedHere) lines.push(escapeForDisplay(preview.allowedHere));
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }
@@ -1211,7 +1438,8 @@ export interface PreparedDeletion {
  * Prepares one deletion, and shows what would be deleted. Nothing is deleted here: Slack is only read.
  *
  * At the workspace's policy, raised by nothing (§E7): a deletion notifies nobody, and the account's own words are
- * what it removes.
+ * what it removes. A deletion the behaviour rules do not allow where the message is is refused with `ACT_NOT_ALLOWED`
+ * before any approval is made (design 2026-10-19-agent-behaviour-rules, B4).
  */
 export async function prepareDeletion(
   deps: PrepareDeps,
@@ -1220,7 +1448,8 @@ export async function prepareDeletion(
 ): Promise<PreparedDeletion> {
   refuseNever(deps.policy, 'delete');
   requireChatWrite(deps, 'delete');
-  const { preview, digest, message } = await viewDeletion(deps, where, book);
+  const { preview, digest, message, check, decision } = await viewDeletion(deps, where, book);
+  if (!decision.allowed) throw await actRefusal(deps, decision, check);
   const riskFlags = [
     DELETES_MESSAGE,
     ...(message.replyCount > 0 ? [HAS_REPLIES] : []),
@@ -1320,6 +1549,8 @@ export async function deletePrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
+    // A standing child is sent only by `ack` (design 2026-10-19-standing-approvals, S9): refused before anything else.
+    requireClaimRoute(deps, approvalId, outcome.record);
     return await deleteClassified(deps, approvalId, outcome.record, where, book);
   } catch (error) {
     throw withApproval(error, outcome.approval);
@@ -1357,6 +1588,8 @@ async function deleteClassified(
   requireChatWrite(deps, 'delete');
   const view = await viewDeletion(deps, where, book);
   const ids = idsOf(where);
+  // The token that posted it deletes it (S5): the app's, opened before the claim, for an app message.
+  const deleter = view.via === 'app' ? await appCall(deps) : deps.call;
 
   if (deps.signal?.aborted) throw cancelled('delete', notUsed('delete'));
   const claim = await claimOrHandOver(
@@ -1369,6 +1602,7 @@ async function deleteClassified(
       inboxSub: deps.postingAs,
       expect: deletionExpectation(where),
     },
+    view.check,
     waitingHint('delete', deps.surface, approvalId, deps.handoffs),
     () => cancelled('delete', notUsed('delete')),
   );
@@ -1398,7 +1632,7 @@ async function deleteClassified(
     try {
       attempted = await throttledRequest(deps, 'chat.delete', 'deleted', readyToDelete, () =>
         spendOn(deps.permit, approvalId, 'chat.delete', () =>
-          callSlack({ ...deps.call, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
+          callSlack({ ...deleter, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
         ),
       );
     } catch (stop) {
@@ -1414,7 +1648,8 @@ async function deleteClassified(
         return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
       }
       if (certainlyRefused(error, 'chat.delete')) {
-        throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, error);
+        const refused = view.via === 'app' ? await appTokenRefusal(deps, 'delete', error) : error;
+        throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, refused);
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'delete', ids, error);
     }

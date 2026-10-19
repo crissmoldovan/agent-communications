@@ -36,6 +36,20 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   text from the sanitiser, or makes a tool act on instructions found in mail.
 - **Disclosure without a standing authorisation** — any webhook or subscriber stream receiving event-derived content, or any hosted or local judge being invoked with it, without an active, digest-bound standing disclosure authorisation for exact approved versions, or versions derived from them by a whitelisted tightening, including the complete validated derivation lineage for the exact effective rule, target, subscriber and judge versions; after that authorisation is revoked; while the judge's kind is not enabled; outside its approved mapping, retention or delivery rate cap; or without successful taint recording before disclosure.
 - **A standing disclosure authorisation is not approval of each event.** Once a person enables one at the terminal or in the app, future unseen content that matches its approved rule may leave automatically through its approved target or be evaluated by its approved judge. agent-events doctor and the app list every active authorisation. Disabling or removing any bound rule, target, subscriber or judge, or disabling a judge kind, revokes it immediately; content already in a network operation cannot be recalled.
+- **An unlabelled send nobody chose** — any way to make a Slack post, reaction, edit or file, a Gmail send or a
+  Resend send go out as the person, with no agent label, when neither the person's word for that message (`as`) nor
+  one of their confirmed label rules said so. Also in scope: any way to get the label's word, name or Slack icon
+  changed without an approval of that exact change, or to make the preview's first line state a different identity
+  from the one that is sent.
+- **An update that installs what it should not** — any way to make the background update job, `comms_update` or
+  `agentcomms update` install, register or switch to a package that was not built by this repository's `release.yml`
+  from the tag of its own version on a GitHub-hosted runner, as its Sigstore provenance proves, or to a runtime that
+  does not hold the tarball that was verified; to skip the release hold, a major version's or a needs-decision
+  release's wait for the person, a rollback's hold, or an organisation's cap; or to switch a runtime a running server
+  is using.
+- **Registry text reaching an agent** — any way to make an update's notice, refusal, preview or background run result
+  repeat a string the npm registry or an unverified attestation wrote (a manifest's `needsDecision` words, a version's
+  prerelease or build words, a certificate's identity, ref or runner), instead of this project's fixed words.
 - **Path traversal** — attachment downloads or exports writing outside their directory, a download written into a
   folder its deny list refuses (a hidden folder anywhere outside `.claude/worktrees/<name>`, a package folder, a Python
   installation or virtual environment, `~/Library`, PowerShell's profile folders, this package's own folders, a system
@@ -50,6 +64,48 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   browser opener hands to a shell.
 - **Installation and supply chain** — unsafe installation instructions, CI compromise, or published packages that do
   not match the repository.
+- **Acting beyond a standing approval** — any way to make a standing approval send words or an emoji it does not hold,
+  acknowledge a message it does not allow (not fresh, not the newest, not from another person, interactive, already
+  acknowledged) or in a place it does not cover, exceed or refund its counts, go out as the person unlabelled, outlive
+  its revocation, its expiry or `standing off`, or be created or widened without the code typed at a terminal (below).
+
+## Standing approvals
+
+A standing approval is the one way a Slack message goes without the person's yes to its exact content: their yes in
+advance, approved only with a code typed at a terminal, to a few acknowledgements — standard emoji reactions, or short
+fixed replies they wrote — on a message that has just arrived from another person, within places, counts and days
+they set ([design](docs/superpowers/specs/2026-10-19-standing-approvals-design.md), §4). In short:
+
+- **Injected text cannot choose the words, the message or the place.** There is no free text: the gate builds the post
+  from the person's own content, named by digest. The target is fixed by what just happened — the newest message from
+  someone else, at most 15 minutes old, not yet acknowledged — and the places are the ones named, or threads the
+  person posted in themselves. Each act goes 5 to 30 seconds after it is decided, by a pause drawn from the operating
+  system's random source, and at most 3 a day answer any one person's messages.
+- **No loops, no floods, no false yes.** Only messages from people, by an allow-list that refuses bots, apps,
+  workflows, Slackbot and this account's own posts; nothing with buttons or menus; once a thread across every standing
+  approval, with hourly and daily caps spent at the moment of use and never refunded; `eyes` by default, and a warning
+  for an emoji, or a reply's words, that read as approval; no emoji in a reply's words.
+- **It never looks like the person.** A reply goes as the app or labelled; a reaction only as the app, where the app
+  is a member.
+- **Nothing creates or widens one but a person at a terminal.** It is a change approval forced to `confirm` whatever
+  the change policy — no typed `yes`, no client's form, no answer in chat — and an agent's proposal says so in the
+  preview. Revoking one, `standing off`, tightening the change policy, a send policy of `never` and removing the
+  account each end them, and loosening again revives none.
+- **Visibility does not rest on the agent.** Every act raises an operating-system notification and is audited with
+  the acknowledged message's digest and whether it had been edited; `standing list` and `doctor` show them.
+
+**What it can still leak.** An agent that has taken in instructions it should not follow still chooses which of the
+messages that arrive to acknowledge, with which content, and when, and whoever watches the acts can read those choices.
+At the defaults — 10 acts an hour, up to 10 contents, any fresh message in the places covered — that is tens of bits an
+hour: a token or a password within a day. The pause and the per-person cap narrow it; neither closes it. **Do not
+create a standing approval for an agent that also reads sensitive mail, files or secrets in the same session.**
+
+**What it does not defend.** It defends against an agent acting through this project's MCP tools. **An agent with an
+unrestricted shell, running as the person, is out of reach:** it can already get past the terminal check (below), edit
+the configuration and run the CLI as the person — and so can anyone who can write to the configuration directory. An
+operating-system user-presence check (Touch ID, Windows Hello) for creating one would reach further, and is future
+work. Under the `chat` send policy the tools already act on an agent's word, so there a standing approval adds limits,
+not freedom, and an agent that ignores the skills and takes the ordinary path is today's risk, unchanged.
 
 ## What the safety model does not claim
 
@@ -72,12 +128,10 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
 - **A "no" said in the chat is not seen.** The server cannot read the conversation. When the person says no, the
   skills tell the agent to revoke the approval at once; an agent that does not leaves an approval waiting for a yes in
   the chat usable for the rest of its ten minutes.
-- **A send's own recipients and subject come back as the agent wrote them.** A prepare result's `expect`, the
-  recipients and subject in a send's result, and the recipients `audit tail` recorded repeat what the preparing agent
-  wrote, outside the untrusted-content envelope: they are its own words, shown to the person and sent back to send.
-  When the agent copied them from mail — a reply's subject, an address found in a message — what that mail's sender
-  wrote comes back with them. An approval as a status, a wait, a list, a revoke or a cancel shows it carries them
-  inside the envelope.
+- **A plain address is syntax, not identity.** Prepare, send, approval and audit results leave an address outside the
+  untrusted-content envelope only when it matches the channel's strict address grammar. This says that it is safe to
+  display as an address; it does not say who owns it or that mail which supplied it was trustworthy. Subjects and
+  every non-plain sender-controlled field are sanitised and enveloped.
 - **A send whose provider never answered may have gone.** Its outcome is reported as unknown, and the process that
   claimed it may still record a late result; nothing reconciles it but looking in Sent or the channel.
 - **Under the default `chat` policy, a message that asks you to reply to its own sender with private data** is
@@ -93,4 +147,34 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   whole cannot be known from here, and saving into it is the person's choice, made when they answer the question.
   Under WSL, a file saved onto a Windows drive carries no internet mark.
 
+- **An update verifies this project's packages, not everyone's.** Every `@agentcomms` package an update installs or
+  switches to is held to its Sigstore provenance, and so is every `@agentcomms` package npm puts in a runtime beside
+  it. The packages of others that a runtime or a global package depends on are checked by npm alone, against the
+  integrity the registry gives: nothing pins who builds them. No package's install script runs as an update installs
+  (`--ignore-scripts`), so their code first runs when a server or command starts. A global package is verified before
+  `npm install -g`, but npm keeps no lockfile for it, so what it installed is not checked afterwards; and an npx
+  registration's client fetches its package from npm each time it starts, which only that client checks.
+- **A first install is verified only when core makes it.** A managed `mcp install` through core's command or
+  `comms_server_install` holds the runtime it fetches to the same provenance as an update. A channel's own command
+  carries no Sigstore: it installs only the release it is running itself — the same package and version npx already
+  fetched to run it, so nothing new runs — says in its preview and its result that it was not verified, and records
+  `verified: false` in the runtime's `.agentcomms-install.json`; any other release it refuses, naming core's command.
+  Core holds a runtime already on the machine to the same: its release is verified and its lockfile must show the
+  attested tarball for every `@agentcomms` package, or core registers nothing on it and says how to fetch a verified
+  one; one that passes has its receipt marked `verified: true`. A channel's own command uses a runtime already there as
+  it finds it, and `--launcher npx` registers a package its client fetches unverified each time it starts it, as
+  above; the managed launcher's runtime, installed or checked by core, is verified.
+- **What a release declares is the registry's word for a verified release.** Provenance signs a release's tarball,
+  not the registry's copy of its manifest: a release is verified before what it declares (`agentcommsRelease`) is
+  acted on, but a registry or mirror that alters that field for a genuine release is not caught: it can move that
+  release's hold between 72 and 24 hours, or make it wait for the person — or not wait, where its own release said it
+  needs a decision. It cannot make anything but a release built by this repository's release workflow install.
+
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
+
+- **A Slack app's bot token can post under any name.** Posting as the app needs `chat:write.customize`, which lets
+  whoever holds the bot token choose any `username` and icon; Slack still shows its APP badge. This project only ever
+  sets the label's phrase and the person's own icon, but the token belongs to the workspace's installation of the app:
+  everyone who connected the same organisation app may hold it, and a program outside this project could use it to
+  post under another member's name, badged as the app. The client secret of an app connected with
+  `--with-client-secret` is kept in the secret store beside the tokens and is as sensitive as they are.

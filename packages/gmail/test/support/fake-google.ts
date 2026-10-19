@@ -49,8 +49,14 @@ export interface FakeAccount {
   contacts?: Array<{ name?: string; email: string }>;
   /** People Google recorded as corresponded with, but never saved. */
   otherContacts?: Array<{ name?: string; email: string }>;
-  /** Drafts this account holds, keyed by draft id. Created by the tests through the API, like a client would. */
-  drafts?: Record<string, { id: string; message: FakeMessage }>;
+  /**
+   * Drafts this account holds, keyed by draft id. Created by the tests through the API, like a client would.
+   *
+   * `raw` is the message exactly as the client saved it, base64url, as Gmail keeps it and gives it back for
+   * `format=raw`. A draft a test plants as a part tree alone has none; asked for its raw form, the fake writes one
+   * from the tree.
+   */
+  drafts?: Record<string, { id: string; message: FakeMessage; raw?: string | undefined }>;
 }
 
 export interface FakeMessage {
@@ -180,10 +186,10 @@ export interface FakeGoogle {
 }
 
 /**
- * The part of Gmail's query language the fake understands: `from:`, `to:`, `subject:`, `in:`, `has:attachment`,
- * `is:unread`, `after:`/`before:` as epoch seconds, `older_than:`/`newer_than:` in days, `OR` and `{a b}` groups,
- * `-` negation, and bare words against the subject and snippet. Enough that a test proves the compiled query does
- * what it claims, rather than proving the fake agrees with itself.
+ * The part of Gmail's query language the fake understands: `from:`, `to:`, `subject:`, `in:`, `rfc822msgid:`,
+ * `has:attachment`, `is:unread`, `after:`/`before:` as epoch seconds, `older_than:`/`newer_than:` in days, `OR` and
+ * `{a b}` groups, `-` negation, and bare words against the subject and snippet. Enough that a test proves the compiled
+ * query does what it claims, rather than proving the fake agrees with itself.
  */
 function matchesQuery(
   message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown },
@@ -235,6 +241,9 @@ function matchesQuery(
       case 'category':
         // No categories are modelled, so a category never matches — and `-category:x` therefore always does.
         return false;
+      case 'rfc822msgid':
+        // The whole Message-ID, as Gmail matches it: not a part of it, and its angle brackets not needed.
+        return headerValue('message-id').trim().replace(/^<|>$/g, '').toLowerCase() === value.replace(/^<|>$/g, '');
       default:
         return `${message.snippet ?? ''} ${headerValue('subject')}`.toLowerCase().includes(value);
     }
@@ -321,6 +330,42 @@ function messageFromRaw(id: string, raw: string, threadId?: string): FakeMessage
         body: bodyFor(decodeBodyBlock(bodyBlock, headers)),
       };
   return { id, threadId: threadId ?? id, labelIds: ['DRAFT'], internalDate: String(Date.now()), payload };
+}
+
+/**
+ * A raw message written from a part tree, for a draft a test planted without one: each leaf base64 under its own
+ * headers, each multipart under a boundary of its own. Read back with `messageFromRaw`, it is the same tree.
+ */
+function rawFromPayload(part: unknown, attachments: Record<string, string> | undefined): string {
+  const node = (part ?? {}) as {
+    partId?: string;
+    mimeType?: string;
+    headers?: Array<{ name?: string; value?: string }>;
+    body?: { data?: string; attachmentId?: string };
+    parts?: unknown[];
+  };
+  const headers = (node.headers ?? []).filter(
+    (header) => !/^content-(type|transfer-encoding)$/i.test(header.name ?? ''),
+  );
+  const lines = headers.map((header) => `${header.name}: ${header.value}`);
+  if (node.parts && node.parts.length > 0) {
+    const boundary = `fake_${(node.partId || 'root').replace(/\W/g, '_')}`;
+    lines.push(`Content-Type: ${node.mimeType ?? 'multipart/mixed'}; boundary="${boundary}"`, '');
+    for (const child of node.parts) lines.push(`--${boundary}`, rawFromPayload(child, attachments));
+    lines.push(`--${boundary}--`, '');
+    return lines.join('\r\n');
+  }
+  const type =
+    (node.headers ?? []).find((header) => (header.name ?? '').toLowerCase() === 'content-type')?.value ??
+    `${node.mimeType ?? 'text/plain'}; charset="UTF-8"`;
+  const content = node.body?.data
+    ? Buffer.from(node.body.data, 'base64url')
+    : node.body?.attachmentId
+      ? Buffer.from(attachments?.[node.body.attachmentId] ?? '')
+      : Buffer.alloc(0);
+  lines.push(`Content-Type: ${type}`, 'Content-Transfer-Encoding: base64', '');
+  lines.push(...(content.toString('base64').match(/.{1,76}/g) ?? ['']), '');
+  return lines.join('\r\n');
 }
 
 function bodyFor(content: Buffer): { size: number; data: string; attachmentId?: string } {
@@ -793,7 +838,7 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         const messageId = `dm_${randomBytes(6).toString('hex')}`;
         const message = messageFromRaw(messageId, parsed.message?.raw ?? '', parsed.message?.threadId);
         if (account) {
-          account.drafts = { ...(account.drafts ?? {}), [draftId]: { id: draftId, message } };
+          account.drafts = { ...(account.drafts ?? {}), [draftId]: { id: draftId, message, raw: parsed.message?.raw } };
         }
         json(response, 200, { id: draftId, message: { id: messageId, threadId: message.threadId } });
         return;
@@ -860,8 +905,19 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           const parsed = JSON.parse(body || '{}') as { message?: { raw?: string; threadId?: string } };
           const messageId = `dm_${randomBytes(6).toString('hex')}`;
           const message = messageFromRaw(messageId, parsed.message?.raw ?? '', parsed.message?.threadId);
-          if (account?.drafts) account.drafts[draftId] = { id: draftId, message };
+          if (account?.drafts) account.drafts[draftId] = { id: draftId, message, raw: parsed.message?.raw };
           json(response, 200, { id: draftId, message: { id: messageId, threadId: message.threadId } });
+          return;
+        }
+        // The draft as it is stored, its bytes as the client saved them: what a header-only rewrite starts from.
+        if ((params.format ?? '') === 'raw') {
+          const raw =
+            existing.raw ??
+            Buffer.from(rawFromPayload(existing.message.payload, account?.attachments), 'utf8').toString('base64url');
+          json(response, 200, {
+            id: draftId,
+            message: { id: existing.message.id, threadId: existing.message.threadId, raw },
+          });
           return;
         }
         json(response, 200, { id: draftId, message: existing.message });

@@ -51,8 +51,8 @@ draft**, and `gmail_send_wait` says where an approval stands — no tool approve
 | [`gmail_organise_undo`](#gmail_organise_undo) | Restore the labels the messages had before a gmail_organise call, using the `undo` it returned. |
 | [`gmail_trash`](#gmail_trash) | Move messages or conversations to the bin, or take them out again with `undo`. |
 | [`gmail_label_create`](#gmail_label_create) | Create a label, or return the one already there. |
-| [`gmail_send_prepare`](#gmail_send_prepare) | Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. |
-| [`gmail_draft_send`](#gmail_draft_send) | Send a draft that gmail_send_prepare has prepared and the user has approved. |
+| [`gmail_send_prepare`](#gmail_send_prepare) | Read a draft and return the preview the person must approve, with an approval id bound to exactly this content — who it appears to come from included: its From line is labelled `<name> (agent)` unless `as` is `me`, and a draft whose From does not say so has that header alone rewritten. |
+| [`gmail_draft_send`](#gmail_draft_send) | Send the draft bound to an approval from gmail_send_prepare. |
 | [`gmail_confirm_probe`](#gmail_confirm_probe) | Raise a test approval form carrying a short code, which the user types back. |
 | [`gmail_confirm_client_add`](#gmail_confirm_client_add) | Add an MCP client to the clients the person chose to trust with approval forms, so a send from a `confirm` mailbox can be approved in that client instead of at a terminal. |
 | [`gmail_confirm_client_remove`](#gmail_confirm_client_remove) | Take a client off the clients the person chose to trust with approval forms. |
@@ -419,7 +419,7 @@ Set how sending from a mailbox must be approved — `chat` (the user says yes in
 
 ### `gmail_draft_create`
 
-Write a new message into Drafts and return the preview the person must read before anything is sent. Nothing is sent by this tool, or by any tool on this server: the person sends it from Gmail, or approves a send explicitly. Show the returned `preview` to the person verbatim.
+Write a new message into Drafts and return the preview the person must read before anything is sent. Nothing is sent by this tool, or by any tool on this server: the person sends it from Gmail, or approves a send explicitly. Show the returned `preview` to the person verbatim. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.
 
 *writes*
 
@@ -434,10 +434,11 @@ Write a new message into Drafts and return the preview the person must read befo
 | `attach` | string[] | no | local file paths; each is checked against the attachment jail |
 | `signature` | boolean | no | use the mailbox signature (default true) |
 | `includeProfile` | boolean | no | return the mailbox writing profile alongside the draft |
+| `as` | string | no | who it appears to come from: agent (labelled "<name> (agent)" in the From line) or me (unlabelled). Pass `me` only when the person said so for this message; left out, their rules decide, and then agent |
 
 ### `gmail_draft_reply`
 
-Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. The original is quoted below your text as sanitised plain text, never its own HTML. A forward starts a new conversation and needs `to`. Nothing is sent by this tool.
+Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. The original is quoted below your text as sanitised plain text, never its own HTML. A forward starts a new conversation and needs `to`. Nothing is sent by this tool. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.
 
 *writes*
 
@@ -454,10 +455,11 @@ Draft an answer to a message, or forward it. The recipients are computed from th
 | `attach` | string[] | no |  |
 | `signature` | boolean | no |  |
 | `includeProfile` | boolean | no |  |
+| `as` | string | no | who it appears to come from: agent (labelled "<name> (agent)" in the From line) or me (unlabelled). Pass `me` only when the person said so for this message; left out, their rules decide, and then agent |
 
 ### `gmail_draft_update`
 
-Change a draft: its body, recipients, subject or attachments. Anything not restated is kept — the body and the attachments included — so an update that only changes the subject keeps the message and its files. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later.
+Change a draft: its body, recipients, subject or attachments. Anything not restated is kept — the body and the attachments included — so an update that only changes the subject keeps the message and its files. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.
 
 *writes*
 
@@ -473,6 +475,7 @@ Change a draft: its body, recipients, subject or attachments. Anything not resta
 | `attach` | string[] | no | replaces the attachments; omit it to keep the ones already on the draft |
 | `signature` | boolean | no |  |
 | `includeProfile` | boolean | no |  |
+| `as` | string | no | who it appears to come from: agent (labelled "<name> (agent)" in the From line) or me (unlabelled). Pass `me` only when the person said so for this message; left out, their rules decide, and then agent |
 
 ### `gmail_draft_delete`
 
@@ -543,7 +546,7 @@ Create a label, or return the one already there. Asking twice is not an error.
 
 ### `gmail_send_prepare`
 
-Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.
+Read a draft and return the preview the person must approve, with an approval id bound to exactly this content — who it appears to come from included: its From line is labelled `<name> (agent)` unless `as` is `me`, and a draft whose From does not say so has that header alone rewritten. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.
 
 *writes*
 
@@ -551,19 +554,20 @@ Read a draft and return the preview the person must approve, with an approval id
 |---|---|---|---|
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
 | `draftId` | string | **yes** | the draft to send, from gmail_draft_create or gmail_draft_list |
+| `as` | string | no | who it appears to come from: agent (labelled "<name> (agent)" in the From line) or me (unlabelled). Pass `me` only when the person said so for this message; left out, their rules decide, and then agent |
 
 ### `gmail_draft_send`
 
-Send a draft that gmail_send_prepare has prepared and the user has approved. You must pass the recipients and subject you believe you are sending to: if they are not what the draft says, nothing is sent. Any edit to the draft since the preview voids the approval. This is irreversible — mail cannot be recalled. Call it only after the user has seen the preview and said yes in this conversation.
+Send the draft bound to an approval from gmail_send_prepare. Pass the approval id after the user has seen the preview and approved it. Legacy callers may also pass draftId and expect; when supplied, each must still match exactly. Any edit since the preview voids the approval. This is irreversible — mail cannot be recalled.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
-| `draftId` | string | **yes** |  |
+| `draftId` | string | no | legacy exact check; otherwise read from the approval |
 | `approvalId` | string | **yes** | from gmail_send_prepare |
-| `expect` | object | **yes** | what you believe you are sending; checked against the draft |
+| `expect` | object | no | legacy exact check for recipients and subject; otherwise read from the approval |
 
 ### `gmail_confirm_probe`
 

@@ -12,10 +12,11 @@ export interface JudgeBudgetMutation {
   /** A coupled edit models one guard that spans a fast state gate and its conditional durable transition. */
   readonly also?: { readonly before: string; readonly after: string } | undefined;
   readonly testName: string;
+  readonly killingAssertion?: string | undefined;
 }
 
 /** Every Task-5 ledger guard is deleted in a copied production tree and killed only by its named oracle. */
-export const JUDGE_BUDGET_MUTATIONS: readonly JudgeBudgetMutation[] = [
+const judgeBudgetMutations: readonly JudgeBudgetMutation[] = [
   {
     id: 'e5-rolling-includes-reserved',
     before: "const ROLLING_STATES = \"('reserved', 'in-flight', 'settled')\";",
@@ -33,6 +34,7 @@ export const JUDGE_BUDGET_MUTATIONS: readonly JudgeBudgetMutation[] = [
     before: `WHERE \${where} AND state IN \${CONCURRENCY_STATES} AND concurrency_owned = 1`,
     after: `WHERE (\${where} AND state IN \${CONCURRENCY_STATES} AND concurrency_owned = 1) OR state = 'settled'`,
     testName: 'E5 budget: concurrency counts only reserved and in-flight work',
+    killingAssertion: 'the approved concurrent-call ceiling is exhausted',
   },
   {
     id: 'e5-stable-rule-key',
@@ -117,6 +119,12 @@ export const JUDGE_BUDGET_MUTATIONS: readonly JudgeBudgetMutation[] = [
   },
 ];
 
+export const JUDGE_BUDGET_MUTATIONS: readonly (JudgeBudgetMutation & { readonly killingAssertion: string })[] =
+  judgeBudgetMutations.map((mutation): JudgeBudgetMutation & { readonly killingAssertion: string } => ({
+    ...mutation,
+    killingAssertion: mutation.killingAssertion ?? 'ERR_ASSERTION',
+  }));
+
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const mutantsRoot = join(packageRoot, '.mutants');
@@ -181,6 +189,26 @@ function assertExactlyOneNamedMutationFailure(
     [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]),
     [mutation.testName],
   );
+  assert.equal(
+    result.output.includes(mutation.killingAssertion ?? ''),
+    true,
+    `${mutation.id}: its named guard assertion did not kill the mutant\n${result.output}`,
+  );
+}
+
+function assertExactlyOneNamedMutationPass(
+  mutation: JudgeBudgetMutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.equal(result.code, 0, `${mutation.id}: unmutated named test did not pass\n${result.output}`);
+  const summary = (name: 'tests' | 'pass' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: baseline emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: baseline ran more than one named test\n${result.output}`);
+  assert.equal(summary('pass'), 1, `${mutation.id}: baseline did not pass exactly once\n${result.output}`);
+  assert.equal(summary('fail'), 0, `${mutation.id}: baseline reported a failure\n${result.output}`);
 }
 
 /** Runs exactly one named production-path test against one destructive edit of the copied ledger source. */
@@ -204,25 +232,23 @@ export async function expectJudgeBudgetMutationToFail(mutation: JudgeBudgetMutat
       changed = changed.replace(change.before, change.after);
     }
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
-    await writeFile(target, changed, 'utf8');
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await runStrictMutationChild({
-      command: process.execPath,
-      args: [
-        '--import',
-        pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, 'test/judge-budgets.test.ts'),
-      ],
-      cwd: root,
-      env: environment,
-    });
+    const args = [
+      '--import',
+      pathToFileURL(join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs')).href,
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+      '--test-reporter=tap',
+      '--test-name-pattern',
+      exactTestName(mutation.testName),
+      join(root, 'test/judge-budgets.test.ts'),
+    ];
+    const baseline = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
+    assertExactlyOneNamedMutationPass(mutation, baseline);
+    await writeFile(target, changed, 'utf8');
+    const result = await runStrictMutationChild({ command: process.execPath, args, cwd: root, env: environment });
     assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;
   } finally {
