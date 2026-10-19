@@ -11,7 +11,8 @@ name: Laya quality gate
 #   starts, and allows only `laya-candidate-*` tags. Approving it is also the owner's attestation that everyone whose
 #   Gmail or Slack messages are in the corpus agreed in writing (the run's `--attest-written-consent`).
 # - **On the owner's protected Mac.** A self-hosted macOS runner the owner registers with the
-#   `agentcomms-laya-gate` label, in a runner group no pull-request job can use, whose host denies outbound connections
+#   `agentcomms-laya-gate` label as an ephemeral runner, for this one job, after dispatching and before approving it
+#   (this public, personal repository has no runner groups; docs/RELEASING.md), whose host denies outbound connections
 #   beyond GitHub, the npm registry and the Node download (the egress step proves a connection elsewhere fails). The
 #   sealed corpus, its key, the Python reference snapshot and the verified runtime and model trees stay on that host,
 #   named by the runner's own environment (`AGENTCOMMS_LAYA_GATE_*`); nothing here holds or uploads them.

@@ -326,8 +326,19 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
 - **Behind the owner's review.** Create the `laya-quality-gate` environment with the owner as its required reviewer and
   a deployment rule that allows only `laya-candidate-*` tags. The owner's approval of a run is also the owner's
   attestation that everyone in the corpus consented in writing (the quality run's `--attest-written-consent`).
-- **On a protected Mac.** Register a self-hosted macOS runner on the gate Mac, labelled `agentcomms-laya-gate`, in a
-  runner group no pull-request job can use. Its host must deny outbound connections except to GitHub, the npm registry
+- **On a protected Mac, registered for one job.** This repository is public and belongs to a personal account, so it
+  has no runner groups, and GitHub's own guidance is that a self-hosted runner should almost never serve a public
+  repository: a pull request can bring a workflow of its own that asks for it. So the gate Mac is never a standing
+  runner. For each run:
+  1. Dispatch the workflow on the candidate tag. The job waits for the environment's approval before any runner is
+     given it.
+  2. On the gate Mac, register an ephemeral runner (`./config.sh --ephemeral`, or a just-in-time runner through the
+     REST API), labelled `agentcomms-laya-gate`. It takes at most one job and is then removed.
+  3. Approve the run, and check in its log that the gate job is the one that ran on that runner. If another job took
+     it, treat the Mac as compromised: discard its trees and keys, and set it up again.
+
+  Keep the repository's Actions setting that requires approval before a fork's pull-request workflows run, for every
+  outside contributor. The gate Mac must deny outbound connections except to GitHub, the npm registry
   and the Node download the job uses to check out, install and report; the job's egress step fails if it can reach an
   outside address. Set, in the runner's own environment, `AGENTCOMMS_LAYA_GATE_RUNTIME_TREE`,
   `AGENTCOMMS_LAYA_GATE_MODEL_TREE`, `AGENTCOMMS_LAYA_GATE_CORPUS`, `AGENTCOMMS_LAYA_GATE_KEY_FILE`,
