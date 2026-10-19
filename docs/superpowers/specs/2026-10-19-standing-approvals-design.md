@@ -447,3 +447,7 @@ word.
    under its own lock while the child's is held (never the other way round), and the child is voided, APPROVAL_VOID,
    when the record has ended by any rule (revoked, expired, an epoch, a tightened change policy, `never`) or no longer
    holds the content or covers the place. The count stays spent. **(lead's call, after review)**
+4. **A Linux notice is never read as markup** (S10; core review C5). Most notification servers read `notify-send`'s
+   body, and some its title, as markup, so a reply holding `<b>` or a link would be drawn as one, and a stray `<` could
+   blank the notice. On Linux both are given with `&`, `<` and `>` as entities (`asMarkupText`); macOS and Windows are
+   given the words as they are. **(lead's call, after review)**

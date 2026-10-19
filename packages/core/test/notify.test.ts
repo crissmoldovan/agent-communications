@@ -126,6 +126,28 @@ test("each platform's program and arguments", async () => {
   }
 });
 
+test('on linux the title and the body are never read as markup', () => {
+  const marked: Notice = {
+    title: '<b>agent</b> & co',
+    body: 'Your agent sent "<a href="https://evil.test">click</a> &amp; <i>more</i> <" in #eng',
+  };
+  const linux = noticeCommand(marked, 'linux', { PATH: '/usr/bin' }, '/usr/bin/notify-send');
+  assert.deepEqual(linux.args, [
+    '--',
+    '&lt;b&gt;agent&lt;/b&gt; &amp; co',
+    'Your agent sent "&lt;a href="https://evil.test"&gt;click&lt;/a&gt; &amp;amp; &lt;i&gt;more&lt;/i&gt; &lt;" in #eng',
+  ]);
+  for (const arg of linux.args.slice(1)) assert.doesNotMatch(arg, /[<>]|&(?!amp;|lt;|gt;)/);
+  // Only linux's server reads markup: macOS and Windows are given the words as they are.
+  assert.deepEqual(noticeCommand(marked, 'darwin', {}, '/usr/bin/osascript').args.slice(-2), [
+    marked.body,
+    marked.title,
+  ]);
+  const win32 = noticeCommand(marked, 'win32', {}, 'powershell.exe');
+  assert.equal(win32.env.AGENTCOMMS_NOTICE_BODY, marked.body);
+  assert.equal(win32.env.AGENTCOMMS_NOTICE_TITLE, marked.title);
+});
+
 test('the text is an argument on darwin and linux, and an environment value on win32, never in the script', async () => {
   const hostile: Notice = { title: `-e ${HOSTILE[1]}`, body: `-e ${HOSTILE.join(' ')}` };
   for (const fragment of HOSTILE) assert.ok(hostile.body.includes(fragment));
@@ -147,11 +169,12 @@ test('the text is an argument on darwin and linux, and an environment value on w
   }
   assert.deepEqual(darwin.env, { LANG: 'C' });
 
-  // Linux: there is no script; the texts are notify-send's arguments, after `--`, verbatim.
+  // Linux: there is no script; the texts are notify-send's arguments, after `--`, with only `&`, `<` and `>` written
+  // as entities for a server that reads markup.
   const linux = noticeCommand(hostile, 'linux', { PATH: '/usr/bin' }, '/usr/bin/notify-send');
   assert.deepEqual(linux, {
     program: '/usr/bin/notify-send',
-    args: ['--', hostile.title, hostile.body],
+    args: ['--', hostile.title.replaceAll('&', '&amp;'), hostile.body.replaceAll('&', '&amp;')],
     env: { PATH: '/usr/bin' },
   });
 

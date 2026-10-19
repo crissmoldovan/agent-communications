@@ -15,7 +15,8 @@ import { childEnvironment, notifierProgram } from './system-programs.ts';
  * The text — what was sent, where, under which standing approval — is never spliced into a script:
  * - macOS: `osascript` runs a fixed AppleScript whose run handler takes the body and the title as its arguments, after
  *   `--`, so that a text starting with `-e` is an argument and never another line of script;
- * - Linux: `notify-send` takes the title and the body as its arguments, after `--`;
+ * - Linux: `notify-send` takes the title and the body as its arguments, after `--`, each with `&`, `<` and `>` written
+ *   as entities, since most notification servers read the body — and some the title — as markup;
  * - Windows: PowerShell runs a fixed toast script that reads them from two environment values, because `-Command`
  *   joins any argument after it into the script. The script puts each in a text node, so neither is read as XML.
  */
@@ -95,7 +96,20 @@ export function noticeCommand(
       env: withNoticeText(env, notice),
     };
   }
-  return { program, args: ['--', notice.title, notice.body], env: childEnvironment(env, platform) };
+  return {
+    program,
+    args: ['--', asMarkupText(notice.title), asMarkupText(notice.body)],
+    env: childEnvironment(env, platform),
+  };
+}
+
+/**
+ * `text` as a notification server that reads markup shows it, word for word: `&`, `<` and `>` as entities, `&` first.
+ * Without this a reply holding `<b>` or `<a href=…>` would be drawn as bold or a link, and one holding a stray `<` could
+ * leave the notice blank (design 2026-10-19-standing-approvals, S10, the lead's call after review).
+ */
+export function asMarkupText(text: string): string {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 /** A file there that may be run: a lookup that never throws. */
