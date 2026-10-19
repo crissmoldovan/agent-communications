@@ -473,7 +473,16 @@ export function renderPrune(result: PruneResult | PruneAllResult, color: boolean
       .map((part) => ({ label: part.label, lines: pruneLines(part, color) }))
       .filter((group) => group.lines.length > 0)
       .map((group) => [`${group.label}:`, ...group.lines.map((line) => `  ${line}`)].join('\n'));
-    return groups.length > 0 ? groups.join('\n') : `No managed runtimes to remove in ${result.runtimeDir}.`;
+    if (groups.length === 0) return `No managed runtimes to remove in ${result.runtimeDir}.`;
+    // Last, so a server left unchecked among others that went ahead is not lost in the list above.
+    const unchecked = (result.refusedServers ?? []).map(({ label, refused }) => `${label} (${refused})`);
+    if (unchecked.length > 0) {
+      const its = unchecked.length === 1 ? 'its' : 'their';
+      groups.push(
+        paint(color, 'yellow', `Not checked, so none of ${its} runtimes was removed: ${unchecked.join('; ')}.`),
+      );
+    }
+    return groups.join('\n');
   }
   const lines = pruneLines(result, color);
   if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);

@@ -359,7 +359,10 @@ another `CODEX_HOME`, is read even from a shell that does not set it, and a runt
 The record starts with 0.4.1, so an entry an earlier release registered there is not in it until it is registered
 again.
 If any of those is there and cannot be read, or the processes cannot be listed, it removes nothing at all and says
-which. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
+which. With no `--server`, a server whose own part cannot be checked — its stable launcher's pointer cannot be read,
+say — keeps all its runtimes while the others go ahead, and is named in the preview (`does not check the Slack
+runtimes…`), at the end of what the command prints, and in the result's `refusedServers`. The running processes are
+listed again for each server, just before it is decided. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
 anywhere else — a workspace `.vscode/mcp.json` or `.cursor/mcp.json`, say — or pasted from a `--print` that warned
 it could not record the entry; check `--dry-run` first if you have one. A runtime kept only because its entry was
 printed stays until you say that entry is gone: `mcp prune --include-printed` removes those too, and still keeps

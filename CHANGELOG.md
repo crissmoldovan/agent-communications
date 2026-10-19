@@ -80,8 +80,10 @@ the one it keeps to roll back to. It now also keeps any runtime newer than this 
 starts, which an update may be installing or checking. And a prune never runs beside an update: while
 `agentcomms update`, a rollback or the background run is under way, a prune that would remove something is refused at
 once and deletes nothing, and one approved before is refused when it is claimed; run it again in a few minutes. A dry
-run still answers. This holds for `--server` and for each channel's own `mcp prune` too. After an update, the result
-now names this one prune, not one command per channel.
+run still answers. This holds for `--server` and for each channel's own `mcp prune` too. A server whose runtimes it
+cannot check, such as one whose stable launcher's pointer cannot be read, keeps them all while the others go ahead,
+and is named in the preview, at the end of what the command prints, and under `refusedServers` in the result. After an
+update, the result now names this one prune, not one command per channel.
 
 ## 0.20.0
 

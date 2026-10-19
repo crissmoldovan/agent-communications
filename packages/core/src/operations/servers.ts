@@ -858,11 +858,15 @@ export interface ServerPruned extends PruneResult {
  * A prune of every managed server: each server's own prune, in the registry's order, and all of it together — every
  * runtime removed and kept, each saying whose it is, and every shim — so it reads as one server's prune does.
  * `refused` is set only when every server with a runtime to look at was stopped: then nothing at all was removed.
+ * `refusedServers` names each server that was stopped whenever any was, so one left unchecked beside others that went
+ * ahead is not missed.
  */
 export interface PruneAllResult extends PruneResult {
   removed: { path: string; version: string; server: ServerId }[];
   kept: { path: string; version: string; reason: string; server: ServerId }[];
   servers: ServerPruned[];
+  /** Each server whose prune was stopped, and why: none of its runtimes was looked at, so all of them stay. */
+  refusedServers?: { server: ServerId; label: string; refused: string }[] | undefined;
 }
 
 /**
@@ -947,8 +951,12 @@ function pruneEffects(label: string, preview: PruneResult): string[] {
  * its stable launcher starts and the one it keeps for a rollback all stay, each said why.
  *
  * A dry run is free. Otherwise the plan is every server's dry run, shown grouped by server, and the approval is bound to
- * exactly that list; the removal is then restricted to it, so nothing that became unused after it was shown goes. The
- * running processes are listed once for each pass, not once a server.
+ * exactly that list; the removal is then restricted to it, so nothing that became unused after it was shown goes. A
+ * server whose prune was stopped — a pointer or a config that cannot be read — is named in the preview, beside what the
+ * others remove, and in the result's `refusedServers`. The running processes are listed again for each server, just
+ * before it is decided, as the prune of one server lists them: a listing taken at the start of the pass would not see
+ * a process started from a runtime while the servers before it were pruned. And, as for one server, a removal never
+ * runs beside an update.
  */
 function everyServerPruneChange(
   core: Core,
@@ -961,27 +969,22 @@ function everyServerPruneChange(
     label: serverLabel(server),
     product: { packageName: serverFacts(server).packageName, version: VERSION },
   }));
-  /** One listing of the running processes, shared by every server's prune in one pass. */
-  const listedOnce = (): (() => Promise<readonly string[] | null>) => {
-    let listing: Promise<readonly string[] | null> | undefined;
-    return () => {
-      listing ??= (request.processes ?? runningCommandLines)();
-      return listing;
-    };
-  };
   const pruneEach = async (options: { dryRun: boolean; only?: readonly string[] }): Promise<ServerPruned[]> => {
-    const processes = listedOnce();
     const parts: ServerPruned[] = [];
     for (const { server, label, product } of servers) {
+      // Each server's prune lists the running processes itself, just before it decides (`pruneManagedRuntimes`).
       const result = await pruneManagedRuntimes(context, product, {
         includePrinted: request.includePrinted === true,
-        processes,
+        processes: request.processes ?? runningCommandLines,
         ...options,
       });
       parts.push({ server, label, ...result });
     }
     return parts;
   };
+  /** Each server whose prune was stopped, and why. */
+  const refusedOf = (parts: readonly ServerPruned[]) =>
+    parts.flatMap(({ server, label, refused }) => (refused === undefined ? [] : [{ server, label, refused }]));
   let approved: string[] = [];
   return {
     plan: async (config) => {
@@ -995,10 +998,16 @@ function everyServerPruneChange(
       const counts = previews
         .filter((part) => part.removed.length > 0)
         .map((part) => `${part.removed.length} ${part.label}`);
+      const removals = previews.flatMap((part) => pruneEffects(part.label, part));
+      // Beside what it removes, each server it could not check, so the one left alone is read with the rest. Alone,
+      // they remove nothing, and there is nothing to approve: the result says them.
+      const unchecked = refusedOf(previews).map(
+        ({ label, refused }) => `does not check the ${label} runtimes, and removes none of them: ${refused}`,
+      );
       return {
         before: config,
         after: config,
-        effects: previews.flatMap((part) => pruneEffects(part.label, part)),
+        effects: removals.length > 0 ? [...removals, ...unchecked] : [],
         summary: `Remove ${approved.length} unused runtime${approved.length === 1 ? '' : 's'}${counts.length > 0 ? `: ${counts.join(', ')}` : ''}`,
       };
     },
@@ -1009,6 +1018,7 @@ function everyServerPruneChange(
         : await withPersonUpdateLock(core.paths.stateDir, () => pruneEach({ dryRun, only: approved }), 'prune');
       const looked = parts.filter((part) => part.removed.length + part.kept.length > 0);
       const refused = looked.length > 0 && looked.every((part) => part.refused !== undefined);
+      const refusedServers = refusedOf(parts);
       return {
         runtimeDir: join(core.paths.dataDir, 'runtime'),
         dryRun,
@@ -1020,6 +1030,7 @@ function everyServerPruneChange(
         },
         ...(refused ? { refused: [...new Set(looked.map((part) => part.refused))].join('; ') } : {}),
         servers: parts,
+        ...(refusedServers.length > 0 ? { refusedServers } : {}),
       };
     },
   };
