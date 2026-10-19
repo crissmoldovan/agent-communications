@@ -226,14 +226,17 @@ test('a DM post is bound to the person the DM is with: the approval posts nowher
   const prepared = await prepareDraftPost(w.context, 'acme', { channel: SAM_DM, text: 'hello Sam' }, w.slack);
   // Slack now says the DM is with Ana: not the place the person said yes to, whatever the rules say of either.
   w.world.rooms[SAM_DM] = { is_im: true, user: ANA, members: ['U0001', ANA] };
-  await assert.rejects(
+  const error = await refusedWith(
     sendPost(
       w.context,
       'acme',
       { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: SAM_DM },
       w.slack,
     ),
+    'a post approved for the DM with Sam, sent once Slack says it is with Ana',
   );
+  // Voided by the digest, which binds the person the DM is with — not refused for some other reason on the way there.
+  assert.equal(error.code, 'APPROVAL_VOID', `${error.code}: ${error.message}`);
   assert.equal(w.asked('chat.postMessage'), 0, 'a post approved for the DM with Sam went to the DM with Ana');
 });
 
