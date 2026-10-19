@@ -204,9 +204,30 @@ export function labelChange(
       if (!planned.changes) return { change: change.kind, changed: false, note, ...reportOf(await core.config.load()) };
       // Made again from the configuration read inside the store's lock: whatever else moved meanwhile stays as it is,
       // and a loosening that is no longer the one approved is the store's to refuse.
-      const written = await core.config.update((config) => planChange(config, change).edit(config), {
-        ...(consent ? { consent } : {}),
-      });
+      const written = await core.config.update(
+        (config) => {
+          const again = planChange(config, change);
+          /*
+           * The workspace by its id, as the approval binds it. The values the store compares name a workspace as the
+           * person knows it, and the change looks the workspace up by that name: if the name came to mean another
+           * account between the claim and this write — the approved one removed, another renamed to its name — the
+           * style, icon or rule would land on that other account, and the store would see the same names. Refused.
+           */
+          if ((again.target?.id ?? null) !== (target?.id ?? null)) {
+            const name = target?.name ?? again.target?.name ?? 'that account';
+            throw new CommsError(
+              'LOOSENING_REFUSED',
+              `this is not the change that was approved: ${name} is another account now`,
+              {
+                hint: 'The configuration changed after the approval was given. Nothing was written. Prepare the change again and ask again.',
+                details: { paths: [SETTING_PATHS[change.kind]] },
+              },
+            );
+          }
+          return again.edit(config);
+        },
+        { ...(consent ? { consent } : {}) },
+      );
       await core.audit.append({
         inboxId: target?.id ?? '',
         ...(target ? { alias: target.name } : {}),
@@ -229,6 +250,16 @@ type CheckedChange =
   | { kind: 'removeRule'; rule: AgentLabelRule }
   | { kind: 'icon'; account: string; emoji: string | null }
   | { kind: 'style'; account: string; style: SlackStyle };
+
+/** The setting each change writes, as `classifyChange` names it. */
+const SETTING_PATHS: Readonly<Record<LabelChangeKind, string>> = {
+  word: 'agentLabel.word',
+  name: 'agentLabel.name',
+  addRule: 'agentLabel.rules',
+  removeRule: 'agentLabel.rules',
+  icon: 'agentLabel.slackIcons',
+  style: 'agentLabel.slackStyles',
+};
 
 const AUDIT_OPERATIONS: Readonly<Record<LabelChangeKind, string>> = {
   word: 'label.word',

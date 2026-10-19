@@ -39,7 +39,9 @@ asks before anything, as it adds the whole profile.
 messages look: acc_… app → acc_… labelled". It now reads "how the agent’s Slack messages look in cue/slack: app →
 labelled", and a Slack icon change reads the same way: "the icon of the agent’s Slack posts in cue/slack: your Slack
 photo → :jo-agent:". The word, name and rule previews already named accounts by name, and still do. The approval still
-binds the workspace's id, so it cannot be spent on another workspace connected later under the same name.
+binds the workspace's id, so it cannot be spent on another workspace connected later under the same name: if the
+workspace's name comes to mean another account between your yes and the write, the change is refused and nothing is
+written.
 
 **`agentcomms label` says what a Slack workspace's style does to each kind of message.** For a workspace whose style
 is `labelled`, the report (and `comms_label` with no change) still said every kind went out "as your agent", even a
