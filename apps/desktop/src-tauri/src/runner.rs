@@ -457,11 +457,14 @@ fn cli_failed(exit: i32, stderr: &[u8], what: &str) -> CliResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `Words` and the clock are used only by the Unix-only tests that start a real launcher.
+    #[cfg_attr(windows, allow(unused_imports))]
     use crate::allowlist::{samples, Call, Shape, Words, ID};
     use crate::launchers::{Product, Program};
     use crate::paths::{Folders, Platform};
     use serde_json::json;
     use std::ffi::OsString;
+    #[cfg_attr(windows, allow(unused_imports))]
     use std::time::{Duration, Instant};
 
     fn envelope(shape: Shape, exit: i32, stdout: &str) -> CliResult {
@@ -932,6 +935,7 @@ mod tests {
         .collect()
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     const NEVER: &[&str] = &[
         "CLAUDECODE",
         "CODEX_HOME",

@@ -258,6 +258,8 @@ pub fn discover(ctx: &RunContext) -> Installation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the Unix-only tests start a launcher with a call.
+    #[cfg_attr(windows, allow(unused_imports))]
     use crate::allowlist::Call;
     use crate::paths::{Folders, Platform};
     use std::fs;
