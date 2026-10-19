@@ -259,6 +259,26 @@ agent-slack channels --workspace acme/slack
 The port must be the same number in the manifest and in `workspace add`. The default `read` mode gets a token
 Slack itself will not let post. The `slack-setup` skill walks all of this, including moving a workspace to `send`.
 
+### Messages sent without asking
+
+Nothing is sent without your yes until you make a **standing approval**: your yes in advance to a few
+acknowledgements, such as `eyes` or "Got it, I'll look at this and come back to you", on a Slack message that has
+just arrived from another person, in the places, counts and days you set.
+
+```bash
+agent-slack standing add --workspace acme/slack --reactions eyes --places C024BE7LR --expires 7d
+agentcomms standing list   # each one, its uses today and its last acts
+agentcomms standing off    # end every one, at once
+```
+
+`standing add` shows each content, place, member count, limit and the expiry, and you approve it only with the code
+it shows, typed at your terminal: never by a yes in chat. An agent then chooses only whether to acknowledge a message
+that has just arrived, and with which of your contents. Every act goes out as your agent, and raises a notification on
+your screen. Mail, top-level posts, edits, deletions and files are never sent this way. It holds against an agent
+acting through the tools, not against one with a shell running as you, and an agent misled by something it read can
+still say tens of bits an hour by which messages it acknowledges: do not make one for an agent that also reads
+sensitive mail, files or secrets in the same session. [SECURITY.md](../SECURITY.md) says what it does not defend.
+
 ### An organisation's agent app, for administrators
 
 Members connected through an organisation's profile post as themselves, labelled "Name (agent)", because the

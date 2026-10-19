@@ -261,6 +261,11 @@ const CHANGING = [
   'comms_secrets_migrate',
   'comms_update',
 ];
+/**
+ * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, and narrowing or
+ * ending standing approvals (design 2026-10-19-standing-approvals, S8).
+ */
+const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing'];
 
 test('the server offers the core tools, and no tool that approves or claims a change it did not plan', async () => {
   /*
@@ -273,7 +278,7 @@ test('the server offers the core tools, and no tool that approves or claims a ch
   try {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
-    assert.deepEqual(names, [...READING, ...CHANGING, 'comms_approval_revoke'].sort());
+    assert.deepEqual(names, [...READING, ...CHANGING, ...TAKING_AWAY].sort());
     for (const name of names) {
       assert.doesNotMatch(name, /claim|prepare|approve(?!d)|apply/, `${name} reads as a generic approval tool`);
     }
@@ -312,6 +317,11 @@ test('the greeting says how a change is approved, names the policy in force, and
       assert.match(greeting, new RegExp(`The default change policy here is ${changePolicy}\\.`));
       assert.match(greeting, /restarted/, 'the last line survives too');
       assert.match(greeting, /comms_update with `check`/, 'an agent learns it can see what is behind');
+      // Standing approvals: reading and ending them is here; creating one only ever prepares, for a person's terminal.
+      assert.match(greeting, /comms_label, comms_behaviour and comms_standing with no change/);
+      assert.match(greeting, /comms_standing narrows or ends standing approvals at once/);
+      assert.match(greeting, /slack_standing_add\nonly prepares one the person asked for/);
+      assert.match(greeting, /at their own terminal with its code, never in chat/);
     } finally {
       await close();
     }
@@ -527,6 +537,7 @@ test('the doctor over MCP is the same report, and the keychain it probes is the 
       'state dir',
       'config',
       'account names',
+      'standing approvals',
       'system keychain',
       'secret backend',
       'update check',

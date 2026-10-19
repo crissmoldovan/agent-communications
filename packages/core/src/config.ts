@@ -449,6 +449,12 @@ export interface LegacyDrain {
 interface Version3Fields {
   /** Each owner's send epoch by id; absent reads as 0. Raised by every write that turns its send policy to `never`. */
   sendEpochs?: Record<string, number> | undefined;
+  /**
+   * The standing epoch (design 2026-10-19-standing-approvals, S8); absent reads as 0. Raised by `standing off` and by
+   * every write that turns a change policy from `chat` to `confirm`, and never lowered: a standing approval made under
+   * an earlier one has ended.
+   */
+  standingEpoch?: number | undefined;
   /** Present while records from an earlier release are being retired. */
   legacyDrain?: LegacyDrain | undefined;
 }
@@ -813,6 +819,7 @@ const LEGACY_DRAIN_OUTCOMES = ['revoked', 'expired', 'used', 'failed', 'sending'
 /** What version 3 adds, loose as the rest of the file is: a later release's keys inside them are kept. */
 const v3Shape = {
   sendEpochs: z.record(z.string().min(1), z.number().int().min(0)).optional(),
+  standingEpoch: z.number().int().min(0).optional(),
   legacyDrain: z
     .looseObject({
       since: absoluteTimeSchema,
@@ -1269,7 +1276,9 @@ export class ConfigStore {
         // The send epoch (design 2026-10-05 §D1), last, once the write is otherwise allowed: on version 3, raised for
         // every owner this write turns to `never`, and never lowered; before it, no send policy of an existing owner
         // moves at all.
-        const written = withSendEpochs(current, parsed.data);
+        // The standing epoch beside it (design 2026-10-19-standing-approvals, S8): raised by any tighter change policy,
+        // and never lowered, in this same write.
+        const written = withStandingEpoch(current, withSendEpochs(current, parsed.data));
         const serialized = `${JSON.stringify(written, null, 2)}\n`;
         await writeFileAtomic(this.path, serialized, FILE_MODE, options.signal);
         committed = written;
@@ -1513,6 +1522,52 @@ function withSendEpochs(before: Config, after: Config): Config {
   for (const [id, epoch] of Object.entries(after.sendEpochs ?? {})) epochs[id] = Math.max(epochs[id] ?? 0, epoch);
   for (const id of fencedOwners(before, after)) epochs[id] = (before.sendEpochs?.[id] ?? 0) + 1;
   return Object.keys(epochs).length === 0 ? after : { ...after, sendEpochs: epochs };
+}
+
+/**
+ * The standing epoch in `config` (design 2026-10-19-standing-approvals, S8): its stored value, or 0 when it has none —
+ * or when it is not a whole number of 0 or more, which no write of this release leaves.
+ */
+export function standingEpochOf(config: Config): number {
+  const epoch = (config as { standingEpoch?: unknown }).standingEpoch;
+  return typeof epoch === 'number' && Number.isInteger(epoch) && epoch >= 0 ? epoch : 0;
+}
+
+/** The change policy of every inbox and account by id, each its own or the default. */
+function changePoliciesById(config: Config): Map<string, ChangePolicy> {
+  const policies = new Map<string, ChangePolicy>();
+  for (const inbox of Object.values(config.inboxes))
+    policies.set(inbox.id, inbox.changePolicy ?? defaultChangePolicy(config));
+  for (const account of Object.values(config.accounts)) {
+    policies.set(account.id, account.changePolicy ?? defaultChangePolicy(config));
+  }
+  return policies;
+}
+
+/**
+ * Whether this write turns a change policy from `chat` to `confirm`: the default's, or the effective one of an inbox or
+ * account there before and after, by id.
+ */
+function tightensAChangePolicy(before: Config, after: Config): boolean {
+  if (defaultChangePolicy(before) === 'chat' && defaultChangePolicy(after) === 'confirm') return true;
+  const was = changePoliciesById(before);
+  for (const [id, policy] of changePoliciesById(after)) {
+    if (policy === 'confirm' && was.get(id) === 'chat') return true;
+  }
+  return false;
+}
+
+/**
+ * `after`, with the standing epoch this write owes (design 2026-10-19-standing-approvals, S8): on version 3, the higher
+ * of the two it holds — never lowered, whatever the write's own copy says, nor dropped — and one more when it tightens a
+ * change policy (`tightensAChangePolicy`). Before version 3 there is no epoch, and no standing approval: every one is
+ * made on version 3.
+ */
+function withStandingEpoch(before: Config, after: Config): Config {
+  if (before.version !== 3 || after.version !== 3) return after;
+  const held = Math.max(standingEpochOf(before), standingEpochOf(after));
+  const kept = tightensAChangePolicy(before, after) ? held + 1 : held;
+  return kept === 0 && after.standingEpoch === undefined ? after : { ...after, standingEpoch: kept };
 }
 
 async function readFileIfExists(path: string): Promise<string | null> {

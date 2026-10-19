@@ -1,6 +1,6 @@
 import { access, constants, stat } from 'node:fs/promises';
 import { type PublicApprovalView, publicApproval } from '../approval-outcome.ts';
-import { integrityRefusal, kindOf } from '../approval-stored.ts';
+import { integrityRefusal, kindOf, type StoredApproval } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
 import { behaviourAccountsOf, readBehaviourSettings } from '../behaviour.ts';
@@ -26,7 +26,7 @@ import {
 import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
-import { resolveName } from '../names.ts';
+import { findById, resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
 import {
@@ -41,6 +41,7 @@ import {
 } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
+import { endStanding } from '../standing-flow.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import { inspectUpdateJob, type UpdateJobDeps, updateJobContext, updateJobHealth } from '../update-job.ts';
 import {
@@ -55,6 +56,7 @@ import {
 import { VERSION } from '../version.ts';
 import { orphanedBehaviourRules } from './behaviour.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
+import { type StandingReport, standingReport } from './standing.ts';
 
 /**
  * The core's own read-only and housekeeping operations: where things live, whether this machine is healthy, what the
@@ -275,6 +277,9 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     });
   }
 
+  checks.push(await standingCheck(core, readable, handoffs));
+  checks.push(...(await standingLedgerChecks(core, readable ? config : null, handoffs)));
+
   const keyring = options.keyring !== undefined ? options.keyring : await loadKeyringModule();
   // `probeKeychain` loads the real module when handed none, so a machine without it is answered here instead.
   const probe = keyring
@@ -305,6 +310,89 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
+}
+
+/**
+ * The standing approvals in force (design 2026-10-19-standing-approvals, S10): each one, its workspace and when it
+ * ends — or `none`. Something to know, never a fault, and read here, from the records and the configuration, rather
+ * than from anything the agent that uses them says. One waiting for its code, or ended, is not in force.
+ */
+async function standingCheck(core: Core, readable: boolean, handoffs: CliHandoffs): Promise<DoctorCheck> {
+  const name = 'standing approvals';
+  if (!readable) return { name, ok: true, detail: 'unknown — the configuration could not be read' };
+  let report: StandingReport;
+  try {
+    report = await standingReport(core);
+  } catch (error) {
+    return {
+      name,
+      ok: true,
+      warn: true,
+      detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const active = report.approvals.filter((view) => view.state === 'active');
+  if (active.length === 0) return { name, ok: true, detail: 'none' };
+  const list = handoffSentence(handoffs.core(['standing', 'list']), (command) => `${command} shows what each covers`);
+  return {
+    name,
+    ok: true,
+    detail: `${active.length} in force, each letting an agent acknowledge without asking: ${active
+      .map((view) => `${view.id} on ${shownText(view.workspace, 64)} until ${view.expiresAt}`)
+      .join('; ')}`,
+    fix: remedy(
+      handoffSentence(handoffs.core(['standing', 'off']), (command) => `${list}; ${command} ends every one at once.`, {
+        instead: `${list}.`,
+      }),
+    ),
+  };
+}
+
+/**
+ * Each account's acknowledgement ledger that holds a line this release cannot read (design
+ * 2026-10-19-standing-approvals, the lead's call after review): a row each, naming the account, its lines and where
+ * the file is. While one does, no standing approval of that account can be used — its counts cannot be known, and a
+ * count is never guessed downwards — and nothing but this says why. Something to put right, not a fault of the
+ * machine, so a warning. The way back is the person's: end that account's standing approvals, then move the file
+ * aside; a new one starts empty. Nothing at all when every ledger reads whole.
+ */
+async function standingLedgerChecks(core: Core, config: Config | null, handoffs: CliHandoffs): Promise<DoctorCheck[]> {
+  let found: Awaited<ReturnType<Core['acks']['unreadable']>>;
+  try {
+    found = await core.acks.unreadable();
+  } catch (error) {
+    return [
+      {
+        name: 'standing ledger',
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  return found.map(({ accountId, path, lines }) => {
+    const account = config === null ? undefined : findById(config, 'account', accountId)?.alias;
+    const named = account === undefined ? accountId : `${shownText(account, 64)} (${accountId})`;
+    const which =
+      lines.length === 1
+        ? `line ${lines[0]}`
+        : `lines ${lines.slice(0, 10).join(', ')}${lines.length > 10 ? ', …' : ''}`;
+    const end = handoffSentence(
+      handoffs.core(['standing', 'off']),
+      (off) =>
+        `End ${account === undefined ? "this account's" : `${shownText(account, 64)}'s`} standing approvals — ${off}, or standing revoke for each`,
+      { instead: "End this account's standing approvals with standing off, or standing revoke for each" },
+    );
+    return {
+      name: 'standing ledger',
+      ok: true,
+      warn: true,
+      detail: `${named}: ${which} of its acknowledgement ledger cannot be read, so none of its standing approvals can be used until it reads whole — ${shownPath(path)}`,
+      fix: remedy(
+        `${end}; then move the file aside (rename it, or move it out of its folder): ${shownPath(path)}. A new ledger starts empty, and its counts start again.`,
+      ),
+    };
+  });
 }
 
 /**
@@ -991,11 +1079,13 @@ export async function listApprovals(
 }
 
 /**
- * Revokes an approval of either kind. Refusing is never the dangerous direction, so this asks nobody.
+ * Revokes an approval of any kind. Refusing is never the dangerous direction, so this asks nobody.
  *
  * A change approval is revoked through `revokeChange`, which records it in the audit log as every other step of a
- * change approval is; a send approval as it always was. Either from an earlier release is retired in its own shape. A
- * corrupt or unreadable record is refused, with only its stub, and nothing is written to it.
+ * change approval is; a standing approval through `endStanding`, which ends every unused child of it with it, so none
+ * minted before the revoke can still be claimed in the minutes it lasts (design 2026-10-19-standing-approvals, S8); a
+ * send approval as it always was. Any from an earlier release is retired in its own shape. A corrupt or unreadable
+ * record is refused, with only its stub, and nothing is written to it.
  *
  * What it returns is the record's public object, as a status shows it (`publicApproval`): what a sender wrote — the
  * recipients and subject, a question's file names — only inside the untrusted-content envelope, never the stored record.
@@ -1010,9 +1100,12 @@ export async function revokeApproval(
   const { stored: existing } = await core.approvals.inspect(approvalId);
   if (existing.form === 'corrupt' || existing.form === 'unreadable') throw integrityRefusal(existing);
   const reason = 'revoked by the user';
-  const stored =
-    kindOf(existing) === 'change'
+  const kind = kindOf(existing);
+  const stored: StoredApproval =
+    kind === 'change'
       ? await revokeChange(core, approvalId, reason, { surface, disposition: 'person' })
-      : await core.approvals.revoke(approvalId, reason, { disposition: 'person' });
+      : kind === 'standing' && existing.form === 'v2'
+        ? { form: 'v2', record: await endStanding(core, approvalId, reason) }
+        : await core.approvals.revoke(approvalId, reason, { disposition: 'person' });
   return publicApproval(stored, await core.approvals.outcomeOf(stored));
 }

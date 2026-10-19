@@ -2,6 +2,7 @@ import { setTimeout as sleepFor } from 'node:timers/promises';
 import {
   type ApprovalOutcome,
   approvalNotFound,
+  NEVER_NOTICE,
   type PublicApprovalState,
   type PublicApprovalView,
   publicApproval,
@@ -55,6 +56,11 @@ export type WaitEnd =
   | 'claimable'
   /** Approved, and the live policy will not let it be claimed (`never`). */
   | 'blocked'
+  /**
+   * A standing approval the person approved, in force: nothing claims one — an agent uses it through its channel's
+   * acknowledgement — so this is where its wait ends, never `blocked` (design 2026-10-19-standing-approvals).
+   */
+  | 'active'
   /** Nothing more will happen to it from a person: used, failed, unknown, expired, revoked, corrupt, or legacy. */
   | 'final'
   /** The time asked for ran out while it was still waiting for a person, or still being sent. */
@@ -105,6 +111,11 @@ export interface ApprovalWait {
   readonly waitedSeconds: number;
   /** What to do next, when the wait ended still waiting: wait again. Never to prepare it again. */
   readonly hint?: string | undefined;
+  /**
+   * For a standing approval: whether it is in force, in `standing list`'s words — `pending` until the person types its
+   * code, `active` while an agent may use it, `ended` ever after, with the store's reason.
+   */
+  readonly standing?: { readonly state: 'pending' | 'active' | 'ended'; readonly reason?: string } | undefined;
 }
 
 let running = 0;
@@ -117,9 +128,25 @@ function stillWaiting(stored: StoredApproval, outcome: ApprovalOutcome): boolean
   return outcome.state === 'pending' && !outcome.claimable;
 }
 
+/**
+ * A standing approval's own state, as `standing list` reads it: `never` on its account ends it at a look, before any
+ * use writes that down. Undefined for every other kind.
+ */
+function standingStateOf(outcome: ApprovalOutcome): ApprovalWait['standing'] {
+  if (outcome.record?.kind !== 'standing') return undefined;
+  const never = outcome.reason === NEVER_NOTICE;
+  if (outcome.state === 'pending' && !never) return { state: 'pending' };
+  if (outcome.state === 'approved' && !never) return { state: 'active' };
+  const reason = outcome.reason ?? outcome.record.reason;
+  return { state: 'ended', ...(reason === undefined ? {} : { reason }) };
+}
+
 /** Why a wait that has stopped waiting ended, from the classification it stopped on. */
 function endOf(outcome: ApprovalOutcome): WaitEnd {
   if (outcome.claimable) return 'claimable';
+  // A standing approval is never claimed: approved and in force is where waiting for it ends.
+  const standing = standingStateOf(outcome);
+  if (standing !== undefined) return standing.state === 'active' ? 'active' : 'final';
   if (outcome.record !== null && outcome.state === 'approved') return 'blocked';
   return 'final';
 }
@@ -208,6 +235,7 @@ async function waitHeld(
         waitedSeconds,
       };
     }
+    const standing = standingStateOf(outcome);
     return {
       approvalId,
       state: outcome.state,
@@ -216,6 +244,7 @@ async function waitHeld(
       ended,
       waitedSeconds,
       ...(ended === 'timeout' ? { hint: waitAgainHint(outcome.state, options.channel) } : {}),
+      ...(standing === undefined ? {} : { standing }),
     };
   };
   if (waitSeconds === 0) return finish('now', seen.outcome);

@@ -7,6 +7,7 @@ import { SendLedger } from './ledger.ts';
 import { type PathEnvironment, type PathOverrides, type ResolvedPaths, resolvePathIdentity } from './paths.ts';
 import { PlanStore } from './plans.ts';
 import { keychainNamespace, openSecretStore, type SecretStore, type SecretStoreKind } from './secrets.ts';
+import { AckLedger } from './standing-ledger.ts';
 import { InboxStateStore } from './state.ts';
 import { TaintStore } from './taint.ts';
 import { securityAnswered } from './update-state.ts';
@@ -20,6 +21,11 @@ export interface Core {
   states: InboxStateStore;
   approvals: ApprovalStore;
   ledger: SendLedger;
+  /**
+   * The acknowledgement ledger (design 2026-10-19-standing-approvals, S6, S9): every use of a standing approval,
+   * counted per account, under its own lock, before the use's child is minted — and never refunded.
+   */
+  acks: AckLedger;
   plans: PlanStore;
   taint: TaintStore;
   audit: AuditLog;
@@ -70,6 +76,7 @@ export function openCore(options: OpenCoreOptions = {}): Core {
       answered: (approvalId) => securityAnswered(paths.stateDir, approvalId),
     }),
     ledger: new SendLedger(paths.stateDir, now),
+    acks: new AckLedger(paths.stateDir, now),
     plans: new PlanStore(paths.stateDir, now),
     taint: new TaintStore(paths.stateDir, now),
     audit,

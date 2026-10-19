@@ -207,6 +207,11 @@ const RULES: Readonly<Record<string, MethodRule>> = {
   'search.messages': { kind: 'read', requiredScopes: ['search:read'] },
   'files.info': { kind: 'read', requiredScopes: ['files:read'] },
   'files.list': { kind: 'read', requiredScopes: ['files:read'] },
+  /*
+   * A link to one message, for the record of an acknowledgement a standing approval made (design
+   * 2026-10-19-standing-approvals, S10): it reads, posts nothing, and Slack asks no scope of it.
+   */
+  'chat.getPermalink': { kind: 'read' },
 
   // ── Writes: everything that puts a message in front of somebody ───────────────────────────────────────────
   /*

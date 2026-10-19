@@ -234,7 +234,7 @@ Send email through Resend: prepare it, show the person the whole preview, and se
 
 Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate.
 
-**Reach for it when:** 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'
+**Reach for it when:** 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message', 'acknowledge new messages without asking me'
 
 **Not for** reading — slack-reading does that; not for connecting a workspace — slack-setup does.
 

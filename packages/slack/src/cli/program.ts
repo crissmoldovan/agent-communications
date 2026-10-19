@@ -1,8 +1,10 @@
+import { readFile } from 'node:fs/promises';
 import {
   agentMarker,
   answerDownloadAtTerminal,
   approveChangeAtTerminal,
   approveRefusedHint,
+  approveStandingAtTerminal,
   CommsError,
   canPrompt,
   cliHandoffs,
@@ -22,6 +24,7 @@ import {
   openCore,
   PATH_OPTIONS,
   paint,
+  parseExpiry,
   pathOverridesFromCliOptions,
   personAtTerminal,
   refuseRetiredOut,
@@ -52,6 +55,7 @@ import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
 import { type InstallMode, parseMode, renderAgentManifest, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
+import { ack } from '../operations/ack.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
@@ -101,7 +105,9 @@ import {
 } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
+import { prepareStandingAdd } from '../operations/standing.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
+import { standingNarrowedView, standingPending } from '../standing-views.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askHidden, readConfigurationToken } from './config-token.ts';
@@ -1512,6 +1518,149 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     );
 
   /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8 and §8.1): acknowledgements an agent may send without
+   * asking, within contents, places, counts and an expiry the person approved at their terminal with its code. `add`
+   * prepares one — reading each place's name, member count and sharing for its preview — and a person at this terminal
+   * approves it there and then; anyone else is handed the approve command. Listing, narrowing and ending them are core's.
+   */
+  const standing = program
+    .command('standing')
+    .description('acknowledgements your agent may send without asking, once you approve them here with a code');
+
+  workspaceOption(standing.command('add'))
+    .description(
+      'prepare a standing approval: fixed contents, places and limits. Approved only with the code at a terminal',
+    )
+    .option('--reactions <names>', 'standard emoji names, comma-separated; eyes alone when no content is given')
+    .option('--replies-file <file>', 'a file of fixed replies, one per line, each at most 200 characters')
+    .requiredOption('--places <places>', 'threads-i-am-in, or channel and DM ids, comma-separated')
+    .option('--per-thread <n>', 'acts per thread, across every standing approval: 1 to 3, 1 when left out')
+    .option('--per-hour <n>', 'acts an hour: 1 to 30, 10 when left out')
+    .option('--per-day <n>', 'acts a day: 1 to 100, 30 when left out')
+    .option(
+      '--per-sender <n>',
+      'acts a day on messages from any one person, across every standing approval: 1 to 10, 3 when left out',
+    )
+    .option('--expires <days>', 'how long it lasts once approved, as 7d: 1d to 30d, 7d when left out')
+    .option('--replaces <id>', 'the standing approval this replaces: narrower applies at once, wider asks for a code')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const listed = (value: unknown): string[] =>
+          String(value)
+            .split(',')
+            .map((part) => part.trim())
+            .filter((part) => part !== '');
+        let replies: string[] | undefined;
+        if (flags.repliesFile !== undefined) {
+          const file = String(flags.repliesFile);
+          let text: string;
+          try {
+            text = await readFile(file, 'utf8');
+          } catch (error) {
+            throw new CommsError('USAGE', `the replies file could not be read: ${(error as Error).message}`, {
+              hint: 'Pass a file of plain text, one reply per line.',
+            });
+          }
+          // One reply per line; a blank line is none.
+          replies = text.split(/\r?\n/).filter((line) => line.trim() !== '');
+        }
+        const places = String(flags.places).trim() === 'threads-i-am-in' ? 'threads-i-am-in' : listed(flags.places);
+        const count = (name: string, value: unknown) => wholeNumber(value, { name, min: 1 });
+        // Decided as every changing command decides it: a person at this terminal, with no agent marker.
+        const person = agentMarker(env) === null && canPrompt(env, streams, { json: options.json });
+        // The same operation as `slack_standing_add`: see `prepareStandingAdd`.
+        const outcome = await prepareStandingAdd(
+          context,
+          String(flags.workspace),
+          {
+            ...(flags.reactions === undefined ? {} : { reactions: listed(flags.reactions) }),
+            ...(replies === undefined ? {} : { replies }),
+            places,
+            perThread: count('--per-thread', flags.perThread),
+            perHour: count('--per-hour', flags.perHour),
+            perDay: count('--per-day', flags.perDay),
+            perSender: count('--per-sender', flags.perSender),
+            ...(flags.expires === undefined ? {} : { expiresDays: parseExpiry(String(flags.expires)) }),
+            ...(flags.replaces === undefined ? {} : { replaces: String(flags.replaces) }),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+          { proposedBy: person ? 'person' : 'agent' },
+        );
+        if (outcome.status === 'narrowed') {
+          writeResult(
+            standingNarrowedView(outcome.record),
+            output(),
+            (view) => `Narrowed at once: standing approval ${view.standingId} now holds less. Nothing was asked for.`,
+            streams,
+          );
+          return;
+        }
+        const { prepared } = outcome;
+        if (!person) {
+          // The preview is what the agent shows the person, so it is printed, not only tucked into the envelope.
+          if (!options.json) streams.stdout.write(`${prepared.preview}\n\n`);
+          throw standingPending(context, prepared);
+        }
+        // The person is here: they read it and type its code, or press Enter, which ends it.
+        const approved = await approveStandingAtTerminal(
+          context.core,
+          prepared.approvalId,
+          env,
+          { json: options.json, color: options.color, platform: context.platform },
+          streams,
+        );
+        writeResult(
+          approved,
+          output(),
+          (result) =>
+            result.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking.'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          streams,
+        );
+      }),
+    );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): the agent names the message and the content by
+   * its digest, and nothing else — no draft, no words, no removal. The gate builds the payload and decides everything a
+   * person would otherwise have been asked.
+   */
+  workspaceOption(program.command('ack'))
+    .description(
+      'acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent',
+    )
+    .requiredOption('--standing <id>', 'the standing approval, as standing list shows it')
+    .requiredOption('--channel <id>', 'the conversation the message is in')
+    .requiredOption('--ts <ts>', 'the message')
+    .requiredOption('--content <digest>', 'the content, by the digest standing list shows for it')
+    .action(
+      act(async (context, _options, flags: Options) => {
+        // The same operation as `slack_ack`: see `ack`.
+        const done = await ack(
+          context,
+          String(flags.workspace),
+          {
+            standingId: String(flags.standing),
+            channel: String(flags.channel),
+            ts: String(flags.ts),
+            content: String(flags.content),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(
+          done,
+          output(),
+          (data) =>
+            `${data.act === 'reaction' ? 'Reacted to' : 'Replied in the thread of'} ${data.ts} in ${data.channel}, ${
+              data.label?.route === 'app' ? 'as the app' : 'labelled as your agent'
+            }, under standing approval ${data.standingId}. Notice: ${data.notice}.`,
+          streams,
+        );
+      }),
+    );
+
+  /*
    * Editing and deleting a message this account posted (design 2026-10-06), through the gate a post goes through: a
    * preview of the act on the message as Slack has it now, an approval bound to both, and a second command that makes
    * it once. `edit` takes its new words from a draft, as `post` does; `delete` takes only the message.
@@ -1637,7 +1786,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('approve <approvalId>')
     .description(
-      'approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved',
+      'approve a post, a reaction, an edit, a deletion, a change or a standing approval at this terminal: read it, then type the code back — or answer where a download is saved',
     )
     .action(
       act(async (context, globalOptions, approvalId: string) => {
@@ -1680,6 +1829,25 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
          * core's own terminal approval.
          */
         const pending = await context.core.approvals.get(approvalId);
+        /*
+         * A standing approval, with its own preview and code (design 2026-10-19-standing-approvals, S8): the command the
+         * person already has approves it, as core's `approve` does, and never with a typed yes.
+         */
+        if (kindOf(pending) === 'standing') {
+          const outcome = await approveStandingAtTerminal(
+            context.core,
+            approvalId,
+            env,
+            { json: globalOptions.json, color: globalOptions.color, platform: context.platform },
+            streams,
+          );
+          streams.stdout.write(
+            outcome.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking.\n'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.\n',
+          );
+          return;
+        }
         if (kindOf(pending) === 'change') {
           const outcome = await approveChangeAtTerminal(
             context.core,

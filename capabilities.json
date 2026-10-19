@@ -322,6 +322,62 @@
       "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
     },
     {
+      "id": "core.standing.list",
+      "package": "core",
+      "cli": "standing list",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingReport",
+      "reason": "What an agent may send without asking: each standing approval's contents by digest, places, limits and end, its uses in the last day and its last 10 acts. `comms_standing` with no change is this report (design 2026-10-19-standing-approvals, S10)."
+    },
+    {
+      "id": "core.standing.narrow",
+      "package": "core",
+      "cli": "standing narrow",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "argv": ["ap_00000000000000000000000000", "--per-hour", "5"],
+      "args": { "narrow": { "id": "ap_00000000000000000000000000", "limits": { "perHour": 5 } } },
+      "expect": {
+        "request.narrow.id": "ap_00000000000000000000000000",
+        "request.revoke.id": null,
+        "request.off": null
+      },
+      "reason": "A narrowing keeps fewer contents or places, lowers a limit or ends it sooner, so it applies at once and asks nobody; one that would allow more is refused, naming Slack's standing add, which a person approves at a terminal (S8, §8.2)."
+    },
+    {
+      "id": "core.standing.revoke",
+      "package": "core",
+      "cli": "standing revoke",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "argv": ["ap_00000000000000000000000000"],
+      "args": { "revoke": { "id": "ap_00000000000000000000000000" } },
+      "expect": {
+        "request.narrow.id": null,
+        "request.revoke.id": "ap_00000000000000000000000000",
+        "request.off": null
+      },
+      "reason": "Ending one standing approval, and every unused act of it, only takes away, so it applies at once and asks nobody (S8, §8.5)."
+    },
+    {
+      "id": "core.standing.off",
+      "package": "core",
+      "cli": "standing off",
+      "mcp": "comms_standing",
+      "status": "both",
+      "operation": "standingChange",
+      "args": { "off": true },
+      "expect": {
+        "request.narrow.id": null,
+        "request.revoke.id": null,
+        "request.off": true
+      },
+      "reason": "Ending every standing approval at once raises the standing epoch each record and each unused act is bound to, so loosening anything later revives none; it only takes away, so it asks nobody (S8)."
+    },
+    {
       "id": "core.profile",
       "package": "core",
       "cli": "profile",
@@ -1563,6 +1619,24 @@
       "argv": ["--approval", "ap_00000000000000000000000000"],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
       "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
+    },
+    {
+      "id": "slack.standing.add",
+      "package": "slack",
+      "cli": "standing add",
+      "mcp": "slack_standing_add",
+      "status": "both",
+      "operation": "prepareStandingAdd",
+      "reason": "Prepares a standing approval, reading each place's name, member count and sharing for its preview (design 2026-10-19-standing-approvals, §8.1). Neither side approves it: only the person's code at a terminal does, through `approve`."
+    },
+    {
+      "id": "slack.ack",
+      "package": "slack",
+      "cli": "ack",
+      "mcp": "slack_ack",
+      "status": "both",
+      "operation": "ack",
+      "reason": "Sends one acknowledgement under a standing approval (design 2026-10-19-standing-approvals, S9): the message and a content digest, no draft. Its one-shot child is claimed through the same path as every Slack act."
     },
     {
       "id": "slack.edit.prepare",

@@ -162,6 +162,13 @@ export interface WorldUser {
   readonly image_192?: string;
   readonly image_512?: string;
   readonly is_bot?: boolean;
+  /** The workspace they belong to: the world's own (`teamId`) when left out, another organisation's when set. */
+  readonly team_id?: string;
+  /** Slack's `is_stranger`: someone from another organisation this account shares a conversation with. */
+  readonly is_stranger?: boolean;
+  /** A guest: Slack's `is_restricted` (a multi-channel guest) and `is_ultra_restricted` (a single-channel one). */
+  readonly is_restricted?: boolean;
+  readonly is_ultra_restricted?: boolean;
 }
 
 /** One conversation in a {@link SlackWorld}: what `conversations.info` says of it, and who is in it. */
@@ -171,10 +178,21 @@ export interface WorldRoom {
   readonly is_im?: boolean;
   readonly is_mpim?: boolean;
   readonly is_ext_shared?: boolean;
+  /** Shared with another organisation, the invitation not yet accepted. */
+  readonly is_pending_ext_shared?: boolean;
+  /** Shared across an Enterprise Grid's own workspaces: one organisation, not another. */
+  readonly is_org_shared?: boolean;
   /** For a DM: whose it is. */
   readonly user?: string;
   /** Everyone in it, the bot user included when it has joined: what `conversations.members` pages through. */
   members: string[];
+  /**
+   * What `conversations.info` says its `num_members` is: the members counted when left out, none at all for `null` —
+   * as Slack leaves it out of some answers, a group DM's among them.
+   */
+  num_members?: number | null;
+  /** `conversations.members` refuses, so nobody in it can be counted one by one. */
+  members_unreadable?: boolean;
 }
 
 /** A message the world holds: one posted through it, or one planted to be edited or deleted. */
@@ -186,12 +204,25 @@ export interface WorldMessage {
   readonly user: string;
   /** Set on a message the bot posted, as Slack sets it on every app message. */
   readonly bot_id?: string;
+  /** What Slack attaches to a message an app or a workflow sent: who the bot is, `is_workflow_bot` for a workflow. */
+  readonly bot_profile?: Record<string, unknown>;
+  readonly app_id?: string;
+  /** `bot_message`, `thread_broadcast`, `channel_join` and the like: anything but a person's own message. */
+  readonly subtype?: string;
+  /** The team of whoever wrote it, and the team it was posted from, as Slack sets them in a shared conversation. */
+  readonly user_team?: string;
+  readonly source_team?: string;
+  /** Legacy attachments, which can carry buttons (`actions`) of their own. */
+  readonly attachments?: unknown;
   readonly username?: string;
   readonly icon_emoji?: string;
   readonly icon_url?: string;
   /** Which token posted it, by what it is: the person's, or the app's bot's. */
   readonly via: 'user' | 'bot';
-  /** The thread it is a reply in, by its first message's ts: absent at the top of a conversation. */
+  /**
+   * The thread it is a reply in, by its first message's ts: absent at the top of a conversation. A parent's own is
+   * filled in when it is shown, once it has replies.
+   */
   readonly thread_ts?: string;
   deleted?: boolean;
   edited?: { ts: string };
@@ -204,6 +235,8 @@ export interface WorldMessage {
  * to a DM or group DM `channel_not_found`; an app message carries `bot_id`, the bot user and any `username` and icon.
  */
 export interface SlackWorld {
+  /** The workspace's own team id, which each user's `team_id` is unless they say otherwise. */
+  readonly teamId: string;
   readonly userToken: string;
   readonly botToken: string;
   readonly self: string;
@@ -215,6 +248,18 @@ export interface SlackWorld {
   readonly messages: WorldMessage[];
   /** Every reaction added or removed, and with which token. */
   readonly reactions: { channel: string; ts: string; name: string; via: 'user' | 'bot'; remove: boolean }[];
+  /**
+   * The clock a message posted through the world is timed by, in milliseconds: its ts says when it was posted. Left
+   * out, posted messages count up from 1700000100, as they always did.
+   */
+  readonly tsNow?: (() => number) | undefined;
+  /**
+   * What Slack sets on a message an app posts with the person's own token: nothing when left out — the message reads
+   * as the person's, `user` and all — or, given, these marks too. Which one Slack does for every app was not settled
+   * by what the design read, so the tests of what this product sent as the person run under both: where neither mark
+   * is set, the audit, the app-posts record and the label at the start of the words are what tell it apart.
+   */
+  readonly userTokenMarks?: { readonly bot_id?: string; readonly app_id?: string } | undefined;
 }
 
 export interface FakeSlack {
@@ -431,6 +476,7 @@ function installEventPages(fake: FakeSlack, pages: SlackEventPages): void {
 /** Scripts `fake` as a workspace with state: see {@link SlackWorld}. */
 function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
   const world: SlackWorld = {
+    teamId: 'T0001',
     userToken: 'fake-user-token-0',
     botToken: 'fake-bot-token-0',
     self: 'U0001',
@@ -441,10 +487,32 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     reactions: [],
     ...given,
   };
+  /** Slack's ts order: the seconds, then the sequence within them. */
+  const compareTs = (a: string, b: string): number => {
+    const [aSeconds = '0', aSequence = '0'] = a.split('.');
+    const [bSeconds = '0', bSequence = '0'] = b.split('.');
+    const seconds = Number(aSeconds) - Number(bSeconds);
+    return seconds !== 0 ? seconds : Number(aSequence.padEnd(6, '0')) - Number(bSequence.padEnd(6, '0'));
+  };
+  /** A reply that lives only in its thread: the history does not hold it, as Slack's does not. */
+  const isReply = (message: WorldMessage): boolean =>
+    message.thread_ts !== undefined && message.thread_ts !== message.ts && message.subtype !== 'thread_broadcast';
+  /** Whether `ts` is inside the window `latest`, `oldest` and `inclusive` describe, as Slack reads them. */
+  const inWindow = (ts: string, params: URLSearchParams): boolean => {
+    const latest = params.get('latest');
+    const oldest = params.get('oldest');
+    const inclusive = params.get('inclusive') === 'true';
+    if (latest !== null && (inclusive ? compareTs(ts, latest) > 0 : compareTs(ts, latest) >= 0)) return false;
+    if (oldest !== null && (inclusive ? compareTs(ts, oldest) < 0 : compareTs(ts, oldest) <= 0)) return false;
+    return true;
+  };
   let clock = 0;
   const nextTs = (): string => {
     clock += 1;
-    return `1700000100.${String(clock).padStart(6, '0')}`;
+    const now = world.tsNow?.();
+    if (now === undefined) return `1700000100.${String(clock).padStart(6, '0')}`;
+    // In the upper half of the second's sequence, so it never meets a ts a test planted for the same second.
+    return `${Math.floor(now / 1000)}.${String(500_000 + clock).padStart(6, '0')}`;
   };
   const tokenOf = (request: SlackRequest): 'user' | 'bot' | 'other' => {
     const bearer = request.authorization?.replace(/^Bearer /, '');
@@ -473,10 +541,12 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
         is_im: target.is_im === true,
         is_mpim: target.is_mpim === true,
         is_ext_shared: target.is_ext_shared === true,
+        is_pending_ext_shared: target.is_pending_ext_shared === true,
+        is_org_shared: target.is_org_shared === true,
         ...(target.user === undefined ? {} : { user: target.user }),
         // A DM's answer has no `is_member`, as Slack's has none.
         ...(target.is_im ? {} : { is_member: target.members.includes(world.self) }),
-        num_members: target.members.length,
+        ...(target.num_members === null ? {} : { num_members: target.num_members ?? target.members.length }),
       },
     };
   };
@@ -484,6 +554,7 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     if (tokenOf(request) !== 'user') return { ok: false, error: 'invalid_auth' };
     const [, target] = room(request);
     if (target === undefined) return { ok: false, error: 'channel_not_found' };
+    if (target.members_unreadable === true) return { ok: false, error: 'missing_scope' };
     const size = world.pageSize ?? 100;
     const start = Number(request.params.get('cursor') || '0');
     const page = target.members.slice(start, start + size);
@@ -500,7 +571,11 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
         id,
         name: id.toLowerCase(),
         ...(user.real_name === undefined ? {} : { real_name: user.real_name }),
+        team_id: user.team_id ?? world.teamId,
         is_bot: user.is_bot === true,
+        ...(user.is_stranger === true ? { is_stranger: true } : {}),
+        ...(user.is_restricted === true ? { is_restricted: true } : {}),
+        ...(user.is_ultra_restricted === true ? { is_ultra_restricted: true } : {}),
         profile: {
           display_name: user.display_name ?? '',
           real_name: user.real_name ?? '',
@@ -532,6 +607,8 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
       ...(field('blocks') ? { blocks: JSON.parse(field('blocks') as string) } : {}),
       user: via === 'bot' ? world.botUserId : world.self,
       ...(via === 'bot' ? { bot_id: 'B0BOT0001' } : {}),
+      ...(via === 'user' && world.userTokenMarks?.bot_id !== undefined ? { bot_id: world.userTokenMarks.bot_id } : {}),
+      ...(via === 'user' && world.userTokenMarks?.app_id !== undefined ? { app_id: world.userTokenMarks.app_id } : {}),
       ...(username === undefined ? {} : { username }),
       ...(icon_emoji === undefined ? {} : { icon_emoji }),
       ...(icon_url === undefined ? {} : { icon_url }),
@@ -539,29 +616,62 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     });
     return { ok: true, channel, ts };
   };
-  const shown = (message: WorldMessage) => ({
-    type: 'message',
-    ts: message.ts,
-    user: message.user,
-    text: message.text,
-    ...(message.blocks === undefined ? {} : { blocks: message.blocks }),
-    ...(message.bot_id ? { bot_id: message.bot_id } : {}),
-    ...(message.username ? { username: message.username } : {}),
-    ...(message.edited ? { edited: message.edited } : {}),
-  });
+  /** How many replies a message has: a thread's parent's count, as Slack gives it. */
+  const repliesTo = (message: WorldMessage): number =>
+    world.messages.filter(
+      (other) =>
+        other.channel === message.channel &&
+        !other.deleted &&
+        other.ts !== message.ts &&
+        other.thread_ts === message.ts,
+    ).length;
+  const shown = (message: WorldMessage) => {
+    const replies = repliesTo(message);
+    // A parent carries its own ts as `thread_ts` once it has replies, as Slack's do.
+    const threadTs = message.thread_ts ?? (replies > 0 ? message.ts : undefined);
+    return {
+      type: 'message',
+      ts: message.ts,
+      user: message.user,
+      text: message.text,
+      ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
+      ...(replies > 0 ? { reply_count: replies } : {}),
+      ...(message.blocks === undefined ? {} : { blocks: message.blocks }),
+      ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+      ...(message.bot_id ? { bot_id: message.bot_id } : {}),
+      ...(message.bot_profile ? { bot_profile: message.bot_profile } : {}),
+      ...(message.app_id ? { app_id: message.app_id } : {}),
+      ...(message.subtype ? { subtype: message.subtype } : {}),
+      ...(message.user_team ? { user_team: message.user_team } : {}),
+      ...(message.source_team ? { source_team: message.source_team } : {}),
+      ...(message.username ? { username: message.username } : {}),
+      ...(message.edited ? { edited: message.edited } : {}),
+    };
+  };
+  /*
+   * The channel, newest first, as a read does — or one message by its ts, as an edit or a deletion reads it, with
+   * `latest`, `oldest` and `inclusive` read as Slack reads them, and `limit`. A reply that lives only in its thread is
+   * not here: `conversations.replies` holds it.
+   */
   fake.script['conversations.history'] = (request) => {
     const channel = request.params.get('channel') ?? '';
-    const ts = request.params.get('latest');
-    // One message by its ts, as an edit or a deletion reads it; else the channel, newest first, as a read does.
+    const limit = Number(request.params.get('limit') ?? '0');
     const found = world.messages
-      .filter((m) => m.channel === channel && !m.deleted && (ts === null || m.ts === ts))
-      .reverse();
-    return { ok: true, messages: found.map(shown), response_metadata: { next_cursor: '' } };
+      .filter((m) => m.channel === channel && !m.deleted && !isReply(m) && inWindow(m.ts, request.params))
+      .sort((a, b) => compareTs(b.ts, a.ts));
+    const page = limit > 0 ? found.slice(0, limit) : found;
+    return {
+      ok: true,
+      messages: page.map(shown),
+      has_more: page.length < found.length,
+      response_metadata: { next_cursor: '' },
+    };
   };
   /*
    * A thread, as Slack reads one: named by any of its messages, in that conversation, and given from its first message —
-   * the parent, then its replies — up to `limit`. A message nobody has replied to is a thread of one. A ts no message in
-   * that conversation has is `thread_not_found`, as Slack says, wherever else a message with that ts may be.
+   * the parent, then its replies, oldest first — within `latest`, `oldest` and `inclusive` as Slack reads them, up to
+   * `limit`. A message nobody has replied to is a thread of one. A ts no message in that conversation has is
+   * `thread_not_found`, as Slack says, wherever else a message with that ts may be.
    */
   fake.script['conversations.replies'] = (request) => {
     const channel = request.params.get('channel') ?? '';
@@ -570,7 +680,9 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     const named = here.find((m) => m.ts === ts);
     if (named === undefined) return { ok: false, error: 'thread_not_found' };
     const root = named.thread_ts ?? named.ts;
-    const thread = here.filter((m) => m.ts === root || m.thread_ts === root);
+    const thread = here
+      .filter((m) => (m.ts === root || m.thread_ts === root) && inWindow(m.ts, request.params))
+      .sort((a, b) => compareTs(a.ts, b.ts));
     const limit = Number(request.params.get('limit') ?? '0');
     const page = limit > 0 ? thread.slice(0, limit) : thread;
     return {
@@ -579,6 +691,13 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
       has_more: page.length < thread.length,
       response_metadata: { next_cursor: '' },
     };
+  };
+  fake.script['chat.getPermalink'] = (request) => {
+    const channel = request.params.get('channel') ?? '';
+    const ts = request.params.get('message_ts') ?? '';
+    const message = world.messages.find((m) => m.channel === channel && m.ts === ts && !m.deleted);
+    if (message === undefined) return { ok: false, error: 'message_not_found' };
+    return { ok: true, channel, permalink: `https://acme.slack.com/archives/${channel}/p${ts.replace('.', '')}` };
   };
   const own = (request: SlackRequest): WorldMessage | string => {
     const via = tokenOf(request);

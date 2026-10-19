@@ -16,6 +16,7 @@ import {
   defaultChangePolicy,
   governingChangePolicy,
   type SendPolicy,
+  standingEpochOf,
 } from './config.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { sendEpochOf } from './send-epoch.ts';
@@ -52,6 +53,11 @@ export interface LiveGate {
   readonly changePolicy?: ChangePolicy | undefined;
   /** The owner's send epoch (`sendEpochOf`). Only for a present owner. */
   readonly sendEpoch?: number | undefined;
+  /**
+   * The configuration's standing epoch (`standingEpochOf`, design 2026-10-19-standing-approvals, S8), for every record:
+   * one number for the whole configuration, not an owner's.
+   */
+  readonly standingEpoch?: number | undefined;
 }
 
 /** The mailbox or account a record's owner id names in `config`, or undefined when there is none. */
@@ -79,14 +85,18 @@ export function liveGateOf(
 ): LiveGate {
   const governing = (fallback: ChangePolicy): ChangePolicy =>
     record.kind === 'change' && record.change !== undefined ? governingChangePolicy(config, record.change) : fallback;
-  if (record.ownerScope !== 'owner') return { owner: 'none', changePolicy: governing(defaultChangePolicy(config)) };
+  const standingEpoch = standingEpochOf(config);
+  if (record.ownerScope !== 'owner') {
+    return { owner: 'none', changePolicy: governing(defaultChangePolicy(config)), standingEpoch };
+  }
   const entry = ownerEntry(config, record.inboxId);
-  if (entry === undefined) return { owner: 'removed' };
+  if (entry === undefined) return { owner: 'removed', standingEpoch };
   return {
     owner: 'present',
     sendPolicy: entry.sendPolicy ?? config.defaults.sendPolicy,
     changePolicy: governing(entry.changePolicy ?? defaultChangePolicy(config)),
     sendEpoch: sendEpochOf(config, record.inboxId),
+    standingEpoch,
   };
 }
 
@@ -94,6 +104,32 @@ export function liveGateOf(
 export const OWNER_REMOVED_REASON = 'its mailbox or account was removed';
 /** The reason a send prepared before a `never` is revoked with: its stored epoch is behind the live one. */
 export const SEND_EPOCH_REASON = 'sending was turned off since this was prepared (policy: never)';
+/**
+ * The reason a standing approval, or one of its unused children, is revoked with once standing approvals were ended
+ * since it was made: its standing epoch is behind the live one (design 2026-10-19-standing-approvals, S8).
+ */
+export const STANDING_EPOCH_REASON = 'standing approvals were ended since this was approved';
+/**
+ * The reason a standing approval is revoked with once its account's change policy is stricter than the one it was
+ * approved under (`approvedChangePolicy`) — `changePolicy-tightened`, read from the configuration itself, whatever the
+ * standing epoch says, so a release that knows no epoch tightening the policy still ends it (design
+ * 2026-10-19-standing-approvals, S8, the lead's call after review).
+ */
+export const CHANGE_POLICY_TIGHTENED_REASON = 'the change policy was tightened since this was approved';
+
+/** Whether `live` is stricter than `approved`: `confirm` over `chat`. */
+function changePolicyTightened(approved: ChangePolicy | undefined, live: ChangePolicy | undefined): boolean {
+  return live === 'confirm' && approved !== 'confirm';
+}
+
+/**
+ * Whether even a look writes this outcome's revocation down: a standing approval ended by a tightened change policy.
+ * Every other revocation a look derives is from something that never goes back — an epoch, an owner's id — so the next
+ * action can write it; a policy can be loosened again, and what it ended must stay ended (S8).
+ */
+export function writtenAtALook(outcome: ApprovalOutcome): boolean {
+  return outcome.revokes && outcome.record?.kind === 'standing' && outcome.reason === CHANGE_POLICY_TIGHTENED_REASON;
+}
 /** What an outcome says of a pending or approved send under a live `never`, before anything revokes it. */
 export const NEVER_NOTICE = 'sending is turned off (policy: never); any use revokes it';
 /** The refusal of a claim, an approval or an answer by a store opened without a configuration. */
@@ -175,21 +211,27 @@ export const sentAtWords: UsedSaid = (usedAt) => `sent at ${usedAt}`;
 /** The refusal prefix and detail key of each kind: a send sends nothing, a change changes nothing, a question saves nothing. */
 function refusalOf(kind: ApprovalKind) {
   const [prefix, idKey, hint] =
-    kind === 'disclosure'
+    kind === 'standing'
       ? [
-          'nothing was disclosed',
+          'nothing was sent',
           'approvalId',
-          'Prepare a new standing disclosure authorisation and show its exact activation preview to the person.',
+          'This standing approval cannot be used. Ask the person instead; only they can set up another, at their own terminal.',
         ]
-      : kind === 'change'
-        ? ['nothing was changed', 'approvalId', 'Prepare the change again and show the new preview to the user.']
-        : kind === 'download'
-          ? [
-              'nothing was saved',
-              'choiceId',
-              'Make the download again without an answer, and show the person the new question.',
-            ]
-          : ['nothing was sent', 'approvalId', 'Prepare the send again and show the new preview to the user.'];
+      : kind === 'disclosure'
+        ? [
+            'nothing was disclosed',
+            'approvalId',
+            'Prepare a new standing disclosure authorisation and show its exact activation preview to the person.',
+          ]
+        : kind === 'change'
+          ? ['nothing was changed', 'approvalId', 'Prepare the change again and show the new preview to the user.']
+          : kind === 'download'
+            ? [
+                'nothing was saved',
+                'choiceId',
+                'Make the download again without an answer, and show the person the new question.',
+              ]
+            : ['nothing was sent', 'approvalId', 'Prepare the send again and show the new preview to the user.'];
   return (code: ErrorCode, reason: string, record: ApprovalRecord, approval: ApprovalObject, said = hint) =>
     new CommsError(code, `${prefix}: ${reason}`, {
       hint: said,
@@ -202,14 +244,17 @@ function refusalOf(kind: ApprovalKind) {
  * or one a pinned surface may not see — byte for byte the same, with `approval: null`, and nothing of any record in it.
  */
 export function approvalNotFound(approvalId: string, kind: ApprovalKind | undefined): CommsError {
+  // A standing approval sends only through its children: what was not found sent nothing.
   const prefix =
     kind === 'disclosure'
       ? 'nothing was disclosed'
-      : kind === 'change'
-        ? 'nothing was changed'
-        : kind === 'download'
-          ? 'nothing was saved'
-          : 'nothing was sent';
+      : kind === 'standing'
+        ? 'nothing was sent'
+        : kind === 'change'
+          ? 'nothing was changed'
+          : kind === 'download'
+            ? 'nothing was saved'
+            : 'nothing was sent';
   return new CommsError('NOT_FOUND', `${prefix}: no approval ${approvalId}`, {
     hint: 'Check the id: an approval is only found by the surface, the kind and the owner it was prepared for.',
     details: { approval: null },
@@ -580,14 +625,17 @@ function classifyV2(read: ApprovalRecord, context: OutcomeContext): ApprovalOutc
   const ownerRemoved = read.ownerScope === 'owner' && live?.owner === 'removed';
   const active = read.state === 'pending' || read.state === 'approved';
   const acting = action === 'approve' || action === 'claim';
+  // A send sends, and a standing approval sends through its children: both are fenced as a send is.
+  const sends = read.kind === 'send' || read.kind === 'standing';
+  // A standing approval and its children are bound to the standing epoch too (design 2026-10-19-standing-approvals).
+  const standingBound = read.kind === 'standing' || (read.kind === 'send' && read.route === 'standing');
   const never =
-    read.kind === 'send' &&
-    live?.owner === 'present' &&
-    stricterPolicy(live.sendPolicy ?? 'never', read.requiredPolicy) === 'never';
+    sends && live?.owner === 'present' && stricterPolicy(live.sendPolicy ?? 'never', read.requiredPolicy) === 'never';
 
   // A revocation the classification derives: from the configuration, not from anything the caller asked.
   // A live `never` is said as itself, before a stale epoch: whatever else is true of the record, sending is off now.
   let derived: string | null = null;
+  let revokedByNever = false;
   if (active && ownerRemoved) derived = OWNER_REMOVED_REASON;
   else if (active && never) {
     if (acting) {
@@ -596,13 +644,30 @@ function classifyV2(read: ApprovalRecord, context: OutcomeContext): ApprovalOutc
         live?.sendPolicy === 'never'
           ? `sending is turned off for this ${accountNoun(read.channel)} (policy: never)`
           : 'sending is turned off for this approval (policy: never)';
+      revokedByNever = true;
     }
-  } else if (active && read.kind === 'send' && live?.owner === 'present' && (read.sendEpoch ?? 0) !== live.sendEpoch) {
+  } else if (active && sends && live?.owner === 'present' && (read.sendEpoch ?? 0) !== live.sendEpoch) {
     derived = SEND_EPOCH_REASON;
+  } else if (
+    active &&
+    standingBound &&
+    live !== null &&
+    live.standingEpoch !== undefined &&
+    read.standingEpoch !== live.standingEpoch
+  ) {
+    // Behind the live one — or ahead of it, which no write of this release makes: either way not the live one.
+    derived = STANDING_EPOCH_REASON;
+  } else if (
+    read.kind === 'standing' &&
+    read.state === 'approved' &&
+    live?.owner === 'present' &&
+    changePolicyTightened(read.approvedChangePolicy, live.changePolicy)
+  ) {
+    // Tightened since the person approved it, by whichever release wrote the policy: the epoch may never have moved.
+    derived = CHANGE_POLICY_TIGHTENED_REASON;
   }
   const record: ApprovalRecord =
     derived === null ? read : { ...read, state: 'revoked', reason: derived, revokedAt: at, challengeHash: undefined };
-  const revokedByNever = derived !== null && derived !== OWNER_REMOVED_REASON && derived !== SEND_EPOCH_REASON;
 
   let claimable = false;
   let reason = record.reason;
@@ -692,6 +757,9 @@ function isClaimable(record: ApprovalRecord, live: LiveGate): boolean {
       return downloadClaimable(record, live.changePolicy);
     case 'disclosure':
       return record.state === 'approved';
+    // Never claimed: a standing approval is used only through the one-shot children each use mints.
+    case 'standing':
+      return false;
   }
 }
 
@@ -768,7 +836,9 @@ function errorOf(
         hint:
           record.kind === 'change'
             ? 'Prepare the change again and show the new preview to the user.'
-            : 'Prepare the send again and show the new preview to the user.',
+            : record.kind === 'standing'
+              ? 'This standing approval has ended. Ask the person instead; only they can set up another, at their own terminal.'
+              : 'Prepare the send again and show the new preview to the user.',
         details: { approvalId: record.approvalId, state: record.state, approval },
       });
     }

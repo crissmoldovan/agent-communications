@@ -39,6 +39,12 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from '../operations/servers.ts';
+import {
+  STANDING_CHANGE_KINDS,
+  type StandingChangeRequest,
+  standingChange,
+  standingReport,
+} from '../operations/standing.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
 import { updateJobChange } from '../operations/update-job.ts';
 import { updateRollbackChange } from '../operations/update-rollback.ts';
@@ -129,7 +135,7 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
-    'comms_label and comms_behaviour with no change, and comms_update with `check`.',
+    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
@@ -142,6 +148,8 @@ async function buildInstructions(core: Core): Promise<string> {
     'they say no, call comms_approval_revoke.',
     'Tightening applies at once — even beside a change that waits: comms_org_update with forOtherAddresses "off"',
     'turns that off before its preview is returned, and the preview marks it done.',
+    'comms_standing narrows or ends standing approvals at once. None is created or widened here: slack_standing_add',
+    'only prepares one the person asked for, and they approve it at their own terminal with its code, never in chat.',
     '',
     `The default change policy here is ${policy}.`,
     'A server registered with a client appears only after that client is restarted: say so.',
@@ -270,7 +278,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Check this machine',
       description:
-        'Check this machine: Node, the directories, the configuration, account names, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
+        'Check this machine: Node, the directories, the configuration, account names, the standing approvals in force and when each ends, the secret store, managed CLI shims, and which MCP clients start each server — each check with the fix when it fails. `ok` is false when any check fails; a check with `warn` is something to look at, and leaves `ok` true.',
       inputSchema: {},
       annotations: readsLocal,
     },
@@ -334,7 +342,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_approval_wait',
     {
       title: 'Wait for an approval',
-      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
+      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends \`active\` once the person has approved it — it is used through its channel's acknowledgement, never claimed — and \`standing\` says pending, active or ended, with why. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
       inputSchema: {
         approvalId: z.string().describe('the approval to wait for'),
         waitSeconds: z
@@ -593,6 +601,63 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
       return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
     },
+  );
+
+  // ── What an agent may send without asking ────────────────────────────────────────────────────────────────────
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8, S10, §8.1): `agentcomms standing` and this, one
+   * operation. Each change only takes away, so none is gated and none takes an `approvalId`: a narrowing, a revoke and
+   * `off` apply at once. Creating or widening one reads Slack, and is Slack's, approved only at a terminal.
+   */
+  const limitArg = (what: string) => z.number().int().optional().describe(what);
+  server.registerTool(
+    'comms_standing',
+    {
+      title: 'Standing approvals',
+      description:
+        "Report, narrow or end the standing approvals: acknowledgements — a standard emoji reaction, or a short fixed reply the person wrote — that an agent may send without asking, on a message that has just arrived from another person, within the places, counts and days the person set. With no change it only reports: each one's state, its contents, each named by its digest, its places and limits as in force, when it ends, its uses in the last day and its last 10 acts. Otherwise exactly one of `narrow` — keep fewer contents or places, lower a limit, or end it sooner — `revoke`, which ends one, or `off`, which ends every one. Each applies at once and asks nobody, since each only takes away; one that would allow more is refused. Nothing here creates or widens one: that is prepared on Slack and approved by the person at their own terminal, with its code. End one, or all, whenever the person asks.",
+      inputSchema: {
+        narrow: z
+          .strictObject({
+            id: z.string().describe('the standing approval, by its id'),
+            keep: z
+              .array(z.string())
+              .optional()
+              .describe('the contents to keep, by the digests the report shows; every other is dropped'),
+            places: z
+              .array(z.string())
+              .optional()
+              .describe('the exact places to keep, by id (C…, G…, D…); every other is dropped'),
+            limits: z
+              .strictObject({
+                perThread: limitArg('acts per thread, or per message outside one, across every standing approval'),
+                perHour: limitArg('acts an hour'),
+                perDay: limitArg('acts a day'),
+                perSender: limitArg('acts a day on messages from any one person, across every standing approval'),
+                expiresDays: limitArg('days from its approval until it ends'),
+              })
+              .optional()
+              .describe('lower limits, or fewer days: each no higher than it is now'),
+          })
+          .optional()
+          .describe('what to keep of one standing approval: it applies at once'),
+        revoke: z
+          .strictObject({ id: z.string().describe('the standing approval, by its id') })
+          .optional()
+          .describe('end one standing approval at once, and every act of it not yet sent'),
+        off: z.literal(true).optional().describe('true ends every standing approval at once'),
+      },
+      // It only takes away, but what it takes away — a narrowing, a revoke, `off` — cannot be undone by any tool.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) =>
+      read(async () => {
+        const asked = STANDING_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+        if (asked.length === 0) return standingReport(core);
+        const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as StandingChangeRequest;
+        return standingChange(core, request, { surface: 'mcp' });
+      }),
   );
 
   // ── How the person writes ────────────────────────────────────────────────────────────────────────────────────

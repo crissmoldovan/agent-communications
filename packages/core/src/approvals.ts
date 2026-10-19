@@ -12,7 +12,9 @@ import {
   pendingMsOf,
   requireKnownChannel,
   SENDING_LEASE_MS,
+  type StandingUseBinding,
   sameDisclosureBinding,
+  standingUseProblem,
 } from './approval-binding.ts';
 import { changePendingHint } from './approval-handoffs.ts';
 import { registerStoreInternals } from './approval-internals.ts';
@@ -37,6 +39,7 @@ import {
   type OutcomeAction,
   type UsedSaid,
   withApproval,
+  writtenAtALook,
 } from './approval-outcome.ts';
 import {
   channelOf,
@@ -67,6 +70,16 @@ import { type CliHandoffs, handoffChoices, requiredHandoffs } from './handoff-te
 import { APPROVAL_ID_PATTERN, challengeMatches, hashChallenge, newApprovalId, newChallenge } from './ids.ts';
 import { withFileLock } from './lock.ts';
 import type { RenameReason } from './saved-files.ts';
+import {
+  canonicalStandingBinding,
+  effectiveStanding,
+  narrowedFurther,
+  STANDING_DAY_MS,
+  type StandingBinding,
+  type StandingNarrowing,
+  standingDays,
+  standingDigest,
+} from './standing.ts';
 
 /**
  * Approval records bind a send to exactly one draft version. States:
@@ -102,7 +115,7 @@ export type ApprovalChannel = 'elicitation' | 'terminal';
  * and a kind on every record, so that none can be spent as another. Without it, a person who approved a post at a
  * terminal would also have approved whatever change an agent claimed under the same id.
  */
-export type ApprovalKind = 'send' | 'change' | 'download' | 'disclosure';
+export type ApprovalKind = 'send' | 'change' | 'download' | 'disclosure' | 'standing';
 export type {
   DisclosureActivationKind,
   DisclosureBinding,
@@ -396,8 +409,11 @@ export interface ApprovalRecord {
    * terminal or in a trusted form. Never on a send or a change, which carry `approvedBindingDigest` instead.
    */
   approvedDigest?: string | undefined;
-  /** Where a person approved, or answered: the terminal, or a trusted client's form. Absent on a chat-route claim. */
-  approvedVia?: ApprovalChannel | undefined;
+  /**
+   * Where a person approved, or answered: the terminal, or a trusted client's form. Absent on a chat-route claim.
+   * `standing` on a standing approval's child, and on nothing else: the person approved it in advance, at a terminal.
+   */
+  approvedVia?: ApprovalChannel | 'standing' | undefined;
   /** A send's or a change's approval: when, and the binding the person approved, which must still be the record's. */
   approvedAt?: string | undefined;
   /** `approvedAt + approvedMs`: until when an approved send or change may be claimed. */
@@ -435,6 +451,29 @@ export interface ApprovalRecord {
   download?: DownloadBinding | undefined;
   /** For a standing disclosure: the canonical, content-free event activation authority. */
   disclosure?: DisclosureBinding | undefined;
+  /**
+   * For a standing approval (`kind: 'standing'`, design 2026-10-19-standing-approvals): exactly what it permits.
+   * `contentDigest` is `standingDigest` of this.
+   */
+  standing?: StandingBinding | undefined;
+  /** For a standing approval: what has been narrowed since, at once. Not bound: it can only take away (S8). */
+  narrowed?: StandingNarrowing | undefined;
+  /** On a standing approval and its children: the standing epoch as read when it was made. Bound. */
+  standingEpoch?: number | undefined;
+  /** On a standing approval's child: the standing approval it is one use of. Bound. */
+  standingId?: string | undefined;
+  /**
+   * On a standing approval's child: where its act goes and which of its standing approval's contents it sends, by
+   * digest — what its claim checks the standing approval still covers. Bound.
+   */
+  standingUse?: StandingUseBinding | undefined;
+  /**
+   * On an approved standing approval: the change policy that governed its account when the person approved it — its
+   * own, else the default. Written with the approval, beside `approvedAt`. A live change policy stricter than this has
+   * ended it (`changePolicy-tightened`), whatever the standing epoch says: a release that knows no standing epoch can
+   * still tighten the policy (design 2026-10-19-standing-approvals, S8, the lead's call after review).
+   */
+  approvedChangePolicy?: ChangePolicy | undefined;
 }
 
 /**
@@ -622,6 +661,19 @@ function refuseDisclosure(code: ErrorCode, reason: string, record?: Refused, hin
   });
 }
 
+/**
+ * The same refusal for a standing approval, which sends only through its children: nothing was sent under it. Its hint
+ * never names a command that makes or widens one — only the person does that, at their terminal.
+ */
+function refuseStanding(code: ErrorCode, reason: string, record?: Refused, hint?: string): CommsError {
+  return new CommsError(code, `nothing was sent: ${reason}`, {
+    hint:
+      hint ??
+      'This standing approval cannot be used. Ask the person instead; only they can set up another, at their own terminal.',
+    details: record ? { approvalId: record.approvalId, state: record.state } : {},
+  });
+}
+
 /** The refusal in the words of the record's own kind. */
 function refusalFor(record: { kind?: ApprovalKind | undefined }): typeof refuse {
   const kind = approvalKind(record);
@@ -634,6 +686,8 @@ function refusalFor(record: { kind?: ApprovalKind | undefined }): typeof refuse 
       return refuseDownload;
     case 'disclosure':
       return refuseDisclosure;
+    case 'standing':
+      return refuseStanding;
   }
 }
 
@@ -693,6 +747,11 @@ function cancelledClaim(record: ApprovalRecord): CommsError {
     case 'disclosure':
       return new CommsError('USAGE', 'cancelled: nothing was disclosed', {
         hint: 'The standing disclosure approval was not used: it can still be completed until it expires.',
+        details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
+      });
+    case 'standing':
+      return new CommsError('USAGE', 'cancelled: nothing was sent', {
+        hint: 'The standing approval was not used: it is as it was.',
         details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
       });
   }
@@ -902,10 +961,21 @@ export class ApprovalStore {
       if (now < Date.parse(record.createdAt) || (approvedAt !== undefined && now < Date.parse(approvedAt))) {
         return { ...record, state: 'expired', reason: CLOCK_ANOMALY, expiredAt: observed.toISOString() };
       }
-      const deadline =
+      let deadline =
         record.state === 'approved' && record.kind !== 'download' && record.usableUntil !== undefined
           ? record.usableUntil
           : record.expiresAt;
+      // A standing approval narrowed to fewer days ends then (S8): its own deadline, never later than its binding's.
+      if (
+        record.kind === 'standing' &&
+        record.state === 'approved' &&
+        record.approvedAt !== undefined &&
+        record.standing
+      ) {
+        const narrowed =
+          Date.parse(record.approvedAt) + standingDays(record.standing, record.narrowed) * STANDING_DAY_MS;
+        if (narrowed < Date.parse(deadline)) deadline = new Date(narrowed).toISOString();
+      }
       if (now >= Date.parse(deadline)) {
         return { ...record, state: 'expired', reason: 'the approval window passed', expiredAt: deadline };
       }
@@ -1056,7 +1126,15 @@ export class ApprovalStore {
     expect: ApprovalExpectation,
     action: OutcomeAction,
     decide: (current: ApprovalRecord, outcome: ApprovalOutcome, live: LiveGate | null) => ApprovalRecord,
-    options: { claimToken?: string | undefined; usedSaid?: UsedSaid | undefined } = {},
+    options: {
+      claimToken?: string | undefined;
+      usedSaid?: UsedSaid | undefined;
+      /**
+       * Read under the record's lock, after its own classification is written and before `decide`: what `decide` needs
+       * that only another read can say — a standing child's standing approval, read under that one's own lock.
+       */
+      before?: ((current: ApprovalRecord, outcome: ApprovalOutcome) => Promise<void>) | undefined;
+    } = {},
   ): Promise<Transitioned> {
     const path = this.#path(approvalId);
     return withFileLock(`${path}.lock`, async () => {
@@ -1080,6 +1158,7 @@ export class ApprovalStore {
       const objectOf = (record: ApprovalRecord) => approvalObjectOf(record, live, this.#now());
       let next: ApprovalRecord;
       try {
+        await options.before?.(current, outcome);
         next = decide(current, outcome, live);
       } catch (error) {
         throw withApproval(error, objectOf(current));
@@ -1115,7 +1194,10 @@ export class ApprovalStore {
       const live = config === null || derived.form !== 'v2' ? null : liveGateOf(config, derived.record);
       const outcome = approvalOutcome(derived, { action, live, now: this.#now(), usedSaid: options.usedSaid });
       if (found.form === 'v2' && derived.form === 'v2') {
-        const acting = outcome.revokes && action !== 'inspect' && action !== 'wait' && outcome.record !== null;
+        const acting =
+          outcome.revokes &&
+          outcome.record !== null &&
+          ((action !== 'inspect' && action !== 'wait') || writtenAtALook(outcome));
         const current = acting && outcome.record !== null ? outcome.record : derived.record;
         if (current.state !== found.record.state) {
           await this.#write({ ...current, updatedAt: this.#now().toISOString() });
@@ -1189,6 +1271,11 @@ export class ApprovalStore {
       case 'disclosure':
         return new CommsError('USAGE', 'nothing was disclosed: it is approved already, and a person approves it once', {
           hint: 'Nothing more is needed from the person: complete the same activation with the same approval.',
+          details: detail,
+        });
+      case 'standing':
+        return new CommsError('USAGE', 'nothing was sent: it is approved already, and a person approves it once', {
+          hint: 'Nothing more is needed from the person: the standing approval is in force until it ends.',
           details: detail,
         });
     }
@@ -1383,7 +1470,7 @@ export class ApprovalStore {
       approvalId,
       { kind },
       'approve',
-      (current, outcome) => {
+      (current, outcome, gate) => {
         if (outcome.error) throw outcome.error;
         if (current.state !== 'pending') throw this.#alreadyApproved(current, outcome);
         if (!current.challengeHash)
@@ -1398,11 +1485,26 @@ export class ApprovalStore {
           };
           return { ...current, state: 'revoked', reason: failure.reason, revokedAt: at.toISOString() };
         }
+        /*
+         * A standing approval lets acts happen with nobody asked (design 2026-10-19-standing-approvals, S8): it is
+         * approved with the code typed at a terminal and nothing else, whatever the change policy — never a client's
+         * form. Voided here, before any other evidence could be written.
+         */
+        if (kind === 'standing' && via !== 'terminal') {
+          failure = {
+            code: 'APPROVAL_VOID',
+            reason:
+              'a standing approval is approved only with its code at a terminal, and this was not approved at a terminal',
+          };
+          return { ...current, state: 'revoked', reason: failure.reason, revokedAt: at.toISOString() };
+        }
         if (live.draftMessageId !== current.draftMessageId || live.contentDigest !== current.contentDigest) {
           const reason =
             kind === 'change'
               ? 'the change shown is not the one the approval was prepared for'
-              : 'the draft changed after the preview was prepared';
+              : kind === 'standing'
+                ? 'the standing approval shown is not the one that was prepared'
+                : 'the draft changed after the preview was prepared';
           failure = { code: 'APPROVAL_VOID', reason };
           return { ...current, state: 'revoked', reason: failure.reason, revokedAt: at.toISOString() };
         }
@@ -1430,6 +1532,12 @@ export class ApprovalStore {
           usableUntil: new Date(at.getTime() + (current.approvedMs ?? APPROVAL_LIFETIMES.approved)).toISOString(),
           approvedBindingDigest: current.bindingDigest,
           challengeHash: undefined,
+          /*
+           * A standing approval binds the change policy that governed its account as the person approved it, read under
+           * this lock: a live one stricter than this ends it, from the configuration alone (S8, the lead's call after
+           * review). With none to read it binds `chat`, the looser, so that any `confirm` ends it.
+           */
+          ...(kind === 'standing' ? { approvedChangePolicy: gate?.changePolicy ?? 'chat' } : {}),
         };
       },
       { usedSaid: options.usedSaid },
@@ -1456,6 +1564,8 @@ export class ApprovalStore {
     options: ClaimOptions = {},
   ): Promise<SendClaim> {
     let failure: Failure | null = null;
+    // A standing child's standing approval, as it reads now: ended or narrowed since the mint, the child is void.
+    let parentProblem: string | null = null;
     const done = await this.#transition(
       approvalId,
       { kind: 'send', owner: live.inboxId },
@@ -1475,6 +1585,7 @@ export class ApprovalStore {
           failure = { code, reason };
           return { ...current, state: 'revoked', reason, revokedAt: at, challengeHash: undefined };
         };
+        if (parentProblem !== null) return voidWith('APPROVAL_VOID', parentProblem);
         // Fail closed: an approval prepared against a known account may only be claimed by a caller that names the same
         // account. A caller that passes none is refused rather than trusted, whatever the reason it has none.
         if (current.inboxSub && current.inboxSub !== live.inboxSub) {
@@ -1509,7 +1620,15 @@ export class ApprovalStore {
         }
         return { ...current, state: 'sending', sendingAt: at };
       },
-      { usedSaid: options.usedSaid },
+      {
+        usedSaid: options.usedSaid,
+        // Every channel's: a standing child is claimed only while its standing approval still covers what it sends.
+        before: async (current, outcome) => {
+          if (outcome.error === undefined && current.route === 'standing' && current.state === 'approved') {
+            parentProblem = await this.#standingParentProblem(current);
+          }
+        },
+      },
     );
     const failed = failure as Failure | null;
     if (failed) throw refusedAfter(refuse(failed.code, failed.reason, done.record), done);
@@ -1518,6 +1637,40 @@ export class ApprovalStore {
     // Claimed to be sent: the person's yes, at a terminal before or in the chat now. Its preview's question is answered.
     await this.answered?.(approvalId);
     return { record: done.record, claimToken, approval: done.approval };
+  }
+
+  /**
+   * Why a standing child may not be claimed now, or null (design 2026-10-19-standing-approvals, S9, the lead's call after
+   * review): its standing approval read again, under that one's own lock — ended by any of the store's rules, an epoch
+   * or a tightened change policy among them, or narrowed so that it no longer holds the child's content or covers its
+   * place. Called with the child's lock held: no lock is ever taken the other way round.
+   */
+  async #standingParentProblem(child: ApprovalRecord): Promise<string | null> {
+    const use = child.standingUse;
+    if (child.standingId === undefined || use === undefined) return 'it names no standing approval it is a use of';
+    let seen: { stored: StoredApproval; outcome: ApprovalOutcome };
+    try {
+      seen = await this.inspect(child.standingId, { kind: 'standing', owner: child.inboxId }, { action: 'claim' });
+    } catch {
+      return 'its standing approval could not be read';
+    }
+    const parent = seen.outcome.record;
+    if (
+      seen.outcome.error !== undefined ||
+      parent === null ||
+      parent.state !== 'approved' ||
+      parent.standing === undefined
+    ) {
+      return `its standing approval has ended${seen.outcome.reason === undefined ? '' : ` (${seen.outcome.reason})`}`;
+    }
+    const inForce = effectiveStanding(parent.standing, parent.narrowed);
+    if (!inForce.contents.some((content) => content.digest === use.content)) {
+      return 'its standing approval no longer holds what it sends';
+    }
+    if (inForce.places.kind === 'exact' && !inForce.places.places.some((place) => place.id === use.channel)) {
+      return 'its standing approval no longer covers where it goes';
+    }
+    return null;
   }
 
   /**
@@ -1702,6 +1855,250 @@ export class ApprovalStore {
     const failed = failure as Failure | null;
     if (failed) throw refusedAfter(refuseChange(failed.code, failed.reason, done.record), done);
     await this.#markClaimed(done);
+    return done.record;
+  }
+
+  /**
+   * A standing approval (design 2026-10-19-standing-approvals, S8), pending, bound to `standingDigest` of its binding —
+   * computed here, never taken from the caller — and to the send epoch of its account and the standing epoch, both as
+   * read when it is made.
+   *
+   * Its route is `confirm` and its `requiredPolicy` `confirm` whatever the change policy is, because what it permits
+   * happens with nobody asked: it is approved only with the code typed at a terminal (`approve`, `via: 'terminal'`),
+   * never by a yes in the chat, a client's form, or an answer carried in a call. It lasts its days once approved
+   * (`approvedMs`). Nothing ever claims it: each use mints a child (`createStandingChild`).
+   *
+   * The binding is checked before anything is written (`canonicalStandingBinding`): a custom emoji, a reply with a
+   * link, a limit outside the table or a place that is no Slack id is refused, however the caller assembled it.
+   */
+  async createStanding(input: {
+    binding: StandingBinding;
+    inboxSub: string;
+    sendEpoch: number;
+    standingEpoch: number;
+  }): Promise<ApprovalRecord> {
+    const standing = canonicalStandingBinding(input.binding);
+    if (typeof input.inboxSub !== 'string' || input.inboxSub === '') {
+      throw new CommsError('BAD_DATA', 'nothing was prepared: a standing approval is made for a known account user', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+    requireEpochs(input.sendEpoch, input.standingEpoch);
+    requireKnownChannel('slack');
+    // The day's retention first, bounded: a creation goes on whatever it finds.
+    await this.ensurePruned();
+    const now = this.#now();
+    const digest = standingDigest(standing);
+    const pendingMs = APPROVAL_LIFETIMES.confirm;
+    const record = this.#bound({
+      approvalId: newApprovalId(),
+      kind: 'standing',
+      digestVersion: DIGEST_VERSION,
+      channel: 'slack',
+      ownerScope: 'owner',
+      route: 'confirm',
+      pendingMs,
+      approvedMs: standing.limits.expiresDays * STANDING_DAY_MS,
+      inboxId: standing.target.id,
+      inboxSub: input.inboxSub,
+      draftId: 'standing',
+      draftMessageId: digest,
+      contentDigest: digest,
+      sendEpoch: input.sendEpoch,
+      standingEpoch: input.standingEpoch,
+      policy: 'confirm',
+      requiredPolicy: 'confirm',
+      riskFlags: [],
+      // Not an expectation of recipients, as for a change: the field every listing already shows.
+      expect: { to: [], cc: [], bcc: [], subject: standing.summary },
+      challengeAttempts: 0,
+      state: 'pending',
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
+      updatedAt: now.toISOString(),
+      standing,
+    });
+    await this.#write(record);
+    return record;
+  }
+
+  /**
+   * Runs `use` under the standing record's own lock, with the record as it reads there and its classification for a
+   * use (`claim`): its expiry, a revocation the configuration derives — its account removed, `never`, a send epoch or
+   * a standing epoch behind the live one — written before `use` runs, and `outcome.error` set for every state that
+   * refuses a use. `owner` is the account the caller acts for: any other's record is the one `NOT_FOUND`.
+   *
+   * What `use` decides is decided while no revocation, narrowing or approval of this record can land. `use` must not
+   * take this record's lock again: it is held.
+   */
+  async withStanding<T>(
+    standingId: string,
+    owner: string,
+    use: (record: ApprovalRecord, outcome: ApprovalOutcome) => Promise<T>,
+  ): Promise<T> {
+    const path = this.#path(standingId);
+    const expect: ApprovalExpectation = { kind: 'standing', owner };
+    return withFileLock(`${path}.lock`, async () => {
+      const config = await this.#config();
+      const found = await this.#read(standingId, config);
+      if (found === null || !matchesExpectation(found, expect)) throw approvalNotFound(standingId, 'standing');
+      const derived = this.#derived(found);
+      const live = config === null || derived.form !== 'v2' ? null : liveGateOf(config, derived.record);
+      const outcome = approvalOutcome(derived, { action: 'claim', live, now: this.#now() });
+      if (found.form !== 'v2' || derived.form !== 'v2' || outcome.record === null) {
+        throw outcome.error ?? integrityRefusal(found);
+      }
+      const current = outcome.revokes ? outcome.record : derived.record;
+      if (current.state !== found.record.state) await this.#write({ ...current, updatedAt: this.#now().toISOString() });
+      return use(current, outcome);
+    });
+  }
+
+  /**
+   * One use of a standing approval (S9): a send record, approved the moment it is made — `route: 'standing'`,
+   * `approvedVia: 'standing'`, `approvedAt` its creation — bound to the standing id, the standing epoch and the send
+   * epoch, and usable once, within `APPROVAL_LIFETIMES.standingChild`. It then takes the one send path every send
+   * takes: `claimForSend`, its O_EXCL marker, the fence and the outcome.
+   *
+   * Minted only by the use (`mintStandingUse`), under the account's acknowledgement ledger lock and then the standing
+   * record's, after every check there. Checked again here, read without that lock — which the caller holds: the
+   * standing record must be this account's, approved at a terminal, under the same epochs and the same account user,
+   * and not ended, or nothing is written. A child never names anything but what its use was checked for.
+   */
+  async createStandingChild(input: {
+    /**
+     * The id the child is made under, when its use was counted under it first (`mintStandingUse`): an id this store
+     * would make, and one no record holds. A new one when left out.
+     */
+    approvalId?: string | undefined;
+    standingId: string;
+    standingEpoch: number;
+    inboxId: string;
+    inboxSub: string;
+    draftId: string;
+    draftMessageId: string;
+    contentDigest: string;
+    sendEpoch: number;
+    riskFlags: string[];
+    expect: Expectation;
+    /** Where the act goes, and which of the standing approval's contents it sends: what its claim checks again. */
+    use: StandingUseBinding;
+  }): Promise<ApprovalRecord> {
+    if (!/^[0-9a-f]{64}$/.test(input.contentDigest)) {
+      throw new CommsError('UNEXPECTED', 'an approval is bound to a SHA-256 of what it permits, and this is not one', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+    if (standingUseProblem(input.use) !== null) {
+      throw new CommsError('UNEXPECTED', 'a standing use’s child names where it acts and what it sends, or nothing', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+    requireEpochs(input.sendEpoch, input.standingEpoch);
+    requireKnownChannel('slack');
+    const config = await this.#config();
+    if (input.approvalId !== undefined) {
+      // Never over another record: an id given here is a fresh one, and nothing may already be held under it.
+      if (!APPROVAL_ID_PATTERN.test(input.approvalId) || (await this.#read(input.approvalId, config)) !== null) {
+        throw new CommsError('UNEXPECTED', 'a standing use’s child is made under a fresh id, and this is not one', {
+          hint: 'This is a bug — please report it.',
+        });
+      }
+    }
+    const found = await this.#read(input.standingId, config);
+    if (found === null || !matchesExpectation(found, { kind: 'standing', owner: input.inboxId })) {
+      throw approvalNotFound(input.standingId, 'standing');
+    }
+    if (found.form !== 'v2') throw integrityRefusal(found);
+    const parent = this.#derive(found.record);
+    const live = config === null ? null : liveGateOf(config, parent);
+    const outcome = approvalOutcome({ form: 'v2', record: parent }, { action: 'claim', live, now: this.#now() });
+    if (outcome.error) throw outcome.error;
+    const standing = outcome.record ?? parent;
+    if (standing.state === 'pending') {
+      throw refuseStanding(
+        'APPROVAL_PENDING',
+        'the standing approval waits for the person to approve it at a terminal',
+        standing,
+      );
+    }
+    const unbound =
+      standing.state !== 'approved'
+        ? 'the standing approval is not in force'
+        : standing.approvedVia !== 'terminal' || standing.approvedBindingDigest !== standing.bindingDigest
+          ? 'the standing approval was not approved at a terminal'
+          : standing.standingEpoch !== input.standingEpoch || standing.sendEpoch !== input.sendEpoch
+            ? 'the use is not bound to the epochs its standing approval was made under'
+            : standing.inboxSub !== input.inboxSub
+              ? 'the use is not for the account user its standing approval was made for'
+              : null;
+    if (unbound !== null) throw refuseStanding('APPROVAL_VOID', unbound, standing);
+
+    const now = this.#now();
+    const at = now.toISOString();
+    const lifetime = APPROVAL_LIFETIMES.standingChild;
+    const until = new Date(now.getTime() + lifetime).toISOString();
+    const sealed = this.#bound({
+      approvalId: input.approvalId ?? newApprovalId(),
+      kind: 'send',
+      digestVersion: DIGEST_VERSION,
+      channel: 'slack',
+      ownerScope: 'owner',
+      route: 'standing',
+      pendingMs: lifetime,
+      approvedMs: lifetime,
+      inboxId: input.inboxId,
+      inboxSub: input.inboxSub,
+      draftId: input.draftId,
+      draftMessageId: input.draftMessageId,
+      contentDigest: input.contentDigest,
+      sendEpoch: input.sendEpoch,
+      standingEpoch: input.standingEpoch,
+      standingId: input.standingId,
+      standingUse: { channel: input.use.channel, thread: input.use.thread, content: input.use.content },
+      // The send policy as it stands, for display and audit; approved in advance, outside the chat.
+      policy: live?.sendPolicy === 'chat' ? 'chat' : 'confirm',
+      requiredPolicy: 'confirm',
+      riskFlags: [...input.riskFlags],
+      expect: {
+        to: [...input.expect.to],
+        cc: [...input.expect.cc],
+        bcc: [...input.expect.bcc],
+        subject: input.expect.subject,
+      },
+      challengeAttempts: 0,
+      state: 'approved',
+      createdAt: at,
+      expiresAt: until,
+      updatedAt: at,
+      approvedVia: 'standing',
+      approvedAt: at,
+      usableUntil: until,
+    });
+    // The binding it was approved with is its own, as for every approved send.
+    const record: ApprovalRecord = { ...sealed, approvedBindingDigest: sealed.bindingDigest };
+    await this.#write(record);
+    return record;
+  }
+
+  /**
+   * Narrows a standing approval at once (S8): fewer contents or places, a lower limit, an earlier end. Nothing is asked
+   * for, because nothing more is permitted: anything `classifyStandingChange` calls a widening of what is in force is
+   * refused with USAGE, and the record is left as it was. The binding the person approved stays the record's own, and
+   * what is narrowed is kept beside it, where it can only take away.
+   */
+  async narrowStanding(standingId: string, owner: string, narrowing: StandingNarrowing): Promise<ApprovalRecord> {
+    const done = await this.#transition(standingId, { kind: 'standing', owner }, 'revoke', (current, outcome) => {
+      if (outcome.error) throw outcome.error;
+      if ((current.state !== 'pending' && current.state !== 'approved') || current.standing === undefined) {
+        throw refuseStanding(
+          'APPROVAL_VOID',
+          'the standing approval has ended, so there is nothing to narrow',
+          current,
+        );
+      }
+      return { ...current, narrowed: narrowedFurther(current.standing, current.narrowed, narrowing) };
+    });
     return done.record;
   }
 
@@ -2034,7 +2431,14 @@ export class ApprovalStore {
           await this.#write({ ...derived.record, updatedAt: this.#now().toISOString() });
         }
         const live = config === null || derived.form !== 'v2' ? null : liveGateOf(config, derived.record);
-        return { stored: derived, outcome: approvalOutcome(derived, { action: 'inspect', live, now: this.#now() }) };
+        const outcome = approvalOutcome(derived, { action: 'inspect', live, now: this.#now() });
+        // The one revocation a look writes down: what a loosening could otherwise take back (`writtenAtALook`).
+        if (writtenAtALook(outcome) && outcome.record !== null) {
+          const ended = { ...outcome.record, updatedAt: this.#now().toISOString() };
+          await this.#write(ended);
+          return { stored: { form: 'v2' as const, record: ended }, outcome };
+        }
+        return { stored: derived, outcome };
       });
       if (seen === null) continue;
       if (filter.inboxId !== undefined && filter.inboxId !== '' && ownerOf(seen.stored) !== filter.inboxId) continue;
@@ -2074,6 +2478,17 @@ export class ApprovalStore {
       found.push(current);
     }
     return found.sort(byCreation);
+  }
+}
+
+/** Both epochs a standing record or child binds: whole numbers of 0 or more, or a programming error. */
+function requireEpochs(sendEpoch: number, standingEpoch: number): void {
+  for (const epoch of [sendEpoch, standingEpoch]) {
+    if (!Number.isSafeInteger(epoch) || epoch < 0) {
+      throw new CommsError('UNEXPECTED', 'a standing approval is bound to whole epochs, and this is not one', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
   }
 }
 

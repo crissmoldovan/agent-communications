@@ -202,8 +202,9 @@ const MEMBER_PAGES = 10;
 /**
  * Whether the bot user is in the room, read with the person's token and paged until it is found (S2). Undefined when
  * that could not be settled — a failed read, or ten pages without it and more to come — which is never read as yes.
+ * A standing reaction asks it too, of every room, before anything is counted (`ack.ts`).
  */
-async function botIsMember(call: SlackCall, channel: string, botUserId: string): Promise<boolean | undefined> {
+export async function botIsMember(call: SlackCall, channel: string, botUserId: string): Promise<boolean | undefined> {
   let cursor: string | undefined;
   for (let page = 0; page < MEMBER_PAGES; page += 1) {
     let response: Record<string, unknown>;

@@ -5,9 +5,19 @@ import {
   type DisclosureBinding,
   isKnownChannel,
   pendingMsOf,
+  standingUseProblem,
 } from './approval-binding.ts';
 import { type ApprovalRecord, type ApprovalState, changeDigest, DIGEST_VERSION, downloadDigest } from './approvals.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
+import {
+  STANDING_DAY_MS,
+  STANDING_LIMITS,
+  type StandingBinding,
+  standingBindingProblem,
+  standingDigest,
+  standingNarrowingProblem,
+} from './standing.ts';
 
 /**
  * The integrity check of a version-2 approval record (design 2026-10-05 §D1, "Digest integrity" and "Version-2
@@ -34,6 +44,7 @@ export type IntegrityReason =
   | 'content-digest-mismatch'
   | 'identity-contradiction'
   | 'listing-mismatch'
+  | 'narrowing-invalid'
   | 'state-impossible'
   | 'lifetime-mismatch'
   | 'timestamp-invalid'
@@ -65,16 +76,37 @@ const STATES: readonly ApprovalState[] = [
   'expired',
   'revoked',
 ];
-/** The states each kind can reach. A change or a download is claimed straight to `used`: it is never sent. */
-const STATES_OF: Readonly<Record<'send' | 'change' | 'download', readonly ApprovalState[]>> = {
+/**
+ * The states each kind can reach. A change or a download is claimed straight to `used`: it is never sent. A standing
+ * approval is never claimed at all — its children are — so it ends expired or revoked.
+ */
+const STATES_OF: Readonly<Record<Kind, readonly ApprovalState[]>> = {
   send: STATES,
   change: ['pending', 'approved', 'used', 'expired', 'revoked'],
   download: ['pending', 'approved', 'used', 'expired', 'revoked'],
+  standing: ['pending', 'approved', 'expired', 'revoked'],
 };
+/** A standing approval's child, approved when it is made: never pending. */
+const CHILD_STATES: readonly ApprovalState[] = [
+  'approved',
+  'sending',
+  'used',
+  'failed',
+  'unknown',
+  'expired',
+  'revoked',
+];
 /** The send states that went through a claim, and so carry `sendingAt`. */
 const CLAIMED_SEND: readonly ApprovalState[] = ['sending', 'used', 'failed', 'unknown'];
 
 type Fail = { ok: false; reason: IntegrityReason; attribution: Attribution };
+/** The kinds this validator reads field by field; a disclosure has its own closed check. */
+type Kind = 'send' | 'change' | 'download' | 'standing';
+
+/** Whether a record is one use of a standing approval: a send on the `standing` route. */
+function isChild(raw: Record<string, unknown>): boolean {
+  return raw.kind === 'send' && raw.route === 'standing';
+}
 
 /** A record's timestamp field: absent, invalid, or the time it names. */
 function timeOf(value: unknown): number | null | 'invalid' {
@@ -130,7 +162,7 @@ function checkVerified(record: ApprovalRecord, raw: Record<string, unknown>): Fa
   if (raw.digestVersion !== DIGEST_VERSION) return fail('digest-version');
   const kind = raw.kind;
   if (kind === 'disclosure') return checkDisclosure(record, raw);
-  if (kind !== 'send' && kind !== 'change' && kind !== 'download') return fail('wrong-shape');
+  if (kind !== 'send' && kind !== 'change' && kind !== 'download' && kind !== 'standing') return fail('wrong-shape');
   if (!STATES.includes(raw.state as ApprovalState)) return fail('state-impossible');
   const state = raw.state as ApprovalState;
 
@@ -146,12 +178,22 @@ function checkVerified(record: ApprovalRecord, raw: Record<string, unknown>): Fa
       return fail('content-digest-mismatch');
     }
   }
+  // A standing approval: a binding the store would have made, digesting to what it is bound to, and a narrowing that
+  // can only take away. Only it holds either.
+  if (kind === 'standing') {
+    if (record.standing === undefined || standingBindingProblem(record.standing) !== null) return fail('wrong-shape');
+    if (standingDigest(record.standing) !== record.contentDigest) return fail('content-digest-mismatch');
+    if (standingNarrowingProblem(record.standing, raw.narrowed) !== null) return fail('narrowing-invalid');
+  } else if (raw.standing !== undefined || raw.narrowed !== undefined) {
+    return fail('wrong-shape');
+  }
 
   const identity = checkIdentity(record, raw, kind);
   if (identity !== null) return identity;
   if (!STATES_OF[kind].includes(state)) return fail('state-impossible');
+  if (isChild(raw) && !CHILD_STATES.includes(state)) return fail('state-impossible');
 
-  const lifetime = checkLifetime(raw, kind);
+  const lifetime = checkLifetime(record, raw, kind);
   if (lifetime !== null) return lifetime;
 
   const times: Partial<Record<Stamp, number>> = {};
@@ -226,11 +268,7 @@ function checkDisclosure(record: ApprovalRecord, raw: Record<string, unknown>): 
 }
 
 /** The identity the binding covers is also consistent with itself: who it belongs to, and what it is about. */
-function checkIdentity(
-  record: ApprovalRecord,
-  raw: Record<string, unknown>,
-  kind: 'send' | 'change' | 'download',
-): Fail | null {
+function checkIdentity(record: ApprovalRecord, raw: Record<string, unknown>, kind: Kind): Fail | null {
   if (!isKnownChannel(raw.channel)) return fail('identity-contradiction');
   const scope = raw.ownerScope;
   if (kind !== 'change') {
@@ -244,11 +282,31 @@ function checkIdentity(
     if (scope !== expected) return fail('identity-contradiction');
     if (raw.inboxId !== (expected === 'owner' ? target?.id : '')) return fail('identity-contradiction');
   }
-  if (kind === 'send') {
-    if (typeof raw.sendEpoch !== 'number' || !Number.isInteger(raw.sendEpoch) || raw.sendEpoch < 0) {
+  const wholeEpoch = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  if (kind === 'send' || kind === 'standing') {
+    if (!wholeEpoch(raw.sendEpoch)) return fail('identity-contradiction');
+  } else if (raw.sendEpoch !== undefined) {
+    return fail('identity-contradiction');
+  }
+  // A standing approval and its children: Slack's, bound to the standing epoch too; a child names its standing
+  // approval. Neither field appears on any other record.
+  const standingBound = kind === 'standing' || isChild(raw);
+  if (standingBound) {
+    if (raw.channel !== 'slack' || !wholeEpoch(raw.standingEpoch)) return fail('identity-contradiction');
+  } else if (raw.standingEpoch !== undefined) {
+    return fail('identity-contradiction');
+  }
+  if (isChild(raw)) {
+    if (typeof raw.standingId !== 'string' || !APPROVAL_ID_PATTERN.test(raw.standingId)) {
       return fail('identity-contradiction');
     }
-  } else if (raw.sendEpoch !== undefined) {
+    if (raw.standingId === raw.approvalId) return fail('identity-contradiction');
+    // Where it acts and what it sends, which its claim checks its standing approval still covers.
+    if (standingUseProblem(raw.standingUse) !== null) return fail('identity-contradiction');
+  } else if (raw.standingId !== undefined || raw.standingUse !== undefined) {
+    return fail('identity-contradiction');
+  }
+  if (kind === 'standing' && (record.standing as StandingBinding).target.id !== raw.inboxId) {
     return fail('identity-contradiction');
   }
   if (kind === 'download') {
@@ -264,11 +322,29 @@ function checkIdentity(
   return null;
 }
 
-/** The lifetime profile: what the route says, and nothing the record could have chosen for itself. */
-function checkLifetime(raw: Record<string, unknown>, kind: 'send' | 'change' | 'download'): Fail | null {
+/**
+ * The lifetime profile: what the route says, and nothing the record could have chosen for itself. A standing approval
+ * waits as a `confirm` change does and lasts the whole days its limits name, from 1 to 30; its child lives
+ * `standingChild`, pending and approved alike.
+ */
+function checkLifetime(record: ApprovalRecord, raw: Record<string, unknown>, kind: Kind): Fail | null {
   if (kind === 'download') {
     if (raw.pendingMs !== APPROVAL_LIFETIMES.download) return fail('lifetime-mismatch');
     if (raw.route !== undefined || raw.approvedMs !== undefined) return fail('lifetime-mismatch');
+    return null;
+  }
+  if (kind === 'standing') {
+    const days = (record.standing as StandingBinding).limits.expiresDays;
+    const { min, max } = STANDING_LIMITS.expiresDays;
+    if (raw.route !== 'confirm' || raw.pendingMs !== APPROVAL_LIFETIMES.confirm) return fail('lifetime-mismatch');
+    if (!Number.isSafeInteger(days) || days < min || days > max) return fail('lifetime-mismatch');
+    if (raw.approvedMs !== days * STANDING_DAY_MS) return fail('lifetime-mismatch');
+    if (raw.policy !== 'confirm' || raw.requiredPolicy !== 'confirm') return fail('lifetime-mismatch');
+    return null;
+  }
+  if (isChild(raw)) {
+    const lifetime = APPROVAL_LIFETIMES.standingChild;
+    if (raw.pendingMs !== lifetime || raw.approvedMs !== lifetime) return fail('lifetime-mismatch');
     return null;
   }
   if (raw.route !== 'chat' && raw.route !== 'confirm') return fail('lifetime-mismatch');
@@ -284,7 +360,7 @@ function checkLifetime(raw: Record<string, unknown>, kind: 'send' | 'change' | '
  */
 function checkTimestamps(
   raw: Record<string, unknown>,
-  kind: 'send' | 'change' | 'download',
+  kind: Kind,
   state: ApprovalState,
   times: Partial<Record<Stamp, number>>,
 ): Fail | null {
@@ -331,6 +407,11 @@ function checkTimestamps(
     if (!(createdAt <= approvedAt && approvedAt < expiresAt)) return fail('timestamp-misordered');
     if (usableUntil - approvedAt !== raw.approvedMs) return fail('lifetime-mismatch');
   }
+  // A child is approved the moment it is made, and keeps that time in every state after.
+  if (isChild(raw)) {
+    if (approvedAt === undefined) return fail('timestamp-missing');
+    if (approvedAt !== createdAt) return fail('timestamp-misordered');
+  }
   const deadline = usableUntil ?? expiresAt;
   const since = approvedAt ?? createdAt;
 
@@ -366,11 +447,19 @@ function checkTimestamps(
 function checkEvidence(
   record: ApprovalRecord,
   raw: Record<string, unknown>,
-  kind: 'send' | 'change' | 'download',
+  kind: Kind,
   state: ApprovalState,
 ): Fail | null {
   const via = raw.approvedVia;
-  if (via !== undefined && via !== 'terminal' && via !== 'elicitation') return fail('evidence-invalid');
+  if (via !== undefined && via !== 'terminal' && via !== 'elicitation' && via !== 'standing') {
+    return fail('evidence-invalid');
+  }
+  // `standing` evidence is a child's, and only a child's: the person approved it in advance, at a terminal.
+  if ((via === 'standing') !== (isChild(raw) && via !== undefined)) return fail('evidence-invalid');
+  // The change policy a standing approval was approved under is its evidence, and only an approved one's (S8).
+  if (raw.approvedChangePolicy !== undefined && (kind !== 'standing' || raw.approvedAt === undefined)) {
+    return fail('evidence-contradictory');
+  }
   if (kind === 'download') {
     const answer = record.download?.answer;
     const answered = via !== undefined || raw.approvedDigest !== undefined || answer !== undefined;
@@ -388,8 +477,13 @@ function checkEvidence(
     return via !== undefined || raw.approvedBindingDigest !== undefined ? fail('evidence-contradictory') : null;
   }
   if (via === undefined || raw.approvedBindingDigest === undefined) return fail('evidence-missing');
-  // A change's `confirm` means a person at a terminal: a form is not what that policy asked for.
-  if (kind === 'change' && via !== 'terminal') return fail('evidence-invalid');
+  if (kind === 'standing' && raw.approvedChangePolicy !== 'chat' && raw.approvedChangePolicy !== 'confirm') {
+    return fail('evidence-missing');
+  }
+  // A change's `confirm` means a person at a terminal: a form is not what that policy asked for. Nor does anything but
+  // the code at a terminal approve a standing approval, whatever the change policy (S8).
+  if ((kind === 'change' || kind === 'standing') && via !== 'terminal') return fail('evidence-invalid');
+  if (isChild(raw) && via !== 'standing') return fail('evidence-invalid');
   if (raw.approvedBindingDigest !== record.bindingDigest) return fail('evidence-contradictory');
   return null;
 }

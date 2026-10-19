@@ -2,7 +2,7 @@
 
 Status: **written 2026-10-19**, for 0.23.0, after spec 2
 ([agent behaviour rules](2026-10-19-agent-behaviour-rules-design.md)); **revised 2026-10-19 after an independent
-security review.**
+security review,** and settled again after build (§9).
 
 **What the owner asked:**
 - On 2026-10-15: that some messages go without asking each time, acknowledgements especially.
@@ -85,7 +85,7 @@ adds enforcement, not freedom, and its contents, places and limits hold only on 
 | # | Threat | What it would cost | Mitigation |
 |---|---|---|---|
 | T1 | Injected text makes the agent send words of the attacker's choosing | impersonation, data leak | **No free text.** The gate builds the payload from the person's fixed content, named by digest (S3, S9). |
-| T2 | Injected text leaks data by choosing which content, which message or where (a covert channel) | a few bits per act | A fixed target: the newest message from someone else, just arrived (S4). Fixed places (S5), one emoji by default (S3), low counts (S6). |
+| T2 | Injected text leaks data by choosing which content, which message, where and when (a covert channel) | tens of bits an hour at the defaults (§10.11) | A fixed target: the newest message from someone else, just arrived (S4). Fixed places (S5), one emoji by default (S3), low counts (S6), at most 3 a day on one person's messages, and a random pause before each act (§10.11). Not closed: see below. |
 | T3 | Messages go to new people or places | spam, a wrong-recipient leak | Exact places, or threads the person really posted in; threads only, no mentions; big rooms and other organisations only where named exactly, failing closed (S5). |
 | T4 | Volume: loops with another bot, or a flood | reputation, rate limits | Humans only, by allow-list (S4). Once per thread across all standing approvals; hourly and daily caps (S6). |
 | T5 | Being taken for the person ("Got it" read as their promise) | reputation | A reply goes as the app or labelled; a reaction only as the app (S7). |
@@ -104,7 +104,12 @@ adds enforcement, not freedom, and its contents, places and limits hold only on 
 - **An agent with an unrestricted shell, running as the person.** It can already get past the terminal check, edit the
   configuration and run the CLI as the person (§3), as can anyone who can write to the configuration directory. An OS
   user-presence check would reach further: future work (§7).
-- T2's covert channel: about one bit per act (act or not, on a message the agent did not choose), within the counts.
+- T2's covert channel, which is wider than this section first said (§10.11, the lead's call after review). The agent
+  still chooses which of the messages that arrive in its places to acknowledge, with which of up to 10 contents, and
+  when within the 15 minutes; whoever watches the acts can read those choices. At the defaults that is tens of bits an
+  hour — enough for a token or a password within a day. The pause and the per-sender cap narrow it; nothing here closes
+  it. **Do not create a standing approval for an agent that also reads sensitive mail, files or secrets in the same
+  session.**
 - Under `chat`, an agent that ignores the skills and takes the ordinary path: today's risk, unchanged.
 
 ## 5. Decisions
@@ -167,6 +172,15 @@ among many messages is a covert channel. So what just happened fixes the target;
 
 Whatever can't be read is refused.
 
+**Threads the person started (lead's call, after build).** The thread's parent may instead be the person's own
+message, when this product did not send it:
+- their own user id, with none of `bot_id`, `app_id`, `bot_profile` or `subtype`;
+- not in the app-posts record, and not in the audit's record of what was sent: the same test `threads-i-am-in` makes
+  of the person's posts (S5). The audit is read as far back as the parent, however old the thread.
+
+A parent from a bot, an app, Slackbot or this account's app, or one this product sent, is still refused. The message
+acknowledged must still be from another human: never the person's own.
+
 **Nothing to press (lead's call).** A message with interactive blocks (buttons, selects), or from a workflow, is
 refused. A reaction on a form or an approval request can read as an answer to it.
 
@@ -216,6 +230,11 @@ app is a member; otherwise labelled, "Name (agent): …".
 
 **A reaction goes only as the workspace's agent app (lead's call):** bot token present, style `app`, app a member.
 Wherever the label would send it as the person, unlabelled (§3), it is refused, so it never goes in a DM.
+
+**The app's membership is read for every reaction (lead's call, after build).** An app post may go to a public channel
+the app has not joined, so the label's route alone does not settle it. Before the mint, so that no count is spent, the
+app's bot user must be found among the conversation's members (`conversations.members`). One not found, or a membership
+that can't be settled, refuses with `STANDING_REFUSED`, reason `app-not-member`.
 
 **What overrides what:** this overrides any `me` label rule. A message sent without the person's yes must never look
 like the person's own. **(lead's call)**
@@ -317,6 +336,9 @@ standing path refuses what S4 to S6 refuse.
   not beginning `U` or `W`, `users.info` saying bot, `USLACKBOT`, this account, the app-posts record;
 - a message with a button or a select, or from a workflow.
 
+A thread the person started may be acknowledged; one whose parent this product sent as them (in the audit, however
+old, or in the app-posts record), or an app made with their token, may not.
+
 **Places (S5):**
 - A top-level reply is refused.
 - Under `threads-i-am-in`, a thread doesn't count when the person's only message there was this product's (app-posts
@@ -345,7 +367,9 @@ standing path refuses what S4 to S6 refuse.
 - Widening asks again, as does replacing a text or a place with one outside the old set. Narrowing applies at once.
 
 **Identity (S7):** a reply goes as the app or labelled, overriding a `me` rule. A reaction is refused wherever it would
-go as the person (a DM, a group DM, a room the app isn't in, `labelled` style, no bot token), and so is a removal.
+go as the person (a DM, a group DM, a room the app isn't in, `labelled` style, no bot token), and so is a removal. A
+reaction in a public channel the app has not joined, or whose membership can't be read, is refused before the mint,
+`app-not-member`, with nothing counted.
 
 **Spec 2 (T9):** a rule that forbids `reply` or `reaction` refuses the standing act, before the mint and at execute.
 
@@ -385,3 +409,151 @@ Each is settled here, and where this section and S1 to S11 differ, this section 
    approval, revoke its unused children.
 6. **The notification text on Windows goes in through environment variables,** read by a fixed script, because
    PowerShell's `-Command` joins trailing arguments into the script. It is never spliced in.
+
+## 9. Settled after build (2026-10-19)
+
+Integrating the build turned up three more points. Each is the lead's call, and where this section and the ones above
+differ, this section is the later word.
+
+1. **A thread the person started may be acknowledged** (S4). Its parent may be the person's own message when this
+   product did not send it; the message acknowledged is still another person's.
+2. **A standing reaction needs the app in the conversation** (S7). Its membership is read before the mint, and a
+   membership not found or not settled refuses with `app-not-member`, so nothing is counted for a reaction that could
+   not have gone.
+3. **The notice is core's** (S10). Its words are `ackNotice`'s alone, and a Slack context raises it with core's
+   notifier for its platform (`makeNotifier`) unless it is given one. Tests inject a notifier or a runner, so none shows
+   a real notification.
+
+## 10. Settled after review (2026-10-19)
+
+An independent review of the build, by a core reviewer and a Slack reviewer, found the points below. Each is settled
+here as **(lead's call, after review)**, and where this section and the ones above differ, this section is the later
+word.
+
+1. **A change policy tightened by a release that knows no standing epoch still ends them** (S8; core review C1).
+   0.22 can tighten a change policy and leave the standing epoch where it was. So the approval binds the change policy
+   that governed its account when the person typed the code — its own, else the default — as `approvedChangePolicy`,
+   written with `approvedAt` and checked by the validator: an approved standing record has one, and nothing else does.
+   A live change policy stricter than it ends the record, `changePolicy-tightened`, with the reason "the change policy
+   was tightened since this was approved", read from the configuration itself at every look, mint and claim, whatever
+   the epoch says. Because a policy, unlike an epoch, can be loosened again, this is the one ending even a look writes
+   down (`writtenAtALook`): `standing list`, the doctor and `comms_standing` write it as well as a use does. A
+   loosening made before anything has looked at the record still revives it; nothing a 0.22 process does can be
+   prevented by this release. The epoch stays the broader rule for this release's own writes: any tightening, of any
+   account's policy or the default, ends every one. **(lead's call, after review)**
+2. **A narrowing stops a use already reading Slack** (S8, S9; core review C2). The mint is given the channel and
+   thread, and the kind of place its reads were checked against. Under the record's lock it requires the place to be
+   covered by what is in force there: an exact place by its id, and `threads-i-am-in` only while the record is still
+   `threads-i-am-in`. Otherwise `STANDING_REFUSED`, `place-not-covered`, before anything is counted. **(lead's call,
+   after review)**
+3. **A child is claimed only while its standing approval still covers it** (S9; core review C6). Each child now binds
+   its use, `standingUse`: the channel, the thread and the digest of the content it sends. At the claim of any
+   `route: 'standing'` child — in core's `claimForSend`, so every channel gets it — the standing record is read again,
+   under its own lock while the child's is held (never the other way round), and the child is voided, APPROVAL_VOID,
+   when the record has ended by any rule (revoked, expired, an epoch, a tightened change policy, `never`) or no longer
+   holds the content or covers the place. The count stays spent. **(lead's call, after review)**
+4. **A Linux notice is never read as markup** (S10; core review C5). Most notification servers read `notify-send`'s
+   body, and some its title, as markup, so a reply holding `<b>` or a link would be drawn as one, and a stray `<` could
+   blank the notice. On Linux both are given with `&`, `<` and `>` as entities (`asMarkupText`); macOS and Windows are
+   given the words as they are. **(lead's call, after review)**
+5. **`standing off` fails closed** (S8; core review C4). It revokes each standing record, and its unused children,
+   first (`endStanding`), then raises the standing epoch; either alone ends every one. What it could not do while
+   ending every one all the same is said in the result's `partial`, a sentence each, and in the audit. If any is still
+   in force once both have been tried — a record that could not be written down, under an epoch that could not be
+   raised — it is refused with the failure's code, naming each in `details.inForce`, so it exits non-zero and nobody
+   is told they have all ended when they have not. **(lead's call, after review)**
+6. **Every place name `comms_standing` returns is in the untrusted-content envelope** (S10; core review C3). A
+   channel's name is whatever someone in the workspace called it, and a DM's is the other person's display name. The
+   report — `comms_standing`, `standing list --json` and the doctor's reading of it — gives each, cut to 80
+   characters, wrapped with `wrapUntrusted` (field `place-name`, the place's id), one boundary per report.
+   `standing list` prints each envelope on lines of its own, as it is, so an agent reading the command's output reads
+   it as quoted data too. **(lead's call, after review)**
+7. **A wait reads a standing approval in its own words** (S8; core review C8). `comms_approval_wait` and
+   `slack_approval_wait` called an approved standing record `blocked`, as if a policy kept it from being claimed; but
+   nothing claims one. A wait on one now ends `active` once the person has approved it, and carries
+   `standing: { state: 'pending' | 'active' | 'ended', reason? }`, read as `standing list` reads it (a live `never`
+   ends it at a look). A pending one is waited on as before; an ended one ends `final`, with the store's reason.
+   **(lead's call, after review)**
+8. **An unreadable ledger line still fails closed, and is no longer silent** (S6, S10; core review C7). A line of an
+   account's acknowledgement ledger that this release cannot read still refuses every use of that account's standing
+   approvals, `BAD_DATA`, now with the line numbers in `details.lines`. The doctor adds a `standing ledger` warning for
+   each such ledger, naming the account, its lines and the file, `<state>/standing/<accountId>.jsonl`. There is no
+   repair command. The recovery is documented (core README, and the doctor's fix): the person ends that account's
+   standing approvals with `standing off`, or `standing revoke` for each, then moves the file aside; a new ledger starts
+   empty. **(lead's call, after review)**
+9. **Smaller points** (core review C9). `standingBindingProblem` derives S3's warnings again from the contents and
+   refuses a binding whose `warnings` are not exactly those, so a direct `createStanding` caller cannot leave one out of
+   what the person is shown. `comms_standing` is annotated `destructiveHint: true`: it only takes away, but nothing
+   puts back what it took. The tests now type a `yes` as long as the code, and follow a tightened change policy to a
+   mint and a claim. **(lead's call, after review)**
+10. **A reply may not say "approve" by the back door** (S3; Slack review S6). A reply holding an emoji or a pictograph
+    — any `Extended_Pictographic` character, and the plain check mark ✓, which Unicode does not count as one — is
+    refused, `pictograph`, checked before invisible characters so an emoji's variation selector is said as the emoji.
+    A ✅ or 👍 in the words reads as a yes as surely as the reaction. A reply holding any of `yes`, `approved`,
+    `approve`, `go ahead`, `lgtm`, `ok`, `done` or `confirmed`, as whole words in any case, gets S3's reads-as-approval
+    warning, shown under that reply in the preview. **(lead's call, after review)**
+11. **The covert channel is far wider than §4 first said, and the gate now narrows it** (S6, S9, §4 T2; Slack review
+    S1). An agent under injected instructions still chooses which of the messages arriving in its places to
+    acknowledge, with which of up to 10 contents, and when within the 15 minutes; whoever watches can read those
+    choices. At the defaults that is tens of bits an hour. So:
+    - **The docs say so plainly** — §4, SECURITY.md, the core and Slack READMEs, getting started, the changelog and
+      the skills — and say not to create a standing approval for an agent that also reads sensitive mail, files or
+      secrets in the same session.
+    - **A pause between the decision and the act:** 5 to 30 seconds, a whole number of milliseconds from the operating
+      system's CSPRNG (`standingPause`, `node:crypto`'s `randomInt`), taken after the count is spent and before the
+      newest-message read and the claim. The act's own time is recorded beside the decision's: `actAt` in the
+      ledger's outcome line and in the audit, with `pausedMs`; `standing list` shows it. The child's two minutes cover
+      it. A refusal before the count waits no pause. Tests inject the pause (`SlackContext.standingPause`), so none
+      waits.
+    - **A per-sender daily cap,** `perSender`: at most this many acts a day on messages from any one person, counted
+      across every standing approval of the account, as `perThread` is. 3 by default, 1 to 10, part of the limits and
+      their digest: narrowing it applies at once, raising it is a widening and asks for the code. `--per-sender` on
+      `agent-slack standing add` and `agentcomms standing narrow`, `perSender` on `slack_standing_add` and
+      `comms_standing`. The ledger's `use` line records the sender. Reached, it is `STANDING_LIMIT`, `perSender`, with
+      when it frees.
+    - The 15-minute window stays. **(lead's call, after review)**
+12. **"Nothing to press" is an allow-list** (S4; Slack review S5). A list of interactive names missed
+    `context_actions`, `feedback_buttons`, `icon_button`, and whatever Slack adds next. A message, and its thread's
+    parent, may now carry only these blocks (`onlyStaticBlocks`, in a file of its own): `section` with text and fields
+    and no accessory but an image; `context` of text and images only; `divider`; `header`; `image`; and `rich_text` of
+    sections, lists, quotes and preformatted runs holding text, links, emoji, mentions, dates and colours. Anything
+    else, a block type unknown here included, is `interactive`; so is a legacy attachment with actions, a callback or
+    blocks of its own outside the list, and a `blocks` that is not an array. **(lead's call, after review)**
+13. **A guest is from outside, and so is a message Slack marks as another team's** (S5; Slack review S2). A member
+    whom `users.info` calls `is_restricted` (a multi-channel guest) or `is_ultra_restricted` (a single-channel one)
+    counts as external, as `is_stranger` and another `team_id` do. And the message acknowledged, and its thread's
+    first message, are read for who wrote them: a guest, a stranger, a `team_id` not the workspace's (or none), or a
+    `user_team` or `source_team` on the message not the workspace's makes it external — found even in a big room,
+    whose members are not read one by one. An external author refuses, `external`, unless the place was named exactly
+    and approved as shared with another organisation. An Enterprise Grid's other workspaces read as other teams there:
+    refused, the safe way to be wrong. **(lead's call, after review)**
+14. **"Sent by this product" no longer fails open** (S4, S5; Slack review S3). Three gaps, each closed:
+    - **A label at the start of the words** (`beginsAsAgentLabelled`, core): a message whose text begins as a labelled
+      fallback's — `<name> (<word>): `, or `Sent by <name> (<word>)`, for any label word in any case — is never a
+      person's. As the message, or its thread's first message, it refuses `not-human`, whoever's agent posted it; as
+      the person's own post, it is not theirs, for a thread they started or under `threads-i-am-in`.
+    - **The audit matched by the person, not only the account:** every post this product makes now records the
+      person's Slack user id and team in its audit ids (`user`, `team`). A post counts as this product's when its
+      record is this account's, or names that user and team, or — written by a release that recorded neither — any
+      account's at that channel and ts. A workspace removed and added again, a new account id, still knows what it
+      sent as the person.
+    - **All four marks in `threads-i-am-in`:** the person's post counts only with none of `bot_id`, `app_id`,
+      `bot_profile` or `subtype`, as a thread they started already required.
+    **(lead's call, after review)**
+15. **The tests no longer contradict themselves about Slack** (Slack review S4). Some said a post made with the
+    person's token through an app carries no `bot_id`, others that Slack marks one with it; nothing the design read
+    settles which Slack does for this app. The fake now models both (`userTokenMarks`: none, or the app's `bot_id` and
+    `app_id`), and every test of a post this product made as the person runs under each. With no mark, the audit's
+    record and the label at the start of the words (§10.14) are each enough on their own; only with both broken does
+    the unmarked case fail, which the tests were run to show. The comments now say what each fixture models.
+    **(lead's call, after review)**
+16. **Tests added after review** (Slack review S8): a label changed between the mint and the claim voids a reaction's
+    child as it does a reply's (the claim's binding to the label's route); the person's own post marked with `app_id`
+    or a `subtype` does not make a thread theirs under `threads-i-am-in` (§10.14); guests (§10.13).
+    **(lead's call, after review)**
+17. **The Slack server's instructions keep saying every post or reaction needs a yes** (Slack review S7). A clause
+    for `slack_ack` does not fit: with twelve workspaces, nine of them able to post — the case `mcp.test.ts` holds
+    under the cap — the instructions measure 2,043 bytes against Claude Code's 2,048, measured after this review's
+    fixes. So they are left as they are, and `slack_ack`'s own description carries the exception, now with the pause
+    (§10.11). The skills' compatibility lines are the release's `sync:versions`, and are left to it.
+    **(lead's call, after review)**

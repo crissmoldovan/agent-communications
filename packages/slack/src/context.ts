@@ -3,13 +3,18 @@ import {
   CommsError,
   type Config,
   type Core,
+  makeNotifier,
+  type NoticeRunner,
+  type Notifier,
   openCore,
   type PathOverrides,
   requireHandoffs,
   type SecretStore,
   type SendPacing,
+  type StandingPause,
   secretsStoreOf,
   sendPacing,
+  standingPause,
 } from '@agentcomms/core';
 import { closedPermit, type FetchLike, guardSlackRequests } from './api/guard.ts';
 import { SLACK_ORIGIN } from './api/methods.ts';
@@ -60,6 +65,20 @@ export interface SlackContextOptions {
     | undefined;
   /** How a throttled post, reaction, edit or deletion waits (design 2026-10-08 §R2): core's; a test injects one. */
   sendPacing?: (() => SendPacing) | undefined;
+  /**
+   * What raises a notification on the person's screen for each standing act (design 2026-10-19-standing-approvals,
+   * S10). Best effort, never through the agent: a notice that could not be raised never fails the act, and the audit
+   * says so. Left out, it is core's notifier for this platform (`makeNotifier`); `null` raises none at all. A test
+   * injects one, or `noticeRunner`, so no test ever shows a real notification.
+   */
+  notify?: Notifier | null | undefined;
+  /** How the default notifier starts its program: `execFile`, with no shell, unless a test injects one. */
+  noticeRunner?: NoticeRunner | undefined;
+  /**
+   * The pause between deciding a standing act and making it (design 2026-10-19-standing-approvals, S9, the lead's call
+   * after review): core's — 5 to 30 seconds from the CSPRNG — unless a test injects one, so no test waits.
+   */
+  standingPause?: StandingPause | undefined;
 }
 
 /**
@@ -135,6 +154,10 @@ export class SlackContext {
   readonly slackBaseUrl: string | undefined;
   readonly persist: PersistPolicy | undefined;
   readonly foregroundSignIn: SlackContextOptions['foregroundSignIn'];
+  /** What raises each standing act's notification on the person's screen (S10): none only when `null` was given. */
+  readonly notify: Notifier | undefined;
+  /** The pause between deciding a standing act and making it: core's unless a test injects one. */
+  readonly standingPause: StandingPause;
 
   constructor(options: SlackContextOptions = {}) {
     this.env = options.env ?? process.env;
@@ -158,6 +181,17 @@ export class SlackContext {
     this.fetch = options.fetch;
     this.slackBaseUrl = options.slackBaseUrl;
     this.persist = options.persist;
+    this.standingPause = options.standingPause ?? standingPause();
+    // The platform's own notifier unless one is given, as `sendPacing` is core's unless a test injects one (S10).
+    this.notify =
+      options.notify === null
+        ? undefined
+        : (options.notify ??
+          makeNotifier({
+            platform: this.platform,
+            env: this.env,
+            ...(options.noticeRunner === undefined ? {} : { run: options.noticeRunner }),
+          }));
   }
 
   /**

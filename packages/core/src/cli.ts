@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { approveAndWaitSentence } from './approval-handoffs.ts';
 import type { PublicApprovalView } from './approval-outcome.ts';
+import { kindOf } from './approval-stored.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
 import type { BehaviourAct } from './behaviour.ts';
 import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
@@ -12,6 +13,7 @@ import {
   type OutputOptions,
   pathOverridesFromCliOptions,
   runCommand,
+  type Streams,
   writeError,
   writeResult,
 } from './cli-runtime.ts';
@@ -26,6 +28,7 @@ import {
   handoffSentenceToFill,
   handoffText,
 } from './handoffs.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
@@ -80,6 +83,13 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
+import {
+  type StandingChangeRequest,
+  type StandingReport,
+  type StandingView,
+  standingChange,
+  standingReport,
+} from './operations/standing.ts';
 import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
@@ -93,7 +103,18 @@ import {
 } from './operations/update-settings.ts';
 import { profileSourcePath, shownPath, shownText } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
-import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
+import {
+  escapeForDisplay,
+  renderDoctor,
+  renderInstall,
+  renderPrune,
+  renderUpdate,
+  renderUpdateCheck,
+  truncateDisplay,
+} from './render.ts';
+import { type ExactPlace, parseExpiry } from './standing.ts';
+import { approveStandingAtTerminal } from './standing-flow.ts';
+import { neutralise } from './untrusted.ts';
 import {
   type BackgroundDeps,
   type BackgroundOutcome,
@@ -132,7 +153,8 @@ Usage — run these with this CLI, each as the words after its program:
   approval wait <approvalId> [--wait-seconds <n>]
                                 wait for an approval to be usable or finished, and say where it stands:
                                 30 seconds when left out, 300 at most, 0 for its status now
-  approve <approvalId>          approve a configuration change at this terminal: read it, type the code
+  approve <approvalId>          approve a configuration change or a standing approval at this terminal:
+                                read it, type the code
   policy [--account <name> | --inbox <name>] [chat|confirm] [--approval <id>]
                                 report or set the change policy: how a loosening is approved;
                                 confirm applies at once, chat is approved first
@@ -185,6 +207,15 @@ Usage — run these with this CLI, each as the words after its program:
   behaviour clear <account> [--conversation <id>] [--approval <id>]
                                 take a rule away, so the wider one holds there: approved first when that
                                 allows more
+  standing list                 the standing approvals — what an agent may send without asking: each one's
+                                contents by digest, places, limits and end, its uses in the last day and
+                                its last acts
+  standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>]
+                                [--per-day <n>] [--per-sender <n>] [--expires <n>d]
+                                keep fewer contents or places, lower a limit, or end it sooner: applies
+                                at once, and never allows more
+  standing revoke <id>          end one standing approval at once, and every act of it not yet sent
+  standing off                  end every standing approval at once; loosening anything later revives none
   profile [<account>] [--conversation <id>…]
                                 the writing profile an agent reads before it writes there: the files it
                                 joins, in order, and which are written; --conversation repeats, one per
@@ -230,6 +261,11 @@ you approve it there; anything else gets the preview and an approval id (exit 10
 remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
 may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
 once when it only narrows.
+
+A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
+places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the
+code it shows, at a terminal, whatever the change policy. standing narrow, revoke and off only take away, so each
+applies at once and asks nobody.
 
 On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
 once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
@@ -330,6 +366,14 @@ function parse(argv: string[]) {
       kinds: { type: 'string' },
       as: { type: 'string' },
       clear: { type: 'boolean', default: false },
+      // `standing narrow`; refused on every other command (`refuseStandingOptionsElsewhere`).
+      keep: { type: 'string' },
+      places: { type: 'string' },
+      'per-thread': { type: 'string' },
+      'per-hour': { type: 'string' },
+      'per-day': { type: 'string' },
+      'per-sender': { type: 'string' },
+      expires: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -465,6 +509,33 @@ function labelOptionsGiven(values: { conversation?: string; kinds?: string; as?:
   ];
 }
 
+/** `standing narrow`'s own options, as typed. */
+const STANDING_OPTIONS = ['keep', 'places', 'per-thread', 'per-hour', 'per-day', 'per-sender', 'expires'] as const;
+
+function standingOptionsGiven(values: Partial<Record<(typeof STANDING_OPTIONS)[number], unknown>>): string[] {
+  return STANDING_OPTIONS.filter((flag) => values[flag] !== undefined);
+}
+
+/**
+ * Refuses `standing narrow`'s options on any other command, as USAGE, before anything runs — as `label`'s are: an
+ * option a command does not read is refused rather than quietly doing nothing, and `--expires` read by nothing would
+ * look like a limit that held.
+ */
+function refuseStandingOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof STANDING_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'standing') return;
+  const given = standingOptionsGiven(values);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the standing narrow command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
 /**
  * Refuses `org`'s own options on any other command, as USAGE, before anything runs.
  *
@@ -514,6 +585,8 @@ export async function main(
     updateBackground?: BackgroundDeps | undefined;
     /** What `update` and `update --check` read and run — the registry, the verifier, the installers — for a test. */
     update?: UpdateDeps | undefined;
+    /** The terminal `approve` asks at: the process's own unless a test brings one. */
+    streams?: Streams | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -554,6 +627,7 @@ export async function main(
     refuseApprovalNotTaken(command, sub, values.approval);
     refuseOrgOptionsElsewhere(command, values, help);
     refuseLabelOptionsElsewhere(command, values, help);
+    refuseStandingOptionsElsewhere(command, values, help);
   } catch (error) {
     return writeError(error as CommsError, output);
   }
@@ -659,7 +733,21 @@ export async function main(
       }
       case 'approve': {
         if (!sub || arg !== undefined) throw usage('usage: approve <approvalId>');
-        const result = await approveChangeAtTerminal(core, sub, env, output);
+        const streams = deps.streams ?? defaultStreams;
+        // A standing approval is approved with its own preview and code (design 2026-10-19-standing-approvals, S8);
+        // anything else here is a change, as it always was. Decided by the record's kind, read and trusted only from
+        // a record whose binding verifies; each approval then refuses an id of the other kind as not found.
+        const stored = APPROVAL_ID_PATTERN.test(sub) ? await core.approvals.get(sub).catch(() => null) : null;
+        if (kindOf(stored) === 'standing') {
+          const standing = await approveStandingAtTerminal(core, sub, env, output, streams);
+          writeResult(standing, output, (r) =>
+            r.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking. End it at any time with the standing commands.'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          );
+          return;
+        }
+        const result = await approveChangeAtTerminal(core, sub, env, output, streams);
         writeResult(result, output, (r) =>
           r.state === 'approved'
             ? 'Approved. The agent can make the change now — this command approves; it changes nothing itself.'
@@ -948,6 +1036,79 @@ export async function main(
         const result = await gatedChangeAtTerminal(core, behaviourChange(core, request, 'cli'), { ...approval, rerun });
         writeResult(result, output, renderBehaviourChange);
         return;
+      }
+      case 'standing': {
+        // Every change here only takes away, so none is gated: each applies at once, and none takes --approval.
+        const [, , id, ...extra] = positionals;
+        const taking = (taken: readonly string[]) => {
+          const wrong = standingOptionsGiven(values).filter((flag) => !taken.includes(flag));
+          if (wrong.length > 0) throw usage(`the standing ${sub} command takes no --${wrong.join(', --')}`);
+        };
+        const report = (head?: string) => (shown: StandingReport) =>
+          [...(head === undefined ? [] : [head, '']), renderStanding(shown, handoffs)].join('\n');
+        if (sub === 'list') {
+          if (id !== undefined) throw usage('usage: standing list');
+          taking([]);
+          writeResult(await standingReport(core), output, report());
+          return;
+        }
+        if (sub === 'narrow') {
+          if (id === undefined || extra.length > 0) {
+            throw usage(
+              'usage: standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>] [--per-day <n>] [--per-sender <n>] [--expires <n>d]',
+            );
+          }
+          taking(STANDING_OPTIONS);
+          const listOf = (text: string | undefined) =>
+            text
+              ?.split(',')
+              .map((item) => item.trim())
+              .filter((item) => item !== '');
+          // Checked as typed here; whether each is low enough, by the operation, in the words the tool gets too.
+          const limits = Object.fromEntries(
+            Object.entries({
+              perThread: wholeNumber(values['per-thread'], { name: '--per-thread', min: 0 }),
+              perHour: wholeNumber(values['per-hour'], { name: '--per-hour', min: 0 }),
+              perDay: wholeNumber(values['per-day'], { name: '--per-day', min: 0 }),
+              perSender: wholeNumber(values['per-sender'], { name: '--per-sender', min: 0 }),
+              expiresDays: values.expires === undefined ? undefined : parseExpiry(values.expires),
+            }).filter(([, value]) => value !== undefined),
+          );
+          const keep = listOf(values.keep);
+          const places = listOf(values.places);
+          const request: StandingChangeRequest = {
+            narrow: {
+              id,
+              ...(keep === undefined ? {} : { keep }),
+              ...(places === undefined ? {} : { places }),
+              ...(Object.keys(limits).length === 0 ? {} : { limits }),
+            },
+          };
+          const result = await standingChange(core, request, { surface: 'cli' });
+          writeResult(result, output, report(`Narrowed ${id}: it applies now, and allows nothing more.`));
+          return;
+        }
+        if (sub === 'revoke') {
+          if (id === undefined || extra.length > 0) throw usage('usage: standing revoke <id>');
+          taking([]);
+          const result = await standingChange(core, { revoke: { id } }, { surface: 'cli' });
+          writeResult(result, output, report(`${id} has ended: nothing more is sent under it.`));
+          return;
+        }
+        if (sub === 'off') {
+          if (id !== undefined) throw usage('usage: standing off');
+          taking([]);
+          const result = await standingChange(core, { off: true }, { surface: 'cli' });
+          writeResult(
+            result,
+            output,
+            report(
+              'Every standing approval has ended: nothing more is sent under any of them, and loosening anything later revives none.',
+            ),
+          );
+          return;
+        }
+        throw usage('usage: standing list|narrow|revoke|off');
       }
       case 'profile': {
         const conversations = conversationsGiven(parsed);
@@ -1287,6 +1448,80 @@ function renderPolicy(report: ChangePolicyReport): string {
     for (const entry of report.looser) lines.push(`  ${handoffText(entry.tighten.command)}`);
   }
   return lines.join('\n');
+}
+
+/** A name someone in Slack chose, or a link Slack gave: made safe to print, and cut. */
+const shownWords = (text: string, width: number) => truncateDisplay(neutralise(text).text, width);
+
+/**
+ * One exact place: its id, and — when it has one — its name as the report gives it, in its untrusted-content envelope,
+ * on lines of its own: someone in Slack chose it, and an agent reading this output reads it there, as quoted data.
+ */
+function standingPlaceLines(place: ExactPlace): string[] {
+  if (place.name === null) return [`    ${place.id}`];
+  return [
+    `    ${place.id}, ${place.id.startsWith('D') ? 'the direct message with' : 'named'}:`,
+    // Already neutralised inside its envelope: made one line each and cut, never neutralised again, which would
+    // defuse the envelope's own tags.
+    ...place.name.split('\n').map((line) => `      ${truncateDisplay(line, 240)}`),
+  ];
+}
+
+/** One standing approval as a person reads it: what is in force, its uses, and its last acts, newest first. */
+function renderStandingView(view: StandingView): string {
+  const status =
+    view.state === 'active'
+      ? `ends ${view.expiresAt}`
+      : view.state === 'pending'
+        ? 'waits for the person to approve it at a terminal, with its code'
+        : view.reason === undefined
+          ? ''
+          : `(${shownWords(view.reason, 160)})`;
+  const lines = [`${view.id}  ${view.state}  ${view.workspace}  ${status}`.trimEnd()];
+  for (const content of view.contents) {
+    lines.push(
+      content.kind === 'reaction'
+        ? `  reaction :${content.text}:  ${content.digest}`
+        : `  reply "${escapeForDisplay(content.text)}"  ${content.digest}`,
+    );
+  }
+  if (view.places.kind === 'threads-i-am-in') lines.push('  in threads where you posted yourself in the last 14 days');
+  else lines.push('  in', ...view.places.places.flatMap(standingPlaceLines));
+  const { perThread, perHour, perDay, perSender, expiresDays } = view.limits;
+  lines.push(
+    `  limits ${perThread} per thread, ${perHour} an hour, ${perDay} a day, ${perSender} a day from any one person, for ${expiresDays} days`,
+  );
+  lines.push(`  ${view.usesToday} ${view.usesToday === 1 ? 'use' : 'uses'} in the last day`);
+  for (const act of view.lastActs) {
+    // When it was decided, and — after the pause that follows — when it went, where that was recorded.
+    lines.push(
+      `    ${act.at}${act.actAt === undefined ? '' : ` (went ${act.actAt})`}  ${act.act}  ${act.contentDigest.slice(0, 12)}  ${act.channel} ${act.ts}  ${act.outcome}${
+        act.link === undefined ? '' : `  ${shownWords(act.link, 200)}`
+      }`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Every standing approval, and how to end one or all of them while any is live. */
+function renderStanding(report: StandingReport, handoffs: CliHandoffs): string {
+  // What `off` could not do, though every one has ended: said first, so it is not missed below the list.
+  const partial = (report.partial ?? []).map((line) => `Note: ${line}`);
+  const body = renderStandingList(report, handoffs);
+  return partial.length === 0 ? body : [...partial, '', body].join('\n');
+}
+
+function renderStandingList(report: StandingReport, handoffs: CliHandoffs): string {
+  if (report.approvals.length === 0) return 'No standing approvals.';
+  const live = report.approvals.some((view) => view.state !== 'ended');
+  const ending = handoffSentenceToFill(handoffs.core(['standing', 'revoke']), ['<id>'], (revoke) =>
+    handoffSentence(
+      handoffs.core(['standing', 'off']),
+      (off) => `End one with ${revoke}, or every one at once with ${off}.`,
+      { instead: `End one with ${revoke}.` },
+    ),
+  );
+  return [report.approvals.map(renderStandingView).join('\n\n'), ...(live ? ['', ending] : [])].join('\n');
 }
 
 /** The label as a person reads it: the word and the name, then each account and who its messages appear from. */

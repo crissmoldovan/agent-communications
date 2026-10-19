@@ -478,6 +478,45 @@ in Slack, shared nowhere — delete it there if it should go. Changing files nee
 are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch to stop it. A deletion
 cannot be undone.
 
+### Messages sent without asking
+
+A standing approval is your yes given in advance to a few acknowledgements: standard emoji reactions (`eyes` when you
+name none; custom workspace emoji never), or short fixed replies you write, one a line, at most 200 characters, with
+no links, mentions, formatting or emoji. With one, an agent may acknowledge a message that has just arrived from another
+person without asking — and only that: the newest message from someone else in its thread or channel, within 15
+minutes, in a place the approval names, and not one already acknowledged. It never writes the words, and it cannot
+pick an old message, one among many, or a new place.
+
+```sh
+agent-slack standing add --workspace acme/slack --reactions eyes --replies-file ~/acks.txt --places C024BE7LR --expires 7d
+agent-slack approve <approvalId>    # the command the result gives, and the code it shows: never a typed yes
+agent-slack ack --workspace acme/slack --standing <id> --channel C024BE7LR --ts <ts> --content <digest>
+```
+
+`--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in yourself in the last 14 days,
+where a message this product sent for you does not count. The preview shows each content in full with its digest,
+warning for an emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place
+with its member count and whether another organisation shares it; the limits (`--per-thread`, `--per-hour`,
+`--per-day`, and `--per-sender`: acts a day on any one person's messages, 3 by default, 10 at most); and the expiry. A
+place of 50 members or more, or one with someone from another organisation in it — a guest counts as one, and so does
+a message Slack marks as from another team — is allowed only when named exactly, and one that has grown to 50 or
+changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and asks again; a
+replacement that only narrows applies at once.
+
+Every act goes out as your agent: a reply in the thread, as the app or labelled `Jo Example (agent):`, even under a
+`me` rule; a reaction only as the app, and only where the app is a member, so never in a DM, a group DM, a room the
+app is not in, or a `labelled` workspace. Each act raises a notification on your screen — what was sent, where, and
+under which standing approval — and goes in the audit, with the acknowledged message's digest and whether it had been
+edited. Each act goes 5 to 30 seconds after the agent asks for it, by a pause drawn at random, so the moment it appears
+is not the agent's to choose. A refusal is `STANDING_REFUSED` with its reason, or `STANDING_LIMIT` with when the limit
+frees (exit `10`): nothing was sent.
+
+The core lists, narrows and ends them: `agentcomms standing list`, `agentcomms standing revoke <id>`, and
+`agentcomms standing off`, which ends every one at once. What a standing approval does not defend — an agent with a
+shell, running as you — is in the core's README and the repository's SECURITY.md, and so is what it can still leak: an
+agent misled by something it read can still say tens of bits an hour by which messages it acknowledges, with what and
+when. Do not make one for an agent that also reads sensitive mail, files or secrets in the same session.
+
 ## Your agent's emoji
 
 When your agent posts as the Slack app, its messages can carry your own picture with a small robot badge on it, so
@@ -538,6 +577,8 @@ on stdio directly.
 | `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
 | `slack_edit_prepare`, `slack_edit_send` | change the words or files of a message this account posted, through the same gate — `agent-slack edit prepare` and `edit send` |
 | `slack_delete_prepare`, `slack_delete_send` | delete a message this account posted, through the same gate — `agent-slack delete prepare` and `delete send` |
+| `slack_standing_add` | prepare a standing approval — fixed reactions or replies, places, limits and an expiry — for the person to approve at their terminal with its code; approves nothing — `agent-slack standing add` |
+| `slack_ack` | acknowledge, without asking, a message that just arrived, with a content a standing approval holds, by its digest; as the agent, never as you — `agent-slack ack` |
 | `slack_approval_wait` | where an approval stands, now or once a person approves it — only looks; `agent-slack approval wait` |
 | `slack_draft_create`, `slack_draft_update` | write a draft, or change one — words, channel, thread, mentions or files — without preparing it |
 | `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |

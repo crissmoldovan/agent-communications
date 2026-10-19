@@ -77,6 +77,7 @@ import {
   rateLimitedBeforeActing,
   refileCommand,
   refusalWithBookkeeping,
+  requireClaimRoute,
   requireFileSending,
   risksOf,
   roomOf,
@@ -789,6 +790,8 @@ export async function editPrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
+    // A standing child is sent only by `ack` (design 2026-10-19-standing-approvals, S9): refused before anything else.
+    requireClaimRoute(deps, approvalId, outcome.record);
     return await editClassified(deps, draft, approvalId, outcome.record, target, book);
   } catch (error) {
     throw withApproval(error, outcome.approval);
@@ -1546,6 +1549,8 @@ export async function deletePrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
+    // A standing child is sent only by `ack` (design 2026-10-19-standing-approvals, S9): refused before anything else.
+    requireClaimRoute(deps, approvalId, outcome.record);
     return await deleteClassified(deps, approvalId, outcome.record, where, book);
   } catch (error) {
     throw withApproval(error, outcome.approval);

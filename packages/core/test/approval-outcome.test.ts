@@ -161,7 +161,8 @@ test('a prospective or global change is never owner-removed: its claim follows t
     const record = v2Record({ kind: 'change', state: 'pending', scope });
     const config = parseConfig(JSON.stringify({ version: 3, naming: 2 }));
     const gate = liveGateOf(config, record);
-    assert.deepEqual(gate, { owner: 'none', changePolicy: 'chat' }, scope);
+    // The standing epoch is the whole configuration's, so every gate carries it (design 2026-10-19-standing-approvals).
+    assert.deepEqual(gate, { owner: 'none', changePolicy: 'chat', standingEpoch: 0 }, scope);
     const outcome = classify(record, gate);
     assert.equal(outcome.ownerRemoved, undefined, scope);
     assert.equal(outcome.claimable, true);
@@ -208,6 +209,7 @@ test('liveGateOf finds the owner by its id, in either map, and assumes nothing o
     sendPolicy: 'confirm',
     changePolicy: 'chat',
     sendEpoch: 0,
+    standingEpoch: 0,
   });
   const slack = { ...v2Record({ kind: 'send', state: 'pending' }), channel: 'slack', inboxId: ACCOUNT };
   assert.deepEqual(liveGateOf(config, slack), {
@@ -215,11 +217,13 @@ test('liveGateOf finds the owner by its id, in either map, and assumes nothing o
     sendPolicy: 'never',
     changePolicy: 'confirm',
     sendEpoch: 4,
+    standingEpoch: 0,
   });
   // A change is governed by the strictest policy over everything it touches.
   assert.equal(liveGateOf(config, v2Record({ kind: 'change', state: 'pending' })).changePolicy, 'confirm');
   const gone = { ...v2Record({ kind: 'send', state: 'pending' }), inboxId: 'ibx_ZZZZZZZZZZZZZZZZ' };
-  assert.deepEqual(liveGateOf(config, gone), { owner: 'removed' }, 'no default policy, no epoch 0');
+  // No default policy and no send epoch 0 for an owner that is gone; the standing epoch is nobody's own.
+  assert.deepEqual(liveGateOf(config, gone), { owner: 'removed', standingEpoch: 0 }, 'no default policy, no epoch 0');
 });
 
 test('without a configuration nothing is claimable or owner-removed, and a claim or an approval is refused with CONFIG', () => {

@@ -741,6 +741,9 @@ test('the audit records a file post by its ids, names, sizes and hashes — neve
     fileNames: ['memo.txt'],
     fileSizes: [String(Buffer.byteLength(secret))],
     fileSha256: [sha256(secret)],
+    // Whom it was posted for, by Slack user id and team (design 2026-10-19-standing-approvals).
+    user: 'U0001',
+    team: 'T0001',
   });
   const everything = JSON.stringify(await w.context.core.audit.tail());
   assert.equal(everything.includes(secret), false, 'the audit holds the file’s contents');

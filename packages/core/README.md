@@ -113,6 +113,49 @@ Over MCP, `comms_behaviour` is `behaviour` — with no change it only reports; `
 and `comms_profile` is `profile`, and only reads. No tool writes a profile: `profile init` is the person's, at a
 terminal, because something an agent read could otherwise change how every later message is written.
 
+## Messages sent without asking
+
+**A standing approval is your yes given in advance, for acknowledgements only.** With one, an agent may answer a Slack
+message that has just arrived from another person — the newest from someone else in its thread or channel, within 15
+minutes — with one of the contents you wrote: a standard emoji reaction (`eyes` when you name none), or a short fixed
+reply of at most 200 characters. It covers the places you named, or the threads you posted in yourself in the last 14
+days; by default once a thread, 10 an hour, 30 a day and 3 a day on any one person's messages (3, 30, 100 and 10 at
+most); and it ends 7 days after you approve it, 30 at most. Each act goes 5 to 30 seconds after the agent asks for it. A reply goes in the thread as the app or labelled, a reaction only as the app, and every act raises a
+notification on your screen, goes in the audit and shows in `standing list`. Mail, top-level posts, edits, deletions,
+files and removing a reaction are never sent this way.
+
+Slack's `agent-slack standing add` makes one, and it is approved only with the code it shows, typed at a terminal:
+never a typed `yes`, a client's form or a yes in chat, whatever the change policy. An agent can prepare one, and its
+preview then says so; nothing changes until you approve it.
+
+```sh
+npx @agentcomms/core standing list    # each one: its contents by digest, places, limits, uses today and its last 10 acts
+npx @agentcomms/core standing narrow <id> --keep <digest> --per-hour 5   # keep less of it (applies at once)
+npx @agentcomms/core standing revoke <id>   # end one, at once
+npx @agentcomms/core standing off           # end every one, at once
+```
+
+Tightening the change policy ends every one too, and a send policy of `never`, or removing the account, ends that
+account's; loosening again revives none. `doctor` lists the active ones and when each ends. Over MCP, `comms_standing`
+reports them, and with `narrow`, `revoke` or `off` changes them; nothing in core creates or widens one.
+
+Every use is counted in the account's acknowledgement ledger, `standing/<account id>.jsonl` in the state folder
+(`agentcomms paths` shows where that is). If a line of it cannot be read — a disk that filled mid-write — none of that
+account's standing approvals can be used, since what they have counted cannot be known, and `doctor` names the account,
+the line and the file. To recover, end that account's standing approvals (`standing off`, or `standing revoke` for
+each), then move the file aside; a new ledger starts empty, and you can make new standing approvals.
+
+**What it can still leak.** An agent misled by something it read still chooses which arriving messages to acknowledge,
+with which content, and when, and anyone watching the acts can read those choices: at the defaults, tens of bits an
+hour. A pause of 5 to 30 seconds before each act, and at most 3 acts a day on any one person's messages, narrow that;
+they do not close it. Do not make a standing approval for an agent that also reads sensitive mail, files or secrets in
+the same session.
+
+**What it does not defend.** It holds against an agent acting through the MCP tools. An agent with an unrestricted
+shell, running as you, is out of its reach: it can already get past the terminal check, edit the configuration and run
+these commands as you — and so can anyone who can write to the configuration directory. Under the `chat` send policy
+the tools already act on an agent's word, so there a standing approval adds limits rather than freedom.
+
 ## The core MCP server
 
 `agentcomms mcp` runs it on stdio; `agentcomms mcp install --client <client>` registers it, from a terminal, since it
@@ -128,6 +171,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
 | `comms_label` | how what an agent sends is labelled, as `label`, with each Slack workspace's style; `word`, `name`, `icon`, `addRule` with `as: "me"`, `removeRule` of an `agent` rule and `style` set to `labelled` are approved first, and the other rule changes and `style` back to `app` apply at once |
 | `comms_behaviour`, `comms_profile` | what an agent may do, and how it writes: see above |
+| `comms_standing` | the standing approvals, as `standing list`: what an agent may send without asking, each one's uses and last acts; `narrow`, `revoke` and `off` only take away, so each applies at once, and `off` ends every one. Creating or widening one is Slack's, approved only with the code at a terminal |
 | `comms_names_migrate` | rename every account to `organisation/platform`; `dryRun` shows the mapping |
 | `comms_secrets_migrate` | move every credential between the keychain and files |
 | `comms_paths`, `comms_doctor`, `comms_audit_tail` | as `paths`, `doctor` and `audit tail` |
