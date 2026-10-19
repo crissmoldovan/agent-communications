@@ -98,10 +98,11 @@ describe("the app's repository rules", () => {
   it('no file names a real home', () => {
     const binary = /\.(?:png|icns|ico|jpg|jpeg|gif|webp|woff2?)$/;
     const realHome = homedir();
+    // Each at the start of a path, so a folder named home inside an example path is not read as a home.
     const homes = [
-      /\/Users\/(?!example\b)[A-Za-z0-9._-]+/,
-      /\/home\/(?!example\b)[A-Za-z0-9._-]+/,
-      /[A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/)(?!example\b)[A-Za-z0-9._-]+/i,
+      /(?<![\w.~/-])\/Users\/(?!example\b)[A-Za-z0-9._-]+/,
+      /(?<![\w.~/-])\/home\/(?!example\b)[A-Za-z0-9._-]+/,
+      /(?<![\w.~/-])[A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/)(?!example\b)[A-Za-z0-9._-]+/i,
     ];
     const findings: string[] = [];
     for (const { path, text } of filesUnder('.', (path) => !binary.test(path))) {

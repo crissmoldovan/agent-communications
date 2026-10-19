@@ -35,7 +35,9 @@ pub fn is_app_origin(url: &Url) -> bool {
     }
     match url.scheme() {
         "tauri" if !cfg!(windows) => url.host_str() == Some("localhost") && url.port().is_none(),
-        "http" if cfg!(windows) && url.host_str() == Some("tauri.localhost") => url.port().is_none(),
+        "http" if cfg!(windows) && url.host_str() == Some("tauri.localhost") => {
+            url.port().is_none()
+        }
         "http" if cfg!(debug_assertions) => {
             url.host_str() == Some("localhost") && url.port() == Some(1420)
         }
