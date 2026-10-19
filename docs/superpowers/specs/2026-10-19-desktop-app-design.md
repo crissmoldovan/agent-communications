@@ -296,3 +296,25 @@ the app works in two ways.
   run `--offline`. Gmail's only runs when the person asks, because it calls Google. Core's doctor never runs on a
   timer, because each run writes to the keychain.
 - **The pre-paint script** is pinned in the content policy by its hash. That is new work: phase C had no inline script.
+
+### DA15. Settled while planning (2026-10-19)
+
+The plan (`docs/superpowers/plans/2026-10-19-desktop-app.md`) settles what writing it found against the code. Where it
+differs from DA1 to DA14, the plan is the later word.
+- **Approvals are polled through core only.** Every channel writes to one shared store, and only core lists it.
+- **Windows Node** is read from the Windows launcher's second line.
+- **Five folder pins,** where DA12 said four. Downloads is left to its default.
+- **Stylesheet:** `@cueplusplus/ui` 0.29 also needs its theme stylesheet line and a `themes` prop.
+- **Updates** are found through the GitHub API, among `desktop-v*` releases published with `--latest=false`.
+- **The events CLI's** `--version` takes no folder pins.
+- **Plugins:**
+  - notifications are dropped;
+  - clipboard, single-instance and opening files are added.
+- **On Windows,** the tray shows the count in its tooltip.
+- **Updater artifacts** are switched on only by the release script.
+
+**Licence notices (lead's call).** The app ships a `THIRD_PARTY_LICENSES` file, as phase C did. A script in
+`apps/desktop/scripts/` writes it from two sources: the JavaScript dependencies the bundle includes, read the way
+`scripts/third-party-licenses.mjs` reads the packages; and the Rust crates in the build, read from `cargo metadata`
+(name, version, licence expression), with the licence texts taken from each crate's own files. No new tool is
+installed. A check in CI fails when the file is out of step.
