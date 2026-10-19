@@ -36,6 +36,8 @@ export type ErrorCode =
   | 'SEND_REFUSED'
   | 'POLICY_NEVER'
   | 'ACT_NOT_ALLOWED'
+  | 'STANDING_REFUSED'
+  | 'STANDING_LIMIT'
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
   | 'LOOSENING_REFUSED'
@@ -99,6 +101,25 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     exit: EXIT_CODES.APPROVAL,
     retryable: false,
     summary: 'a behaviour rule does not allow this act here',
+  },
+  /*
+   * A standing approval (design 2026-10-19-standing-approvals, S4, S5, S7) does not cover this act: the message is not
+   * fresh, not the newest, not from a person, or the place, the sharing or the identity is not what it allows.
+   * `details.reason` says which. Nothing was sent; the agent stops and asks the person, and never retries.
+   */
+  STANDING_REFUSED: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'this standing approval does not cover this act',
+  },
+  /*
+   * A standing approval's limit is reached (S6): `details.limit` (perThread, perHour or perDay), `details.allowed` and
+   * `details.freesAt`. Never queued, and not retryable: the agent asks the person instead.
+   */
+  STANDING_LIMIT: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: "a standing approval's limit is reached",
   },
   RATE_CAPPED: { exit: EXIT_CODES.APPROVAL, retryable: true, summary: 'the send limit for this inbox is reached' },
   UNSENDABLE_HTML: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the draft has HTML an agent may not send' },

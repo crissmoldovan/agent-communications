@@ -199,6 +199,12 @@ export * from './secrets.ts';
 export * from './send-epoch.ts';
 export * from './send-pacing.ts';
 export * from './sending-lease.ts';
+/*
+ * Standing approvals (design 2026-10-19-standing-approvals): the contents a person writes in advance, named by digest,
+ * the places and limits, what widens one, and the standard emoji a standing reaction may be.
+ */
+export * from './standing.ts';
+export * from './standing-emoji.ts';
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';
