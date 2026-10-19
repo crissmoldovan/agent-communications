@@ -119,7 +119,7 @@ describe('the desktop workflows', () => {
     expect(workflow).toContain('libwebkit2gtk-4.1-dev');
 
     const gates = [
-      'pnpm install --frozen-lockfile',
+      "pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'",
       'pnpm --filter @agentcomms/desktop typecheck',
       'pnpm --filter @agentcomms/desktop test',
       'pnpm --filter @agentcomms/desktop build',

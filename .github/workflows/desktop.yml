@@ -83,7 +83,7 @@ jobs:
         with:
           node-version: 22.18.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 
       - name: Linux system packages for Tauri
         if: runner.os == 'Linux'
