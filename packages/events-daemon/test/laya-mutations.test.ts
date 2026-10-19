@@ -16,6 +16,7 @@ import {
   VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
@@ -900,6 +901,113 @@ test('E2 mutation: copied production checker fails only its named oracle', { ski
   for (const { mutation, changedLine } of await expectEveryLayaMutationToFail()) {
     context.diagnostic(`${mutation.id}: ${mutation.source}:${changedLine} -> ${mutation.testName}`);
   }
+});
+
+/**
+ * One oracle that starts a descendant — as a test process starts a Laya worker — writes the descendant's PID to
+ * `pidFile`, then hangs (`hang`), exits at once (`exit`), or exits while the descendant still holds its output (`hold`).
+ */
+function oracleWithDescendant(mode: 'hang' | 'exit' | 'hold', pidFile: string): readonly string[] {
+  const source = [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    `const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ${
+      mode === 'hold' ? "['ignore', 'inherit', 'inherit']" : "'ignore'"
+    } });`,
+    `writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid));`,
+    mode === 'hang' ? 'setInterval(() => {}, 1000);' : 'process.exit(0);',
+  ].join('\n');
+  return ['-e', source];
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True once `pid` has gone; a SIGKILLed orphan is reaped by init within moments. */
+async function goneWithin(pid: number, milliseconds: number): Promise<boolean> {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !processAlive(pid);
+}
+
+async function withDescendantOracle(
+  mode: 'hang' | 'exit' | 'hold',
+  run: (oracle: { readonly args: readonly string[]; readonly descendant: () => Promise<number> }) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), 'events-e2-runner-tree-'));
+  const pidFile = join(directory, 'descendant.pid');
+  try {
+    await run({
+      args: oracleWithDescendant(mode, pidFile),
+      descendant: async () => Number(await readFile(pidFile, 'utf8')),
+    });
+  } finally {
+    // A runner that left the descendant running fails above; this only keeps that failure from leaking it.
+    const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
+    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
+  await withDescendantOracle('hang', async (oracle) => {
+    await assert.rejects(
+      runStrictMutationChild({
+        command: process.execPath,
+        args: oracle.args,
+        cwd: tmpdir(),
+        env: process.env,
+        timeoutMs: 1_500,
+      }),
+      /timed out after 1500ms/u,
+    );
+    const descendant = await oracle.descendant();
+    assert.equal(await goneWithin(descendant, 2_000), true, 'the bound ends the oracle’s whole process tree');
+  });
+});
+
+test('E2 mutation: an oracle that has ended leaves no process it started running', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withDescendantOracle('exit', async (oracle) => {
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args: oracle.args,
+      cwd: tmpdir(),
+      env: process.env,
+      timeoutMs: 10_000,
+    });
+    assert.equal(result.code, 0, result.output);
+    const descendant = await oracle.descendant();
+    assert.equal(await goneWithin(descendant, 2_000), true, 'nothing the oracle started outlives it');
+  });
+});
+
+test('E2 mutation: a process an ended oracle left holding its output does not hold the runner to its bound', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withDescendantOracle('hold', async (oracle) => {
+    const started = Date.now();
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args: oracle.args,
+      cwd: tmpdir(),
+      env: process.env,
+      timeoutMs: 10_000,
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.ok(Date.now() - started < 5_000, 'the runner ended the leftover and read the oracle’s result at once');
+    assert.equal(await goneWithin(await oracle.descendant(), 2_000), true, 'the leftover holding the pipe was ended');
+  });
 });
 
 test('E2 mutation: cold-store self-test holds the exact normal install command', async () => {
