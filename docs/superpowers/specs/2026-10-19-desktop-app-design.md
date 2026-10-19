@@ -30,8 +30,19 @@ service only, predates the owner's direction, and stays unmerged, as reference.
 - **Releases** are signed with a Developer ID and notarised by a local script. They update through
   tauri-plugin-updater, from a private GitHub release, using a token baked into the binary.
 
-**QuotaMate** (`cueplusplus/quotamate`) is a Next.js web app with no desktop shell. Its use of `@cueplusplus/ui` is
-the reference:
+**QuotaMate** (`cueplusplus/quotamate`) has two parts:
+- **A Next.js web app.**
+- **A Tauri v2 menu-bar app** (`apps/menubar`, `ai.quotamate.menubar` 0.1.3), merged on 2026-10-11.
+  - It is signed with a Developer ID and notarised.
+  - Its release script says it is "Supbuddy release-tauri.sh, adapted for a universal menu bar app with no sidecar".
+    It runs on the signing Mac, notarises and staples both the app and the DMG, and refuses a dirty tree or a commit
+    that isn't the tag's.
+  - It updates through tauri-plugin-updater, from private GitHub prereleases, using a baked read-only token.
+  - It paints with `@cueplusplus/theme-quotamate` tokens, but doesn't use `@cueplusplus/ui`'s components or provider.
+
+So the two siblings share one release mechanism, and Supbuddy is its source.
+
+The **web** app's use of `@cueplusplus/ui` is the reference:
 - the two-line stylesheet (`@import 'tailwindcss'` then `@import '@cueplusplus/ui/styles.css'`);
 - a pre-paint script so the theme shows without a flash;
 - `ThemeProvider` with theme, density and mode;
@@ -173,21 +184,26 @@ The command is built in Rust from the allow-list. It is never text taken from th
   repository's: `sync-versions` writes `tauri.conf.json`.
 - **CI:** `.github/workflows/desktop.yml` builds on macOS (Apple silicon and Intel), Windows and Linux, for any pull
   request that touches `apps/desktop`, and runs the app's tests.
-- **Releases:** `desktop-release.yml`, on the same `v*` tag as the npm release, builds the installers and attaches them
-  to that GitHub release: a `.dmg`, an NSIS `.exe`, an AppImage and a `.deb`.
-- **Signing and notarisation** use repository secrets when they exist: Apple's Developer ID certificate, notarisation
-  credentials, and Tauri's updater key. **When they don't,** the workflow still builds:
-  - macOS is signed ad hoc;
-  - Windows is unsigned;
-  - no updater files are made, and the app's updater is off.
+- **The macOS release follows the siblings (lead's call).** `apps/desktop/scripts/release-desktop.sh` is adapted from
+  QuotaMate's `release-menubar.sh`. On the owner's signing Mac it:
+  - builds a universal binary;
+  - signs it with the Developer ID certificate in the login keychain;
+  - notarises and staples the app and the DMG;
+  - refuses a dirty tree, or a commit that is not the tag's.
 
-  The release notes say which applies.
-
-  Only the owner can create a signing identity, so `docs/RELEASING.md` gains the owner's steps:
-  - generate the updater key (`tauri signer generate`), and add it and its password as secrets;
-  - add the Developer ID certificate and the notarisation credentials as secrets.
-- **The updater** reads `latest.json` from this public repository's releases. **No token is baked into the app**,
-  unlike Supbuddy, because the repository is public.
+  Then `publish-desktop.sh` makes the GitHub release `desktop-vX.Y.Z` in this repository, with the DMG, the updater's
+  `.app.tar.gz` and `latest.json`. The signing identity and the updater key stay on the owner's Mac, as they do for
+  Supbuddy and QuotaMate. An agent never runs these scripts.
+- **The updater** follows the siblings: tauri-plugin-updater with `requireSignedVersion`, a silent check 60 seconds
+  after launch and then every 24 hours, and Check for Updates… in the tray. It reads `latest.json` from this
+  repository's releases. **No token is baked into the app,** because this repository is public. An app built without
+  the updater key (any CI build) has its updater off, and says so in Settings.
+- **Windows and Linux:** `desktop-release.yml`, on a `desktop-v*` tag, builds an unsigned NSIS `.exe`, an AppImage and
+  a `.deb`, and attaches them to that release. The release notes say they are unsigned. **(lead's call:** the siblings
+  ship macOS only; these come at no cost from CI.**)**
+- **Owner steps** go in `docs/RELEASING.md`: generate the updater key (`tauri signer generate`) into
+  `~/.agentcomms/tauri-updater.key` with mode 600; put the signing environment in a `.env.desktop-release.local` that
+  git ignores; then run the two scripts.
 
 ### DA9. Tests
 
