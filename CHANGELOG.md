@@ -3,7 +3,20 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.23.0
+
+**An agent can acknowledge a Slack message without asking you, in your words, where and as often as you allowed —
+and nothing else changes without your yes.** This is spec 3, which the owner asked for alongside the agent label:
+agents that read Slack "send acknowledgments back", and asking for each "Got it" stopped them. A standing approval is
+your yes given in advance, at your terminal with a code, to a few fixed acknowledgements in places you name. Each use
+waits a random 5–30 seconds, is counted against your limits, goes out labelled as your agent, and shows a
+notification on your screen.
+
+Nothing changes when you update: until you create one with `agent-slack standing add`, no message goes out without
+your yes, exactly as in 0.22.0. Read "Using one" below before you
+create one. An agent tricked by a message it reads can choose which messages to acknowledge and when. At the defaults
+that is enough to leak tens of bits an hour, so don't give standing approvals to an agent that also reads sensitive
+mail or secrets in the same session.
 
 **You can let an agent acknowledge a Slack message without asking you — with words or an emoji you wrote, where and
 as often as you said.** Until now nothing posted without your yes to that exact message, so an agent that read a
