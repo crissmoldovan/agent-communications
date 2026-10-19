@@ -1,3 +1,4 @@
+import { behaviourRenamed, behaviourRulesMigrated } from './behaviour.ts';
 import { connectMailboxWords } from './channel-words.ts';
 import {
   type AccountConfig,
@@ -250,38 +251,6 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
 }
 
 /**
- * `config.behaviour` with every rule that holds the account `id` renamed from `from` to `to` (design
- * 2026-10-19-agent-behaviour-rules, B3).
- *
- * A rule bound to the account's id holds it whatever its name, and is renamed only so it reads as the account is
- * called now. A rule that holds it by name — one whose id no account holds (an orphan), one with none, one this release
- * cannot read — would hold nothing once the name went, and that is a restriction a rename would shed; renamed, it holds
- * the account still. A rule bound to another account's id is left alone, whatever name it carries. Every other key, of
- * the setting and of each rule, is kept as it was, and a value with no list of rules is returned as it is.
- */
-function behaviourRenamed(config: Config, id: string, from: string, to: string): unknown {
-  const stored = config.behaviour;
-  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return stored;
-  const rules: unknown = (stored as { rules?: unknown }).rules;
-  if (!Array.isArray(rules)) return stored;
-  const held = new Set([...Object.values(config.inboxes), ...Object.values(config.accounts)].map((entry) => entry.id));
-  const holds = (rule: Record<string, unknown>): boolean => {
-    if (typeof rule.account !== 'string') return false;
-    if (rule.accountId === id) return true;
-    const bound = typeof rule.accountId === 'string' && held.has(rule.accountId);
-    return !bound && rule.account === from;
-  };
-  return {
-    ...stored,
-    rules: rules.map((rule: unknown) =>
-      typeof rule === 'object' && rule !== null && !Array.isArray(rule) && holds(rule as Record<string, unknown>)
-        ? { ...rule, account: to }
-        : rule,
-    ),
-  };
-}
-
-/**
  * `config` with every former name that pointed at `fromId` pointed at `toId` instead.
  *
  * For a re-authorisation that mints a new id for the same account — Slack's did before it kept the id, and a release
@@ -449,10 +418,14 @@ export function applyNamesMigration(config: PlainConfig, rows: readonly NamesMig
   };
   const inboxes = rename('inbox', config.inboxes);
   const accounts = rename('account', config.accounts);
+  // The behaviour rules that hold an account by its name go with it, as a rename takes them (`renameEntry`): a rule
+  // left under the old name would hold nothing, and that is a restriction a migration must never shed.
+  const behaviour = config.behaviour === undefined ? {} : { behaviour: behaviourRulesMigrated(config, rows) };
   const named = {
     inboxes: inboxes.renamed,
     accounts: accounts.renamed,
     formerNames: { inboxes: inboxes.former, accounts: accounts.former },
+    ...behaviour,
   };
   return config.version === 3 ? { ...config, ...named, naming: 2 } : { ...config, ...named, version: 2 };
 }

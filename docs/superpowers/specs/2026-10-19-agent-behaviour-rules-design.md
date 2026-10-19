@@ -4,6 +4,7 @@ Status: **written 2026-10-19**, for 0.22.0. The owner asked for these rules on 2
 and confirmed the order on 2026-10-19: spec 2, then spec 3 (sending some messages without asking), then the desktop
 app. On 2026-10-19 the owner chose to have the work done without further questions ("continue until all specs and
 plans are implemented"). So every decision the owner did not state is marked **(lead's call)**, for them to overturn.
+Revised on 2026-10-19 after two independent code reviews: what changed then is marked **(lead's call, after review)**.
 
 This design builds on the [agent label design](2026-10-15-agent-label-design.md), whose rules, kinds and account
 binding it reuses. It also builds on the writing profiles in `packages/core/src/compose-profile.ts`.
@@ -65,7 +66,7 @@ machine check would be wrong as often as right, and the person sees every messag
 | Channel | Acts, and what each is |
 |---|---|
 | Slack | `post`, a new top-level message in a channel or DM. `reply`, a message in a thread. `reaction`. `edit` of a message this account posted. `delete` of one. `file`, a file shared. **A file share needs `file` and, for where it lands, `post` (top-level) or `reply` (in a thread); an edit that adds files needs `edit` and `file`.** So `reply` with `file` means files only in threads. **(lead's call)** |
-| Gmail | `send`, a new message, a forward included. `reply`, a message whose `In-Reply-To` names a message that exists in this mailbox, checked against Gmail at prepare and bound into the approval. A thread id alone is not a reply: Gmail gives every draft one. **(lead's call)** |
+| Gmail | `send`, a new message, a forward included. `reply`, a message whose `In-Reply-To` names a message that exists in this mailbox, checked against Gmail at prepare and bound into the approval. A thread id alone is not a reply: Gmail gives every draft one. **(lead's call)** The act is decided **per recipient**: a recipient is `reply` only if their address is on the proven message — its From, Reply-To, To or Cc — and `send` otherwise, so a reply to an unrelated message cannot reach someone new as a reply. The proof never uses Spam or Trash: a message only there proves nothing. **(lead's call, after review)** |
 | Resend | `send`. Resend has no threads here, so a message with `In-Reply-To` is still `send`. **(lead's call)** |
 | WhatsApp | none, since it reads only. |
 
@@ -98,13 +99,37 @@ one is the act that is checked.
 - **A rule this release cannot read at all** (a bad shape) makes its account allow nothing, and `doctor` says so.
   Nothing ever makes the whole list vanish, as the label's reader may for the label.
 
+**Rules fail closed against names too (lead's call, after review):**
+- **A rule naming an account no account here could ever have** — outside the configuration's name grammar (`*`, upper
+  case, a version-1 name in a version-2 configuration), or a former name whose account is gone (a former name is never
+  given again) — is unreadable, and since it names no account it can hold, it holds every account: each allows nothing
+  until a person corrects it. A restriction that silently holds nothing is the failure this prevents.
+- **A rule naming a former name** holds the account that name points at now, through the former-names table.
+- **`names migrate` renames the rules** that hold each account it renames, as `renameEntry` does for one rename, and the
+  store accepts a migration whose rules changed only so.
+- `doctor`'s orphan row promises a future account only for a name an account could still be given.
+
 **Resolving them:**
 - **With no rule,** every act is allowed: today's behaviour. Nothing changes on update.
 - **The most specific rule wins,** conversation over account, as the label's do. For mail, an address rule wins over
-  its `@domain` rule, which wins over the account rule. A conversation rule may allow more than its account rule. That
+  every `@domain` rule, which wins over the account rule. A conversation rule may allow more than its account rule. That
   is a loosening, and it is approved first (B5). **(lead's call:** it is the same model as the label's, so a person
   learns one rule.**)**
-- **Two rules for the same place** can't exist: adding one replaces the other.
+- **How mail rules meet a recipient (lead's call, after review):**
+  - An address rule and a recipient compare as the mailbox they reach: a `+tag` in the local part is ignored on both
+    sides (`ceo+x@client.test` meets `ceo@client.test`), and for `gmail.com` and `googlemail.com` the dots in the
+    local part are ignored too and the two domains are one.
+  - An `@domain` rule covers its subdomains: `@client.test` holds `x@eu.client.test`. Among domain rules the longest
+    that covers the recipient wins, so `@eu.client.test` wins over `@client.test`. Specificity: address > longest
+    matching domain > account.
+  - Before these, case, Unicode or punycode, and a trailing dot are already one spelling (`normaliseMailConversation`).
+- **A Slack place that is no conversation id** — a channel's name, `#name`, an id in lower case — is held to every rule
+  of its account at one level, so only what all of them allow is allowed, as a DM whose person could not be read is
+  held to every person's rule. Slack refuses such a destination at prepare (B4); this is the backstop beneath it.
+  **(lead's call, after review)**
+- **Two rules for the same place** can't exist: adding one replaces the other. Two rules whose addresses only reach
+  one mailbox — `ceo@client.test` and `ceo+board@client.test` — are two places, both kept, and a recipient there gets
+  only what both allow, as two rules at one level do. **(lead's call, after review)**
 - **Two different places can match at the same specificity,** such as a Slack DM matched by its `D…` rule and by the
   person's `U…` rule. Then **the narrower wins**: only the acts both allow are allowed.
 
@@ -144,18 +169,61 @@ or `refused` naming the rule.
    prompt.**)**
 
 **Deciding the act:**
-- **Slack** decides `post` or `reply` from `thread_ts`. A file needs `file` as well (B2).
-- **Gmail** decides `reply` only from an `In-Reply-To` naming a message in this mailbox (B2). A forward, or a bare
-  thread id, is `send`.
+- **Slack** decides `post` or `reply` from `thread_ts`. A file needs `file` as well (B2). **(lead's call, after
+  review:** Slack posts a `thread_ts` that names no message in that conversation as a new top-level message, so a
+  thread is never taken on the draft's word. A post's `thread_ts` must have a message ts's form — `USAGE` where it is
+  given, `BAD_DATA` in a stored or hand-written draft. Where the rules as they are now allow a reply and not a post, or
+  a post and not a reply, the thread is read from Slack (`conversations.replies` in that channel at that ts): a message
+  there makes it a `reply`; none makes it a `post`, checked as that, the refusal's hint saying why. Where they allow
+  both, or neither, the post is checked as both acts, so Slack is asked nothing more — and an account with no rules
+  asks Slack nothing it did not before. This is decided again at the approval screen and at the send, from the channel
+  and thread the digest already binds, so a thread gone by the send is a post there. A read that fails for a moment is
+  `TRANSIENT`, nothing sent.**)**
+- **A Slack destination is a conversation id** — a channel's `C…` or `G…`, a DM's `D…`, in capitals and digits — and
+  anything else (a channel's name, `#name`, an id in lower case) is refused `USAGE` (`not-a-conversation`) at draft
+  create and update, at post prepare, at a reaction's prepare and claim, at an edit's and a deletion's, and wherever a
+  post is viewed, before Slack is asked anything. `chat.postMessage` takes a name, and a name matched no rule. Beneath
+  this, core holds a place that is no id to every rule of its account (B3). **(lead's call, after review)**
+- **Gmail** decides `reply` only from an `In-Reply-To` naming a message in this mailbox, outside Spam and Trash (B2),
+  and only for the recipients on that message. A forward, or a bare thread id, is `send`. **(lead's call, after
+  review:** a Gmail error while proving the reply raises `TRANSIENT` — nothing sent, nothing used, retryable — and
+  never reads as "not a reply", which a rule that allows only replies would refuse for good.**)**
 - **The conversation is the destination:** a Slack channel id, the DM's channel or the person (a `U…` rule matches the
   DM with them), or each recipient's address for mail.
-- **For mail, each recipient is resolved on its own:** address, then `@domain`, then account. The act must be allowed
-  for every one of them. A rule for `@client.com` that forbids `send` refuses a message with any recipient there.
+- **A person's rule holds every group DM with them too (lead's call, after review).** A group DM (`G…`, an mpim) is
+  one place for each person in it but this account, each place the room with that person — `[G…, U…]` — and every
+  place must allow the act. So a person's narrower rule holds the group DM, a rule for the room itself still wins over
+  the account's where no person's rule speaks, and a person's wider rule cannot widen the room past what its other
+  people allow. The members are those Slack reports (`conversations.members`, paged), read only while a rule names a
+  person. Failing closed: members that could not be read, or a `G…` room that could not be read at all (it may be a
+  group DM), are held to every person's rule. Nothing more is bound, so a channel's and a group DM's approvals keep
+  their digests; the members are read and held again at the claim. (The decision as given was the room and each
+  member as separate places; pairing each member with the room keeps a rule for the room able to allow more than its
+  account, as every conversation rule may.)
+- **For mail, each recipient is resolved on its own:** address, then the longest `@domain`, then account. The act — for
+  Gmail, the act the message is to that recipient — must be allowed for every one of them. A rule for `@client.test` that forbids `send` refuses a message with any recipient there.
   **(lead's call:** the strictest reading, because one forbidden recipient is the point of such a rule. The label's
   own mail matching, which applies a conversation rule only when every recipient matches, is not reused.**)**
 
 **What every preview carries:** a line `Allowed here: reply, reaction (rule: cue/slack, #general)`, or `Allowed here:
-everything (no rule)`, so the person sees what holds.
+everything (no rule)`, so the person sees what holds. A Gmail reply's preview, and its approval screen, also carry
+`Checked as: reply to <From of the proven message>` — a sender's words, so neutralised and flattened to one line — and
+how many recipients get it as a new message. **(lead's call, after review)**
+
+**Where the second check sits (lead's call, after review):**
+- **Gmail binds each recipient's act into the approval's digest** (`{ v: 2, content, places: [[address, act], …] }`).
+  The approval screen and the send read the acts back from the digest: every recipient a `send`, every one a `reply`,
+  or — only when neither is the digest — the reading a fresh proof gives, which the digest must confirm. A mailbox
+  changed since can never turn a send into a reply; a mixed reply whose original has gone cannot be read back, and its
+  approval is void. An approval prepared before 0.22.0 binds the draft's digest alone, and each recipient is checked
+  as both acts when its `In-Reply-To` could make it a reply.
+- **Every channel checks before the approval is claimed,** so a refused approval stays usable: loosened again, the same
+  approval goes once. Gmail checks again after the claim, before each attempt; Resend asks before each attempt too, so
+  a rule tightened while a throttle is waited out stops the retry.
+- **The terminal's approval screen refuses** what a rule tightened since the prepare forbids, on Gmail and Resend
+  alike, and issues no code.
+- **`doctor`** counts a registered server that names no release, or one it cannot read, as one that may enforce no
+  rule.
 
 ### B5. Changing the rules
 
@@ -252,6 +320,7 @@ Out of scope. An organisation-wide floor ("no agent may delete in our workspace"
 **Rules and resolution:**
 - The most specific rule wins: an address over its `@domain`, over the account.
 - A DM matched by both a `D…` rule and a `U…` rule gets the narrower.
+- A group DM is held to the rule of every person in it, and to every person's rule when its members cannot be read.
 - An empty `acts` means nothing is allowed.
 - With no rule, everything is allowed.
 
@@ -275,11 +344,18 @@ with no preview and no approval created.
 - This uses Gmail's fake transport, Slack's loopback fake and Resend's loopback fake. Nothing real is reached.
 
 **Deciding the act:**
-- Slack `thread_ts` gives `reply`.
+- Slack `thread_ts` gives `reply` only with a parent in that channel, where the rules tell a reply from a post; an
+  unknown `thread_ts`, or one from another channel, is checked as `post`; a malformed one is refused.
+- A Slack destination that is no conversation id is refused at prepare, and held to every rule beneath that.
+- A Gmail recipient not on the message a reply answers is checked as `send`; Spam and Trash prove nothing; a Gmail
+  error during the proof is `TRANSIENT`.
 - A file needs `file` plus `post` or `reply`, and an edit that adds files needs `edit` and `file`.
 - In Gmail, an `In-Reply-To` naming a message in the mailbox gives `reply`. A forward, or a bare thread id, gives
   `send`.
-- A mail recipient's domain matches an `@domain` rule.
+- A mail recipient's domain matches an `@domain` rule, and so does a subdomain of it, a longer subdomain rule winning.
+- An address rule holds the address with a `+tag`, and at Gmail with dots and at `googlemail.com`.
+- A rule naming an account that can never match holds every account; a former name holds its account; `names migrate`
+  keeps every rule holding its account.
 
 **Previews:** every one carries the `Allowed here:` line.
 

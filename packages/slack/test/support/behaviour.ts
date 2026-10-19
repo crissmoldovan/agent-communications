@@ -10,9 +10,11 @@ import { type Harness, newHarness } from './harness.ts';
  * the fake is the loopback one, and the gate reaches it only through the guard.
  *
  * The rooms: `#eng` ({@link ENG}), which this account has joined; a DM with Sam ({@link SAM_DM}, Sam is {@link SAM});
- * and a DM with Ana ({@link ANA_DM}, Ana is {@link ANA}). Ids as Slack writes them, long enough to be read as ids: a rule
- * naming one too short to be a Slack id is a rule the rules cannot read, and its account allows nothing. This account's
- * own message sits in `#eng` at {@link MINE}, for an edit or a deletion to act on.
+ * a DM with Ana ({@link ANA_DM}, Ana is {@link ANA}); a group DM with Sam and Ana ({@link GROUP_WITH_SAM}), one with Ana
+ * and Ben ({@link GROUP_WITHOUT_SAM}, Ben is {@link BEN}), and a private channel Sam is in ({@link PRIVATE_WITH_SAM}).
+ * Ids as Slack writes them, long enough to be read as ids: a rule naming one too short to be a Slack id is a rule the
+ * rules cannot read, and its account allows nothing. This account's own message sits in `#eng` at {@link MINE}, and in
+ * the group DM with Sam at {@link MINE_IN_GROUP}, for an edit or a deletion to act on.
  */
 
 export const MINE = '1700000000.000100';
@@ -21,6 +23,11 @@ export const SAM = 'U0SAM';
 export const SAM_DM = 'D0SAM';
 export const ANA = 'U0ANA';
 export const ANA_DM = 'D0ANA';
+export const BEN = 'U0BEN';
+export const GROUP_WITH_SAM = 'G0SAMANA';
+export const GROUP_WITHOUT_SAM = 'G0ANABEN';
+export const PRIVATE_WITH_SAM = 'G0PRIV';
+export const MINE_IN_GROUP = '1700000000.000400';
 
 export interface BehaviourWorld {
   readonly harness: Harness;
@@ -45,13 +52,24 @@ export async function behaviourWorld(
   const fake = await startFakeSlack();
   t.after(() => fake.close());
   const world = fake.world({
-    users: { U0001: { display_name: 'Jo' }, [SAM]: { display_name: 'Sam' }, [ANA]: { display_name: 'Ana' } },
+    users: {
+      U0001: { display_name: 'Jo' },
+      [SAM]: { display_name: 'Sam' },
+      [ANA]: { display_name: 'Ana' },
+      [BEN]: { display_name: 'Ben' },
+    },
     rooms: {
       [ENG]: { name: 'eng', members: ['U0001', SAM, ANA] },
       [SAM_DM]: { is_im: true, user: SAM, members: ['U0001', SAM] },
       [ANA_DM]: { is_im: true, user: ANA, members: ['U0001', ANA] },
+      [GROUP_WITH_SAM]: { name: 'mpdm-jo--sam--ana-1', is_mpim: true, members: ['U0001', SAM, ANA] },
+      [GROUP_WITHOUT_SAM]: { name: 'mpdm-jo--ana--ben-1', is_mpim: true, members: ['U0001', ANA, BEN] },
+      [PRIVATE_WITH_SAM]: { name: 'launch', is_private: true, members: ['U0001', SAM] },
     },
-    messages: [{ channel: ENG, ts: MINE, text: 'shipping in ten minuets', user: 'U0001', via: 'user' }],
+    messages: [
+      { channel: ENG, ts: MINE, text: 'shipping in ten minuets', user: 'U0001', via: 'user' },
+      { channel: GROUP_WITH_SAM, ts: MINE_IN_GROUP, text: 'lunch at noon?', user: 'U0001', via: 'user' },
+    ],
   });
   const context = harness.context({ platform: 'darwin', surface: 'mcp' });
   return {

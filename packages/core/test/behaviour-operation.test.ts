@@ -211,19 +211,19 @@ test('setRule that tightens applies at once with no approval, binds the account 
   assert.deepEqual(await listApprovals(m.core), [], 'none of them asked anybody');
 
   // A domain in Unicode, or fully qualified with its trailing dot, is kept in the one form rules are compared in.
-  applied(await run(m, { setRule: { account: 'acme/gmail', conversation: '@Bücher.DE.', acts: [] } }));
-  assert.equal(((await stored(m)) as { conversation?: string }[]).at(-1)?.conversation, '@xn--bcher-kva.de');
+  applied(await run(m, { setRule: { account: 'acme/gmail', conversation: '@Bücher.EXAMPLE.', acts: [] } }));
+  assert.equal(((await stored(m)) as { conversation?: string }[]).at(-1)?.conversation, '@xn--bcher-kva.example');
   const again2 = applied(
-    await run(m, { setRule: { account: 'acme/gmail', conversation: '@xn--bcher-kva.de', acts: [] } }),
+    await run(m, { setRule: { account: 'acme/gmail', conversation: '@xn--bcher-kva.example', acts: [] } }),
   );
   assert.equal(again2.changed, false, 'the same domain in another spelling is the same rule');
   const mailQuery = { accountId: inbox.id, account: 'acme/gmail', acts: ['send' as const] };
   assert.equal(
-    allowedAct(await m.core.config.load(), { ...mailQuery, places: [['kunde@xn--bcher-kva.de']] }).allowed,
+    allowedAct(await m.core.config.load(), { ...mailQuery, places: [['kunde@xn--bcher-kva.example']] }).allowed,
     false,
   );
   // And it is found to take away in either spelling: removing it loosens, so it waits rather than is not found.
-  waiting(await run(m, { removeRule: { account: 'acme/gmail', conversation: '@BÜCHER.de' } }));
+  waiting(await run(m, { removeRule: { account: 'acme/gmail', conversation: '@BÜCHER.example' } }));
 
   // The same rule again changes nothing, and asks nobody.
   const again = applied(await run(m, { setRule: { account: 'acme/slack', acts: ['reply', 'reaction'] } }));
@@ -319,7 +319,7 @@ test('what a rule names is checked against the account it is for, and every othe
     note: 'kept',
   });
   // A domain that is not one is refused before anything is written: as a rule it could only allow nothing.
-  for (const conversation of ['@exa|mple.com', 'bob@xn--a.com', '@client.com..']) {
+  for (const conversation of ['@exa|mple.com', 'bob@xn--a.test', '@client.test..']) {
     await assert.rejects(
       run(m, { setRule: { account: 'acme/gmail', conversation, acts: [] } }),
       refused('USAGE', /domain/),
@@ -556,6 +556,56 @@ test("doctor's three rows: unreadable rules, orphaned rules, and servers below 0
   assert.doesNotMatch(enforcement.detail, /Slack/, 'a server at the release that enforces is not named');
   assert.match(enforcement.fix ?? '', /update/);
   assert.match(enforcement.fix ?? '', /restart/);
+});
+
+/*
+ * A registration that names no release — `npx @agentcomms/gmail-mcp`, `@latest`, a hand-written command — may start
+ * any release, an older one too. Counted as enforcing, it hid exactly the server that may not: so it is named, in
+ * words of its own (lead's call, after review).
+ */
+test('doctor names a server whose release cannot be read as one that may enforce no rule', async () => {
+  const m = machine({ rules: [{ account: 'acme/gmail', accountId: inbox.id, acts: ['reply'] }] });
+  const claude = knownClientConfigs(m.env).find((file) => file.client === 'claude-code')?.path;
+  assert.ok(claude);
+  mkdirSync(dirname(claude), { recursive: true });
+  const servers = {
+    gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp', '--inbox', 'acme/gmail'] },
+    slack: { command: 'npx', args: ['-y', '@agentcomms/slack@latest', 'mcp', '--workspace', 'acme/slack'] },
+  };
+  writeFileSync(claude, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
+  const report = await doctor(m.core, m.env, { keyring: null });
+  const enforcement = report.checks.find((check) => check.name === 'behaviour enforcement');
+  assert.ok(enforcement, JSON.stringify(report.checks));
+  assert.equal(enforcement.warn, true);
+  assert.match(
+    enforcement.detail,
+    /Gmail server[^;]*names no release that can be read, so it may enforce no behaviour rule/,
+  );
+  assert.match(enforcement.detail, /Slack server[^;]*names no release that can be read/);
+});
+
+/*
+ * A rule's conversation is the file's own words, and the conversation grammar lets an escape sequence through in an
+ * address's local part: the report printed it raw, at the terminal of the person reading what an agent may do.
+ */
+test('the behaviour report shows a hand-edited rule made safe: no escape sequence reaches the terminal', () => {
+  const m = machine({
+    rules: [
+      { account: 'acme/gmail', accountId: inbox.id, conversation: '\u001b[2J\u001b[31mx@client.test', acts: [] },
+      {
+        account: 'acme/gmail',
+        accountId: 'ibx_GONEGONEGONEGONE',
+        conversation: '\u001b]0pwned\u0007@a.test',
+        acts: [],
+      },
+    ],
+  });
+  const shown = cli(m, ['behaviour']);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.ok(!shown.stdout.includes('\u001b'), JSON.stringify(shown.stdout));
+  assert.ok(!shown.stdout.includes('\u0007'), JSON.stringify(shown.stdout));
+  assert.match(shown.stdout, /in [^\n]*x@client\.test: nothing/);
+  assert.match(shown.stdout, /not connected now[\s\S]*acme\/gmail in [^\n]*pwned[^\n]*@a\.test: nothing/);
 });
 
 // ── A person at a terminal ────────────────────────────────────────────────────────────────────────────────────────

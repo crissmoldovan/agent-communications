@@ -751,8 +751,17 @@ async function registrationChecks(
     const name = `${channel.channel} server`;
     if (actsOnOthers(channel.channel)) {
       for (const entry of channel.registered) {
-        if (entry.version !== null && enforcesNoRule(entry.version)) {
-          unenforced.push(`the ${channel.label} server registered with ${where(entry)} is ${entry.version}`);
+        // A registration whose release cannot be read — none named, or not one — may be any release, an older one
+        // too: it is not counted as enforcing (fail closed), and said in words of its own.
+        const enforces = enforcementOf(entry.version);
+        if (enforces === 'unknown') {
+          unenforced.push(
+            `the ${channel.label} server registered with ${where(entry)} names no release that can be read, so it may enforce no behaviour rule`,
+          );
+        } else if (enforces === 'older') {
+          unenforced.push(
+            `the ${channel.label} server registered with ${where(entry)} is ${entry.version}, which enforces no behaviour rule`,
+          );
         }
       }
     }
@@ -858,7 +867,7 @@ async function registrationChecks(
       name: 'behaviour enforcement',
       ok: true,
       warn: true,
-      detail: `${unenforced.join('; ')}, which enforces no behaviour rule: an agent there may start any act, each still waiting for the person's yes`,
+      detail: `${unenforced.join('; ')}: an agent there may start any act, each still waiting for the person's yes`,
       fix: remedy(
         handoffSentence(
           handoffs.core(['update']),
@@ -875,12 +884,15 @@ async function registrationChecks(
 const BEHAVIOUR_ENFORCED_SINCE = '0.22.0';
 
 /**
- * Whether a registration's release enforces no behaviour rule: before 0.22.0. A prerelease of 0.22.0 or later — a
- * branch's build — has the code that enforces them, so it is read as its release.
+ * Whether a registration's release enforces the behaviour rules: `older` before 0.22.0, which enforces none. A
+ * prerelease of 0.22.0 or later — a branch's build — has the code that enforces them, so it is read as its release.
+ * `unknown` when it names no release, or one that cannot be read: it may be an older one, so it is never counted as
+ * enforcing.
  */
-function enforcesNoRule(version: string): boolean {
-  const release = version.replace(/[-+].*$/u, '');
-  return (compareVersions(release, BEHAVIOUR_ENFORCED_SINCE) ?? 0) < 0;
+function enforcementOf(version: string | null): 'enforces' | 'older' | 'unknown' {
+  if (version === null) return 'unknown';
+  const order = compareVersions(version.replace(/[-+].*$/u, ''), BEHAVIOUR_ENFORCED_SINCE);
+  return order === null ? 'unknown' : order < 0 ? 'older' : 'enforces';
 }
 
 /** A channel whose accounts can act on other people — one with a `send` mode — and so whose server enforces rules. */

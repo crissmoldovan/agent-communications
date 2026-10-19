@@ -144,17 +144,24 @@ store unavailable, `75` temporary, `77` sign-in or permission needed, `78` confi
 - If the user has a skill describing how *they* write — tone, length, how they address a room — load it and
   follow it for anything you compose. Its posting protocol may only be **stricter** than this contract, never
   looser.
-- **What an agent may start is a rule the person sets,** for a workspace or one conversation in it: which of
-  `post` (a new message), `reply` (in a thread), `reaction`, `edit`, `delete` and `file` it may do there. A file
-  needs `file` and, for where it lands, `post` or `reply`; an edit that adds files needs `edit` and `file`. Every
-  preview carries what holds: `Allowed here: reply, reaction (rule: acme/slack, #general)`, or `Allowed here:
-  everything (no rule)`.
+- **What an agent may start is a rule the person sets,** for a workspace or one conversation in it — a channel, a
+  DM, or a person, whose rule holds every DM and group DM with them: which of `post` (a new message), `reply` (in a
+  thread), `reaction`, `edit`, `delete` and `file` it may do there. A file needs `file` and, for where it lands,
+  `post` or `reply`; an edit that adds files needs `edit` and `file`. Name where an act lands by its conversation
+  id — `C…`, `G…` or `D…`, exactly as `slack_channels` lists it — never by a channel's name: anything else is
+  refused with `USAGE`. A reply is a reply only under a message Slack has in that conversation: give the thread as
+  its first message's `ts`, exactly as a read returned it; a thread Slack does not have there — or a reply's own
+  `ts` given for its thread — would be posted as a new message, so it is checked as a `post`. Every preview carries what holds: `Allowed here: reply, reaction
+  (rule: acme/slack, #general)`, or `Allowed here: everything (no rule)`.
 - **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this act here,** and nothing was prepared or
   posted: refused before any preview, or at send when the rule was narrowed after the person's yes. Tell the person
   which rule refused it — the message says what is allowed, and where — and stop. Never retry it, never get it out
-  another way (a new post for a refused reply, a reaction for a refused post), and never start a change that lets
+  another way (a new post for a refused reply, a reaction for a refused post, a channel's name for its id, a
+  thread made up to pass a post off as a reply, a group DM for a refused DM), and never start a change that lets
   an agent do more (`comms_behaviour` with `setRule` or `removeRule`) unless the person asked for that change: it
-  is theirs to approve. `comms_behaviour` with no change (CLI: `agentcomms behaviour`) shows the rules.
+  is theirs to approve. `comms_behaviour` with no change (CLI: `agentcomms behaviour`) shows the rules. A
+  `TRANSIENT` saying Slack could not be asked whether the thread is there means nothing was posted: try again
+  shortly.
 
 ## 9. A command for a person is the one a result gives.
 

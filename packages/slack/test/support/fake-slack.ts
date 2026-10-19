@@ -201,8 +201,6 @@ export interface WorldMessage {
   readonly user: string;
   /** Set on a message the bot posted, as Slack sets it on every app message. */
   readonly bot_id?: string;
-  /** The thread a reply is in: its parent's ts. A parent's own is filled in when it is shown, once it has replies. */
-  readonly thread_ts?: string;
   /** What Slack attaches to a message an app or a workflow sent: who the bot is, `is_workflow_bot` for a workflow. */
   readonly bot_profile?: Record<string, unknown>;
   readonly app_id?: string;
@@ -215,6 +213,11 @@ export interface WorldMessage {
   readonly icon_url?: string;
   /** Which token posted it, by what it is: the person's, or the app's bot's. */
   readonly via: 'user' | 'bot';
+  /**
+   * The thread it is a reply in, by its first message's ts: absent at the top of a conversation. A parent's own is
+   * filled in when it is shown, once it has replies.
+   */
+  readonly thread_ts?: string;
   deleted?: boolean;
   edited?: { ts: string };
 }
@@ -580,12 +583,12 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     const username = field('username');
     const icon_emoji = field('icon_emoji');
     const icon_url = field('icon_url');
-    const threadTs = field('thread_ts');
+    const thread_ts = field('thread_ts');
     world.messages.push({
       channel,
       ts,
+      ...(thread_ts === undefined ? {} : { thread_ts }),
       text: field('text') ?? '',
-      ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
       ...(field('blocks') ? { blocks: JSON.parse(field('blocks') as string) } : {}),
       user: via === 'bot' ? world.botUserId : world.self,
       ...(via === 'bot' ? { bot_id: 'B0BOT0001' } : {}),
@@ -646,21 +649,29 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     };
   };
   /*
-   * A thread, parent first and then its replies, oldest first — given the parent's ts or any reply's, as Slack takes
-   * either. A message in no thread at all, or none at that ts, is `thread_not_found`.
+   * A thread, as Slack reads one: named by any of its messages, in that conversation, and given from its first message —
+   * the parent, then its replies, oldest first — within `latest`, `oldest` and `inclusive` as Slack reads them, up to
+   * `limit`. A message nobody has replied to is a thread of one. A ts no message in that conversation has is
+   * `thread_not_found`, as Slack says, wherever else a message with that ts may be.
    */
   fake.script['conversations.replies'] = (request) => {
     const channel = request.params.get('channel') ?? '';
     const ts = request.params.get('ts') ?? '';
-    const message = world.messages.find((m) => m.channel === channel && m.ts === ts && !m.deleted);
-    if (message === undefined) return { ok: false, error: 'thread_not_found' };
-    const root = message.thread_ts ?? message.ts;
-    const thread = world.messages.filter(
-      (m) => m.channel === channel && !m.deleted && (m.ts === root || m.thread_ts === root),
-    );
-    if (thread.length === 1 && thread[0]?.thread_ts === undefined) return { ok: false, error: 'thread_not_found' };
-    const found = thread.filter((m) => inWindow(m.ts, request.params)).sort((a, b) => compareTs(a.ts, b.ts));
-    return { ok: true, messages: found.map(shown), has_more: false, response_metadata: { next_cursor: '' } };
+    const here = world.messages.filter((m) => m.channel === channel && !m.deleted);
+    const named = here.find((m) => m.ts === ts);
+    if (named === undefined) return { ok: false, error: 'thread_not_found' };
+    const root = named.thread_ts ?? named.ts;
+    const thread = here
+      .filter((m) => (m.ts === root || m.thread_ts === root) && inWindow(m.ts, request.params))
+      .sort((a, b) => compareTs(a.ts, b.ts));
+    const limit = Number(request.params.get('limit') ?? '0');
+    const page = limit > 0 ? thread.slice(0, limit) : thread;
+    return {
+      ok: true,
+      messages: page.map((m) => ({ ...shown(m), ...(m.thread_ts === undefined ? {} : { thread_ts: m.thread_ts }) })),
+      has_more: page.length < thread.length,
+      response_metadata: { next_cursor: '' },
+    };
   };
   fake.script['chat.getPermalink'] = (request) => {
     const channel = request.params.get('channel') ?? '';

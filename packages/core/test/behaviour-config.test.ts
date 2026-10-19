@@ -291,7 +291,12 @@ test('connecting an account under an orphaned rule, or removing one, needs nobod
   );
 });
 
-test("older releases' loose schema keeps behaviour through a write", async () => {
+/*
+ * What this proves is this release's own schema, at every version it reads: `behaviour` — even a key or an act it does
+ * not know — survives a write about something else, as written. What an older release does with it is the next test's,
+ * against a schema frozen from one.
+ */
+test('this release keeps behaviour through an unrelated write, as written, at every config version', async () => {
   const behaviour = {
     rules: [{ account: 'acme', accountId: GMAIL_ID, conversation: 'bob@client.test', acts: ['reply', 'later-act'] }],
     defaults: { from: 'a later release' },
@@ -306,4 +311,33 @@ test("older releases' loose schema keeps behaviour through a write", async () =>
     assert.equal(written.defaults.timezone, 'Europe/London', `version ${version}`);
     assert.deepEqual(written.behaviour, behaviour, `version ${version} keeps it`);
   }
+});
+
+/*
+ * An older release sharing the configuration keeps `behaviour` through its own writes because its root is loose (B3).
+ * Held against the version-2 schema 0.12.1 parsed and wrote, frozen in `config-v2-0.12.1.ts` — the oldest release that
+ * reads version 2, and one whose root is no looser than any release since.
+ */
+test("an older release's frozen version-2 schema keeps behaviour through its own write", async () => {
+  const { writeAsReleased0121 } = await import('./fixtures/config-v2-0.12.1.ts');
+  const behaviour = {
+    rules: [{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test', acts: ['reply'] }],
+  };
+  const text = `${JSON.stringify(body(behaviour, 2), null, 2)}\n`;
+  const written = writeAsReleased0121(text, (raw) => {
+    (raw.defaults as Record<string, unknown>).timezone = 'Europe/London';
+  });
+  const parsed = JSON.parse(written) as { behaviour?: unknown; defaults: { timezone: string } };
+  assert.equal(parsed.defaults.timezone, 'Europe/London');
+  assert.deepEqual(parsed.behaviour, behaviour);
+  // And what it wrote this release reads as the rule it was.
+  assert.equal(
+    allowedAct(parseConfig(written), {
+      accountId: GMAIL_ID,
+      account: 'acme/gmail',
+      places: [['bob@client.test']],
+      acts: ['send'],
+    }).allowed,
+    false,
+  );
 });
