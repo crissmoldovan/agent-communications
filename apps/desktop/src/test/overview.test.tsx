@@ -220,4 +220,22 @@ describe('Overview', () => {
       await within(region('Standing approvals')).findByText('The standing approvals could not be read.'),
     ).toBeTruthy();
   });
+
+  it('a background job that could not be read says why on Overview too', async () => {
+    const status = FIXTURES.updateStatus as Record<string, unknown>;
+    const reason = 'the background job could not be read: EISDIR: illegal operation on a directory, read';
+    renderApp(
+      createFakeBridge(
+        {},
+        {
+          updateStatus: {
+            ...status,
+            job: { state: 'unreadable', where: null, installedAt: null, lastRun: null, working: null, reason },
+          },
+        },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    expect(await within(region('Updates')).findByText(reason)).toBeTruthy();
+  });
 });

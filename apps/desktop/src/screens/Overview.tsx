@@ -79,6 +79,7 @@ function jobWords(job: Record<string, unknown>): ReactNode {
   }
   if (state === 'not-set-up') return 'not set up';
   if (state === 'unsupported') return 'not available on this system';
+  if (state === 'unreadable') return textOf(job.reason) ?? 'could not be read';
   return state ?? 'unknown';
 }
 

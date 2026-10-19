@@ -33,6 +33,7 @@ const JOB_STATES: Readonly<Record<string, { label: string; tone: 'ok' | 'neutral
   stale: { label: 'out of date', tone: 'warn' },
   foreign: { label: "someone else's", tone: 'warn' },
   unsupported: { label: 'not offered', tone: 'neutral' },
+  unreadable: { label: 'could not be read', tone: 'warn' },
 };
 
 /** The pauses the CLI takes (`update --pause 1|7|14`). */
@@ -250,6 +251,10 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
     >
       {job.state === 'unsupported' ? (
         <p className="text-fg-muted">Background updates aren't offered on this system.</p>
+      ) : job.state === 'unreadable' ? (
+        <p className="text-warn">
+          <UntrustedText text={job.reason ?? 'The background job could not be read.'} />
+        </p>
       ) : (
         <>
           <DescriptionList.Root>

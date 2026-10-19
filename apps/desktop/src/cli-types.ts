@@ -114,11 +114,13 @@ export interface UpdateStatus {
   security: string | null;
   lastError: string | null;
   job: {
-    state: 'installed' | 'not-set-up' | 'unsupported' | string;
+    state: 'installed' | 'not-set-up' | 'unsupported' | 'unreadable' | string;
     where: string | null;
     installedAt: string | null;
     lastRun: string | null;
     working: boolean | null;
+    /** Why it could not be read: only with `unreadable` (0.24.0). */
+    reason?: string;
   };
 }
 

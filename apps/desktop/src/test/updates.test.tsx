@@ -266,6 +266,28 @@ describe('Updates', () => {
     expect(within(rollback).queryByText(COPY.approveThisInTerminal)).toBeNull();
   });
 
+  it('a background job that could not be read says why, and offers nothing to change', async () => {
+    const reason = 'the background job could not be read: EACCES: permission denied, open';
+    renderApp(
+      createFakeBridge(
+        {},
+        {
+          updateStatus: {
+            ...STATUS,
+            job: { state: 'unreadable', where: null, installedAt: null, lastRun: null, working: null, reason },
+          },
+        },
+      ),
+      { screen: 'updates' },
+    );
+    const job = await screen.findByRole('region', { name: 'Background updates' });
+    expect(await within(job).findByText('could not be read')).toBeTruthy();
+    expect(within(job).getByText(reason)).toBeTruthy();
+    expect(within(job).queryAllByRole('button')).toEqual([]);
+    // The rest of the status still shows.
+    expect(within(region('Versions')).getByText('0.24.1')).toBeTruthy();
+  });
+
   it('rollback goes to Terminal, and a failure says what went wrong', async () => {
     const bridge = bridgeWith({
       updateRollback: pending('Roll back agent-communications from 0.24.0 to 0.23.0'),
