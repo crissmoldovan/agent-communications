@@ -120,6 +120,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
 | `comms_label` | how what an agent sends is labelled, as `label`, with each Slack workspace's style; `word`, `name`, `icon`, `addRule` with `as: "me"`, `removeRule` of an `agent` rule and `style` set to `labelled` are approved first, and the other rule changes and `style` back to `app` apply at once |
 | `comms_behaviour`, `comms_profile` | what an agent may do, and how it writes: see above |
+| `comms_standing` | the standing approvals, as `standing list`: what an agent may send without asking, each one's uses and last acts; `narrow`, `revoke` and `off` only take away, so each applies at once, and `off` ends every one. Creating or widening one is Slack's, approved only with the code at a terminal |
 | `comms_names_migrate` | rename every account to `organisation/platform`; `dryRun` shows the mapping |
 | `comms_secrets_migrate` | move every credential between the keychain and files |
 | `comms_paths`, `comms_doctor`, `comms_audit_tail` | as `paths`, `doctor` and `audit tail` |
