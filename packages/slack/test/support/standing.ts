@@ -200,9 +200,10 @@ export async function recordOf(w: StandingWorld, approvalId: string): Promise<Ap
 
 /**
  * A terminal a person sits at: stdin and stdout are terminals, and whatever the code asked for is typed back, as the
- * person reads it off the screen. `answer` types something else instead — a `yes`, say.
+ * person reads it off the screen. `answer` types something else instead — a `yes`, say, or what a function makes of
+ * the code shown.
  */
-export function terminal(answer?: string): Streams & { readonly said: () => string } {
+export function terminal(answer?: string | ((code: string) => string)): Streams & { readonly said: () => string } {
   const stdin = Object.assign(new PassThrough(), { isTTY: true });
   const stdout = Object.assign(new PassThrough(), { isTTY: true });
   const stderr = new PassThrough();
@@ -213,7 +214,7 @@ export function terminal(answer?: string): Streams & { readonly said: () => stri
   stderr.on('data', (chunk) => {
     said += String(chunk);
     const code = /Type (\w{4}) to approve/.exec(String(chunk))?.[1];
-    if (code !== undefined) stdin.write(`${answer ?? code}\n`);
+    if (code !== undefined) stdin.write(`${typeof answer === 'function' ? answer(code) : (answer ?? code)}\n`);
   });
   return { stdin, stdout, stderr, said: () => said } as unknown as Streams & { readonly said: () => string };
 }

@@ -572,15 +572,57 @@ test('a raised standing epoch revokes the standing record and its unclaimed chil
   await assert.rejects(core.approvals.issueChallenge(waiting.approvalId, 'standing'), refusedWith('APPROVAL_VOID'));
 });
 
-test('tightening the change policy ends them too: the epoch is the same one', async () => {
+test('tightening the change policy ends them too: the epoch is the same one, at a look, a mint and a claim', async () => {
   const { core } = machine();
   const standing = await approvedAtTerminal(core, await prepared(core));
+  const minting = await approvedAtTerminal(core, await prepared(core));
+  const claiming = await approvedAtTerminal(core, await prepared(core));
+  // Minted before the tightening, to be claimed after it.
+  const minted = await child(core, claiming);
   await core.config.update((config) => {
     (config.accounts['acme/slack'] as AccountConfig).changePolicy = 'confirm';
     return config;
   });
   const { outcome } = await core.approvals.inspect(standing.approvalId, {}, { action: 'claim' });
   assert.equal(outcome.state, 'revoked');
+  // A mint, under the record's lock: refused, and nothing minted.
+  await assert.rejects(
+    core.approvals.withStanding(minting.approvalId, ACME, async (_record, found) => {
+      if (found.error) throw found.error;
+    }),
+    refusedWith('APPROVAL_VOID'),
+  );
+  await assert.rejects(child(core, minting), refusedWith('APPROVAL_VOID'));
+  // A claim of a child minted before it: refused, and the child is spent.
+  await assert.rejects(core.approvals.claimForSend(minted.approvalId, liveOf(minted)), refusedWith('APPROVAL_VOID'));
+  assert.equal(asV2(await core.approvals.get(minted.approvalId))?.state, 'revoked');
+});
+
+test('a binding made by hand must carry the warnings its contents give', async () => {
+  const { core } = machine();
+  const config = await core.config.load();
+  const { contents, warnings } = checkedContents({ reactions: ['eyes', 'white_check_mark'] });
+  assert.equal(warnings.length, 1, 'white_check_mark reads as approval');
+  for (const [what, given] of [
+    ['none', []],
+    ['another', ['nothing to see here']],
+    ['one twice', [...warnings, ...warnings]],
+  ] as const) {
+    await assert.rejects(
+      core.approvals.createStanding({
+        binding: binding({ contents, warnings: [...given] }),
+        inboxSub: 'U_ME',
+        sendEpoch: sendEpochOf(config, ACME),
+        standingEpoch: standingEpochOf(config),
+      }),
+      (error: unknown) =>
+        error instanceof CommsError &&
+        error.code === 'BAD_DATA' &&
+        /warnings are not the ones its contents give/.test(error.message),
+      what,
+    );
+  }
+  assert.equal((await core.approvals.list()).length, 0, 'nothing was written');
 });
 
 test('a change policy tightened by a release that knows no standing epoch ends them, at a look and a mint', async () => {

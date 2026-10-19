@@ -105,7 +105,13 @@ test('under the chat change policy, a typed yes does not approve it', async () =
   const { core } = machine();
   assert.equal((await core.config.load()).defaults.changePolicy ?? 'chat', 'chat');
   const { approvalId } = await prepared(core);
-  const person = terminal(() => 'yes');
+  // A yes as long as the code, so it is refused for what it says and not only for its length.
+  const person = terminal((code) => {
+    const yes = 'yes'.padEnd(code.length, 's');
+    assert.equal(yes.length, code.length);
+    assert.notEqual(yes.toLowerCase(), code.toLowerCase());
+    return yes;
+  });
   await assert.rejects(
     approveStandingAtTerminal(core, approvalId, {}, { color: false }, person.streams),
     (error: unknown) =>

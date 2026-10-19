@@ -452,8 +452,8 @@ function placesProblem(places: unknown): string | null {
 
 /**
  * Why `binding` is not one a standing record may hold, or null: every content one `checkedContents` gives for its
- * texts, in order, with its digest; every limit inside the table; places of one kind, each a Slack id once, with its
- * member count and sharing; an account by its id; and who proposed it. The store refuses one before writing it, and
+ * texts, in order, with its digest; exactly the warnings those contents give (S3); every limit inside the table; places
+ * of one kind, each a Slack id once, with its member count and sharing; an account by its id; and who proposed it. The store refuses one before writing it, and
  * the validator a record that holds one, so nothing a caller assembles by hand — a custom emoji, a 31-day expiry, a
  * reply with a link — can become a standing approval.
  */
@@ -469,11 +469,12 @@ export function standingBindingProblem(binding: unknown): string | null {
     return 'a content is unreadable';
   const contents = written as StandingContent[];
   let checked: StandingContent[];
+  let warnings: string[];
   try {
-    checked = checkedContents({
+    ({ contents: checked, warnings } = checkedContents({
       reactions: contents.filter((content) => content.kind === 'reaction').map((content) => content.text),
       replies: contents.filter((content) => content.kind === 'reply').map((content) => content.text),
-    }).contents;
+    }));
   } catch {
     return 'a content is not one a standing approval may hold';
   }
@@ -501,6 +502,9 @@ export function standingBindingProblem(binding: unknown): string | null {
     return 'what it replaces is not an approval id';
   }
   if (!isStrings(binding.warnings)) return 'its warnings are unreadable';
+  // S3's warnings are its contents', derived again here: a caller cannot leave one out of what the person is shown.
+  if (canonicalJson(binding.warnings) !== canonicalJson(warnings))
+    return 'its warnings are not the ones its contents give';
   return null;
 }
 

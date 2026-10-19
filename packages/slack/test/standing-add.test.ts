@@ -279,8 +279,14 @@ test('agent-slack approve completes a standing record with its code', async (t) 
   assert.equal(agent.code, EXIT_CODES.APPROVAL);
   assert.equal((await recordOf(w, prepared.approvalId)).state, 'pending');
 
-  // A typed yes is not the code.
-  const yes = await cli(w, ['approve', prepared.approvalId], { streams: terminal('yes') });
+  // A typed yes is not the code: one as long as the code, so it is refused for what it says, not for its length.
+  const yesLike = (code: string) => {
+    const yes = 'yes'.padEnd(code.length, 's');
+    assert.equal(yes.length, code.length);
+    assert.notEqual(yes.toLowerCase(), code.toLowerCase());
+    return yes;
+  };
+  const yes = await cli(w, ['approve', prepared.approvalId], { streams: terminal(yesLike) });
   assert.notEqual(yes.code, EXIT_CODES.OK);
   assert.equal((await recordOf(w, prepared.approvalId)).state, 'pending');
 

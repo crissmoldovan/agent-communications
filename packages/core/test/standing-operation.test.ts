@@ -625,7 +625,8 @@ async function connect(m: Machine) {
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   const call = async (name: string, args: Record<string, unknown> = {}) =>
     (await client.callTool({ name, arguments: args })) as ToolResult;
-  return { call, close: () => Promise.all([client.close(), server.close()]) };
+  const tools = async () => (await client.listTools()).tools;
+  return { call, tools, close: () => Promise.all([client.close(), server.close()]) };
 }
 
 function cli(m: Machine, args: string[]) {
@@ -657,8 +658,12 @@ type StandingViewLike = { places: unknown };
 test('comms_standing with no change only reports and refuses an approvalId', async () => {
   const m = machine();
   const record = await standing(m.core);
-  const { call, close } = await connect(m);
+  const { call, close, tools } = await connect(m);
   try {
+    // What it changes only takes away, but no tool can put it back: a client should ask before letting it run.
+    const tool = (await tools()).find((each) => each.name === 'comms_standing');
+    assert.equal(tool?.annotations?.destructiveHint, true);
+    assert.equal(tool?.annotations?.readOnlyHint, false);
     const shown = await call('comms_standing');
     assert.notEqual(shown.isError, true, JSON.stringify(shown.structuredContent));
     assert.deepEqual(sameBoundary(shown.structuredContent), sameBoundary(await standingReport(m.core)));

@@ -647,7 +647,8 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           .describe('end one standing approval at once, and every act of it not yet sent'),
         off: z.literal(true).optional().describe('true ends every standing approval at once'),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      // It only takes away, but what it takes away — a narrowing, a revoke, `off` — cannot be undone by any tool.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async (args) =>
       read(async () => {

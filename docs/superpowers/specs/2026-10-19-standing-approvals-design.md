@@ -476,3 +476,8 @@ word.
    repair command. The recovery is documented (core README, and the doctor's fix): the person ends that account's
    standing approvals with `standing off`, or `standing revoke` for each, then moves the file aside; a new ledger starts
    empty. **(lead's call, after review)**
+9. **Smaller points** (core review C9). `standingBindingProblem` derives S3's warnings again from the contents and
+   refuses a binding whose `warnings` are not exactly those, so a direct `createStanding` caller cannot leave one out of
+   what the person is shown. `comms_standing` is annotated `destructiveHint: true`: it only takes away, but nothing
+   puts back what it took. The tests now type a `yes` as long as the code, and follow a tightened change policy to a
+   mint and a claim. **(lead's call, after review)**
