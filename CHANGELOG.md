@@ -3,7 +3,23 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.21.0
+
+**Organisation profiles can gain new fields without breaking members on an older release, and the rough edges found
+while setting up 0.20.0 on a real machine are fixed.** Every release since 0.13.0 refused a whole organisation
+profile over one key it did not know, so an admin could not add anything without stopping `org update` for every
+member who had not updated (CUE-494). From this release a profile has one place for new fields, `extensions`, and a
+release that does not know an entry skips it or asks you to update first — never applying it behind your back. The
+other changes come from the owner's own 0.20.0 setup on 2026-10-18: previews that showed internal ids, a label report
+that ignored the Slack style, a terminal approval that said "in the chat", a printed command that an update would
+later delete, and a prune that covered one server at a time.
+
+Nothing to do when you update: it is additive. Three results gain fields — `extensions` on the `comms_org_*` tools,
+`appRoute` per Slack workspace in `comms_label`, and `servers` and `refusedServers` from a prune — and a new error code,
+`NEEDS_NEWER_RELEASE` (exit 1), refuses a profile this release is too old for, where a profile of `version` 2 got
+`BAD_DATA` before. `agentcomms mcp prune` with no `--server` now covers every server, still shown to you and approved
+first; `--server core` does what it did. Members of an organisation should be on 0.21.0 before its admin adds the
+first extension.
 
 **An organisation can add new fields to its profile without breaking `org update` for members on 0.21.0 or later.**
 Until now every release refused a whole profile carrying any key it did not know, so one new field stopped
