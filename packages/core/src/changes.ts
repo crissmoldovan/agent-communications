@@ -340,7 +340,8 @@ export async function beginChangeApproval(
   try {
     record = await changeRecord(core, approvalId);
     const challenge = await core.approvals.issueChallenge(approvalId, 'change', options.platform);
-    return { approvalId, preview: renderChangePreview(record), challenge };
+    // This screen asks for a code, here: a change prepared under `chat` says so, not that a yes in the chat approves it.
+    return { approvalId, preview: renderChangePreview(record, { codeHere: true }), challenge };
   } catch (error) {
     await auditRefusal(core, 'change.approve', error, {
       surface: options.surface,
@@ -681,18 +682,21 @@ function describeLoosening(loosening: Loosening): string {
  * carry text a person or a profile chose; every other preview's header is word for word what it was.
  *
  * It says how the change is approved: under `confirm`, a code typed at a terminal; under `chat`, a yes in the chat —
- * or, `askedHere`, a yes typed here, at this terminal, where a CLI asks the person reading it at once.
+ * or, `askedHere`, a yes typed here, at this terminal, where a CLI asks the person reading it at once; or, `codeHere`,
+ * a code typed here, at this terminal, where `approve <id>` shows a change prepared under `chat` and asks for its code.
  */
 export function renderChangePreview(
   record: Pick<ApprovalRecord, 'approvalId' | 'requiredPolicy'> & { change: ChangeBinding },
-  options: { askedHere?: boolean | undefined } = {},
+  options: { askedHere?: boolean | undefined; codeHere?: boolean | undefined } = {},
 ): string {
   const { change } = record;
   const how =
     changePolicyOf(record) === 'chat'
-      ? options.askedHere === true
-        ? 'a yes typed here, at this terminal'
-        : 'a yes in the chat'
+      ? options.codeHere === true
+        ? 'a code typed here, at this terminal'
+        : options.askedHere === true
+          ? 'a yes typed here, at this terminal'
+          : 'a yes in the chat'
       : 'a code typed at a terminal';
   const target = change.target;
   const about =
