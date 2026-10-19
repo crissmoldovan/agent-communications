@@ -29,6 +29,12 @@ semver = "1"
 tauri-plugin-opener = "2.7"
 tauri-plugin-clipboard-manager = "2.5"
 
+# Task 7: the updater, deep links and single-instance run from Rust too; ureq finds the release through GitHub's API.
+tauri-plugin-updater = "2.14"
+tauri-plugin-deep-link = "2.6"
+ureq = "3"
+tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
+
 # Task 6: the login item is SMAppService's on macOS (13 and later), as Supbuddy's is.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

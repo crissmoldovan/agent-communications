@@ -1,10 +1,87 @@
 //! The main window: Supbuddy's shell (desktop design DA2), with nothing loaded but the app itself.
 
+use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    Window, WindowEvent,
+};
 
 /// The one window's label, which the capability file grants (`capabilities/default.json`).
 pub const MAIN: &str = "main";
+
+/// Set once the app is quitting (Quit in the tray, Cmd+Q, an update's restart): from then on a close closes.
+pub static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// What closing the window does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseAction {
+    /// Hide it to the tray: the app keeps running.
+    Hide,
+    /// Let it close: the app is quitting.
+    Close,
+}
+
+/// Closing hides the window to the tray, unless the app is quitting (DA2).
+pub fn on_close(quitting: bool) -> CloseAction {
+    if quitting {
+        CloseAction::Close
+    } else {
+        CloseAction::Hide
+    }
+}
+
+/// The event that tells the window whether it can be seen: the UI polls only while it can (DA4).
+pub const VISIBILITY: &str = "window-visibility";
+
+#[derive(Clone, Serialize)]
+struct Visibility {
+    visible: bool,
+}
+
+/// Shows the main window and brings it forward: Open in the tray, the Dock icon, a deep link, a second launch.
+pub fn show(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN) else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = app.emit(VISIBILITY, Visibility { visible: true });
+}
+
+/// Closing the main window hides it to the tray, unless the app is quitting.
+pub fn on_window_event(window: &Window, event: &WindowEvent) {
+    if window.label() != MAIN {
+        return;
+    }
+    if let WindowEvent::CloseRequested { api, .. } = event {
+        if on_close(QUITTING.load(Ordering::SeqCst)) == CloseAction::Hide {
+            api.prevent_close();
+            let _ = window.hide();
+            let _ = window.emit(VISIBILITY, Visibility { visible: false });
+        }
+    }
+}
+
+/// The app's own events: any exit (Quit, Cmd+Q, an update's restart) marks the app as quitting, so a close it causes is
+/// not turned into a hide; on macOS, clicking the Dock icon shows the window again.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn on_run_event(app: &AppHandle, event: RunEvent) {
+    match event {
+        RunEvent::ExitRequested { .. } => QUITTING.store(true, Ordering::SeqCst),
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show(app),
+        _ => {}
+    }
+}
+
+/// The macOS menu bar: Tauri's default, whose Quit (Cmd+Q) quits and whose Close Window hides to the tray.
+#[cfg(target_os = "macos")]
+pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    tauri::menu::Menu::default(app)
+}
 
 /// Builds the main window: 1200×800, never smaller than 900×600, its title bar over the app's header on macOS.
 ///
@@ -79,6 +156,14 @@ mod tests {
             "http://tauri.localhost/"
         };
         assert!(!is_app_origin(&url(foreign)));
+    }
+
+    #[test]
+    fn close_hides_unless_quitting() {
+        assert_eq!(on_close(false), CloseAction::Hide);
+        assert_eq!(on_close(true), CloseAction::Close);
+        // The app starts not quitting, so the first close hides.
+        assert!(!QUITTING.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

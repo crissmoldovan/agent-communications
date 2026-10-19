@@ -20,9 +20,28 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    updater_flag();
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("the app's command manifest is valid");
+}
+
+/// `AGENTCOMMS_DESKTOP_UPDATER` is `on` when the updater key is in the environment (`TAURI_SIGNING_PRIVATE_KEY`, which
+/// only the release script on the owner's Mac sets), and `off` otherwise: every CI build has its updater off (DA8).
+///
+/// The key is only looked at, never kept. `cargo:rerun-if-env-changed` is not used for it, because Cargo writes the
+/// value of such a variable into its fingerprint under `target/`. Instead a release build runs this script every time,
+/// through a path that never exists, so a release can never reuse a word decided without the key; a debug build
+/// decides again when this file or Tauri's inputs change.
+fn updater_flag() {
+    let on = std::env::var_os("TAURI_SIGNING_PRIVATE_KEY").is_some_and(|key| !key.is_empty());
+    println!(
+        "cargo:rustc-env=AGENTCOMMS_DESKTOP_UPDATER={}",
+        if on { "on" } else { "off" }
+    );
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        println!("cargo:rerun-if-changed=a-release-build-reads-the-updater-key-every-time");
+    }
 }

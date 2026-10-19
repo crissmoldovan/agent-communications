@@ -1,7 +1,5 @@
 //! The thirteen commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
-//! each declared to Tauri in `build.rs`. `installation` and `cli` work here, and so do the seven from
-//! `open_in_terminal` to `set_login_item` (Task 6); the updater's and the deep link's say `APP_NOT_BUILT` until Task 7
-//! replaces each body with one call into its module.
+//! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{
@@ -11,7 +9,7 @@ use crate::ipc::{
 use crate::launchers::discover;
 use crate::paths::FolderOverrides;
 use crate::runner::{run, RunContext};
-use crate::{links, login_item, settings, terminal, AppState};
+use crate::{deeplink, links, login_item, settings, terminal, tray, updater, AppState};
 use tauri::{AppHandle, State};
 
 /// Every command, in the order `build.rs` declares them; a test checks the two and the capability file agree.
@@ -32,7 +30,7 @@ pub const NAMES: &[&str] = &[
 ];
 
 /// This machine's run context, with Settings' folder overrides.
-fn context(state: &State<'_, AppState>) -> RunContext {
+pub(crate) fn context(state: &State<'_, AppState>) -> RunContext {
     let overrides = state
         .overrides
         .lock()
@@ -57,11 +55,23 @@ pub async fn installation(state: State<'_, AppState>) -> Result<Installation, Ap
     blocking(move || discover(&ctx)).await
 }
 
-/// One call from the allow-list. An argument the allow-list refuses never reaches here: the invoke fails first.
+/// One call from the allow-list. An argument the allow-list refuses never reaches here: the invoke fails first. The
+/// approvals waiting, when the window reads them, are counted in the tray too.
 #[tauri::command]
-pub async fn cli(call: Call, state: State<'_, AppState>) -> Result<CliResult, AppError> {
+pub async fn cli(
+    call: Call,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CliResult, AppError> {
     let ctx = context(&state);
-    blocking(move || run(&call, &ctx)).await
+    let counts = matches!(call, Call::ApprovalsPending {});
+    let result = blocking(move || run(&call, &ctx)).await?;
+    if let (true, CliResult::Ok { data, .. }) = (counts, &result) {
+        if let Some(n) = tray::pending_count(data) {
+            tray::set_count(&app, n);
+        }
+    }
+    Ok(result)
 }
 
 /// Opens the system terminal with an approve, change or sign-in command (DA6, DA10), or copies it and says why. A
@@ -128,28 +138,28 @@ pub fn set_login_item(
     Ok(settings::current(&app, &state))
 }
 
-/// Where the app's own updater stands. Task 7.
+/// Where the app's own updater stands: off, with why, in a copy built without the updater key (DA8).
 #[tauri::command]
-pub fn updater_state() -> Result<UpdaterState, AppError> {
-    Err(AppError::not_built("updater_state"))
+pub fn updater_state(app: AppHandle) -> Result<UpdaterState, AppError> {
+    Ok(updater::current(&app))
 }
 
-/// Looks for an update to the app. Task 7.
+/// Looks for an update to the app, and says what it found.
 #[tauri::command]
-pub fn check_for_updates() -> Result<UpdaterState, AppError> {
-    Err(AppError::not_built("check_for_updates"))
+pub async fn check_for_updates(app: AppHandle) -> Result<UpdaterState, AppError> {
+    Ok(updater::check(&app, false).await)
 }
 
-/// Installs the update found, and restarts. Task 7.
+/// Installs the update found, verified, and restarts into it.
 #[tauri::command]
-pub fn install_update() -> Result<(), AppError> {
-    Err(AppError::not_built("install_update"))
+pub async fn install_update(app: AppHandle) -> Result<(), AppError> {
+    updater::install(&app).await
 }
 
-/// The approval an `agentcomms://` link launched the app with, once. Task 7.
+/// The approval an `agentcomms://` link launched the app with, once.
 #[tauri::command]
-pub fn take_deep_link() -> Result<Option<DeepLinkTarget>, AppError> {
-    Err(AppError::not_built("take_deep_link"))
+pub fn take_deep_link(app: AppHandle) -> Result<Option<DeepLinkTarget>, AppError> {
+    Ok(deeplink::take(&app))
 }
 
 #[cfg(test)]
@@ -204,12 +214,13 @@ mod tests {
     }
 
     #[test]
-    fn the_unbuilt_commands_say_so() {
-        let refusal = updater_state().expect_err("not built");
-        assert_eq!(refusal.code, "APP_NOT_BUILT");
-        assert_eq!(
-            take_deep_link().expect_err("not built").code,
-            "APP_NOT_BUILT"
+    fn every_command_is_built() {
+        let source = include_str!("commands.rs");
+        let commands = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        assert!(
+            !commands.contains("not_built("),
+            "a command still says it is not built"
         );
+        assert_eq!(commands.matches("#[tauri::command]").count(), NAMES.len());
     }
 }
