@@ -894,7 +894,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 
   | Error code | Exit |
   |---|---|
-  | `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`, `APPROVAL_VOID`, `POLICY_NEVER`, `RATE_CAPPED`, `UNSENDABLE_HTML`, `LOOSENING_REFUSED` | 10 |
+  | `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`, `APPROVAL_VOID`, `POLICY_NEVER`, `RATE_CAPPED`, `UNSENDABLE_HTML`, `LOOSENING_REFUSED`, `ACT_NOT_ALLOWED` (a behaviour rule does not allow this act here — [behaviour rules design](2026-10-19-agent-behaviour-rules-design.md), B4) | 10 |
   | `USAGE`, `CURSOR_MISMATCH` (bad flags, a cursor from another query, malformed ids) | 64 |
   | `BAD_DATA`, `REPLY_INVALID` | 65 |
   | `NOT_FOUND` | 66 |

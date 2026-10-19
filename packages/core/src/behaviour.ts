@@ -13,6 +13,8 @@
  */
 import { MAIL_CONVERSATION_PATTERN, SLACK_CONVERSATION_PATTERN } from './agent-label.ts';
 import type { Config } from './config.ts';
+import { CommsError } from './errors.ts';
+import { neutralise } from './untrusted.ts';
 
 /** B2: the acts a rule may name — the label's kinds (`ACT_KINDS`), and `delete`. */
 export const BEHAVIOUR_ACTS: readonly ['post', 'reply', 'reaction', 'edit', 'delete', 'file', 'send'] = Object.freeze([
@@ -449,4 +451,95 @@ export function classifyBehaviourChange(
   const anyOther: Who = { accountId: '', account: '' };
   measure('*', anyOther, anyOther, sides);
   return { loosens, deltas };
+}
+
+/** How an act reads in a refusal: `reply and react`, as the design words it, never `reply, reaction`. */
+const ACT_VERBS: Readonly<Record<BehaviourAct, string>> = Object.freeze({
+  post: 'post',
+  reply: 'reply',
+  reaction: 'react',
+  edit: 'edit',
+  delete: 'delete',
+  file: 'share files',
+  send: 'send',
+});
+
+function inWords(acts: readonly BehaviourAct[]): string {
+  const verbs = acts.map((act) => ACT_VERBS[act]);
+  const last = verbs.pop();
+  return verbs.length === 0 ? (last ?? '') : `${verbs.join(', ')} and ${last}`;
+}
+
+/** The widest a name is shown in a refusal or a preview line. */
+const SHOWN_WIDTH = 120;
+
+/**
+ * A name as a refusal or a preview line shows it: chat-template tokens, role markers and envelope look-alikes
+ * neutralised and every control and invisible character stripped (`neutralise`), tabs and line breaks flattened to a
+ * space, and cut to `SHOWN_WIDTH`. As `shownText` shows a profile's text, which this module cannot import: its module
+ * reads the configuration, and the configuration imports this one.
+ */
+function shownName(value: string): string {
+  const flat = neutralise(value).text.replace(/[\n\t]+/g, ' ');
+  const chars = [...flat];
+  return chars.length <= SHOWN_WIDTH ? flat : `${chars.slice(0, SHOWN_WIDTH - 1).join('')}…`;
+}
+
+/**
+ * How the person knows what a refusal or a preview line names: the account, by its name now, and the place — for a
+ * refusal its `place`, for a preview line the rule's conversation — by its name, such as `#general` for `C0GENERAL`.
+ * A `place` of null shows the id as the decision holds it.
+ */
+export interface ShownPlace {
+  account: string;
+  place: string | null;
+}
+
+/**
+ * B4's refusal, for prepare and for execute alike: `ACT_NOT_ALLOWED`, exit 10, its message naming what is allowed,
+ * where, and in which account — `this agent may only reply and react in #general (cue/slack)`, or `this agent may do
+ * nothing in …`. `hint` is the caller's, and names the located command that shows the rules, never one that loosens
+ * them: a loosening is the person's to start. The names are shown neutralised and on one line; `details` carries the
+ * act, the place and the rule as the decision holds them, made safe the same way.
+ */
+export function actNotAllowed(
+  decision: Extract<ActDecision, { allowed: false }>,
+  shown: ShownPlace,
+  hint: string,
+): CommsError {
+  const account = shownName(shown.account);
+  const named = shown.place ?? decision.place;
+  const where = named === null ? `in ${account}` : `in ${shownName(named)} (${account})`;
+  const message =
+    decision.allowedActs.length === 0
+      ? `this agent may do nothing ${where}`
+      : `this agent may only ${inWords(decision.allowedActs)} ${where}`;
+  const rule: RuleRef =
+    decision.rule.conversation === undefined
+      ? { account: shownName(decision.rule.account) }
+      : { account: shownName(decision.rule.account), conversation: shownName(decision.rule.conversation) };
+  return new CommsError('ACT_NOT_ALLOWED', message, {
+    hint,
+    details: {
+      act: decision.act,
+      account,
+      place: decision.place === null ? null : shownName(decision.place),
+      rule,
+      allowedActs: [...decision.allowedActs],
+    },
+  });
+}
+
+/**
+ * B4's line, in every preview: `Allowed here: reply, reaction (rule: cue/slack, #general)` — what is allowed where the
+ * act lands, and the rule that says so, with its place when the rule names one — or `Allowed here: everything (no
+ * rule)`. A rule that allows nothing reads `nothing`.
+ */
+export function allowedHereLine(decision: ActDecision, shown: ShownPlace): string {
+  if (decision.rule === null) return 'Allowed here: everything (no rule)';
+  const acts = decision.allowedActs;
+  const allowed = acts === 'all' ? 'everything' : acts.length === 0 ? 'nothing' : acts.join(', ');
+  const conversation = decision.rule.conversation;
+  const place = conversation === undefined ? '' : `, ${shownName(shown.place ?? conversation)}`;
+  return `Allowed here: ${allowed} (rule: ${shownName(shown.account)}${place})`;
 }
