@@ -457,3 +457,9 @@ word.
    in force once both have been tried — a record that could not be written down, under an epoch that could not be
    raised — it is refused with the failure's code, naming each in `details.inForce`, so it exits non-zero and nobody
    is told they have all ended when they have not. **(lead's call, after review)**
+6. **Every place name `comms_standing` returns is in the untrusted-content envelope** (S10; core review C3). A
+   channel's name is whatever someone in the workspace called it, and a DM's is the other person's display name. The
+   report — `comms_standing`, `standing list --json` and the doctor's reading of it — gives each, cut to 80
+   characters, wrapped with `wrapUntrusted` (field `place-name`, the place's id), one boundary per report.
+   `standing list` prints each envelope on lines of its own, as it is, so an agent reading the command's output reads
+   it as quoted data too. **(lead's call, after review)**

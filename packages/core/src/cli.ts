@@ -1451,11 +1451,18 @@ function renderPolicy(report: ChangePolicyReport): string {
 /** A name someone in Slack chose, or a link Slack gave: made safe to print, and cut. */
 const shownWords = (text: string, width: number) => truncateDisplay(neutralise(text).text, width);
 
-/** One exact place: `#<name> (<id>)`, or the id alone when it has no name. */
-function standingPlaceWords(place: ExactPlace): string {
-  return place.name === null
-    ? place.id
-    : `${place.id.startsWith('D') ? '' : '#'}${shownWords(place.name, 80)} (${place.id})`;
+/**
+ * One exact place: its id, and — when it has one — its name as the report gives it, in its untrusted-content envelope,
+ * on lines of its own: someone in Slack chose it, and an agent reading this output reads it there, as quoted data.
+ */
+function standingPlaceLines(place: ExactPlace): string[] {
+  if (place.name === null) return [`    ${place.id}`];
+  return [
+    `    ${place.id}, ${place.id.startsWith('D') ? 'the direct message with' : 'named'}:`,
+    // Already neutralised inside its envelope: made one line each and cut, never neutralised again, which would
+    // defuse the envelope's own tags.
+    ...place.name.split('\n').map((line) => `      ${truncateDisplay(line, 240)}`),
+  ];
 }
 
 /** One standing approval as a person reads it: what is in force, its uses, and its last acts, newest first. */
@@ -1476,11 +1483,8 @@ function renderStandingView(view: StandingView): string {
         : `  reply "${escapeForDisplay(content.text)}"  ${content.digest}`,
     );
   }
-  lines.push(
-    view.places.kind === 'threads-i-am-in'
-      ? '  in threads where you posted yourself in the last 14 days'
-      : `  in ${view.places.places.map(standingPlaceWords).join(', ')}`,
-  );
+  if (view.places.kind === 'threads-i-am-in') lines.push('  in threads where you posted yourself in the last 14 days');
+  else lines.push('  in', ...view.places.places.flatMap(standingPlaceLines));
   const { perThread, perHour, perDay, expiresDays } = view.limits;
   lines.push(`  limits ${perThread} per thread, ${perHour} an hour, ${perDay} a day, for ${expiresDays} days`);
   lines.push(`  ${view.usesToday} ${view.usesToday === 1 ? 'use' : 'uses'} in the last day`);

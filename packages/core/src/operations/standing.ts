@@ -21,6 +21,7 @@ import {
   standingDays,
 } from '../standing.ts';
 import { endStanding } from '../standing-flow.ts';
+import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import type { AckOutcome, AckUse } from '../standing-ledger.ts';
 
 /**
@@ -103,6 +104,26 @@ function workspaceOf(config: Config, binding: StandingBinding): string {
   return findById(config, 'account', binding.target.id)?.alias ?? binding.target.name;
 }
 
+/**
+ * `places` as a report gives them, each name in the untrusted-content envelope (design 2026-10-19-standing-approvals,
+ * the lead's call after review): a channel's name is whatever someone in the workspace called it, and a DM's is the
+ * other person's display name, so neither reaches an agent as anything but quoted data. Cut to 80 characters first.
+ */
+function enveloped(places: StandingPlaces, boundary: string): StandingPlaces {
+  if (places.kind === 'threads-i-am-in') return { kind: 'threads-i-am-in' };
+  return {
+    kind: 'exact',
+    places: places.places.map((place) => ({
+      ...place,
+      shared: { ...place.shared },
+      name:
+        place.name === null
+          ? null
+          : wrapUntrusted(truncateDisplay(place.name, 80), { field: 'place-name', id: place.id }, boundary),
+    })),
+  };
+}
+
 /** When an approved standing approval ends: its approval and its days, as narrowed. */
 function endOf(record: ApprovalRecord, binding: StandingBinding): string {
   return new Date(
@@ -142,6 +163,8 @@ export async function standingReport(core: Core): Promise<StandingReport> {
   const config = await core.config.load();
   const listed = await core.approvals.inspectAll();
   const now = core.acks.now().getTime();
+  // One envelope boundary for the whole report: every place's name is someone in Slack's words.
+  const boundary = newBoundary();
   const ledgers = new Map<string, (AckUse | AckOutcome)[]>();
   const approvals: StandingView[] = [];
   for (const { stored, outcome } of listed) {
@@ -170,7 +193,7 @@ export async function standingReport(core: Core): Promise<StandingReport> {
       workspace: workspaceOf(config, binding),
       state,
       contents: inForce.contents.map((content) => ({ ...content })),
-      places: inForce.places,
+      places: enveloped(inForce.places, boundary),
       limits: { ...inForce.limits },
       expiresAt: state === 'active' ? endOf(record, binding) : null,
       ...(state === 'ended' && reason !== undefined ? { reason } : {}),
