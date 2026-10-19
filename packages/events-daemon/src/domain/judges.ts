@@ -9,10 +9,11 @@ import {
   createLayaJudgeKindDefinition,
   LayaContractError,
   type LayaJudgeKindDefinition,
+  type LayaJudgeTerms,
   type LayaPlatformProbe,
   type LayaReviewedAssetSource,
 } from '../runtime/laya/contracts.ts';
-import { isLayaTemplateId, type LayaTemplateId } from '../runtime/laya/templates.ts';
+import { isLayaTemplateId, LAYA_RUNNABLE_TEMPLATE_IDS, type LayaTemplateId } from '../runtime/laya/templates.ts';
 import {
   EventDomainError,
   JUDGE_KIND_LAYA,
@@ -22,7 +23,12 @@ import {
   type JudgeKind,
 } from './lifecycle.ts';
 
-export type { LayaJudgeKindDefinition, LayaPlatformProbe, LayaReviewedAssetSource } from '../runtime/laya/contracts.ts';
+export type {
+  LayaJudgeKindDefinition,
+  LayaJudgeTerms,
+  LayaPlatformProbe,
+  LayaReviewedAssetSource,
+} from '../runtime/laya/contracts.ts';
 
 export const TYPESAFE_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const JUDGE_BUDGET_ID = 'judge-budget';
@@ -140,6 +146,7 @@ export function layaEnablementInputsFor(database: DatabaseSync): LayaEnablementI
 const LAYA_JUDGE_KIND_DEFINITION: LayaJudgeKindDefinition = {
   kind: JUDGE_KINDS[1],
   availability: () => shippedLayaDefinition().availability(),
+  judgeTerms: () => shippedLayaDefinition().judgeTerms(),
   prepareEnablement: (input) => shippedLayaDefinition().prepareEnablement(input),
   canonicalEnablement: (value) => shippedLayaDefinition().canonicalEnablement(value),
   preview: (input) => shippedLayaDefinition().preview(input),
@@ -228,6 +235,66 @@ export function assertLayaJudgeKindAvailable(inputs: LayaEnablementInputs = {}):
   if (availability.code === 'LAYA_PLATFORM_UNAVAILABLE')
     fail('Laya is unavailable on this platform', 'LAYA_PLATFORM_UNAVAILABLE');
   fail('the macOS Laya boundary is unavailable', 'LAYA_SANDBOX_UNAVAILABLE');
+}
+
+/** The reviewed terms a Laya judge is created under, for exactly the inputs E's activation path validates with. */
+export function layaJudgeTermsFor(inputs: LayaEnablementInputs = {}): LayaJudgeTerms {
+  try {
+    const implementation =
+      inputs.layaAssetSource === undefined && inputs.layaPlatformProbe === undefined
+        ? judgeKindDefinition(JUDGE_KINDS[1]).implementation
+        : shippedLayaDefinition(inputs);
+    if (implementation === undefined) return fail('the Laya registry implementation is absent');
+    return implementation.judgeTerms();
+  } catch (error) {
+    if (error instanceof LayaContractError) return fail('the reviewed Laya manifest cannot be read');
+    throw error;
+  }
+}
+
+/**
+ * B3 control v3 (D2, D11): a Laya judge is configuration, kept whatever Laya's state on this machine or in this release,
+ * and it evaluates only once Laya is enabled and ready. It may name only what this release could run: the reviewed
+ * manifest entry, and a template that entry lists and the worker runs. The reason is in each message, because the
+ * message is all the CLI and MCP show.
+ */
+export function assertCreatableLayaJudge(
+  judge: CanonicalJudgeDocument | undefined,
+  inputs: LayaEnablementInputs = {},
+): void {
+  if (judge?.kind !== JUDGE_KIND_LAYA) return;
+  const terms = layaJudgeTermsFor(inputs);
+  if (judge.model !== terms.manifestId)
+    fail(
+      `a Laya judge names this release's reviewed manifest, ${terms.manifestId} (LAYA_MANIFEST_NOT_REVIEWED)`,
+      'LAYA_MANIFEST_NOT_REVIEWED',
+    );
+  if (
+    !terms.promptTemplates.includes(judge.promptTemplate) ||
+    !LAYA_RUNNABLE_TEMPLATE_IDS.includes(judge.promptTemplate)
+  )
+    fail(
+      `a Laya judge uses ${LAYA_RUNNABLE_TEMPLATE_IDS.join(' or ')}; ${judge.promptTemplate} is not offered (LAYA_TEMPLATE_BLOCKED)`,
+      'LAYA_TEMPLATE_BLOCKED',
+    );
+}
+
+/**
+ * D11: a rule naming a Laya judge is activated only where this release and platform offer Laya. Anywhere else its
+ * judge could never evaluate, so preparing, claiming or finalising the rule is refused with Laya's own closed reason,
+ * before the kind's state: never a rule that silently cannot ask.
+ */
+export function assertLayaRuleJudgeOffered(inputs: LayaEnablementInputs = {}): void {
+  try {
+    assertLayaJudgeKindAvailable(inputs);
+  } catch (error) {
+    if (error instanceof EventDomainError)
+      throw new EventDomainError(
+        error.code,
+        `this rule's Laya judge cannot evaluate here: Laya is not offered (${error.code})`,
+      );
+    throw error;
+  }
 }
 
 function record(value: unknown, name: string): Record<string, unknown> {

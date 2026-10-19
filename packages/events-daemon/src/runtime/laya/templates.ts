@@ -60,6 +60,15 @@ export const LAYA_TEMPLATE_IDS: readonly LayaTemplateId[] = Object.freeze(
   ),
 );
 
+/**
+ * The templates this release runs: those that ask a `noul` question. The worker refuses any other as
+ * `template-blocked` before the runtime is asked, so `laya-choice2-v1` stays out until a Laya source record states where
+ * a choice's probability comes from (E2 Task 8); B3 control v3 refuses a judge naming it when it is created.
+ */
+export const LAYA_RUNNABLE_TEMPLATE_IDS: readonly LayaTemplateId[] = Object.freeze(
+  LAYA_TEMPLATE_IDS.filter((id) => TEMPLATES[id].type === 'noul'),
+);
+
 export function isLayaTemplateId(value: unknown): value is LayaTemplateId {
   return typeof value === 'string' && Object.hasOwn(TEMPLATES, value);
 }

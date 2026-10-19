@@ -1,0 +1,798 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/b3-control-v3.schema.json",
+  "title": "B3 control contract v3",
+  "description": "B3 control v2 with a Laya judge variant. A Laya judge document is exactly judgeId, version, kind and provider laya, the reviewed manifest id as model, and the binary laya-noul-v1 template; v3 accepts one wherever a judge document goes (judge add and update, and the rule documents of rule create, update and test). v3 replaces the results that carry a judge document or inventory, and a rule approval view naming a Laya judge adds D11's Laya limits. Every other operation answers as v2 does. An owner without E2's artifact manager still answers v1.",
+  "$defs": {
+    "layaJudgeDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["judgeId", "version", "kind", "provider", "model", "promptTemplate"],
+      "properties": {
+        "judgeId": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "version": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+        },
+        "kind": {
+          "const": "laya"
+        },
+        "provider": {
+          "const": "laya"
+        },
+        "model": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "promptTemplate": {
+          "const": "laya-noul-v1"
+        }
+      }
+    },
+    "judgeDocument": {
+      "oneOf": [
+        {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/judgeDocument"
+        },
+        {
+          "$ref": "#/$defs/layaJudgeDocument"
+        }
+      ]
+    },
+    "layaRuleDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "version",
+        "source",
+        "event",
+        "condition",
+        "mapping",
+        "agentic",
+        "targets",
+        "subscribers",
+        "judges",
+        "deliveryRateCap",
+        "retention"
+      ],
+      "properties": {
+        "ruleId": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "version": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "accountIds", "options"],
+          "properties": {
+            "channel": {
+              "enum": ["gmail", "slack", "resend", "whatsapp"]
+            },
+            "accountIds": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+              }
+            },
+            "options": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/sourceOptions"
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "version"],
+          "properties": {
+            "type": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "version": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            }
+          }
+        },
+        "condition": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/json"
+        },
+        "agentic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judge",
+            "question",
+            "inputs",
+            "threshold",
+            "onUncertain",
+            "callsPerRollingHour",
+            "inputTokensPerRolling30Days",
+            "concurrency",
+            "maxInputTokens",
+            "maxOutputTokens"
+          ],
+          "properties": {
+            "judge": {
+              "$ref": "#/$defs/layaJudgeDocument"
+            },
+            "question": {
+              "type": "string"
+            },
+            "inputs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "onUncertain": {
+              "enum": ["no-match", "hold"]
+            },
+            "callsPerRollingHour": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "inputTokensPerRolling30Days": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "concurrency": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "maxInputTokens": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "maxOutputTokens": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            }
+          }
+        },
+        "mapping": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/json"
+        },
+        "cloudEventType": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/targetDocument"
+          }
+        },
+        "subscribers": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/subscriberDocument"
+          }
+        },
+        "judges": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "deliveryRateCap": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+        },
+        "retention": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/retention"
+        }
+      }
+    },
+    "ruleDocument": {
+      "oneOf": [
+        {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/ruleDocument"
+        },
+        {
+          "$ref": "#/$defs/layaRuleDocument"
+        }
+      ]
+    },
+    "layaDocumentRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "enum": ["addJudge", "updateJudge"]
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["document"],
+              "properties": {
+                "document": {
+                  "$ref": "#/$defs/layaJudgeDocument"
+                }
+              }
+            },
+            "origin": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "enum": ["rule-create", "rule-update"]
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["document"],
+              "properties": {
+                "document": {
+                  "$ref": "#/$defs/layaRuleDocument"
+                }
+              }
+            },
+            "origin": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "const": "ruleTest"
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["document", "catalogue"],
+              "properties": {
+                "document": {
+                  "$ref": "#/$defs/layaRuleDocument"
+                },
+                "catalogue": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "version", "exampleIndex"],
+                  "properties": {
+                    "type": {
+                      "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+                    },
+                    "version": {
+                      "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+                    },
+                    "exampleIndex": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            },
+            "origin": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/request"
+        },
+        {
+          "$ref": "#/$defs/layaDocumentRequest"
+        }
+      ]
+    },
+    "judgeInventoryEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "revokedAt"],
+          "properties": {
+            "judgeId": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "version": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "kind": {
+              "const": "typesafe"
+            },
+            "provider": {
+              "const": "typesafe"
+            },
+            "model": {
+              "const": "jev-1.13.0"
+            },
+            "revokedAt": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "revokedAt"],
+          "properties": {
+            "judgeId": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "version": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "kind": {
+              "const": "local-endpoint"
+            },
+            "provider": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "model": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "revokedAt": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "revokedAt"],
+          "properties": {
+            "judgeId": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "version": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "kind": {
+              "const": "laya"
+            },
+            "provider": {
+              "const": "laya"
+            },
+            "model": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "revokedAt": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "layaJudgePreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["judgeId", "version", "promptTemplate", "manifestId", "limits", "limitations"],
+      "properties": {
+        "judgeId": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "version": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+        },
+        "promptTemplate": {
+          "const": "laya-noul-v1"
+        },
+        "manifestId": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["englishCpu", "macosBoundary", "oneAtATime"],
+          "properties": {
+            "englishCpu": {
+              "type": "string",
+              "minLength": 1
+            },
+            "macosBoundary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "oneAtATime": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "limitations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sandboxDeprecation", "englishAccuracy"],
+          "properties": {
+            "sandboxDeprecation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "englishAccuracy": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "layaRuleApprovalReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "approvalId", "digest", "preview", "pendingTargetSelectors", "challenge", "layaJudge"],
+      "properties": {
+        "kind": {
+          "const": "READY"
+        },
+        "approvalId": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "digest": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+        },
+        "preview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "rule"],
+          "properties": {
+            "documentVersion": {
+              "const": 1
+            },
+            "kind": {
+              "const": "rule"
+            },
+            "rule": {
+              "$ref": "#/$defs/layaRuleDocument"
+            }
+          }
+        },
+        "pendingTargetSelectors": {
+          "type": "array",
+          "items": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/pendingTargetSelector"
+          }
+        },
+        "challenge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approvalId", "digest", "challenge", "expiresAt"],
+          "properties": {
+            "approvalId": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "digest": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "challenge": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "layaJudge": {
+          "$ref": "#/$defs/layaJudgePreview"
+        }
+      }
+    },
+    "resultsByOperation": {
+      "judgesList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/judgeInventoryEntry"
+        }
+      },
+      "addJudge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+        "properties": {
+          "id": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "kind": {
+            "const": "judge"
+          },
+          "objectId": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "version": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+          },
+          "document": {
+            "$ref": "#/$defs/judgeDocument"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "null"
+          }
+        }
+      },
+      "updateJudge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+        "properties": {
+          "id": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "kind": {
+            "const": "judge"
+          },
+          "objectId": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "version": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+          },
+          "document": {
+            "$ref": "#/$defs/judgeDocument"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "null"
+          }
+        }
+      },
+      "rule-create": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+        "properties": {
+          "id": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "kind": {
+            "const": "rule"
+          },
+          "objectId": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "version": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+          },
+          "document": {
+            "$ref": "#/$defs/ruleDocument"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "null"
+          }
+        }
+      },
+      "rule-update": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+        "properties": {
+          "id": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "kind": {
+            "const": "rule"
+          },
+          "objectId": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+          },
+          "version": {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+          },
+          "document": {
+            "$ref": "#/$defs/ruleDocument"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "null"
+          }
+        }
+      },
+      "approvalView": {
+        "oneOf": [
+          {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/approvalResult"
+          },
+          {
+            "$ref": "#/$defs/layaRuleApprovalReady"
+          }
+        ]
+      }
+    },
+    "layaJudgeRefusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "reason"],
+      "properties": {
+        "code": {
+          "const": "BAD_DATA"
+        },
+        "reason": {
+          "enum": [
+            "E2_EXTERNAL_REFERENCE_BLOCKED",
+            "LAYA_PLATFORM_UNAVAILABLE",
+            "LAYA_SANDBOX_UNAVAILABLE",
+            "LAYA_MANIFEST_NOT_REVIEWED",
+            "LAYA_TEMPLATE_BLOCKED"
+          ]
+        }
+      }
+    },
+    "layaJudgeResultVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request", "result"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "result": true
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "judgesList"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/judgesList"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "addJudge"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/addJudge"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "updateJudge"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/updateJudge"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "rule-create"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/rule-create"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "rule-update"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/rule-update"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "approvalView"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/approvalView"
+            }
+          }
+        }
+      ]
+    },
+    "layaJudgeErrorVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request", "error"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "enum": ["addJudge", "updateJudge", "rule-create", "rule-update", "rule-enable"]
+            },
+            "args": {
+              "type": "object"
+            },
+            "origin": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            }
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/layaJudgeRefusal"
+        }
+      }
+    }
+  }
+}
