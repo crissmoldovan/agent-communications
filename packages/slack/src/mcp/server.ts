@@ -23,6 +23,7 @@ import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { INSTALL_MODES, MANIFEST_MODES } from '../manifest.ts';
+import { ack } from '../operations/ack.ts';
 import {
   CHANGE_POLICIES,
   connectWorkspace,
@@ -63,7 +64,9 @@ import {
 } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
+import { prepareStandingAdd } from '../operations/standing.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
+import { standingNarrowedView, standingPreparedView } from '../standing-views.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -1054,6 +1057,100 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         const name = await resolve(args.workspace);
         await ownApproval(args.approvalId, 'send');
         return reply(await react(context, name, reactionOf(args), args.approvalId, slackDeps));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8 and §8.1): `agent-slack standing add`. It only
+   * prepares — it takes no `approvalId` — because a standing approval lets acts happen with nobody asked, so it is
+   * approved only by the person, at their own terminal, with its code: never in a chat, never through a client's form.
+   */
+  server.registerTool(
+    'slack_standing_add',
+    {
+      title: 'Prepare a standing approval',
+      description:
+        'Prepare a standing approval — acknowledgements your agent may later send without asking — for the person to approve at their own terminal with its code. Only when the person asked for one. **Nothing is sent, and nothing is approved here**: it returns `approvalRequired` with a preview that says an agent proposed it, each content in full with its digest, each place with its member count and sharing, the limits and the expiry. Show it in full, then tell the person to run the approve command `next` names in their terminal — you cannot approve it yourself, and their yes in this chat does not approve it. `reactions` are standard emoji names (eyes alone when no content is given); `replies` fixed plain texts of at most 200 characters; `places` is `threads-i-am-in` or channel and DM ids. With `replaces`, one that only narrows that standing approval applies at once; anything wider asks again. The same as the command line’s `standing add`.',
+      inputSchema: {
+        ...workspaceArg,
+        reactions: z.array(z.string()).optional().describe('standard emoji names, without colons, at most 5'),
+        replies: z.array(z.string()).optional().describe('fixed replies, plain text on one line, at most 5'),
+        places: z
+          .union([z.literal('threads-i-am-in'), z.array(z.string())])
+          .describe('`threads-i-am-in`, or channel and DM ids: C…, G…, D…'),
+        perThread: z.number().optional().describe('acts per thread, across every standing approval: 1 to 3'),
+        perHour: z.number().optional().describe('acts an hour: 1 to 30'),
+        perDay: z.number().optional().describe('acts a day: 1 to 100'),
+        expiresDays: z.number().optional().describe('days it lasts once approved: 1 to 30'),
+        replaces: z.string().optional().describe('the standing approval this replaces'),
+      },
+      // It writes a pending record on this machine and reads Slack for the places; nothing reaches anyone.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        // The operation `standing add` runs: see `prepareStandingAdd`. An agent proposes it, always, from here.
+        const outcome = await prepareStandingAdd(
+          context,
+          await resolve(args.workspace),
+          {
+            reactions: args.reactions,
+            replies: args.replies,
+            places: args.places,
+            perThread: args.perThread,
+            perHour: args.perHour,
+            perDay: args.perDay,
+            expiresDays: args.expiresDays,
+            replaces: args.replaces,
+          },
+          slackDeps,
+          { proposedBy: 'agent' },
+        );
+        return reply(
+          outcome.status === 'narrowed' ? standingNarrowedView(outcome.record) : standingPreparedView(outcome.prepared),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): `agent-slack ack`. It names the message and the
+   * content by its digest, and nothing else — no draft, no words, no removal — so the gate builds the payload, and every
+   * check a person would otherwise have made is the gate's.
+   */
+  server.registerTool(
+    'slack_ack',
+    {
+      title: 'Acknowledge under a standing approval',
+      description:
+        'Acknowledge, without asking, a message that has just arrived from another person — with a reaction or a reply the person wrote in advance and approved at their terminal as a standing approval. Use it only on a message that just arrived, the newest from someone else in its thread or channel, and only with a content digest comms_standing shows for that standing approval: you never write the words. It goes out as your agent — the app, or labelled — and the person is told on their screen. Without a standing approval that covers it, ask the person instead. STANDING_REFUSED or STANDING_LIMIT means it does not cover this act: stop and ask the person, and do not try again. The same as the command line’s `ack`.',
+      inputSchema: {
+        ...workspaceArg,
+        standingId: z.string().describe('the standing approval, as comms_standing lists it'),
+        channel: z.string().describe('the conversation the message is in: C…, G… or D…'),
+        ts: z.string().describe('the message, by its ts as a read returned it'),
+        content: z.string().describe('the content, by the digest comms_standing shows for it: 64 hex characters'),
+      },
+      annotations: outward,
+    },
+    async (args) => {
+      try {
+        const name = await resolve(args.workspace);
+        await ownApproval(args.standingId, 'standing');
+        // The operation `ack` runs: see `ack`.
+        return reply(
+          await ack(
+            context,
+            name,
+            { standingId: args.standingId, channel: args.channel, ts: args.ts, content: args.content },
+            slackDeps,
+          ),
+        );
       } catch (error) {
         return fail(error);
       }

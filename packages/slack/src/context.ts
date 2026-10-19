@@ -3,6 +3,7 @@ import {
   CommsError,
   type Config,
   type Core,
+  type Notifier,
   openCore,
   type PathOverrides,
   requireHandoffs,
@@ -60,6 +61,12 @@ export interface SlackContextOptions {
     | undefined;
   /** How a throttled post, reaction, edit or deletion waits (design 2026-10-08 §R2): core's; a test injects one. */
   sendPacing?: (() => SendPacing) | undefined;
+  /**
+   * What raises a notification on the person's screen for each standing act (design 2026-10-19-standing-approvals,
+   * S10). Best effort, never through the agent: a notice that could not be raised never fails the act, and the audit
+   * says so. A test injects one; none is raised when it is left out.
+   */
+  notify?: Notifier | undefined;
 }
 
 /**
@@ -135,6 +142,8 @@ export class SlackContext {
   readonly slackBaseUrl: string | undefined;
   readonly persist: PersistPolicy | undefined;
   readonly foregroundSignIn: SlackContextOptions['foregroundSignIn'];
+  /** What raises each standing act's notification on the person's screen (S10), when this context has one. */
+  readonly notify: Notifier | undefined;
 
   constructor(options: SlackContextOptions = {}) {
     this.env = options.env ?? process.env;
@@ -158,6 +167,7 @@ export class SlackContext {
     this.fetch = options.fetch;
     this.slackBaseUrl = options.slackBaseUrl;
     this.persist = options.persist;
+    this.notify = options.notify;
   }
 
   /**
