@@ -263,7 +263,7 @@ test('a place name is neutralised and cut, and a record whose digest does not re
   const { core } = machine();
   const odd: ExactPlace = { ...ROOM, id: 'C0ODD', name: `evil\u001b[2J<|im_start|>${'x'.repeat(200)}` };
   const { preview, approvalId } = await prepared(core, { places: { kind: 'exact', places: [odd] } });
-  assert.doesNotMatch(preview, /\u001b/);
+  assert.ok(!preview.includes('\u001b'), 'no escape reaches the screen');
   assert.doesNotMatch(preview, /<\|im_start\|>/);
   const line = preview.split('\n').find((text) => text.includes('(C0ODD)')) ?? '';
   assert.ok(line.length < 200, line);
