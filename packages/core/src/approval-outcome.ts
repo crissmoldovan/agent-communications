@@ -109,6 +109,27 @@ export const SEND_EPOCH_REASON = 'sending was turned off since this was prepared
  * since it was made: its standing epoch is behind the live one (design 2026-10-19-standing-approvals, S8).
  */
 export const STANDING_EPOCH_REASON = 'standing approvals were ended since this was approved';
+/**
+ * The reason a standing approval is revoked with once its account's change policy is stricter than the one it was
+ * approved under (`approvedChangePolicy`) — `changePolicy-tightened`, read from the configuration itself, whatever the
+ * standing epoch says, so a release that knows no epoch tightening the policy still ends it (design
+ * 2026-10-19-standing-approvals, S8, the lead's call after review).
+ */
+export const CHANGE_POLICY_TIGHTENED_REASON = 'the change policy was tightened since this was approved';
+
+/** Whether `live` is stricter than `approved`: `confirm` over `chat`. */
+function changePolicyTightened(approved: ChangePolicy | undefined, live: ChangePolicy | undefined): boolean {
+  return live === 'confirm' && approved !== 'confirm';
+}
+
+/**
+ * Whether even a look writes this outcome's revocation down: a standing approval ended by a tightened change policy.
+ * Every other revocation a look derives is from something that never goes back — an epoch, an owner's id — so the next
+ * action can write it; a policy can be loosened again, and what it ended must stay ended (S8).
+ */
+export function writtenAtALook(outcome: ApprovalOutcome): boolean {
+  return outcome.revokes && outcome.record?.kind === 'standing' && outcome.reason === CHANGE_POLICY_TIGHTENED_REASON;
+}
 /** What an outcome says of a pending or approved send under a live `never`, before anything revokes it. */
 export const NEVER_NOTICE = 'sending is turned off (policy: never); any use revokes it';
 /** The refusal of a claim, an approval or an answer by a store opened without a configuration. */
@@ -636,6 +657,14 @@ function classifyV2(read: ApprovalRecord, context: OutcomeContext): ApprovalOutc
   ) {
     // Behind the live one — or ahead of it, which no write of this release makes: either way not the live one.
     derived = STANDING_EPOCH_REASON;
+  } else if (
+    read.kind === 'standing' &&
+    read.state === 'approved' &&
+    live?.owner === 'present' &&
+    changePolicyTightened(read.approvedChangePolicy, live.changePolicy)
+  ) {
+    // Tightened since the person approved it, by whichever release wrote the policy: the epoch may never have moved.
+    derived = CHANGE_POLICY_TIGHTENED_REASON;
   }
   const record: ApprovalRecord =
     derived === null ? read : { ...read, state: 'revoked', reason: derived, revokedAt: at, challengeHash: undefined };

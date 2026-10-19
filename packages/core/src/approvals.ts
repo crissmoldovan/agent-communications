@@ -37,6 +37,7 @@ import {
   type OutcomeAction,
   type UsedSaid,
   withApproval,
+  writtenAtALook,
 } from './approval-outcome.ts';
 import {
   channelOf,
@@ -458,6 +459,13 @@ export interface ApprovalRecord {
   standingEpoch?: number | undefined;
   /** On a standing approval's child: the standing approval it is one use of. Bound. */
   standingId?: string | undefined;
+  /**
+   * On an approved standing approval: the change policy that governed its account when the person approved it — its
+   * own, else the default. Written with the approval, beside `approvedAt`. A live change policy stricter than this has
+   * ended it (`changePolicy-tightened`), whatever the standing epoch says: a release that knows no standing epoch can
+   * still tighten the policy (design 2026-10-19-standing-approvals, S8, the lead's call after review).
+   */
+  approvedChangePolicy?: ChangePolicy | undefined;
 }
 
 /**
@@ -1169,7 +1177,10 @@ export class ApprovalStore {
       const live = config === null || derived.form !== 'v2' ? null : liveGateOf(config, derived.record);
       const outcome = approvalOutcome(derived, { action, live, now: this.#now(), usedSaid: options.usedSaid });
       if (found.form === 'v2' && derived.form === 'v2') {
-        const acting = outcome.revokes && action !== 'inspect' && action !== 'wait' && outcome.record !== null;
+        const acting =
+          outcome.revokes &&
+          outcome.record !== null &&
+          ((action !== 'inspect' && action !== 'wait') || writtenAtALook(outcome));
         const current = acting && outcome.record !== null ? outcome.record : derived.record;
         if (current.state !== found.record.state) {
           await this.#write({ ...current, updatedAt: this.#now().toISOString() });
@@ -1442,7 +1453,7 @@ export class ApprovalStore {
       approvalId,
       { kind },
       'approve',
-      (current, outcome) => {
+      (current, outcome, gate) => {
         if (outcome.error) throw outcome.error;
         if (current.state !== 'pending') throw this.#alreadyApproved(current, outcome);
         if (!current.challengeHash)
@@ -1504,6 +1515,12 @@ export class ApprovalStore {
           usableUntil: new Date(at.getTime() + (current.approvedMs ?? APPROVAL_LIFETIMES.approved)).toISOString(),
           approvedBindingDigest: current.bindingDigest,
           challengeHash: undefined,
+          /*
+           * A standing approval binds the change policy that governed its account as the person approved it, read under
+           * this lock: a live one stricter than this ends it, from the configuration alone (S8, the lead's call after
+           * review). With none to read it binds `chat`, the looser, so that any `confirm` ends it.
+           */
+          ...(kind === 'standing' ? { approvedChangePolicy: gate?.changePolicy ?? 'chat' } : {}),
         };
       },
       { usedSaid: options.usedSaid },
@@ -2344,7 +2361,14 @@ export class ApprovalStore {
           await this.#write({ ...derived.record, updatedAt: this.#now().toISOString() });
         }
         const live = config === null || derived.form !== 'v2' ? null : liveGateOf(config, derived.record);
-        return { stored: derived, outcome: approvalOutcome(derived, { action: 'inspect', live, now: this.#now() }) };
+        const outcome = approvalOutcome(derived, { action: 'inspect', live, now: this.#now() });
+        // The one revocation a look writes down: what a loosening could otherwise take back (`writtenAtALook`).
+        if (writtenAtALook(outcome) && outcome.record !== null) {
+          const ended = { ...outcome.record, updatedAt: this.#now().toISOString() };
+          await this.#write(ended);
+          return { stored: { form: 'v2' as const, record: ended }, outcome };
+        }
+        return { stored: derived, outcome };
       });
       if (seen === null) continue;
       if (filter.inboxId !== undefined && filter.inboxId !== '' && ownerOf(seen.stored) !== filter.inboxId) continue;

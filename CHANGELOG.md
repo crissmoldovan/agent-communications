@@ -53,8 +53,9 @@ Mail, top-level posts, edits, deletions, files and removing a reaction are never
 **Seeing and ending them: `agentcomms standing`, and `comms_standing`.** `agentcomms standing list` shows each one, its
 contents by digest, its uses today and its last 10 acts with links; `agentcomms standing narrow <id>` keeps less of
 one, `agentcomms standing revoke <id>` ends one, and `agentcomms standing off` ends every one — each at once, asking
-nobody. Tightening your change policy ends every one too; a send policy of `never`, or removing the account, ends that
-account's; loosening again revives none. `agentcomms doctor` lists the active ones and when each ends.
+nobody. Tightening your change policy ends every one too — even when an older release's CLI or server tightened it,
+since each standing approval keeps the change policy it was approved under; a send policy of `never`, or removing the
+account, ends that account's; loosening again revives none. `agentcomms doctor` lists the active ones and when each ends.
 
 Why: agents that listen in Slack were stopping to ask before sending even "Got it", or sending it as you. A
 standing approval keeps your yes on the exact words while letting the moment go, inside limits you set, and it is

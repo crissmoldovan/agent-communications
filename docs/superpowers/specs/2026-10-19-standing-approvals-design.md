@@ -418,3 +418,21 @@ differ, this section is the later word.
 3. **The notice is core's** (S10). Its words are `ackNotice`'s alone, and a Slack context raises it with core's
    notifier for its platform (`makeNotifier`) unless it is given one. Tests inject a notifier or a runner, so none shows
    a real notification.
+
+## 10. Settled after review (2026-10-19)
+
+An independent review of the build, by a core reviewer and a Slack reviewer, found the points below. Each is settled
+here as **(lead's call, after review)**, and where this section and the ones above differ, this section is the later
+word.
+
+1. **A change policy tightened by a release that knows no standing epoch still ends them** (S8; core review C1).
+   0.22 can tighten a change policy and leave the standing epoch where it was. So the approval binds the change policy
+   that governed its account when the person typed the code — its own, else the default — as `approvedChangePolicy`,
+   written with `approvedAt` and checked by the validator: an approved standing record has one, and nothing else does.
+   A live change policy stricter than it ends the record, `changePolicy-tightened`, with the reason "the change policy
+   was tightened since this was approved", read from the configuration itself at every look, mint and claim, whatever
+   the epoch says. Because a policy, unlike an epoch, can be loosened again, this is the one ending even a look writes
+   down (`writtenAtALook`): `standing list`, the doctor and `comms_standing` write it as well as a use does. A
+   loosening made before anything has looked at the record still revives it; nothing a 0.22 process does can be
+   prevented by this release. The epoch stays the broader rule for this release's own writes: any tightening, of any
+   account's policy or the default, ends every one. **(lead's call, after review)**

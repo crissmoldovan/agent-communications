@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { APPROVAL_LIFETIMES, type BindingFields, bindingDigestOf } from '../src/approval-binding.ts';
-import { OWNER_REMOVED_REASON, SEND_EPOCH_REASON } from '../src/approval-outcome.ts';
+import { CHANGE_POLICY_TIGHTENED_REASON, OWNER_REMOVED_REASON, SEND_EPOCH_REASON } from '../src/approval-outcome.ts';
 import { asV2 } from '../src/approval-stored.ts';
 import { validateV2 } from '../src/approval-validate.ts';
 import type { ApprovalRecord, ApprovalStore, Expectation } from '../src/approvals.ts';
@@ -550,6 +550,75 @@ test('tightening the change policy ends them too: the epoch is the same one', as
   });
   const { outcome } = await core.approvals.inspect(standing.approvalId, {}, { action: 'claim' });
   assert.equal(outcome.state, 'revoked');
+});
+
+test('a change policy tightened by a release that knows no standing epoch ends them, at a look and a mint', async () => {
+  // 0.22 writes the configuration with no standing epoch: the policy moves to confirm, and the epoch stays at 0.
+  const { core, config } = machine();
+  const standing = await approvedAtTerminal(core, await prepared(core));
+  assert.equal(standing.approvedChangePolicy, 'chat', 'it binds the change policy it was approved under');
+  const later = await approvedAtTerminal(core, await prepared(core));
+  config.write({ accounts: { 'acme/slack': { id: ACME, sendPolicy: 'chat', changePolicy: 'confirm' } } });
+  assert.equal(standingEpochOf(await core.config.load()), standing.standingEpoch, 'the epoch never moved');
+
+  const { outcome } = await core.approvals.inspect(standing.approvalId);
+  assert.equal(outcome.state, 'revoked', 'a look shows it ended');
+  assert.equal(outcome.reason, CHANGE_POLICY_TIGHTENED_REASON);
+  await assert.rejects(
+    core.approvals.withStanding(standing.approvalId, ACME, async (_record, found) => {
+      if (found.error) throw found.error;
+    }),
+    refusedWith('APPROVAL_VOID', new RegExp(CHANGE_POLICY_TIGHTENED_REASON)),
+  );
+  await assert.rejects(child(core, later), refusedWith('APPROVAL_VOID', new RegExp(CHANGE_POLICY_TIGHTENED_REASON)));
+  // A list is a look, and even a look writes this ending down: the policy, unlike an epoch, can be loosened again.
+  const listed = await core.approvals.inspectAll();
+  assert.ok(listed.some(({ outcome: seen }) => seen.reason === CHANGE_POLICY_TIGHTENED_REASON));
+  // Loosening it again revives nothing: each was written down as ended.
+  config.write({ accounts: { 'acme/slack': { id: ACME, sendPolicy: 'chat', changePolicy: 'chat' } } });
+  assert.equal(asV2(await core.approvals.get(standing.approvalId))?.state, 'revoked');
+  assert.equal(asV2(await core.approvals.get(later.approvalId))?.state, 'revoked');
+  // Approved under confirm, a confirm changes nothing.
+  config.write({ accounts: { 'acme/slack': { id: ACME, sendPolicy: 'chat', changePolicy: 'confirm' } } });
+  const strict = await approvedAtTerminal(core, await prepared(core));
+  assert.equal(strict.approvedChangePolicy, 'confirm');
+  assert.equal((await core.approvals.inspect(strict.approvalId)).outcome.state, 'approved');
+});
+
+test('the change policy it was approved under is an approved standing record’s evidence, and nothing else’s', async () => {
+  const { core } = machine();
+  const record = await approvedAtTerminal(core, await prepared(core));
+  const invalid = (reason: string) => ({ ok: false, reason, attribution: 'verified' });
+  assert.deepEqual(
+    resealed(core.approvals, record, (raw) => {
+      delete raw.approvedChangePolicy;
+    }),
+    invalid('evidence-missing'),
+    'an approved standing record without it',
+  );
+  assert.deepEqual(
+    resealed(core.approvals, record, (raw) => {
+      raw.approvedChangePolicy = 'never';
+    }),
+    invalid('evidence-missing'),
+    'a policy that is none',
+  );
+  const pending = await prepared(core);
+  assert.deepEqual(
+    resealed(core.approvals, pending, (raw) => {
+      raw.approvedChangePolicy = 'confirm';
+    }),
+    invalid('evidence-contradictory'),
+    'on one not yet approved',
+  );
+  const minted = await child(core, record);
+  assert.deepEqual(
+    resealed(core.approvals, minted, (raw) => {
+      raw.approvedChangePolicy = 'confirm';
+    }),
+    invalid('evidence-contradictory'),
+    'on a child',
+  );
 });
 
 test('never revokes it, and loosening again revives nothing', async () => {

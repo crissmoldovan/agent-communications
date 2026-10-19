@@ -453,6 +453,10 @@ function checkEvidence(
   }
   // `standing` evidence is a child's, and only a child's: the person approved it in advance, at a terminal.
   if ((via === 'standing') !== (isChild(raw) && via !== undefined)) return fail('evidence-invalid');
+  // The change policy a standing approval was approved under is its evidence, and only an approved one's (S8).
+  if (raw.approvedChangePolicy !== undefined && (kind !== 'standing' || raw.approvedAt === undefined)) {
+    return fail('evidence-contradictory');
+  }
   if (kind === 'download') {
     const answer = record.download?.answer;
     const answered = via !== undefined || raw.approvedDigest !== undefined || answer !== undefined;
@@ -470,6 +474,9 @@ function checkEvidence(
     return via !== undefined || raw.approvedBindingDigest !== undefined ? fail('evidence-contradictory') : null;
   }
   if (via === undefined || raw.approvedBindingDigest === undefined) return fail('evidence-missing');
+  if (kind === 'standing' && raw.approvedChangePolicy !== 'chat' && raw.approvedChangePolicy !== 'confirm') {
+    return fail('evidence-missing');
+  }
   // A change's `confirm` means a person at a terminal: a form is not what that policy asked for. Nor does anything but
   // the code at a terminal approve a standing approval, whatever the change policy (S8).
   if ((kind === 'change' || kind === 'standing') && via !== 'terminal') return fail('evidence-invalid');
