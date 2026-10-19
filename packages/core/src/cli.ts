@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { approveAndWaitSentence } from './approval-handoffs.ts';
 import type { PublicApprovalView } from './approval-outcome.ts';
+import { kindOf } from './approval-stored.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
 import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
 import type { PreparedChange } from './changes.ts';
@@ -11,6 +12,7 @@ import {
   type OutputOptions,
   pathOverridesFromCliOptions,
   runCommand,
+  type Streams,
   writeError,
   writeResult,
 } from './cli-runtime.ts';
@@ -25,6 +27,7 @@ import {
   handoffSentenceToFill,
   handoffText,
 } from './handoffs.ts';
+import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
@@ -85,6 +88,7 @@ import {
 import { profileSourcePath, shownPath } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
 import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
+import { approveStandingAtTerminal } from './standing-flow.ts';
 import {
   type BackgroundDeps,
   type BackgroundOutcome,
@@ -455,6 +459,8 @@ export async function main(
     updateBackground?: BackgroundDeps | undefined;
     /** What `update` and `update --check` read and run — the registry, the verifier, the installers — for a test. */
     update?: UpdateDeps | undefined;
+    /** The terminal `approve` asks at: the process's own unless a test brings one. */
+    streams?: Streams | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -600,7 +606,21 @@ export async function main(
       }
       case 'approve': {
         if (!sub || arg !== undefined) throw usage('usage: approve <approvalId>');
-        const result = await approveChangeAtTerminal(core, sub, env, output);
+        const streams = deps.streams ?? defaultStreams;
+        // A standing approval is approved with its own preview and code (design 2026-10-19-standing-approvals, S8);
+        // anything else here is a change, as it always was. Decided by the record's kind, read and trusted only from
+        // a record whose binding verifies; each approval then refuses an id of the other kind as not found.
+        const stored = APPROVAL_ID_PATTERN.test(sub) ? await core.approvals.get(sub).catch(() => null) : null;
+        if (kindOf(stored) === 'standing') {
+          const standing = await approveStandingAtTerminal(core, sub, env, output, streams);
+          writeResult(standing, output, (r) =>
+            r.state === 'approved'
+              ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking. End it at any time with the standing commands.'
+              : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          );
+          return;
+        }
+        const result = await approveChangeAtTerminal(core, sub, env, output, streams);
         writeResult(result, output, (r) =>
           r.state === 'approved'
             ? 'Approved. The agent can make the change now — this command approves; it changes nothing itself.'

@@ -205,6 +205,8 @@ export * from './sending-lease.ts';
  */
 export * from './standing.ts';
 export * from './standing-emoji.ts';
+// Preparing one, showing it in full, and approving it only with its code at a terminal; ending one at once.
+export * from './standing-flow.ts';
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';
