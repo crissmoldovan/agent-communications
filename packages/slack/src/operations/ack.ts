@@ -442,7 +442,9 @@ async function startedByPerson(context: SlackContext, gate: GateDeps, channel: s
   if (parent.user !== gate.postingAs) return false;
   for (const field of NOT_TYPED) if (Object.hasOwn(parent, field)) return false;
   const ts = str(parent.ts);
-  if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
+  // A ts that is no time cannot say how far back to read what this product sent: not the person's, then.
+  if (ts === undefined || !Number.isFinite(msOf(ts))) return false;
+  if (gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
   return !(await sentByThisProduct(context, gate.accountId, channel, msOf(ts))).has(ts);
 }
 

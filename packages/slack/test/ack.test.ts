@@ -391,6 +391,16 @@ test('a thread this product started for the person, or an app with their token, 
   assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
 });
 
+test('a parent of the person’s whose ts cannot be read as a time is refused, not a crash', async (t) => {
+  const w = await world(t);
+  const s = await inEng(w);
+  const parent = 'not-a-ts';
+  w.world.messages.push({ channel: ENG, ts: parent, user: SELF, via: 'user', text: 'deploying at noon' });
+  const ts = say(w, { channel: ENG, thread_ts: parent });
+  assertRefused(await refused(acknowledge(w, withEyes(s, ENG, ts)), 'odd ts'), 'not-human', 'an unreadable ts');
+  nothingSent(w, 'an unreadable ts');
+});
+
 test('a thread this product started for the person weeks ago is still not theirs', async (t) => {
   // Older than threads-i-am-in looks back: what this product sent is read from the audit as far back as the parent.
   const w = await world(t);
