@@ -189,6 +189,7 @@ describe('the desktop workflows', () => {
     expect(block(attach, 'permissions', 4)).toBe('    permissions:\n      contents: write');
     expect(attach).not.toMatch(/actions\/checkout|pnpm|node |npm |cargo|tauri/);
     expect(attach).toMatch(/uses: actions\/download-artifact@[0-9a-f]{40} # v7/);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow and shell text, not a template
     const upload = attach.indexOf('gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber');
     expect(upload).toBeGreaterThan(attach.indexOf(isDraft));
     expect(attach.indexOf(isDraft)).toBeGreaterThan(-1);
@@ -224,16 +225,16 @@ describe('the desktop workflows', () => {
     const patterns = [...block(block(workflow, 'on'), 'pull_request', 2).matchAll(/^\s+- '([^']+)'$/gm)].map(
       ([, glob]) => glob ?? '',
     );
-    const covers = (path: string) =>
-      patterns.some((glob) =>
-        new RegExp(
-          `^${glob
-            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*\*/g, '\u0000')
-            .replace(/\*/g, '[^/]*')
-            .replace(/\u0000/g, '.*')}$`,
-        ).test(path),
-      );
+    // A path filter's glob as GitHub reads it: `**` any folders, `*` any name within one.
+    const globRegExp = (glob: string) => {
+      const literal = (text: string) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      const body = glob
+        .split('**')
+        .map((part) => part.split('*').map(literal).join('[^/]*'))
+        .join('.*');
+      return new RegExp(`^${body}$`);
+    };
+    const covers = (path: string) => patterns.some((glob) => globRegExp(glob).test(path));
     // Every file outside apps/desktop that the app's tests and scripts import or read.
     const sources = ['src/test', 'scripts'].flatMap((folder) =>
       readdirSync(join(APP, folder), { recursive: true })
