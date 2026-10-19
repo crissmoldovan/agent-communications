@@ -226,6 +226,9 @@ export function nameAvailable(config: Config, kind: NameKind, name: string, plat
  * Earlier records for the same account are pointed at the new name too, so `cue` → `cue/gmail` → `cue/gmail-main`
  * leaves `cue` naming `cue/gmail-main`, never another former name. The caller has checked `to` with
  * `nameAvailable`; the schema checks it again when this is written.
+ *
+ * The behaviour rules that hold the account are renamed with it (`behaviourRenamed`), so a rename, which needs no
+ * approval, never sheds one.
  */
 export function renameEntry<C extends Config>(config: C, kind: NameKind, from: string, to: string): C {
   const map = MAP[kind];
@@ -235,14 +238,47 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
   const renamed: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(entries)) if (key !== from) renamed[key] = value;
   renamed[to] = row;
-  if (!hasNames(config)) return { ...config, [map]: renamed };
+  const behaviour = config.behaviour === undefined ? {} : { behaviour: behaviourRenamed(config, row.id, from, to) };
+  if (!hasNames(config)) return { ...config, [map]: renamed, ...behaviour };
   const records: FormerNames[typeof map] = {};
   for (const [key, record] of Object.entries(config.formerNames[map])) {
     // Spread, so a field a newer release added to the record survives this one rewriting it.
     records[key] = record.id === row.id ? { ...record, name: to, id: row.id } : record;
   }
   records[from] = { name: to, id: row.id };
-  return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records } };
+  return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records }, ...behaviour };
+}
+
+/**
+ * `config.behaviour` with every rule that holds the account `id` renamed from `from` to `to` (design
+ * 2026-10-19-agent-behaviour-rules, B3).
+ *
+ * A rule bound to the account's id holds it whatever its name, and is renamed only so it reads as the account is
+ * called now. A rule that holds it by name — one whose id no account holds (an orphan), one with none, one this release
+ * cannot read — would hold nothing once the name went, and that is a restriction a rename would shed; renamed, it holds
+ * the account still. A rule bound to another account's id is left alone, whatever name it carries. Every other key, of
+ * the setting and of each rule, is kept as it was, and a value with no list of rules is returned as it is.
+ */
+function behaviourRenamed(config: Config, id: string, from: string, to: string): unknown {
+  const stored = config.behaviour;
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return stored;
+  const rules: unknown = (stored as { rules?: unknown }).rules;
+  if (!Array.isArray(rules)) return stored;
+  const held = new Set([...Object.values(config.inboxes), ...Object.values(config.accounts)].map((entry) => entry.id));
+  const holds = (rule: Record<string, unknown>): boolean => {
+    if (typeof rule.account !== 'string') return false;
+    if (rule.accountId === id) return true;
+    const bound = typeof rule.accountId === 'string' && held.has(rule.accountId);
+    return !bound && rule.account === from;
+  };
+  return {
+    ...stored,
+    rules: rules.map((rule: unknown) =>
+      typeof rule === 'object' && rule !== null && !Array.isArray(rule) && holds(rule as Record<string, unknown>)
+        ? { ...rule, account: to }
+        : rule,
+    ),
+  };
 }
 
 /**

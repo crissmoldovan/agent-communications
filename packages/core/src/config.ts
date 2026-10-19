@@ -10,6 +10,14 @@ import {
   classifyAgentLabelChange,
 } from './agent-label.ts';
 import type { ChangeBinding } from './approvals.ts';
+import {
+  type BehaviourAct,
+  type BehaviourDelta,
+  behaviourAccountsOf,
+  classifyBehaviourChange,
+  type RuleRef,
+  readBehaviourSettings,
+} from './behaviour.ts';
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { CONVERSION_HOOKS, type ConversionHooks } from './config-hooks.ts';
 import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
@@ -271,6 +279,16 @@ interface ConfigBody {
    * judged by `classifyChange`.
    */
   agentLabel?: unknown;
+  /**
+   * What an agent may do (design 2026-10-19-agent-behaviour-rules, B3): `{ rules: [...] }`, each rule the acts allowed
+   * in one account or one of its conversations.
+   *
+   * `unknown` here, as `agentLabel` is, and for the same reason the other way round: it is read only through
+   * `readBehaviourSettings`, which reads a value it does not understand as allowing less — an unknown act dropped, a
+   * rule it cannot read as its account allowing nothing — never as no rules. Kept through every write as the schemas
+   * keep every key they do not name, so older releases keep it too, and judged by `classifyChange`.
+   */
+  behaviour?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2012,7 +2030,48 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
       labelSettingValue(loosening, loosening.now, after),
     );
   }
+  // What an agent may do (design 2026-10-19-agent-behaviour-rules, B5), judged per connected account as every channel
+  // decides it: a change that lets an agent do more at any level waits for the person, and one that only narrows applies
+  // at once. Its values are every level the change moves, by name, so the preview shows the whole change and the
+  // approval binds it.
+  const behaviour = classifyBehaviourChange(readBehaviourSettings(before), readBehaviourSettings(after), {
+    before: behaviourAccountsOf(before),
+    after: behaviourAccountsOf(after),
+  });
+  if (behaviour.loosens) {
+    const levels = behaviourLevels(behaviour.deltas);
+    loosen('behaviour.rules', levels.before, levels.after);
+  }
   return { loosened: changes.map((change) => change.path), changes };
+}
+
+/** What a level allows, in a preview's words: `everything` where no rule holds, `nothing` for an empty one. */
+function behaviourActsText(acts: readonly BehaviourAct[] | 'all'): string {
+  return acts === 'all' ? 'everything' : acts.length === 0 ? 'nothing' : acts.join(', ');
+}
+
+/** A level by the name the person knows: the account, and its conversation — `acme/slack C0GENERAL`. */
+function behaviourLevelText(scope: RuleRef): string {
+  const account = scope.account === '*' ? 'any other account' : scope.account;
+  return scope.conversation === undefined ? account : `${account} ${scope.conversation}`;
+}
+
+/**
+ * The levels a change to the behaviour rules moves, as a loosening carries them: each level, by name, to what it
+ * allowed before, and to what it allows after. Read back as `<level>: <before> → <after>` in a preview.
+ */
+function behaviourLevels(deltas: readonly BehaviourDelta[]): {
+  before: Record<string, string>;
+  after: Record<string, string>;
+} {
+  const before: Record<string, string> = {};
+  const after: Record<string, string> = {};
+  for (const delta of deltas) {
+    const level = behaviourLevelText(delta.scope);
+    before[level] = behaviourActsText(delta.before);
+    after[level] = behaviourActsText(delta.after);
+  }
+  return { before, after };
 }
 
 /**
@@ -2079,7 +2138,8 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * the agent label's settings, and each mailbox's and account's own settings — including those of one added or removed.
+ * the agent label's settings, the behaviour rules, and each mailbox's and account's own settings — including those of
+ * one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
  * changes approved by chat" — and binding only the loosenings let a claim drop the tightening a person read, since
@@ -2122,7 +2182,16 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   const labelBefore = storedAgentLabel(before);
   const labelAfter = storedAgentLabel(after);
   for (const key of LABEL_SETTINGS) record(`agentLabel.${key}`, labelBefore[key], labelAfter[key]);
+  record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
   return changes;
+}
+
+/** The behaviour rules as the file holds them — raw, ids and all, as `changedSettings` records every setting. */
+function storedBehaviourRules(config: Config): unknown {
+  const stored = config.behaviour;
+  return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+    ? (stored as { rules?: unknown }).rules
+    : undefined;
 }
 
 /**

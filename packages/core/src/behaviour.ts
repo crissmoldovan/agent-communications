@@ -142,7 +142,7 @@ function unreadableWhole(reason: string): BehaviourSettings {
  */
 export function readBehaviourSettings(config: Config): BehaviourSettings {
   try {
-    const stored: unknown = (config as { behaviour?: unknown }).behaviour;
+    const stored: unknown = config.behaviour;
     if (stored === undefined) return { rules: [], unreadable: [] };
     if (!isRecord(stored)) return unreadableWhole('the behaviour setting is not an object');
     const rules: unknown = stored.rules;
