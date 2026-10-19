@@ -78,9 +78,9 @@ import { compareVersions } from '../versions.ts';
  * the `organisations` record, made only if nothing it was planned from moved meanwhile.
  *
  * An update that only repairs drift — bringing the configuration back to what was already approved — applies at once
- * and asks nobody, as does turning `--for-other-addresses` off and anything that only tightens: a skipped extension a
- * later release reads as tightening (design 2026-10-19, X4). Any other change to the profile's contents, a new source,
- * or turning other addresses on is approved first (§D8).
+ * and asks nobody, as does turning `--for-other-addresses` off and anything that only tightens: a tighter caps file, and
+ * a skipped extension a later release reads as tightening (design 2026-10-19, X4, X6). Any other change to the profile's
+ * contents, a new source, or turning other addresses on is approved first (§D8).
  */
 
 export interface OrgOptions {
@@ -497,6 +497,37 @@ function extensionLine(
 
 /** The extension a tightening line made at once names, when it is one: `extension <name>: … (tightens)`. */
 const TIGHTENED_EXTENSION = /^extension ([a-z][a-z0-9-]{1,39}): .* \(tightens\)$/;
+
+/**
+ * How two sets of update caps compare (design 2026-10-19, X6). `max` from tightest to loosest: `never`, then
+ * `every-14-days`, then no cap — a word this release does not know reads as `never`, the strictest it could mean, as
+ * the record's own reading of it does. `background: false` is tighter than its absence. A caps file gone is looser, and
+ * a mix of tighter and looser counts as looser.
+ */
+export function capsOrder(
+  were: { max?: string | undefined; background?: boolean | undefined } | undefined,
+  now: { max?: string | undefined; background?: boolean | undefined } | undefined,
+): 'tighter' | 'same' | 'looser' {
+  if (now === undefined) return were === undefined ? 'same' : 'looser';
+  const rank = (caps: typeof were) => (caps?.max === undefined ? 2 : caps.max === 'every-14-days' ? 1 : 0);
+  const background = (caps: typeof were) => (caps?.background === false ? 0 : 1);
+  if (rank(now) > rank(were) || background(now) > background(were)) return 'looser';
+  return rank(now) < rank(were) || background(now) < background(were) ? 'tighter' : 'same';
+}
+
+/** A caps file as the record keeps it: its caps, and the SHA-256 of its bytes. */
+function recordedCaps(caps: NonNullable<ProfileFile['updates']>): NonNullable<OrganisationRecord['updates']> {
+  return {
+    ...(caps.max === undefined ? {} : { max: caps.max }),
+    ...(caps.background === undefined ? {} : { background: caps.background }),
+    sha256: caps.sha256,
+  };
+}
+
+/** A change of the caps, before → after, bound to the file it was read from: its path, and both digests. */
+function capsLine(were: OrganisationRecord['updates'], now: ProfileFile['updates']): string {
+  return `updates: ${capsText(were)} → ${capsText(now)}${now ? `, ${capsSourceLine(now)}` : ''}`;
+}
 
 /**
  * The profile, planned into this configuration: the record it leaves, the rows it writes and unmarks, the one secret it
@@ -1025,18 +1056,23 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
   /*
    * The update caps, from the file beside the profile (design 2026-10-16, U8): their own file and their own SHA-256,
    * so their own judgement. Another file — a new one, a changed one, one gone — is a change of what the organisation
-   * says, approved first even with the profile's bytes unchanged; the same file with the record saying otherwise is
-   * drift, put back at once. Judged after the profile's drift is sorted above, which would otherwise count it a repair.
+   * says; the same file with the record saying otherwise is drift, put back at once. Judged after the profile's drift is
+   * sorted above, which would otherwise count it a repair.
+   *
+   * A file that only tightens applies at once (design 2026-10-19, X6) — written before the plan (`tightenAtOnce`), so
+   * it is here only when that did not run; then it applies with the plan, and needs nobody. Looser in any part, a file
+   * gone, or one read from a new source is approved first.
    */
   const capsWere = previous?.updates;
   const capsNow = file.updates;
   let capsChanged = false;
   if (input.mode === 'update') {
     if ((capsWere?.sha256 ?? null) !== (capsNow?.sha256 ?? null)) {
-      capsChanged = true;
-      changes.push(
-        `updates: ${capsText(capsWere)} → ${capsText(capsNow)}${capsNow ? `, ${capsSourceLine(capsNow)}` : ''}`,
-      );
+      if (!input.sourceGiven && capsOrder(capsWere, capsNow) !== 'looser') immediate.push(capsLine(capsWere, capsNow));
+      else {
+        capsChanged = true;
+        changes.push(capsLine(capsWere, capsNow));
+      }
     } else if (capsWere && capsNow && capsText(capsWere) !== capsText(capsNow)) {
       repairs.push(
         `the update caps recorded for ${organisation} were changed here, to ${capsText(capsWere)}; they are ${capsText(capsNow)} again, as their file says`,
@@ -1067,13 +1103,8 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
   else delete next.gmail;
   if (slack) next.slack = slack;
   else delete next.slack;
-  if (capsNow) {
-    next.updates = {
-      ...(capsNow.max === undefined ? {} : { max: capsNow.max }),
-      ...(capsNow.background === undefined ? {} : { background: capsNow.background }),
-      sha256: capsNow.sha256,
-    };
-  } else delete next.updates;
+  if (capsNow) next.updates = recordedCaps(capsNow);
+  else delete next.updates;
   for (const entry of verdict.understood) next = entry.extension.apply(next, entry.value);
   for (const extension of withdrawn) next = extension.apply(next, undefined);
   if (verdict.ignored.length > 0) next.ignoredExtensions = ignoredNow;
@@ -1260,7 +1291,7 @@ function profileChange(
         throw needsNewerRelease(file.profile.organisation, verdict.refused, spec.mode, commands.handoffs);
       }
       /*
-       * What only tightens applies at once, as a narrowing does (design 2026-10-19, X4): written before the rest is
+       * What only tightens applies at once, as a narrowing does (design 2026-10-19, X4, X6): written before the rest is
        * planned, so it never waits for an approval the rest needs, and the preview marks it done. A claim plans from a
        * record already tightened, and learns what was done from its own earlier call at a terminal, or from the
        * approval it claims — each line held to the record it says it left.
@@ -1278,6 +1309,7 @@ function profileChange(
             ? stillTightened(
                 (await approvalDoneAtOnce(core, spec.approvalId)).filter((line) => line !== NARROWED_WHEN_PREPARED),
                 recordOf(config, spec.organisation),
+                file,
                 verdict,
               )
             : [];
@@ -1337,17 +1369,26 @@ async function approvalDoneAtOnce(core: Core, approvalId: string | undefined): P
 
 /**
  * Of the tightenings an approval says its preparation made, those the record still shows made, in the approval's order:
- * an extension line whose entry the profile still names, the record no longer lists as skipped, and holds as the
- * profile says. A line the record no longer bears out is left out, so the claim says otherwise than the approval and is
- * refused — prepare it again.
+ * a caps line whose file and record both hold the caps it names by their SHA-256, and an extension line whose entry the
+ * profile still names, the record no longer lists as skipped, and holds as the profile says. A line the record no longer
+ * bears out is left out, so the claim says otherwise than the approval and is refused — prepare it again.
  */
 function stillTightened(
   lines: readonly string[],
   record: OrganisationRecord | undefined,
+  file: ProfileFile,
   verdict: ExtensionVerdict,
 ): string[] {
   if (record === undefined) return [];
   return lines.filter((line) => {
+    if (line.startsWith('updates: ')) {
+      const caps = file.updates;
+      return (
+        caps !== undefined &&
+        record.updates?.sha256 === caps.sha256 &&
+        line.endsWith(` → ${capsText(caps)}, ${capsSourceLine(caps)}`)
+      );
+    }
     const name = TIGHTENED_EXTENSION.exec(line)?.[1];
     const entry = verdict.understood.find((each) => each.name === name);
     return (
@@ -1359,10 +1400,13 @@ function stillTightened(
 }
 
 /**
- * What only tightens, written on its own under the credentials lock before the rest is planned (design 2026-10-19, X4)
- * — as `narrowAtOnce` writes a narrowing — with a line for each **skipped extension this release now knows, whose
- * classifier reads applying it as tightening**, its entry the same as when it was skipped: applied, and no longer listed
- * as skipped. A changed entry is a changed profile, which is approved with the rest.
+ * What only tightens, written on its own under the credentials lock before the rest is planned (design 2026-10-19,
+ * X4, X6) — as `narrowAtOnce` writes a narrowing — with a line for each:
+ *
+ * - **a caps file that is no looser in any part than what the record holds** (`capsOrder`): its caps, and its SHA-256;
+ * - **a skipped extension this release now knows, whose classifier reads applying it as tightening**, its entry the
+ *   same as when it was skipped: applied, and no longer listed as skipped. A changed entry is a changed profile, which
+ *   is approved with the rest.
  *
  * Nothing else of the record moves. A record that is not there, or a profile for another organisation, is left alone:
  * what is refused about it is the plan's to say.
@@ -1409,6 +1453,16 @@ function tightenings(
   const record = recordOf(config, organisation);
   if (!hasNames(config) || !record || file.profile.organisation !== organisation) return { record: undefined, done };
   let next: OrganisationRecord = { ...record };
+  const capsWere = record.updates;
+  const capsNow = file.updates;
+  if (
+    capsNow !== undefined &&
+    (capsWere?.sha256 ?? null) !== capsNow.sha256 &&
+    capsOrder(capsWere, capsNow) !== 'looser'
+  ) {
+    next.updates = recordedCaps(capsNow);
+    done.push(capsLine(capsWere, capsNow));
+  }
   for (const entry of verdict.understood) {
     const skipped = own(record.ignoredExtensions, entry.name);
     if (skipped?.sha256 !== entry.sha256) continue;
