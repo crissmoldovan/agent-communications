@@ -11,6 +11,7 @@ use crate::launchers::{find_launcher, launcher_path, program_for, windows_node, 
 use crate::paths::{resolve_folders, FolderOverrides, Folders, PathEnv, Platform};
 use regex::Regex;
 use serde_json::Value;
+use std::ffi::OsString;
 use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -71,13 +72,93 @@ pub fn argv(words: &Words, program: &Program, folders: &Folders, json: bool) -> 
     line
 }
 
+/// The variables a child of the app may have from the app's own environment, by name: where home, the temporary
+/// folder and the programs are, the language, who the user is, and Windows' own (case does not matter there). Upper
+/// case; `LC_` and `XDG_` take every name they start.
+const ENV_KEPT: &[&str] = &[
+    "HOME",
+    "USERPROFILE",
+    "PATH",
+    "LANG",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    // Linux: where the keyring and gnome-terminal's server are reached.
+    "DBUS_SESSION_BUS_ADDRESS",
+];
+const ENV_KEPT_PREFIXES: &[&str] = &["LC_", "XDG_"];
+/// A terminal opens a window, so on Linux it needs the display too.
+const ENV_KEPT_FOR_A_TERMINAL: &[&str] = &["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"];
+/// Never passed on, even when a name above would take it: an agent's or CI's marker, which would make the CLI act for
+/// an agent or switch updates off; what loads code into Node or any program; and `AGENT_COMMS_*`, whose folders the pins
+/// name instead.
+const ENV_NEVER: &[&str] = &["CI", "CLAUDECODE", "CODEX_HOME"];
+const ENV_NEVER_PREFIXES: &[&str] = &["AGENT_", "NODE_", "LD_", "DYLD_", "GIO_"];
+
+/// What a child gets of `vars`, the app's environment: only the names `ENV_KEPT` allows (and, for a terminal, the
+/// display's), never one `ENV_NEVER` names or any with `_AGENT` in it. Names are compared without case on Windows.
+pub fn child_env(
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+    windows: bool,
+    terminal: bool,
+) -> Vec<(OsString, OsString)> {
+    vars.into_iter()
+        .filter(|(name, _)| {
+            let Some(name) = name.to_str() else {
+                return false;
+            };
+            let name = if windows {
+                name.to_ascii_uppercase()
+            } else {
+                name.to_string()
+            };
+            let kept = ENV_KEPT.contains(&name.as_str())
+                || ENV_KEPT_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                || (terminal && ENV_KEPT_FOR_A_TERMINAL.contains(&name.as_str()));
+            let never = ENV_NEVER.contains(&name.as_str())
+                || ENV_NEVER_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                || name.contains("_AGENT");
+            kept && !never
+        })
+        .collect()
+}
+
 /// The process to start: `argv`'s line handed to the operating system as words, with `NO_COLOR=1`, and
 /// `AGENT_COMMS_UPDATE_CHECK=off` unless the call is doctor or `update --status`. stdin is closed and both outputs are
-/// read; on Windows no console window opens.
+/// read; on Windows no console window opens. Its environment is `child_env` of the app's.
 pub fn command_for(words: &Words, program: &Program, folders: &Folders, json: bool) -> Command {
+    command_with_env(words, program, folders, json, std::env::vars_os())
+}
+
+/// `command_for`, with the environment it filters named.
+pub(crate) fn command_with_env(
+    words: &Words,
+    program: &Program,
+    folders: &Folders,
+    json: bool,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
     let line = argv(words, program, folders, json);
     let mut command = Command::new(&line[0]);
     command.args(&line[1..]);
+    command.env_clear();
+    command.envs(child_env(vars, cfg!(windows), false));
     command.env("NO_COLOR", "1");
     if words.quiet_updates {
         command.env("AGENT_COMMS_UPDATE_CHECK", "off");
@@ -375,6 +456,7 @@ mod tests {
     use crate::launchers::{Product, Program};
     use crate::paths::{Folders, Platform};
     use serde_json::json;
+    use std::ffi::OsString;
     use std::time::{Duration, Instant};
 
     fn envelope(shape: Shape, exit: i32, stdout: &str) -> CliResult {
@@ -813,6 +895,155 @@ mod tests {
                 version: "0.24.0".into()
             }
         );
+    }
+
+    /// An environment an agent's terminal, CI and a hostile login could leave the app with.
+    fn hostile_env() -> Vec<(OsString, OsString)> {
+        [
+            ("HOME", "/example/home"),
+            ("PATH", "/usr/bin:/bin"),
+            ("LANG", "en_GB.UTF-8"),
+            ("LC_ALL", "en_GB.UTF-8"),
+            ("XDG_RUNTIME_DIR", "/run/user/501"),
+            ("TMPDIR", "/example/tmp"),
+            ("USER", "example"),
+            ("DISPLAY", ":0"),
+            ("CLAUDECODE", "1"),
+            ("CODEX_HOME", "/example/codex"),
+            ("CI", "true"),
+            ("CURSOR_AGENT", "1"),
+            ("XDG_AGENT_HINT", "x"),
+            ("NODE_OPTIONS", "--require /example/evil.js"),
+            ("NODE_PATH", "/example/evil"),
+            ("AGENT_COMMS_CONFIG_DIR", "/example/elsewhere"),
+            ("AGENT_COMMS_UPDATE_CHECK", "on"),
+            ("LD_PRELOAD", "/example/evil.so"),
+            ("DYLD_INSERT_LIBRARIES", "/example/evil.dylib"),
+            ("GIO_MODULE_DIR", "/example/evil"),
+            ("GITHUB_TOKEN", "never-this"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect()
+    }
+
+    const NEVER: &[&str] = &[
+        "CLAUDECODE",
+        "CODEX_HOME",
+        "CI",
+        "CURSOR_AGENT",
+        "XDG_AGENT_HINT",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "AGENT_COMMS_CONFIG_DIR",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "GIO_MODULE_DIR",
+        "GITHUB_TOKEN",
+    ];
+
+    #[test]
+    fn a_child_gets_only_the_allowed_variables() {
+        let names = |kept: Vec<(OsString, OsString)>| -> Vec<String> {
+            kept.into_iter()
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(child_env(hostile_env(), false, false)),
+            [
+                "HOME",
+                "PATH",
+                "LANG",
+                "LC_ALL",
+                "XDG_RUNTIME_DIR",
+                "TMPDIR",
+                "USER"
+            ]
+        );
+        // A terminal opens a window: it gets the display too, and nothing else more.
+        assert_eq!(
+            names(child_env(hostile_env(), false, true)),
+            [
+                "HOME",
+                "PATH",
+                "LANG",
+                "LC_ALL",
+                "XDG_RUNTIME_DIR",
+                "TMPDIR",
+                "USER",
+                "DISPLAY"
+            ]
+        );
+        // Windows names its variables in any case, and they are read so; POSIX names are exact.
+        let windows: Vec<(OsString, OsString)> = [
+            ("Path", "C:\\Windows"),
+            ("SystemRoot", "C:\\Windows"),
+            ("UserProfile", "C:\\Users\\example"),
+            ("Node_Options", "--require x"),
+            ("ClaudeCode", "1"),
+            ("Agent_Comms_Data_Dir", "C:\\x"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect();
+        assert_eq!(
+            names(child_env(windows.clone(), true, false)),
+            ["Path", "SystemRoot", "UserProfile"]
+        );
+        assert!(names(child_env(windows, false, false)).is_empty());
+    }
+
+    /// The child itself: what a launcher sees of an environment like that is only what `child_env` keeps, and the
+    /// app's own two.
+    #[cfg(unix)]
+    #[test]
+    fn a_hostile_variable_never_reaches_the_launcher() {
+        let (dir, folders) = fake_installation(
+            "#!/bin/sh\nenv > \"$(dirname \"$0\")/env\"\nprintf '{\"ok\":true,\"schemaVersion\":1,\"data\":[]}\\n'\n",
+        );
+        let words = Call::Label {}.words().expect("words");
+        let program = Program {
+            program: dir
+                .path()
+                .join("launch")
+                .join("core")
+                .to_string_lossy()
+                .into_owned(),
+            leading: vec![],
+        };
+        let mut env = hostile_env();
+        // The child needs a real PATH for `dirname`.
+        env.retain(|(name, _)| name != "PATH");
+        env.push(("PATH".into(), "/usr/bin:/bin".into()));
+        let output = command_with_env(&words, &program, &folders, true, env)
+            .output()
+            .expect("ran");
+        assert!(output.status.success(), "{output:?}");
+        let seen = std::fs::read_to_string(dir.path().join("launch").join("env")).expect("env");
+        let names: Vec<&str> = seen
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        for never in NEVER {
+            assert!(
+                !names.contains(never),
+                "{never} reached the launcher: {names:?}"
+            );
+        }
+        for kept in [
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "TMPDIR",
+            "USER",
+            "NO_COLOR",
+            "AGENT_COMMS_UPDATE_CHECK",
+        ] {
+            assert!(names.contains(&kept), "{kept} did not: {names:?}");
+        }
+        assert!(seen.contains("AGENT_COMMS_UPDATE_CHECK=off\n"), "{seen}");
+        assert!(!names.contains(&"DISPLAY"), "a CLI call opens no window");
     }
 
     #[cfg(unix)]

@@ -20,7 +20,7 @@ use crate::allowlist::{ApprovalId, Call, Shape, Words};
 use crate::ipc::{AppError, CliResult, CopyReason, TerminalCommand, TerminalOutcome};
 use crate::launchers::{find_launcher, launcher_path, program_for, Product};
 use crate::paths::Platform;
-use crate::runner::{argv, run, RunContext};
+use crate::runner::{argv, child_env, run, RunContext};
 use regex::Regex;
 use std::path::Path;
 use std::process::Command;
@@ -483,8 +483,17 @@ const OSASCRIPT_WAIT: Duration = Duration::from_secs(120);
 /// Starts a planned terminal. A terminal lives as long as its window, so it is waited for on a thread of its own and
 /// never lingers as a zombie; osascript ends once Terminal has the command, and its exit says whether it did. On macOS
 /// and Linux the terminal gets none of the app's standard streams; on Windows they are left as they are, so a new
-/// console gives cmd.exe its own.
+/// console gives cmd.exe its own. The terminal gets `child_env` of the app's environment, with the display's: an agent's
+/// marker, `NODE_OPTIONS` or `AGENT_COMMS_*` never reaches the shell it starts.
 pub fn spawn(plan: &Plan) -> Result<(), String> {
+    spawn_with_env(plan, std::env::vars_os())
+}
+
+/// `spawn`, with the environment it filters named.
+pub(crate) fn spawn_with_env(
+    plan: &Plan,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Result<(), String> {
     let Plan::Spawn {
         program,
         args,
@@ -497,6 +506,8 @@ pub fn spawn(plan: &Plan) -> Result<(), String> {
         return Err("there is nothing to start".into());
     };
     let mut command = Command::new(program);
+    command.env_clear();
+    command.envs(child_env(vars, cfg!(windows), true));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -926,6 +937,62 @@ mod tests {
             .collect();
         assert_eq!(printed, words[1..].to_vec());
         assert!(!marker.exists(), "a word was run");
+    }
+
+    /// The terminal itself: started with an environment an agent's terminal could leave the app with, it sees only
+    /// what `child_env` keeps for a terminal.
+    #[cfg(unix)]
+    #[test]
+    fn a_hostile_variable_never_reaches_the_terminal() {
+        let dir = tempfile::tempdir().expect("a folder");
+        let seen = dir.path().join("env");
+        let plan = Plan::Spawn {
+            program: "/bin/sh".into(),
+            args: strings(&["-c", &format!("env > '{}'", seen.display())]),
+            raw: false,
+            new_console: false,
+            wait: true,
+            via: "Terminal",
+        };
+        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
+            ("HOME", "/example/home"),
+            ("PATH", "/usr/bin:/bin"),
+            ("DISPLAY", ":0"),
+            ("TERM", "xterm-256color"),
+            ("CLAUDECODE", "1"),
+            ("CI", "true"),
+            ("NODE_OPTIONS", "--require /example/evil.js"),
+            ("AGENT_COMMS_STATE_DIR", "/example/elsewhere"),
+            ("DYLD_INSERT_LIBRARIES", "/example/evil.dylib"),
+            ("LD_PRELOAD", "/example/evil.so"),
+            ("SOME_AGENT_MARKER", "1"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect();
+        spawn_with_env(&plan, env).expect("started and ended");
+        let text = fs::read_to_string(&seen).expect("env");
+        let names: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        for kept in ["HOME", "PATH", "DISPLAY", "TERM"] {
+            assert!(names.contains(&kept), "{kept} did not reach it: {names:?}");
+        }
+        for never in [
+            "CLAUDECODE",
+            "CI",
+            "NODE_OPTIONS",
+            "AGENT_COMMS_STATE_DIR",
+            "DYLD_INSERT_LIBRARIES",
+            "LD_PRELOAD",
+            "SOME_AGENT_MARKER",
+        ] {
+            assert!(
+                !names.contains(&never),
+                "{never} reached the terminal: {names:?}"
+            );
+        }
     }
 
     fn found_none(_: &str) -> Option<String> {
