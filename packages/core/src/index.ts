@@ -113,6 +113,8 @@ export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
+// The notification on the person's screen for each standing act (design 2026-10-19-standing-approvals, S10).
+export * from './notify.ts';
 export * from './numbers.ts';
 export * from './oauth-client-records.ts';
 export {
