@@ -1345,6 +1345,22 @@ test('a different label gives a different digest: a label changed after the mint
   assert.equal((await ledger(w)).uses.length, 1, 'the count was refunded');
 });
 
+test('a label changed after the mint voids a reaction’s child too: it would no longer go as the app', async (t) => {
+  const w = await world(t);
+  const s = await inEng(w);
+  const ts = say(w, { channel: ENG });
+  // Minted for the app's reaction; the person chooses labelled posts — every act as them — before the claim.
+  betweenMintAndClaim(w, () => chooseLabelled(w));
+  const error = await refused(acknowledge(w, withEyes(s, ENG, ts)), 'relabelled');
+  assert.equal(error.code, 'APPROVAL_VOID', error.message);
+  nothingSent(w, 'a reaction relabelled');
+  assert.equal(w.world.reactions.length, 0, 'it reacted, as the person or as the app');
+  assert.equal((await ledger(w)).uses.length, 1, 'the count was refunded');
+  const [child] = await children(w);
+  assert.notEqual(child?.state, 'approved', 'the child is still usable');
+  assert.notEqual(child?.state, 'used', 'the child was used');
+});
+
 test('a clock earlier than the last act refuses', async (t) => {
   const w = await world(t);
   const s = await inEng(w);

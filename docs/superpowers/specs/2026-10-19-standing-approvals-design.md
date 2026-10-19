@@ -547,3 +547,7 @@ word.
     record and the label at the start of the words (§10.14) are each enough on their own; only with both broken does
     the unmarked case fail, which the tests were run to show. The comments now say what each fixture models.
     **(lead's call, after review)**
+16. **Tests added after review** (Slack review S8): a label changed between the mint and the claim voids a reaction's
+    child as it does a reply's (the claim's binding to the label's route); the person's own post marked with `app_id`
+    or a `subtype` does not make a thread theirs under `threads-i-am-in` (§10.14); guests (§10.13).
+    **(lead's call, after review)**
