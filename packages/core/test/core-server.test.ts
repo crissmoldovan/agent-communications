@@ -2318,14 +2318,38 @@ test('a prune of every server names each server it could not check, in the previ
   } finally {
     await close();
   }
-  // As a person reads it at the end of the list, and as the tool returns it.
-  const dry = cli(m, ['mcp', 'prune', '--dry-run']);
-  assert.equal(dry.status, 0, dry.stderr);
-  const last = dry.stdout.trim().split('\n').at(-1) ?? '';
-  assert.match(last, /^Not checked, so none of its runtimes was removed: Slack \(.*could not be read.*\)\.$/);
-  const json = cli(m, ['mcp', 'prune', '--dry-run', '--json']);
-  slackRefused((json.json().data as { refusedServers?: Refused }).refusedServers);
 });
+
+test(
+  '`agentcomms mcp prune` ends with each server it could not check, and its --json carries them',
+  process.platform === 'win32'
+    ? { skip: 'WINDOWS_SKIP: with no `ps` to list what runs, every server is left unchecked, not one' }
+    : {},
+  () => {
+    const m = machine();
+    runtime(m, '@agentcomms/core', '0.0.1');
+    runtime(m, '@agentcomms/slack', '0.0.1');
+    const { pointer } = launcherPaths(m.core.paths.dataDir, 'slack');
+    mkdirSync(dirname(pointer), { recursive: true });
+    writeFileSync(pointer, 'not a runtime\n');
+    // As a person reads it, at the end of the list.
+    const dry = cli(m, ['mcp', 'prune', '--dry-run']);
+    assert.equal(dry.status, 0, dry.stderr);
+    const last = dry.stdout.trim().split('\n').at(-1) ?? '';
+    assert.match(last, /^Not checked, so none of its runtimes was removed: Slack \(.*could not be read.*\)\.$/);
+    // And as the tool returns it.
+    const refused = (
+      cli(m, ['mcp', 'prune', '--dry-run', '--json']).json().data as {
+        refusedServers?: { server: string; refused: string }[];
+      }
+    ).refusedServers;
+    assert.deepEqual(
+      refused?.map((each) => each.server),
+      ['slack'],
+    );
+    assert.match(refused?.[0]?.refused ?? '', /could not be read/);
+  },
+);
 
 test('a prune of every server lists the running processes again for each server, just before deciding', async () => {
   // One listing taken at the start served every server, so a process started from a runtime while the servers
