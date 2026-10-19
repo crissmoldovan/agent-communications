@@ -310,6 +310,45 @@ test('a tighter cap beside a waiting profile change is applied before the previe
   assert.equal((await recordOf(o))?.label, 'Acme Test Org');
 });
 
+test('a caps file moved between the preview and the claim refuses the claim, and nothing looser lands', async () => {
+  // The preview applied a tighter cap at once and waited on a label. Before the claim the file moved: loosened past
+  // what was applied, removed, or tightened further. The approval describes the cap it applied, so the claim is
+  // refused; the label waits on; and the record keeps the tightest cap any call applied — never a looser one.
+  for (const [what, moved, expect] of [
+    ['loosened', { max: 'every-14-days' }, { max: 'never', background: undefined }],
+    ['emptied', {}, { max: 'never', background: undefined }],
+    ['removed', null, { max: 'never', background: undefined }],
+    ['tightened further', { max: 'never', background: false }, { max: 'never', background: false }],
+  ] as const) {
+    const o = org({ max: 'every-14-days' });
+    await add(o);
+    writeFileSync(o.profile, `${JSON.stringify({ ...PROFILE, label: 'Acme Renamed' }, null, 2)}\n`);
+    writeCaps(o, { max: 'never' });
+    const first = await gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme' }, options(o.m)), {
+      channel: 'core',
+      surface: 'mcp',
+    });
+    assert.equal(first.status, 'approval-required', what);
+    const { approvalId } = (first as { prepared: PreparedChange }).prepared;
+    assert.equal((await recordOf(o))?.updates?.max, 'never', `${what}: the tighter cap was not applied at the preview`);
+    if (moved === null) rmSync(o.updates);
+    else writeCaps(o, moved);
+    await assert.rejects(
+      gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme', approvalId }, options(o.m)), {
+        channel: 'core',
+        surface: 'mcp',
+        approvalId,
+      }),
+      (error: unknown) => error instanceof CommsError,
+      `${what}: the claim was not refused`,
+    );
+    const rec = await recordOf(o);
+    assert.equal(rec?.label, 'Acme Test Org', `${what}: the label landed on a refused claim`);
+    assert.equal(rec?.updates?.max, expect.max, `${what}: the cap in force`);
+    assert.equal(rec?.updates?.background, expect.background, `${what}: background`);
+  }
+});
+
 test('a looser cap, a removed file and a mix of tighter and looser all ask, and nothing moves before the yes', async () => {
   for (const [from, to, words] of [
     [{ max: 'never' }, { max: 'every-14-days' }, /updates: at most never → at most every-14-days/],

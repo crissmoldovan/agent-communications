@@ -906,3 +906,62 @@ test('a refusal after other addresses was turned off at once says so, rather tha
     assert.match(again, /: nothing was changed$/, again);
   }
 });
+
+// ── Between the preview and the claim, and the list's own bookkeeping ───────────────────────────────────────────────
+
+test('an extension tightened at the preview, then the profile changed before the claim: the claim is refused, and nothing looser lands', async () => {
+  const m = machine();
+  const entry = { required: false, since: '0.21.0', limit: 2 };
+  writeProfile(m, profile({ extensions: { 'app-limit': entry } }));
+  await add(m, registryOf());
+  const later = registryOf(
+    known('app-limit', { classify: (_before, after) => (after === undefined ? 'loosens' : 'tightens') }),
+  );
+  writeProfile(m, profile({ label: 'Acme Renamed', extensions: { 'app-limit': entry } }));
+  const first = await askUpdate(m, later);
+  assert.equal(first.status, 'approval-required', 'the label still asks');
+  const { approvalId } = (first as { prepared: PreparedChange }).prepared;
+  assert.deepEqual(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, {
+    'app-limit': { limit: 2 },
+  });
+  // The organisation publishes again before the yes: another label, and the entry gone — which this registry reads as
+  // loosening. The approval was for other bytes.
+  writeProfile(m, profile({ label: 'Acme Again' }));
+  await assert.rejects(
+    gatedChange(m.core, orgUpdateChange(m.core, { organisation: 'acme', approvalId }, options(m, later)), {
+      channel: 'core',
+      surface: 'mcp',
+      approvalId,
+    }),
+    is('APPROVAL_VOID'),
+  );
+  const rec = await record(m);
+  assert.equal(rec?.label, 'Acme Test Org', 'a label landed on a refused claim');
+  assert.deepEqual((rec as { extensionsApplied?: unknown })?.extensionsApplied, { 'app-limit': { limit: 2 } });
+});
+
+test('a list of skipped entries edited by hand is put back at once from the same bytes, and applies nothing', async () => {
+  const m = machine();
+  const entry = { required: false, since: '99.0.0', v: 1 };
+  writeProfile(m, profile({ extensions: { 'future-thing': entry } }));
+  await add(m);
+  editRecord(m, (rec) => {
+    rec.ignoredExtensions = {
+      'future-thing': { since: '99.0.0', sha256: '0'.repeat(64) },
+      'made-up': { since: '0.1.0', sha256: '1'.repeat(64) },
+    };
+  });
+  const { prepared, result } = await update(m);
+  assert.equal(prepared, null, 'putting the list back asked somebody');
+  assert.ok(
+    result.applied.some((line) => /extensions recorded as not applied here for acme were changed here/.test(line)),
+    JSON.stringify(result.applied),
+  );
+  assert.deepEqual((await record(m))?.ignoredExtensions, {
+    'future-thing': { since: '99.0.0', sha256: canonicalSha(entry) },
+  });
+  assert.equal(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, undefined);
+  // Put back, it is as the profile says: the next update changes nothing.
+  const again = await update(m);
+  assert.equal(again.result.changed, false);
+});
