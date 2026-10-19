@@ -71,6 +71,16 @@ export function mimeTypeField(value: string, envelope: FieldEnvelope): string {
     : wrapField(trimmed.slice(0, MAX_TOKEN_CHARS), 'mime-type', envelope);
 }
 
+/** Whether an address may be shown bare, in this package's own words: a plain address and nothing more. */
+export function isPlainAddress(address: string): boolean {
+  return PLAIN_ADDRESS.test(address);
+}
+
+/** Whether a domain may be shown bare, in this package's own words: a plain domain and nothing more. */
+export function isPlainDomain(domain: string): boolean {
+  return PLAIN_DOMAIN.test(domain);
+}
+
 /** An address: bare when it is a plain address and nothing more, wrapped otherwise. */
 export function addressField(address: string, field: string, envelope: FieldEnvelope): string {
   return PLAIN_ADDRESS.test(address) ? address : wrapField(address.slice(0, MAX_TOKEN_CHARS), field, envelope);
