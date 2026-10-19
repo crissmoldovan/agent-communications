@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import type { DatabaseSync } from 'node:sqlite';
 import { canonicalJson } from '@agentcomms/core';
 import { parsePointer } from '@agentcomms/events';
 import { assertApprovedAddressSet, parseIpLiteral } from '../network/address-policy.ts';
@@ -11,6 +12,7 @@ import {
   type LayaPlatformProbe,
   type LayaReviewedAssetSource,
 } from '../runtime/laya/contracts.ts';
+import { isLayaTemplateId, type LayaTemplateId } from '../runtime/laya/templates.ts';
 import {
   EventDomainError,
   JUDGE_KIND_LAYA,
@@ -58,7 +60,21 @@ export type LocalEndpointJudgeDocument =
   | (LocalEndpointJudgeBase & { readonly protocol: 'noul' })
   | (LocalEndpointJudgeBase & { readonly protocol: 'json-score'; readonly scorePointer: string });
 
-export type CanonicalJudgeDocument = TypeSafeJudgeDocument | LocalEndpointJudgeDocument;
+/**
+ * A Laya judge (D2, D11): the canonical Laya provider, the reviewed manifest entry in the endpoint's place — with one
+ * model per entry it is also the model, so the document names it once, as `model` — and one of the two immutable
+ * prompt templates. Execution refuses it unless that entry is the enabled one and lists the template.
+ */
+export interface LayaJudgeDocument {
+  readonly judgeId: string;
+  readonly version: number;
+  readonly kind: typeof JUDGE_KIND_LAYA;
+  readonly provider: typeof JUDGE_KIND_LAYA;
+  readonly model: string;
+  readonly promptTemplate: LayaTemplateId;
+}
+
+export type CanonicalJudgeDocument = TypeSafeJudgeDocument | LocalEndpointJudgeDocument | LayaJudgeDocument;
 
 export interface JudgeBudgetLimits {
   readonly callsPerRollingHour: number;
@@ -99,6 +115,26 @@ export interface JudgeKindDefinition {
 export interface LayaEnablementInputs {
   readonly layaAssetSource?: LayaReviewedAssetSource | undefined;
   readonly layaPlatformProbe?: LayaPlatformProbe | undefined;
+}
+
+const layaInputsByDatabase = new WeakMap<DatabaseSync, LayaEnablementInputs>();
+
+/**
+ * One owner registers the Laya inputs its own activation path validates with, for its database, as it registers E's
+ * purge listener: so E's budget fence, settlement and every other reader of that database's Laya kind document use
+ * the same reviewed bytes. Production's inputs are empty — the shipped assets and this process's platform.
+ */
+export function registerLayaEnablementInputs(database: DatabaseSync, inputs: LayaEnablementInputs): () => void {
+  if (layaInputsByDatabase.has(database)) throw new Error('Laya enablement inputs are already registered');
+  layaInputsByDatabase.set(database, inputs);
+  return () => {
+    if (layaInputsByDatabase.get(database) === inputs) layaInputsByDatabase.delete(database);
+  };
+}
+
+/** The inputs registered for one database, or none: the shipped assets and this process's platform. */
+export function layaEnablementInputsFor(database: DatabaseSync): LayaEnablementInputs {
+  return layaInputsByDatabase.get(database) ?? {};
 }
 
 const LAYA_JUDGE_KIND_DEFINITION: LayaJudgeKindDefinition = {
@@ -259,8 +295,18 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
   const kind = judge.kind;
   if (!(JUDGE_KINDS as readonly string[]).includes(kind as string))
     return fail('a judge document has a known judge kind');
-  if (kind === JUDGE_KINDS[1])
-    return fail('a Laya judge requires the E2 worker contract', 'E2_EXTERNAL_REFERENCE_BLOCKED');
+  if (kind === JUDGE_KIND_LAYA) {
+    exactKeys(judge, ['judgeId', 'version', 'kind', 'provider', 'model', 'promptTemplate'], 'a Laya judge document');
+    if (judge.provider !== JUDGE_KIND_LAYA) return fail('a Laya judge names the canonical Laya provider');
+    if (!isLayaTemplateId(judge.promptTemplate)) return fail('a Laya judge names one immutable Laya prompt template');
+    return {
+      ...identity(judge, 'a Laya judge'),
+      kind: JUDGE_KIND_LAYA,
+      provider: JUDGE_KIND_LAYA,
+      model: text(judge.model, 'a Laya judge manifest id'),
+      promptTemplate: judge.promptTemplate,
+    };
+  }
   if (kind === JUDGE_KIND_TYPESAFE) {
     exactKeys(
       judge,

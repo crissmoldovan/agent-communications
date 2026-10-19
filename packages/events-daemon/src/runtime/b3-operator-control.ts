@@ -385,6 +385,8 @@ export class B3OperatorControl implements B3OwnerService {
     ).flatMap((row) => {
       try {
         const judge = canonicalJudge(JSON.parse(row.document));
+        // B3 v1's inventory has no Laya variant; a Laya judge is listed only by the contract version that adds one.
+        if (judge.kind === JUDGE_KIND_LAYA) return [];
         return [
           {
             judgeId: row.judge_id,

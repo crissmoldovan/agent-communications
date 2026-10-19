@@ -835,7 +835,10 @@ export class JudgeReservationIoGate {
   }
 
   finalGate = (phase: JudgeTransportPhase, assertBeforeTransition?: () => void): undefined => {
-    const firstPhysicalPhase: JudgeTransportPhase = this.#judgeKind === JUDGE_KIND_TYPESAFE ? 'dns' : 'tcp';
+    // Hosted work enters at DNS and a literal-loopback judge at TCP. A Laya request's only physical I/O is the one
+    // write of its frame to the isolated worker, so it enters there.
+    const firstPhysicalPhase: JudgeTransportPhase =
+      this.#judgeKind === JUDGE_KIND_TYPESAFE ? 'dns' : this.#judgeKind === JUDGE_KIND_LAYA ? 'write' : 'tcp';
     if (!this.#entered) {
       if (phase !== firstPhysicalPhase) {
         assertBeforeTransition?.();

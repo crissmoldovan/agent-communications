@@ -10,7 +10,8 @@ import {
   type MappedValue,
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import type { LayaJudgeDocument } from '../domain/judges.ts';
+import { JUDGE_KIND_LAYA, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
   finalizeJudgeTransportRefusal,
@@ -25,6 +26,7 @@ import {
   type JudgeTransportResult,
   prepareJudgeTransportRequest,
 } from './judge-transport.ts';
+import { layaJudgeExecutorFor } from './laya/worker-supervisor.ts';
 import { type EventTaintRecorder, sanitiseSenderFields } from './untrusted.ts';
 
 const QUESTION_NAME = 'decision';
@@ -132,6 +134,8 @@ function closedReason(result: JudgeTransportResult): string {
  * The sole agentic execution coordinator.  It owns no ledger transition and no socket path: Task 5's budget
  * functions and Task 6's sealed transport remain the only owners of those effects.
  */
+type EvaluationInput = Parameters<JudgeCoordinator['evaluate']>[0];
+
 export class JudgeCoordinator {
   readonly #store: EventDatabase;
   readonly #taint: EventTaintRecorder;
@@ -177,6 +181,10 @@ export class JudgeCoordinator {
       channel: input.rule.source.channel,
       classification: envelope.classification,
     });
+
+    // A Laya judge's one physical I/O is a frame to the isolated worker; the same reservation, gate and settlement
+    // that guard a socket guard it.
+    if (agentic.judge.kind === JUDGE_KIND_LAYA) return this.#evaluateLaya(input, agentic.judge, envelope);
 
     // The hosted key is material only at this boundary.  It participates in the exact request bytes, so a rule never
     // reserves the body while the sealed writer later sends a longer Authorization-bearing HTTP request.
@@ -315,5 +323,116 @@ export class JudgeCoordinator {
         valueLabel: result.valueLabel,
       },
     };
+  }
+
+  /**
+   * E2's Laya adapter, in E's order: the deterministic prefilter, the minimised envelope and the taint flush have run;
+   * here the database owner's Laya executor checks the enabled entry and template and bounds the request before any
+   * reservation, E reserves the exact request payload, E's gate moves the reservation in flight immediately before the
+   * one frame is written, and only the worker's bounded value and token count come back for E's final settlement.
+   * Every failure is a closed reason and no-match: pre-I/O E releases the reservation, post-I/O E settles it.
+   */
+  async #evaluateLaya(
+    input: EvaluationInput,
+    judge: LayaJudgeDocument,
+    envelope: JudgeInput,
+  ): Promise<JudgeCoordinatorResult> {
+    const agentic = input.rule.agentic;
+    if (agentic === undefined) return { kind: 'not-applicable' };
+    const executor = layaJudgeExecutorFor(this.#store.database);
+    if (executor === undefined) return { kind: 'closed', reason: 'adapter-reference-blocked', reservationId: null };
+    const laya = executor.prepare({ judge, state: envelope.state, instructions: agentic.question });
+    if (!laya.ok) return { kind: 'closed', reason: laya.code.toLowerCase(), reservationId: null };
+
+    let reservation: JudgeReservation;
+    try {
+      // The same source-owned reservation as every other judge kind, over the exact frame payload the worker gets.
+      reservation = reserveJudgeWork({
+        store: this.#store,
+        id: this.#newId(),
+        workId: `judge:${input.eventId}:${input.ruleId}:${input.ruleVersion}`,
+        scope: {
+          scope: 'source-owned',
+          source: input.rule.source.channel,
+          accountId: input.accountId,
+          eventId: input.eventId,
+          ruleId: input.ruleId,
+          ruleVersion: input.ruleVersion,
+          judgeId: judge.judgeId,
+          judgeVersion: judge.version,
+        },
+        judge,
+        limits: {
+          callsPerRollingHour: agentic.callsPerRollingHour,
+          inputTokensPerRolling30Days: agentic.inputTokensPerRolling30Days,
+          concurrency: agentic.concurrency,
+          maxInputTokens: agentic.maxInputTokens,
+        },
+        finalEnvelope: laya.request.body,
+        switchGeneration: input.switchGeneration,
+        now: this.#now(),
+      });
+    } catch (error) {
+      const code =
+        error instanceof Error && 'code' in error ? String((error as JudgeBudgetError).code) : 'budget-refused';
+      if (code === 'JUDGE_PAUSED') return { kind: 'deferred', reservationId: null };
+      if (code === 'JUDGE_WORK_OWNER_HELD') return { kind: 'owner-held' };
+      return { kind: 'closed', reason: code, reservationId: null };
+    }
+
+    const ioGate = new JudgeReservationIoGate({
+      store: this.#store,
+      reservationId: reservation.id,
+      judgeKind: judge.kind,
+      now: this.#now,
+    });
+    const result = await executor.execute(laya.request, {
+      reservationId: reservation.id,
+      finalGate: () => ioGate.finalGate('write'),
+    });
+    if (result.kind === 'answer') {
+      return {
+        kind: 'completed',
+        outcome: uncertainOutcome(input.rule, result.value),
+        value: result.value,
+        valueLabel: 'probability',
+        actualInputTokens: result.inputTokens,
+        reservationId: reservation.id,
+        metadata: {
+          judgeId: judge.judgeId,
+          judgeVersion: judge.version,
+          provider: judge.provider,
+          model: judge.model,
+          promptTemplate: judge.promptTemplate,
+          threshold: agentic.threshold,
+          value: result.value,
+          valueLabel: 'probability',
+        },
+      };
+    }
+    const disposition = finalizeJudgeTransportRefusal({
+      store: this.#store,
+      reservationId: reservation.id,
+      result: result.code === 'laya-timeout' ? 'timeout' : 'unknown',
+      now: this.#now(),
+    });
+    if (ioGate.firstGateError !== undefined) {
+      if (ioGate.firstGateError instanceof JudgeBudgetError && ioGate.firstGateError.code === 'JUDGE_PAUSED')
+        return { kind: 'deferred', reservationId: reservation.id };
+      return {
+        kind: 'closed',
+        reason:
+          ioGate.firstGateError instanceof Error && 'code' in ioGate.firstGateError
+            ? String((ioGate.firstGateError as JudgeBudgetError).code)
+            : 'authority-changed',
+        reservationId: reservation.id,
+      };
+    }
+    // A Laya refusal before its frame was written — the model not ready or failed, a boundary or load failure, a purge
+    // or a changed selection — is no-match, as an exhausted budget is: deferring it would hold the source scope's
+    // cursor until the model is ready or its person acts. Only the owner's own stop leaves the work for its restart.
+    if (disposition === 'released' && result.code === 'laya-stopped')
+      return { kind: 'deferred', reservationId: reservation.id };
+    return { kind: 'closed', reason: result.code.toLowerCase(), reservationId: reservation.id };
   }
 }

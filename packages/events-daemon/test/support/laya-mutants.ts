@@ -172,6 +172,13 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'test/helpers/loopback-seal-preload.mjs',
   ];
   for (const file of files) await copyFile(root, file);
+  // A test spawns these entries rather than importing them, so their own relative imports are copied too: the shipped
+  // worker's probe, protocol, runtime adapter and templates, and the stand-in's protocol.
+  for (const entry of [
+    'packages/events-daemon/src/runtime/laya/worker-main.ts',
+    'packages/events-daemon/test/support/laya-worker-standin.ts',
+  ])
+    await copyDependencyClosure(root, entry);
   for (const name of await readdir(casesRoot))
     await copyFile(root, `packages/events-daemon/test/fixtures/laya/cases/${name}`);
   await copyDependencyClosure(root, mutation.source);

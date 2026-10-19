@@ -7,6 +7,13 @@ import {
   sealWorkerNetworkAfterProbe,
 } from './worker-boundary-probe.ts';
 import { type WorkerFrame, WorkerFrameParser, writeWorkerFrame } from './worker-protocol.ts';
+import {
+  evaluateLayaRequest,
+  type LayaRuntimeBinding,
+  layaLoadPayload,
+  layaWorkerRequest,
+  loadVerifiedLayaRuntime,
+} from './worker-runtime.ts';
 
 function bindingFromProbe(
   frame: WorkerFrame,
@@ -43,6 +50,40 @@ function namesThisWorker(probe: LayaWorkerBinding): boolean {
   return probe.pid === process.pid && probe.entry === process.argv[1] && probe.profile === LAYA_SANDBOX_PROFILE;
 }
 
+/** Only the exact binding of the proven child, and these fields, may arrive on a request frame. */
+const REQUEST_FIELDS: readonly string[] = [
+  'type',
+  'nonce',
+  'pid',
+  'profile',
+  'entry',
+  'pipeGeneration',
+  'requestId',
+  'templateId',
+  'instructions',
+  'state',
+];
+
+function requestFrame(binding: LayaWorkerBinding, frame: WorkerFrame) {
+  const keys = Object.keys(frame).sort();
+  const expected = [...REQUEST_FIELDS].sort();
+  if (
+    frame.type !== 'request' ||
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index]) ||
+    frame.nonce !== binding.nonce ||
+    frame.pid !== binding.pid ||
+    frame.profile !== binding.profile ||
+    frame.entry !== binding.entry ||
+    frame.pipeGeneration !== binding.pipeGeneration ||
+    typeof frame.requestId !== 'string' ||
+    frame.requestId.length === 0
+  )
+    return null;
+  const request = layaWorkerRequest(frame);
+  return request === null ? null : { requestId: frame.requestId, request };
+}
+
 async function rejectAndExit(): Promise<never> {
   process.exitCode = 70;
   process.stdin.destroy();
@@ -51,6 +92,9 @@ async function rejectAndExit(): Promise<never> {
 
 const parser = new WorkerFrameParser();
 let binding: LayaWorkerBinding | undefined;
+/** The load frame is answered exactly once: `loaded`, or `load-refused` after which every frame ends the worker. */
+let loadAnswered = false;
+let runtime: LayaRuntimeBinding | undefined;
 let work = Promise.resolve();
 
 process.stdin.on('data', (chunk: Buffer) => {
@@ -66,22 +110,53 @@ process.stdin.on('data', (chunk: Buffer) => {
         // report nothing while a probe socket, listener or lookup is still alive.
         sealWorkerNetworkAfterProbe();
         await assertNoProbeSocketsRemain();
-        binding = probe;
-        await writeWorkerFrame(process.stdout, { type: 'probe-result', ...binding, ...result });
+        // Every later frame carries exactly the five binding fields: the proof ports belong to the probe alone.
+        binding = {
+          nonce: probe.nonce,
+          pid: probe.pid,
+          profile: probe.profile,
+          entry: probe.entry,
+          pipeGeneration: probe.pipeGeneration,
+        };
+        await writeWorkerFrame(process.stdout, { type: 'probe-result', ...probe, ...result });
         continue;
       }
-      try {
-        assertWorkerLoadBinding(binding, frame);
-      } catch {
-        await rejectAndExit();
+      if (!loadAnswered) {
+        try {
+          assertWorkerLoadBinding(binding, frame);
+        } catch {
+          await rejectAndExit();
+        }
+        loadAnswered = true;
+        const payload = layaLoadPayload(frame.payload);
+        try {
+          // The runtime and model are imported only here: after this child proved its own boundary, and only from
+          // the trees the daemon verified for this start.
+          if (payload === null) throw new Error('load payload');
+          runtime = await loadVerifiedLayaRuntime(payload);
+        } catch {
+          await writeWorkerFrame(process.stdout, { type: 'load-refused', ...binding, code: 'runtime-failed' });
+          continue;
+        }
+        await writeWorkerFrame(process.stdout, { type: 'loaded', ...binding });
+        continue;
       }
-      // Task 8 is the only code allowed to add the native runtime import/load path.  This worker is intentionally
-      // content-free now, but its reply proves that the nonce-bound original pipes remained live after the probe.
-      await writeWorkerFrame(process.stdout, {
-        type: 'load-refused',
-        ...binding,
-        code: 'E2_EXTERNAL_REFERENCE_BLOCKED',
-      });
+      const request = runtime === undefined ? null : requestFrame(binding, frame);
+      if (runtime === undefined || request === null) return rejectAndExit();
+      // One request at a time: the next frame waits on this chain until this answer is written.
+      const outcome = await evaluateLayaRequest(runtime, request.request);
+      await writeWorkerFrame(
+        process.stdout,
+        outcome.kind === 'answer'
+          ? {
+              type: 'answer',
+              ...binding,
+              requestId: request.requestId,
+              value: outcome.value,
+              inputTokens: outcome.inputTokens,
+            }
+          : { type: 'refused', ...binding, requestId: request.requestId, code: outcome.code },
+      );
     }
   });
   void work.catch(() => {
@@ -95,5 +170,12 @@ process.stdin.on('end', () => {
     parser.finish();
   } catch {
     process.exitCode = 70;
+  }
+  // The daemon closed the pipe, or stopped: release the native session so the worker cannot outlive its parent.
+  if (runtime !== undefined) {
+    void runtime
+      .close()
+      .catch(() => undefined)
+      .finally(() => process.exit());
   }
 });

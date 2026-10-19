@@ -654,6 +654,16 @@ function layaBoundaryProbeFetchProblems(file, executableText) {
   return reviewed ? [] : [`${file}: the Laya boundary probe may use fetch only in its one loopback attempt`];
 }
 
+/**
+ * E2 Task 8: the isolated Laya worker loads its runtime only after its own boundary proof, from the extracted tree the
+ * daemon verified for that start — an absolute path no source can spell as a literal. That one call, in that one file,
+ * is the only exception to the computed-specifier rule: `worker-runtime.ts` may contain it once. Any other computed
+ * `import(` or `require(` there — a second copy of the same call among them — and the same call in any other file are
+ * still `judge paths must not use computed module specifiers`. Every other rule still applies to the file.
+ */
+const LAYA_WORKER_RUNTIME = 'packages/events-daemon/src/runtime/laya/worker-runtime.ts';
+const LAYA_VERIFIED_RUNTIME_IMPORT = 'await import(pathToFileURL(verifiedEntry).href)';
+
 /** Scan one production source file; exported so fixture-copy tests exercise the exact static rules. */
 export function verifyPhaseEJudgeSource({ file, source: text }) {
   const problems = [];
@@ -670,8 +680,10 @@ export function verifyPhaseEJudgeSource({ file, source: text }) {
     problems.push(`${file}: judge paths must not call https.request`);
   if (judgePath && /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?https?['"]/u.test(executableText))
     problems.push(`${file}: judge paths must not import node:http or node:https`);
+  const specifierText =
+    file === LAYA_WORKER_RUNTIME ? executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '') : executableText;
   const computedModuleSpecifier = [
-    ...executableText.matchAll(/(?<![\w$.#])(import|require)\s*\(\s*([^\r\n)]*)/gmu),
+    ...specifierText.matchAll(/(?<![\w$.#])(import|require)\s*\(\s*([^\r\n)]*)/gmu),
   ].some((match) => {
     const argument = match[2]?.trim() ?? '';
     if (argument.startsWith("'") || argument.startsWith('"')) return false;

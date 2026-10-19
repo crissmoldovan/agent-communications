@@ -4,12 +4,95 @@ import { WorkerFrameParser, writeWorkerFrame } from '../../src/runtime/laya/work
 
 const standinArgument = process.argv.indexOf('--standin');
 const mode = standinArgument === -1 ? 'forged' : process.argv[standinArgument + 1];
+
+function argument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
+/**
+ * E2 Task 8: after a proof, `--serve <behaviour>` makes this a frame-compatible stand-in for the worker's load and
+ * request protocol. It never imports a runtime or model: it answers with the synthetic value it was given.
+ */
+const serve = argument('--serve');
+const valueJson = argument('--value-json') ?? '0.75';
+const inputTokens = Number(argument('--tokens') ?? '37');
+const delayMs = Number(argument('--delay') ?? '0');
+
+function bindingOf(frame: Readonly<Record<string, unknown>>) {
+  return {
+    nonce: frame.nonce,
+    pid: frame.pid,
+    profile: frame.profile,
+    entry: frame.entry,
+    pipeGeneration: frame.pipeGeneration,
+  };
+}
+
+/** Writes one frame from raw JSON text, so a reply can carry a value JSON can parse but not produce (`1e309`). */
+function writeRaw(json: string): void {
+  const payload = Buffer.from(json, 'utf8');
+  const frame = Buffer.alloc(4 + payload.length);
+  frame.writeUInt32BE(payload.length, 0);
+  payload.copy(frame, 4);
+  process.stdout.write(frame);
+}
+
+let served = 0;
+function answerRequest(frame: Readonly<Record<string, unknown>>): void {
+  served += 1;
+  const binding = serve === 'wrong-binding' ? { ...bindingOf(frame), nonce: 'another-child' } : bindingOf(frame);
+  const requestId = serve === 'wrong-request-id' ? 'another-request' : frame.requestId;
+  const head = JSON.stringify({ type: 'answer', ...binding, requestId, inputTokens }).slice(0, -1);
+  const reply = (): void => {
+    if (serve === 'token-limit' || serve === 'malformed-refusal' || serve === 'template-blocked') {
+      const code = serve === 'malformed-refusal' ? 'malformed' : serve;
+      void writeWorkerFrame(process.stdout, { type: 'refused', ...binding, requestId: frame.requestId, code });
+      return;
+    }
+    if (serve === 'extra-field') {
+      writeRaw(`${head},"value":${valueJson},"reason":"provider says match"}`);
+      return;
+    }
+    writeRaw(`${head},"value":${valueJson}}`);
+    if (serve === 'extra-frame') void writeWorkerFrame(process.stdout, { type: 'answer', ...binding, requestId });
+  };
+  if (serve === 'hang' || (serve === 'hang-second' && served === 2)) return;
+  if (serve === 'crash' || (serve === 'crash-first' && served === 1)) process.exit(3);
+  if (serve === 'late' || serve === 'slow') setTimeout(reply, delayMs);
+  else reply();
+}
+
 const parser = new WorkerFrameParser();
 process.stdin.on('data', (chunk: Buffer) => {
   for (const frame of parser.push(chunk)) {
+    if (frame.type === 'request' && serve !== undefined) {
+      answerRequest(frame);
+      continue;
+    }
     // A frame-compatible stand-in answers a load on its original pipes, so a test can prove those pipes stayed live.
     if (frame.type === 'load') {
-      void writeWorkerFrame(process.stdout, { type: 'load-ack', nonce: frame.nonce });
+      if (serve === undefined) {
+        void writeWorkerFrame(process.stdout, { type: 'load-ack', nonce: frame.nonce });
+        continue;
+      }
+      if (serve === 'hang-load') continue;
+      if (serve === 'refuse-load') {
+        void writeWorkerFrame(process.stdout, { type: 'load-refused', ...bindingOf(frame), code: 'runtime-failed' });
+        continue;
+      }
+      void writeWorkerFrame(process.stdout, { type: 'loaded', ...bindingOf(frame) });
+      if (serve === 'late-probe-attempt')
+        setTimeout(
+          () =>
+            void writeWorkerFrame(process.stdout, {
+              type: 'probe-attempt',
+              ...bindingOf(frame),
+              attempt: 'tcp',
+              outcome: 'escaped',
+            }),
+          Math.max(delayMs, 1),
+        );
       continue;
     }
     if (frame.type !== 'probe') continue;

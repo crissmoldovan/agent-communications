@@ -36,7 +36,11 @@ import type { AuthenticatedControlRequest } from '../control/protocol.ts';
 import { type ControlServerOptions, type RunningControlServer, startControlServer } from '../control/server.ts';
 import { normaliseActivationDocument } from '../domain/activation-documents.ts';
 import { HumanSecret } from '../domain/human-secret.ts';
-import type { LayaPlatformProbe, LayaReviewedAssetSource } from '../domain/judges.ts';
+import {
+  type LayaPlatformProbe,
+  type LayaReviewedAssetSource,
+  registerLayaEnablementInputs,
+} from '../domain/judges.ts';
 import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
@@ -95,6 +99,7 @@ import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
+import { LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -1175,9 +1180,18 @@ async function startOwnerWithLock(
     now,
   });
   const unregisterLayaPurge = registerJudgeWorkPurgeListener(database.database, layaArtifacts);
+  // Every reader of this database's Laya kind document — E's budget fence and settlement among them — validates with
+  // the same inputs as its activation path. The one isolated worker supervisor is E's coordinator's only Laya
+  // executor; it proves and launches only the shipped worker entry.
+  const unregisterLayaInputs = registerLayaEnablementInputs(database.database, layaInputs);
+  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts });
+  const unregisterLayaWorker = registerLayaJudgeExecutor(database.database, layaWorker);
   onDatabase({
     close: () => {
+      unregisterLayaWorker();
+      unregisterLayaInputs();
       unregisterLayaPurge();
+      void layaWorker.close();
       database.close();
     },
   });
@@ -1477,8 +1491,11 @@ async function startOwnerWithLock(
       try {
         await scheduler.stop();
         await control?.close();
+        await layaWorker.close();
         await layaArtifacts.stop();
       } finally {
+        unregisterLayaWorker();
+        unregisterLayaInputs();
         unregisterLayaPurge();
         database.close();
         await removeInstance(paths, instance.instanceId);
