@@ -26,7 +26,11 @@ import {
   type BehaviourWorld,
   behaviourWorld,
   ENG,
+  GROUP_WITH_SAM,
+  GROUP_WITHOUT_SAM,
   MINE,
+  MINE_IN_GROUP,
+  PRIVATE_WITH_SAM,
   refusedWith,
   SAM,
   SAM_DM,
@@ -672,4 +676,138 @@ test('a thread that is no message timestamp is refused wherever a post’s threa
   }
   assert.equal(w.asked('chat.postMessage'), 0);
   assert.equal(await approvalCount(w.harness), 1, 'only the prepare before the file was changed made an approval');
+});
+
+// ── Group DMs ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A person's rule held the DM with them, and not a group DM with them (review of spec 2, finding 14): "with Sam, only
+ * react" let a post into a group DM with Sam. Now each member of a group DM is matched with the room itself, and every
+ * one of them must allow the act.
+ */
+test('a person’s rule holds every group DM with them, for every act — and nothing else', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: SAM, acts: ['reaction'] }]);
+  const acts: [string, (w: BehaviourWorld) => Promise<unknown>][] = [
+    ['post', (w) => prepareDraftPost(w.context, 'acme', { channel: GROUP_WITH_SAM, text: 'hello both' }, w.slack)],
+    [
+      'reply',
+      (w) =>
+        prepareDraftPost(w.context, 'acme', { channel: GROUP_WITH_SAM, text: 'yes', threadTs: MINE_IN_GROUP }, w.slack),
+    ],
+    [
+      'edit',
+      (w) =>
+        prepareEdit(w.context, 'acme', { ts: MINE_IN_GROUP, channel: GROUP_WITH_SAM, text: 'lunch at one?' }, w.slack),
+    ],
+    ['delete', (w) => prepareDelete(w.context, 'acme', { channel: GROUP_WITH_SAM, ts: MINE_IN_GROUP }, w.slack)],
+  ];
+  for (const [act, prepare] of acts) {
+    const error = await refusedWith(prepare(w), `a ${act} in the group DM with Sam`);
+    assert.equal(error.code, 'ACT_NOT_ALLOWED', `${act}: ${error.message}`);
+    assert.equal(error.details?.act, act);
+    assert.equal(error.details?.place, SAM, `${act}: the refusal does not name the rule for the person`);
+    assert.match(error.message, /^this agent may only react in /);
+  }
+  assert.equal(await approvalCount(w.harness), 0);
+  nothingWritten(w, 'the group DM with Sam');
+
+  // What his rule allows, it allows there: a reaction is made.
+  await react(w.context, 'acme', { channel: GROUP_WITH_SAM, ts: MINE_IN_GROUP, name: 'wave' }, undefined, w.slack);
+  assert.equal(w.asked('reactions.add'), 1);
+  // A group DM without him, and a private channel he is in, are not held to his rule.
+  const without = await prepareDraftPost(w.context, 'acme', { channel: GROUP_WITHOUT_SAM, text: 'hi' }, w.slack);
+  assert.equal(without.preview.allowedHere, 'Allowed here: everything (no rule)');
+  const room = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE_WITH_SAM, text: 'hi all' }, w.slack);
+  assert.equal(room.preview.allowedHere, 'Allowed here: everything (no rule)');
+});
+
+test('a group DM whose members could not be read, or a G… room that could not be, is held to every person’s rule', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: SAM, acts: ['reaction'] }]);
+  // Slack does not say who is in the group DM with Ana and Ben: it may be Sam's too.
+  w.fake.script['conversations.members'] = () => ({ ok: false, error: 'ratelimited' });
+  for (const channel of [GROUP_WITHOUT_SAM, 'G0NOBODY']) {
+    const error = await refusedWith(
+      prepareDraftPost(w.context, 'acme', { channel, text: 'hi' }, w.slack),
+      `a post in ${channel}, its people unread`,
+    );
+    assert.equal(error.code, 'ACT_NOT_ALLOWED', `${channel}: ${error.message}`);
+    assert.equal(error.details?.act, 'post', channel);
+  }
+  // A reaction is held the same way: under Sam's rule allowing only posts, refused in a room Sam may be in.
+  await setRules(w.harness, [{ conversation: SAM, acts: ['post'] }]);
+  const gate = await gateDepsFor(w.context, 'acme', w.slack);
+  const reaction = await refusedWith(
+    prepareReaction(gate, { channel: GROUP_WITHOUT_SAM, ts: MINE_IN_GROUP, name: 'eyes' }),
+    'a reaction in a group DM whose people are unread',
+  );
+  assert.equal(reaction.code, 'ACT_NOT_ALLOWED');
+  assert.equal(reaction.details?.act, 'reaction');
+  assert.equal(await approvalCount(w.harness), 0);
+  nothingWritten(w, 'a room whose people are unread');
+});
+
+test('a group DM’s own rule wins over the account’s; a person’s rule there holds, and does not widen it', async (t) => {
+  const w = await behaviourWorld(t);
+  const post = () => prepareDraftPost(w.context, 'acme', { channel: GROUP_WITH_SAM, text: 'hello both' }, w.slack);
+  // The room's own rule, wider than the account's: the person said yes to it, and it holds there.
+  await setRules(w.harness, [{ acts: ['reaction'] }, { conversation: GROUP_WITH_SAM, acts: ['post', 'reaction'] }]);
+  await post();
+  // A person in it whose rule is narrower holds it to that.
+  await setRules(w.harness, [
+    { acts: ['reaction'] },
+    { conversation: GROUP_WITH_SAM, acts: ['post', 'reaction'] },
+    { conversation: SAM, acts: ['reaction'] },
+  ]);
+  assert.equal((await refusedWith(post(), 'Sam’s narrower rule')).details?.place, SAM);
+  // And a person's rule wider than the account's widens the DM with them, not a group DM with someone else in it.
+  await setRules(w.harness, [{ acts: ['reaction'] }, { conversation: SAM, acts: ['post', 'reaction'] }]);
+  await prepareDraftPost(w.context, 'acme', { channel: SAM_DM, text: 'hello Sam' }, w.slack);
+  // Ana is in it, and no rule names her: the account's rule holds the room for her.
+  const error = await refusedWith(post(), 'Ana, under the account’s rule');
+  assert.equal(error.details?.act, 'post');
+  assert.equal(error.details?.place, GROUP_WITH_SAM);
+  assert.deepEqual(error.details?.rule, { account: 'acme' });
+});
+
+test('a group DM post binds what it always did: its members are read only where a person’s rule could hold them', async (t) => {
+  const w = await behaviourWorld(t);
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: GROUP_WITH_SAM, text: 'hello both' }, w.slack);
+  assert.equal(w.asked('conversations.members'), 0, 'members were read where no rule names a person');
+  // Tightened after the yes, by Sam's rule: refused at send, before the claim — not voided — and nothing posts.
+  await setRules(w.harness, [{ conversation: SAM, acts: ['reaction'] }]);
+  const send = () =>
+    sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: GROUP_WITH_SAM },
+      w.slack,
+    );
+  const error = await refusedWith(send(), 'a group DM post after Sam’s rule');
+  assert.equal(error.code, 'ACT_NOT_ALLOWED', error.message);
+  assert.equal(w.asked('chat.postMessage'), 0);
+  assert.equal(asV2(await w.harness.core.approvals.get(prepared.approvalId))?.state, 'pending');
+  // A rule for Sam that allows it: the same approval posts, its digest unchanged by the members read for the rule.
+  await setRules(w.harness, [{ conversation: SAM, acts: ['post', 'reaction'] }]);
+  await send();
+  assert.ok(w.asked('conversations.members') > 0);
+  assert.equal(w.asked('chat.postMessage'), 1);
+});
+
+test('a group DM reaction’s approval screen says what the rules of the people in it allow, asking Slack nothing', async (t) => {
+  const w = await behaviourWorld(t, { sendPolicy: 'confirm' });
+  await setRules(w.harness, [
+    { conversation: SAM, acts: ['reaction'] },
+    { conversation: ANA, acts: ['reaction', 'post'] },
+  ]);
+  const gate = await gateDepsFor(w.context, 'acme', w.slack);
+  const prepared = await prepareReaction(gate, { channel: GROUP_WITH_SAM, ts: MINE_IN_GROUP, name: 'eyes' });
+  const line = `Allowed here: reaction (rule: acme, ${SAM})`;
+  assert.equal(prepared.allowedHere, line);
+  const asked = w.fake.requests.length;
+  const prompt = await beginApproval(w.context, prepared.approvalId, w.slack);
+  assert.equal(prompt.kind, 'reaction');
+  assert.ok(prompt.preview.split('\n').includes(line), prompt.preview);
+  assert.equal(w.fake.requests.length, asked, 'the reaction approval screen asked Slack something');
 });

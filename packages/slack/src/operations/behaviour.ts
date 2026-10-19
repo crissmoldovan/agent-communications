@@ -33,11 +33,18 @@ import type { Channel, NameBook } from './people.ts';
  * One act's question of the rules: its acts, at its places.
  *
  * A place is one destination and its aliases, which match at the same level: a channel is `[C…]`, a DM `[D…, U…]` —
- * the DM, and the person it is with (a `U…` rule rules the DM with them, B4). Every place must allow every act.
+ * the DM, and the person it is with (a `U…` rule rules the DM with them, B4) — and a group DM one place for each of the
+ * people in it, `[G…, U…]` (review of spec 2, finding 14). Every place must allow every act.
  */
 export interface BehaviourCheck {
   readonly acts: readonly BehaviourAct[];
   readonly places: readonly (readonly string[])[];
+  /**
+   * Places whose people Slack did not say — a group DM's members, or whether a `G…` room that could not be read is a
+   * group DM at all — so they are held to every person's rule as well (`heldPlaces`). Never bound: asked again from
+   * Slack, and held again, wherever the act is checked.
+   */
+  readonly unread?: readonly string[] | undefined;
   /**
    * How each id is named to the person — `#eng` for `C1` — when a refusal or a preview line names a place: given, or
    * read only then (a reaction reads its room for it only when a rule names one). Display only, never bound.
@@ -81,9 +88,9 @@ export function postActs(inThread: boolean, files: number): BehaviourAct[] {
 export async function postCheck(
   deps: BehaviourDeps & { readonly call: SlackCall },
   post: { readonly channel: string; readonly threadTs: string | undefined; readonly files: number },
-  where: Pick<BehaviourCheck, 'places' | 'names'>,
+  where: Pick<BehaviourCheck, 'places' | 'unread' | 'names'>,
 ): Promise<BehaviourCheck> {
-  const at = { places: where.places, names: where.names };
+  const at = { places: where.places, unread: where.unread, names: where.names };
   const asPost: BehaviourCheck = { ...at, acts: postActs(false, post.files) };
   if (post.threadTs === undefined) return asPost;
   const asReply: BehaviourCheck = { ...at, acts: postActs(true, post.files) };
@@ -138,14 +145,90 @@ export function editActs(addsFiles: number): BehaviourAct[] {
   return ['edit', ...(addsFiles > 0 ? (['file'] as const) : [])];
 }
 
+/** Where an act lands, as the rules match it: its places, and those whose people Slack did not say. */
+export interface Landing {
+  readonly places: string[][];
+  readonly unread: string[];
+}
+
 /**
- * Where an act lands, as the rules match it: the channel, or for a DM the DM and the person it is with — from the room
- * as `roomOf` read it. A DM whose person could not be read is the DM alone, which {@link heldPlaces} holds to every
- * person's rule.
+ * Where an act lands, as the rules match it — from the room as `roomOf` read it and, for a group DM, the people Slack
+ * says are in it (`landingOf`):
+ * - a channel, the channel;
+ * - a DM, the DM and the person it is with: one place. One whose person could not be read is the DM alone, which
+ *   {@link heldPlaces} holds to every person's rule;
+ * - a group DM, one place for each person in it but this account, each with the room (review of spec 2, finding 14):
+ *   so a person's rule holds every group DM with them, as it holds the DM with them, and a rule for the room itself
+ *   still wins over the account's where nobody's rule speaks. One whose people were not read is the room alone, and
+ *   held to every person's rule;
+ * - a `G…` room that could not be read may be a group DM, and is held so too.
  */
-export function placesOf(channelId: string, channel: Channel | undefined): string[][] {
-  const person = channel?.isIm === true ? channel.withUserId : undefined;
-  return [person === undefined ? [channelId] : [channelId, person]];
+export function placesOf(
+  channelId: string,
+  channel: Channel | undefined,
+  members?: readonly string[] | undefined,
+  self?: string | undefined,
+): Landing {
+  if (channel?.isIm === true) {
+    const person = channel.withUserId;
+    return { places: [person === undefined ? [channelId] : [channelId, person]], unread: [] };
+  }
+  if (channel?.isMpim === true) {
+    if (members === undefined) return { places: [[channelId]], unread: [channelId] };
+    const people = [...new Set(members)].filter((member) => member !== self).sort();
+    return { places: people.length === 0 ? [[channelId]] : people.map((person) => [channelId, person]), unread: [] };
+  }
+  return { places: [[channelId]], unread: channel === undefined && channelId.startsWith('G') ? [channelId] : [] };
+}
+
+/**
+ * {@link placesOf}, reading a group DM's members from Slack — only where a person's rule could hold them: the
+ * configuration as it is now names a person. Elsewhere they are not read, and the room is held instead, which adds
+ * nothing while no rule names a person and every person's rule once one does — so a rule added before the claim still
+ * holds it, and an account whose rules name nobody asks Slack nothing it did not ask before.
+ */
+export async function landingOf(
+  deps: BehaviourDeps & { readonly call: SlackCall; readonly postingAs: string },
+  channelId: string,
+  channel: Channel | undefined,
+): Promise<Landing> {
+  if (channel?.isMpim !== true || !(await rulesNamePeople(deps))) return placesOf(channelId, channel);
+  return placesOf(channelId, channel, await membersOf(deps.call, channelId), deps.postingAs);
+}
+
+/** Whether the rules as they are now name any person: only then can a group DM's members change what is allowed. */
+export async function rulesNamePeople(deps: Pick<BehaviourDeps, 'currentConfig'>): Promise<boolean> {
+  return personRules(await deps.currentConfig()).length > 0;
+}
+
+/** At most this many pages of `conversations.members` are read for a group DM's people: Slack holds nine at most. */
+const MEMBER_PAGES = 10;
+
+/**
+ * Everyone in a conversation, read with the person's token and paged — or `undefined` when that could not be settled:
+ * a read that failed, or pages that did not end. Never a guess, and never read as nobody.
+ */
+async function membersOf(call: SlackCall, channel: string): Promise<string[] | undefined> {
+  const members: string[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MEMBER_PAGES; page += 1) {
+    let response: Record<string, unknown>;
+    try {
+      response = (await callSlack(call, 'conversations.members', {
+        channel,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+      })) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+    const listed = Array.isArray(response.members) ? response.members : [];
+    for (const member of listed) if (typeof member === 'string' && PERSON.test(member)) members.push(member);
+    const next = (response.response_metadata as { next_cursor?: unknown } | undefined)?.next_cursor;
+    if (typeof next !== 'string' || next === '') return members;
+    cursor = next;
+  }
+  return undefined;
 }
 
 /** How a room and, for a DM, its person are named to the person: `#eng`; `the direct message with Sam`, and `Sam`. */
@@ -177,7 +260,9 @@ export function placeNamesOf(
  * rule the golden digests in `send-files.test.ts` hold every post to.
  */
 export function behaviourBinding(check: BehaviourCheck): { behaviour?: { places: string[][] } } {
-  if (!check.places.some((aliases) => aliases.length > 1)) return {};
+  // A DM's person, and nothing for a group DM: its members are read only where a rule names a person (`landingOf`), so
+  // binding them would make the digest hang on the rules. They are read and held again at the claim instead.
+  if (!check.places.some((aliases) => aliases.length > 1 && DM.test(aliases[0] ?? ''))) return {};
   return { behaviour: { places: check.places.map((aliases) => [...aliases]) } };
 }
 
@@ -190,22 +275,33 @@ export function boundDigest(digest: string, check: BehaviourCheck): string {
 const DM = /^D[A-Z0-9]+$/;
 const PERSON = /^[UW][A-Z0-9]+$/;
 
-/**
- * The places as the rules are asked about them, failing closed (B3): a DM whose person Slack did not say — its room
- * could not be read — may be with anyone, so it is matched by every person a rule names as well as by itself, and only
- * what all of them allow holds. A rule for another account matches nothing here: `allowedAct` reads only this one's.
- */
-function heldPlaces(config: Config, places: readonly (readonly string[])[]): string[][] {
-  const people = [
+/** Every person a rule names, whichever account's: a rule for another account matches nothing in `allowedAct`. */
+function personRules(config: Config): string[] {
+  return [
     ...new Set(
       readBehaviourSettings(config).rules.flatMap((rule) =>
         rule.conversation !== undefined && PERSON.test(rule.conversation) ? [rule.conversation] : [],
       ),
     ),
   ];
-  return places.map((aliases) => {
+}
+
+/**
+ * The places as the rules are asked about them, failing closed (B3). A DM whose person Slack did not say — its room
+ * could not be read — may be with anyone, so it is matched by every person a rule names as well as by itself, and only
+ * what all of them allow holds. A room whose people Slack did not say (`unread`) — a group DM's members, or a `G…` room
+ * that could not be read at all — may hold anyone, so it is asked as a group DM with every person a rule names in it.
+ * A rule for another account matches nothing here: `allowedAct` reads only this one's.
+ */
+function heldPlaces(config: Config, check: BehaviourCheck): string[][] {
+  const people = personRules(config);
+  const unread = new Set(check.unread ?? []);
+  return check.places.flatMap((aliases) => {
     const [only, ...more] = aliases;
-    return only !== undefined && more.length === 0 && DM.test(only) ? [only, ...people] : [...aliases];
+    if (only === undefined || more.length > 0) return [[...aliases]];
+    if (DM.test(only)) return [[only, ...people]];
+    if (unread.has(only) && people.length > 0) return people.map((person) => [only, person]);
+    return [[only]];
   });
 }
 
@@ -216,7 +312,7 @@ export async function decideAct(deps: BehaviourDeps, check: BehaviourCheck): Pro
     accountId: deps.accountId,
     account: deps.workspaceName,
     acts: [...check.acts],
-    places: heldPlaces(config, check.places),
+    places: heldPlaces(config, check),
   });
 }
 
@@ -236,8 +332,11 @@ async function shownPlace(check: BehaviourCheck, id: string | null | undefined):
   const named = names[id];
   if (named !== undefined) return named;
   if (check.places.some((aliases) => aliases.includes(id))) return null;
-  const dm = check.places.find((aliases) => aliases.length === 1 && DM.test(aliases[0] ?? ''))?.[0];
-  return dm === undefined ? null : (names[dm] ?? dm);
+  const unread = check.unread ?? [];
+  const held = check.places.find(
+    (aliases) => aliases.length === 1 && (DM.test(aliases[0] ?? '') || unread.includes(aliases[0] ?? '')),
+  )?.[0];
+  return held === undefined ? null : (names[held] ?? held);
 }
 
 /**

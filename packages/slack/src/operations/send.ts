@@ -49,12 +49,14 @@ import {
   actRefusal,
   allowedHere,
   type BehaviourCheck,
+  type BehaviourDeps,
   behaviourBinding,
   boundDigest,
+  landingOf,
   placeNamesOf,
-  placesOf,
   postCheck,
   requireAllowed,
+  rulesNamePeople,
   type SlackPreview,
 } from './behaviour.ts';
 import { requireConversation } from './destination.ts';
@@ -338,8 +340,10 @@ export interface ComposedPost extends Omit<PostView, 'preview' | 'digest' | 'che
   readonly preview: ChannelPreview;
   /** The post's own digest, which binds no acts. */
   readonly digest: string;
-  /** Where it lands, as the rules match it (`placesOf`), and those places by the names a person knows (`placeNamesOf`). */
+  /** Where it lands, as the rules match it (`landingOf`), and those places by the names a person knows (`placeNamesOf`). */
   readonly places: string[][];
+  /** Its places whose people Slack did not say: held to every person's rule (`heldPlaces`). */
+  readonly unread: string[];
   readonly names: Readonly<Record<string, string>>;
 }
 
@@ -485,12 +489,12 @@ export async function viewPost(
   /** What the message asked for (L3 step 1): `as` at prepare, read back from the approval at send and approval. */
   requested?: 'agent' | 'me' | undefined,
 ): Promise<PostView> {
-  const { places, names, ...view } = await composedPost(deps, draft, book, requested);
+  const { places, unread, names, ...view } = await composedPost(deps, draft, book, requested);
   // `reply` only where Slack has the thread in that conversation, when the rules tell a reply from a post (finding 9).
   const check = await postCheck(
     deps,
     { channel: view.payload.channel, threadTs: view.payload.thread_ts, files: (draft.files ?? []).length },
-    { places, names },
+    { places, unread, names },
   );
   const here = await allowedHere(deps, check);
   return {
@@ -507,7 +511,10 @@ export async function viewPost(
  * reading, and where the post lands. An edit reads its words through this, and asks the rules of its own acts.
  */
 export async function composedPost(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label'>,
+  deps: Pick<
+    PrepareDeps,
+    'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label' | 'accountId' | 'currentConfig'
+  >,
   draft: SlackDraft,
   book: NameBook,
   requested?: 'agent' | 'me' | undefined,
@@ -596,8 +603,9 @@ export async function composedPost(
     payload,
     label,
     sent,
-    // A DM is matched by the person it is with as well as by itself (B4): what the room says, read above.
-    places: placesOf(payload.channel, channel),
+    // A DM is matched by the person it is with as well as by itself (B4), and a group DM by each person in it: what
+    // the room says, read above, and for a group DM who Slack says is in it, where a rule names a person.
+    ...(await landingOf(deps, payload.channel, channel)),
     names: placeNamesOf(payload.channel, channel, book),
   };
 }
@@ -1978,9 +1986,16 @@ function reactionDigest(
 
 /**
  * The flag on a reaction's approval in a DM, naming the person the DM is with: part of where it lands (B4), bound in its
- * digest, and read back by the approval screen, which asks Slack nothing.
+ * digest, and read back by the approval screen, which asks Slack nothing. A reaction in a group DM whose members were
+ * read carries one for each of them, read back the same way and bound by nothing: they are read again at the claim.
  */
 export const REACTS_IN_DM_WITH = 'dm-with:';
+
+/**
+ * The flag on a reaction's approval in a room whose people Slack did not say — a group DM's members, unread — so the
+ * approval screen holds it to every person's rule, as the claim does. Display only: never bound.
+ */
+export const REACTS_WITH_PEOPLE_UNREAD = 'people-unread';
 
 /** The room of one reaction, read at most once however many ask: the label, the rules, the names they show. */
 type RoomOnce = () => ReturnType<typeof roomOf>;
@@ -1993,34 +2008,51 @@ function roomOnce(call: SlackCall, channelId: string): RoomOnce {
   };
 }
 
-/** A reaction's acts and place: a `reaction`, in the channel — or in the DM, with the person it is with. */
-function reactionCheck(channel: string, person: string | undefined, names?: BehaviourCheck['names']): BehaviourCheck {
-  return { acts: ['reaction'], places: [person === undefined ? [channel] : [channel, person]], names };
-}
-
 /**
- * Where a reaction lands, as the rules match it. A DM's room is read for the person it is with; any other room is read
- * only when a refusal or the preview's line names it, so a reaction where no rule speaks asks Slack nothing more.
+ * Where a reaction lands, as the rules match it (`placesOf`). A DM's room is read for the person it is with; a `G…`
+ * room, for whether it is a group DM and who is in it — only while a rule names a person (`landingOf`), and otherwise
+ * held, which adds nothing until one does. Any other room is read only when a refusal or the preview's line names it, so
+ * a reaction where no rule speaks asks Slack nothing more.
  */
-async function reactionCheckOf(options: ReactionOptions, room: RoomOnce): Promise<BehaviourCheck> {
-  if (!options.channel.startsWith('D')) {
-    return reactionCheck(options.channel, undefined, async () => placeNamesOf(options.channel, (await room()).channel));
+async function reactionCheckOf(
+  deps: BehaviourDeps & { readonly call: SlackCall; readonly postingAs: string },
+  options: ReactionOptions,
+  room: RoomOnce,
+): Promise<BehaviourCheck> {
+  const id = options.channel;
+  if (id.startsWith('D') || (id.startsWith('G') && (await rulesNamePeople(deps)))) {
+    const { channel } = await room();
+    return { acts: ['reaction'], ...(await landingOf(deps, id, channel)), names: placeNamesOf(id, channel) };
   }
-  const { channel } = await room();
-  const [place] = placesOf(options.channel, channel);
-  return reactionCheck(options.channel, place?.[1], placeNamesOf(options.channel, channel));
+  return {
+    acts: ['reaction'],
+    places: [[id]],
+    unread: id.startsWith('G') ? [id] : [],
+    names: async () => placeNamesOf(id, (await room()).channel),
+  };
 }
 
-/** A reaction's check as its approval records it: its channel, and the DM's person from its flag. */
+/** A reaction's check as its approval records it: its channel, and the people there from its flags. */
 function recordedReactionCheck(record: ApprovalRecord, options: ReactionOptions): BehaviourCheck {
-  const person = record.riskFlags.find((flag) => flag.startsWith(REACTS_IN_DM_WITH))?.slice(REACTS_IN_DM_WITH.length);
-  return reactionCheck(options.channel, person === '' ? undefined : person);
+  const id = options.channel;
+  const people = record.riskFlags
+    .filter((flag) => flag.startsWith(REACTS_IN_DM_WITH))
+    .map((flag) => flag.slice(REACTS_IN_DM_WITH.length))
+    .filter((person) => person !== '');
+  const unread = record.riskFlags.includes(REACTS_WITH_PEOPLE_UNREAD) ? [id] : [];
+  if (people.length === 0) return { acts: ['reaction'], places: [[id]], unread };
+  // A DM's one person shares its place; each of a group DM's people is a place of its own, with the room.
+  if (id.startsWith('D')) return { acts: ['reaction'], places: [[id, people[0] as string]] };
+  return { acts: ['reaction'], places: people.map((person) => [id, person]) };
 }
 
-/** The flag naming a DM reaction's person, when it has one. */
+/** The flags naming the people where a reaction lands, and whether they were unread: see `recordedReactionCheck`. */
 function reactionPlaceFlags(check: BehaviourCheck): string[] {
-  const person = check.places[0]?.[1];
-  return person === undefined ? [] : [`${REACTS_IN_DM_WITH}${person}`];
+  const people = check.places.flatMap((aliases) => (aliases.length > 1 ? aliases.slice(1) : []));
+  return [
+    ...people.map((person) => `${REACTS_IN_DM_WITH}${person}`),
+    ...((check.unread ?? []).length > 0 ? [REACTS_WITH_PEOPLE_UNREAD] : []),
+  ];
 }
 
 /**
@@ -2152,7 +2184,7 @@ export async function prepareReaction(
   requireConversation(options.channel, deps.workspaceName, deps.handoffs);
   const room = roomOnce(deps.call, options.channel);
   // The behaviour rules first (design 2026-10-19, B4): a reaction they do not allow here makes no approval.
-  const check = await reactionCheckOf(options, room);
+  const check = await reactionCheckOf(deps, options, room);
   const here = await allowedHere(deps, check);
   if (!here.decision.allowed) throw await actRefusal(deps, here.decision, check);
   const label = await reactionLabel(deps, options, requested, room);
@@ -2357,7 +2389,7 @@ export async function reactPrepared(
   requireConversation(options.channel, deps.workspaceName, deps.handoffs);
   const room = roomOnce(deps.call, options.channel);
   // Where it lands, decided again as it was prepared, and bound: a DM read as with someone else is a different act.
-  const check = await reactionCheckOf(options, room);
+  const check = await reactionCheckOf(deps, options, room);
   // Who reacts, decided again as it was prepared: a reaction the app can no longer make is a different act, refused.
   const label =
     deps.label === undefined

@@ -34,8 +34,8 @@ import {
   type BehaviourCheck,
   behaviourBinding,
   editActs,
+  landingOf,
   placeNamesOf,
-  placesOf,
   type SlackPreview,
 } from './behaviour.ts';
 import {
@@ -497,7 +497,12 @@ export async function viewEdit(
   // The words as a post of them would be read, without a post's label: an edit's label is its own (S5), and so are its
   // acts (B2).
   const view = await composedPost({ ...deps, label: undefined }, words, book);
-  const check: BehaviourCheck = { acts: editActs(files?.add.length ?? 0), places: view.places, names: view.names };
+  const check: BehaviourCheck = {
+    acts: editActs(files?.add.length ?? 0),
+    places: view.places,
+    unread: view.unread,
+    names: view.names,
+  };
   const here = await allowedHere(deps, check);
   // An app message stays the app's: its name already says an agent wrote it, and only its bot token can change it.
   const label: SlackLabel | undefined =
@@ -1333,7 +1338,7 @@ export async function viewDeletion(
   if (channel) book.addChannel(channel);
   const check: BehaviourCheck = {
     acts: ['delete'],
-    places: placesOf(where.channel, channel),
+    ...(await landingOf(deps, where.channel, channel)),
     names: placeNamesOf(where.channel, channel, book),
   };
   const here = await allowedHere(deps, check);
