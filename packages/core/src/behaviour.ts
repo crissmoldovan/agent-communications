@@ -15,6 +15,7 @@ import { domainToASCII } from 'node:url';
 import { MAIL_CONVERSATION_PATTERN, SLACK_CONVERSATION_PATTERN } from './agent-label.ts';
 import type { Config } from './config.ts';
 import { CommsError } from './errors.ts';
+import { type CliHandoffs, handoffSentence } from './handoff-text.ts';
 import { neutralise } from './untrusted.ts';
 
 /** B2: the acts a rule may name — the label's kinds (`ACT_KINDS`), and `delete`. */
@@ -557,6 +558,25 @@ export function actNotAllowed(
       allowedActs: [...decision.allowedActs],
     },
   });
+}
+
+/**
+ * B4's hint, in the same words on every channel: nothing was done; the located core command that shows the rules, and
+ * the tool that does from a chat; and that the agent tells the person which rule stopped it and does not try again. It
+ * never names a command that changes the rules: a loosening is the person's to start. `cause`, when given, is said
+ * first — why this act is the one the rules were asked about, such as Gmail's when a message meant as a reply could not
+ * be proven one.
+ */
+export function behaviourRefusalHint(handoffs: CliHandoffs, cause?: string): string {
+  const lead = cause === undefined || cause.trim() === '' ? 'Nothing was done.' : `Nothing was done. ${cause.trim()}`;
+  const stop =
+    'Tell the person which rule stopped this, and do not try it again: changing a rule is theirs to start, not an agent’s.';
+  return handoffSentence(
+    handoffs.core(['behaviour']),
+    (command) =>
+      `${lead} ${command} shows the rules and what each lets an agent do here, as comms_behaviour does from a chat. ${stop}`,
+    { instead: `${lead} comms_behaviour shows the rules and what each lets an agent do here, from a chat. ${stop}` },
+  );
 }
 
 /**

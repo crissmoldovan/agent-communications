@@ -4,9 +4,9 @@ import {
   allowedAct,
   allowedHereLine,
   type BehaviourAct,
+  behaviourRefusalHint,
   type Config,
   canonicalJson,
-  handoffSentence,
   sha256Hex,
 } from '@agentcomms/core';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
@@ -135,17 +135,14 @@ function refusalHint(
   decision: Extract<ActDecision, { allowed: false }>,
   analysis: DraftAnalysis,
 ): string {
-  const rules = handoffSentence(
-    context.handoffs.core(['behaviour']),
-    (command) => `See what this agent may do with ${command}; a wider rule is the person's to set.`,
-    { instead: "What this agent may do is the person's to set." },
-  );
   // Meant as a reply, perhaps, and not one this mailbox could prove: said, so the refusal is not a riddle.
   const unproven =
     decision.act === 'send' && decision.allowedActs.includes('reply') && analysis.inReplyTo?.trim()
-      ? 'A message is a reply only when its In-Reply-To names a message in this mailbox, and this one does not. '
-      : '';
-  return `${unproven}${rules}`;
+      ? 'A message is a reply only when its In-Reply-To names a message in this mailbox, and this one does not.'
+      : undefined;
+  // Core's words, the same on every channel (`behaviourRefusalHint`): the command that shows the rules, never one that
+  // widens them.
+  return behaviourRefusalHint(context.handoffs, unproven);
 }
 
 /**

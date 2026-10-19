@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type ActDecision, actNotAllowed, allowedAct, allowedHereLine } from '../src/behaviour.ts';
+import {
+  type ActDecision,
+  actNotAllowed,
+  allowedAct,
+  allowedHereLine,
+  behaviourRefusalHint,
+} from '../src/behaviour.ts';
 import { parseConfig } from '../src/config.ts';
 import { CommsError, ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
+import type { CliHandoffs } from '../src/handoffs.ts';
+import { coreHandoffs, coreInline } from './helpers/handoffs.ts';
 
 /*
  * Task 4 of the behaviour rules (design 2026-10-19-agent-behaviour-rules, B4): the refusal every channel gives when a
@@ -215,4 +223,37 @@ test('shown names are neutralised and flattened', () => {
   const long = actNotAllowed(refused(), { account: 'cue/slack', place: 'x'.repeat(500) }, HINT).message;
   assert.ok(long.length < 300, `${long.length}`);
   assert.match(long, /…/);
+});
+
+test('the hint is the same on every channel: the located report and the tool, then stop — never a loosening', () => {
+  const pins = { configDir: '/c', stateDir: '/s', dataDir: '/d', secretsDir: '/k', downloadsDir: '/w' };
+  const handoffs = coreHandoffs(pins, 'linux');
+  const report = coreInline(pins, ['behaviour'], 'linux');
+  const stop =
+    'Tell the person which rule stopped this, and do not try it again: changing a rule is theirs to start, not an agent’s.';
+  assert.equal(
+    behaviourRefusalHint(handoffs),
+    `Nothing was done. ${report} shows the rules and what each lets an agent do here, as comms_behaviour does from a chat. ${stop}`,
+  );
+  // A cause comes first, after what was done: Gmail's, for a reply it could not prove.
+  const cause =
+    'A message is a reply only when its In-Reply-To names a message in this mailbox, and this one does not.';
+  assert.equal(
+    behaviourRefusalHint(handoffs, cause),
+    `Nothing was done. ${cause} ${report} shows the rules and what each lets an agent do here, as comms_behaviour does from a chat. ${stop}`,
+  );
+  assert.equal(behaviourRefusalHint(handoffs, '  '), behaviourRefusalHint(handoffs), 'an empty cause is none');
+  // With no command to name here: the tool, and why there is no command.
+  const missing = { ok: false, reason: 'missing', product: 'the core', package: '@agentcomms/core', version: '0.0.0' };
+  const nowhere = {
+    ...handoffs,
+    core: () => ({ ...missing, message: 'The core CLI is not installed here.' }),
+  } as unknown as CliHandoffs;
+  assert.equal(
+    behaviourRefusalHint(nowhere),
+    `Nothing was done. comms_behaviour shows the rules and what each lets an agent do here, from a chat. ${stop} The core CLI is not installed here.`,
+  );
+  for (const hint of [behaviourRefusalHint(handoffs), behaviourRefusalHint(nowhere)]) {
+    assert.doesNotMatch(hint, /\b(allow|clear)\b/, 'never a command that changes the rules');
+  }
 });

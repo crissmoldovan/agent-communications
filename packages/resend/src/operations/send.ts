@@ -8,6 +8,7 @@ import {
   allowedAct,
   allowedHereLine,
   approveAndWaitSentence,
+  behaviourRefusalHint,
   type CliHandoffs,
   CommsError,
   type Config,
@@ -243,15 +244,7 @@ function statusCommand(handoffs: CliHandoffs, approvalId: string, name: string) 
  * 2026-10-19-agent-behaviour-rules, B4). Never a command that loosens one: that is the person's to start.
  */
 function behaviourHint(handoffs: CliHandoffs): string {
-  return handoffSentence(
-    handoffs.core(['behaviour']),
-    (command) =>
-      `${command} shows what this agent may do, and where. Changing a rule is the person's to start; do not retry this send.`,
-    {
-      instead:
-        "comms_behaviour shows what this agent may do, and where. Changing a rule is the person's to start; do not retry this send.",
-    },
-  );
+  return behaviourRefusalHint(handoffs);
 }
 
 /** What the rules in `config` decide for this account's send, as `check` puts it. */

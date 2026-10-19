@@ -4,13 +4,13 @@ import {
   allowedAct,
   allowedHereLine,
   type BehaviourAct,
+  behaviourRefusalHint,
   type ChannelPreview,
   type CliHandoffs,
   type CommsError,
   type Config,
   canonicalJson,
   escapeForDisplay,
-  handoffSentence,
   readBehaviourSettings,
   renderChannelPreview,
   sha256Hex,
@@ -165,19 +165,12 @@ async function shownPlace(check: BehaviourCheck, id: string | null | undefined):
 }
 
 /**
- * What a refusal tells the agent to do: look at the rules, with the located command that shows them, or the tool that
- * does from a chat. Never a command that changes them: a loosening is the person's to start (B4).
+ * What a refusal tells the agent to do, in core's words for every channel (`behaviourRefusalHint`): look at the rules,
+ * with the located command that shows them, or the tool that does from a chat. Never a command that changes them: a
+ * loosening is the person's to start (B4).
  */
 export function behaviourHint(handoffs: CliHandoffs): string {
-  return handoffSentence(
-    handoffs.core(['behaviour']),
-    (command) =>
-      `Nothing was done. ${command} shows the rules and what each lets an agent do here, as comms_behaviour does from a chat. Tell the person which rule stopped this: changing it is theirs to do, not an agent’s.`,
-    {
-      instead:
-        'Nothing was done. comms_behaviour shows the rules and what each lets an agent do here, from a chat. Tell the person which rule stopped this: changing it is theirs to do, not an agent’s.',
-    },
-  );
+  return behaviourRefusalHint(handoffs);
 }
 
 /** B4's refusal of `decision`, naming the place as the person knows it. */
