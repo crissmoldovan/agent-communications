@@ -7,7 +7,10 @@ name: Desktop release
 # **What this does not do is sign anything, or make the release public.** The signed and notarised macOS DMG, the
 # updater's archive and `latest.json` come from the owner's Mac (`apps/desktop/scripts/release-desktop.sh`, then
 # `publish-desktop.sh`, which publishes the release once they are attached). No secret is used here: the release is
-# made and filled with this run's own token, scoped to this repository's contents.
+# made and filled with this run's own token, scoped to this repository's contents. **The builds never hold it:** they
+# run every dependency's code, so they build with read-only access and hand their files on as artifacts, and only the
+# `attach` job, which checks nothing out and runs nothing it built, may write — and only to a draft. A release already
+# published is never written to again.
 #
 # **It never takes Latest.** GitHub's Latest release is the CLI's, which `release.yml` makes; every release command
 # here passes `--latest=false`. The app finds its updates among the `desktop-v*` releases through the GitHub API.
@@ -74,6 +77,11 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --draft --latest=false --title "Agent Comms $version" --notes-file "$RUNNER_TEMP/notes.md" \
               || gh release view "$GITHUB_REF_NAME" > /dev/null
           fi
+          # Only a draft is filled: a release already published is never written to again.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::$GITHUB_REF_NAME is already published; CI fills only a draft. Bump the version." >&2
+            exit 1
+          fi
           # Exactly one release for the tag, or the legs' files and the owner's would land on different ones.
           ids=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")
           case "$ids" in
@@ -87,9 +95,10 @@ jobs:
     name: unsigned ${{ matrix.bundles }} (${{ matrix.os }})
     needs: [check-tag, verify, draft]
     runs-on: ${{ matrix.os }}
-    # To attach the files to the draft, and nothing else.
+    # Read-only: the build runs every dependency's code, so it holds no token that can write. Its files go on as an
+    # artifact, which `attach` uploads.
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -100,8 +109,6 @@ jobs:
       run:
         shell: bash
     env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
       BUNDLES: ${{ matrix.bundles }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -119,23 +126,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+      - name: Rust toolchain, as apps/desktop/src-tauri/rust-toolchain.toml pins it
+        working-directory: apps/desktop/src-tauri
+        run: rustup toolchain install 1.94.1 --profile minimal --component rustfmt --component clippy
       - name: Unsigned bundle
         env:
           # The AppImage tooling is itself an AppImage; this runs it without FUSE.
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: pnpm --filter @agentcomms/desktop tauri build --ci --no-sign --bundles "$BUNDLES"
-      - name: attach to the draft
+      - name: name the files as the release does
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#desktop-v}"
           bundle=apps/desktop/src-tauri/target/release/bundle
           mkdir -p release-assets
           # One file per kind, named without spaces, as the macOS files are.
-          attach() {
+          collect() {
             local found=("$bundle/$1"/*"$2")
             if [ "${#found[@]}" -ne 1 ] || [ ! -f "${found[0]}" ]; then
               echo "::error::expected one $2 in $bundle/$1, found ${#found[@]}" >&2
@@ -144,13 +150,57 @@ jobs:
             cp "${found[0]}" "release-assets/$3"
           }
           case "$RUNNER_OS" in
-            Windows) attach nsis .exe "Agent.Comms_${version}_x64-setup.exe" ;;
+            Windows) collect nsis .exe "Agent.Comms_${version}_x64-setup.exe" ;;
             Linux)
-              attach appimage .AppImage "Agent.Comms_${version}_amd64.AppImage"
-              attach deb .deb "Agent.Comms_${version}_amd64.deb"
+              collect appimage .AppImage "Agent.Comms_${version}_amd64.AppImage"
+              collect deb .deb "Agent.Comms_${version}_amd64.deb"
               ;;
             *) exit 1 ;;
           esac
-          gh release view "$GITHUB_REF_NAME" > /dev/null
-          assets=(release-assets/*)
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: desktop-${{ runner.os }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The one job that writes to the release: it downloads the files the builds made and uploads them to the draft. It
+  # checks nothing out and runs nothing it downloaded.
+  attach:
+    name: attach the unsigned files to the draft
+    needs: [check-tag, draft, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: attach to the draft, while it is still one
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#desktop-v}"
+          assets=(
+            "release-assets/Agent.Comms_${version}_x64-setup.exe"
+            "release-assets/Agent.Comms_${version}_amd64.AppImage"
+            "release-assets/Agent.Comms_${version}_amd64.deb"
+          )
+          for asset in "${assets[@]}"; do
+            [ -f "$asset" ] || { echo "::error::$asset was not built" >&2; exit 1; }
+          done
+          found=$(find release-assets -type f | wc -l | tr -d ' ')
+          if [ "$found" -ne "${#assets[@]}" ]; then
+            echo "::error::expected ${#assets[@]} files, found $found" >&2
+            exit 1
+          fi
+          # Only a draft is ever written to, and replaced files only there: a published release is never touched.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::$GITHUB_REF_NAME is already published; CI fills only a draft. Bump the version." >&2
+            exit 1
+          fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber

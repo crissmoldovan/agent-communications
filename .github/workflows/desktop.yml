@@ -18,6 +18,20 @@ on:
       - '.github/workflows/desktop*.yml'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      # What the app's checks read from the rest of the repository (a test in apps/desktop holds this list to them).
+      - 'scripts/third-party-licenses.mjs'
+      - 'scripts/channels.mjs'
+      - 'test/helpers/printed-command-guard.mjs'
+      - 'packages/core/src/paths.ts'
+      - 'packages/core/src/config.ts'
+      - 'packages/core/src/ids.ts'
+      - 'packages/core/src/name-grammar.ts'
+      - 'packages/core/src/operations/label.ts'
+      - 'packages/*/package.json'
+      - 'capabilities.json'
+      - 'README.md'
+      - '.gitignore'
+      - '.github/workflows/release.yml'
   push:
     branches: [main]
     paths:
@@ -25,6 +39,20 @@ on:
       - '.github/workflows/desktop*.yml'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      # What the app's checks read from the rest of the repository (a test in apps/desktop holds this list to them).
+      - 'scripts/third-party-licenses.mjs'
+      - 'scripts/channels.mjs'
+      - 'test/helpers/printed-command-guard.mjs'
+      - 'packages/core/src/paths.ts'
+      - 'packages/core/src/config.ts'
+      - 'packages/core/src/ids.ts'
+      - 'packages/core/src/name-grammar.ts'
+      - 'packages/core/src/operations/label.ts'
+      - 'packages/*/package.json'
+      - 'capabilities.json'
+      - 'README.md'
+      - '.gitignore'
+      - '.github/workflows/release.yml'
   workflow_call: {}
 
 permissions:
@@ -63,10 +91,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+      - name: Rust toolchain, as apps/desktop/src-tauri/rust-toolchain.toml pins it
+        working-directory: apps/desktop/src-tauri
+        run: rustup toolchain install 1.94.1 --profile minimal --component rustfmt --component clippy
 
       - name: UI typecheck, tests, build and bundle check
         run: |

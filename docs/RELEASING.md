@@ -323,7 +323,8 @@ and none of it goes to npm. A release of it holds:
   Terminal drives Terminal through `osascript`, which a signed build may not do without both.
 - **Windows and Linux:** an NSIS `.exe`, an AppImage and a `.deb`, unsigned. `.github/workflows/desktop-release.yml`
   builds them when the tag is pushed, once the four legs of `desktop.yml` have passed, and attaches them to the tag's
-  draft release. The release notes say they are unsigned.
+  draft release. The builds have read-only access; a separate job, which checks nothing out, uploads their files, and
+  only while the release is a draft. The release notes say they are unsigned.
 - **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
   `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
 

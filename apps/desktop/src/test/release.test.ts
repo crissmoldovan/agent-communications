@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -17,6 +17,8 @@ const ROOT = join(APP, '..', '..');
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 
 const DESKTOP_YML = '.github/workflows/desktop.yml';
+/** The Rust `apps/desktop/src-tauri/rust-toolchain.toml` pins. */
+const PINNED_RUST = /^channel = "([^"]+)"$/m.exec(read('apps/desktop/src-tauri/rust-toolchain.toml'))?.[1] ?? 'none';
 const RELEASE_YML = '.github/workflows/desktop-release.yml';
 const RELEASE_SH = 'apps/desktop/scripts/release-desktop.sh';
 const PUBLISH_SH = 'apps/desktop/scripts/publish-desktop.sh';
@@ -109,9 +111,11 @@ describe('the desktop workflows', () => {
     expect(workflow).toMatch(
       /uses: actions\/setup-node@[0-9a-f]{40} # v7\n\s+with:\n\s+node-version: 22\.18\.0\n\s+cache: pnpm/,
     );
+    // The Rust rust-toolchain.toml pins, here as on the signing Mac: never whatever stable is that day.
     expect(workflow).toContain(
-      'rustup toolchain install stable --profile minimal --component rustfmt --component clippy',
+      `rustup toolchain install ${PINNED_RUST} --profile minimal --component rustfmt --component clippy`,
     );
+    expect(workflow).not.toMatch(/rustup (?:default|toolchain install) stable/);
     expect(workflow).toContain('libwebkit2gtk-4.1-dev');
 
     const gates = [
@@ -161,16 +165,38 @@ describe('the desktop workflows', () => {
       'gh release create "$GITHUB_REF_NAME" --verify-tag --draft --latest=false --title "Agent Comms $version" --notes-file',
     );
 
+    // A release already published is never filled again: the draft job stops on one.
+    const isDraft = '[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != true ]';
+    expect(draft).toContain(isDraft);
+
+    // The builds hold no token that can write: they run every dependency's code. Their files go on as artifacts.
     const bundle = block(jobs, 'bundle', 2);
     expect(bundle).toMatch(/needs: \[check-tag, verify, draft\]/);
-    expect(block(bundle, 'permissions', 4)).toBe('    permissions:\n      contents: write');
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow and shell text, not a template
-    expect(bundle).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(block(bundle, 'permissions', 4)).toBe('    permissions:\n      contents: read');
+    expect(bundle).not.toMatch(/GH_TOKEN|github\.token|gh release|gh api/);
     // A comma ends a value in a flow mapping, so `appimage,deb` is quoted.
     const legs = [...bundle.matchAll(/- \{ os: (\S+), bundles: '?([^'\s]+?)'? \}/g)].map(([, os, b]) => `${os} ${b}`);
     expect(legs).toEqual(['windows-latest nsis', 'ubuntu-22.04 appimage,deb']);
     expect(bundle).toContain('pnpm --filter @agentcomms/desktop tauri build --ci --no-sign --bundles "$BUNDLES"');
-    expect(bundle).toMatch(/gh release upload "\$GITHUB_REF_NAME" "\$\{assets\[@\]\}" --clobber/);
+    expect(bundle).toContain(
+      `rustup toolchain install ${PINNED_RUST} --profile minimal --component rustfmt --component clippy`,
+    );
+    expect(bundle).toMatch(/uses: actions\/upload-artifact@[0-9a-f]{40} # v7\n\s+with:\n\s+name: desktop-/);
+
+    // Only `attach` writes: it checks nothing out, uploads what the builds made, and only while the release is a draft.
+    const attach = block(jobs, 'attach', 2);
+    expect(attach).toMatch(/needs: \[check-tag, draft, bundle\]/);
+    expect(block(attach, 'permissions', 4)).toBe('    permissions:\n      contents: write');
+    expect(attach).not.toMatch(/actions\/checkout|pnpm|node |npm |cargo|tauri/);
+    expect(attach).toMatch(/uses: actions\/download-artifact@[0-9a-f]{40} # v7/);
+    const upload = attach.indexOf('gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber');
+    expect(upload).toBeGreaterThan(attach.indexOf(isDraft));
+    expect(attach.indexOf(isDraft)).toBeGreaterThan(-1);
+    // Nothing else in the workflow can write.
+    const names = [...jobs.matchAll(/^ {2}([\w-]+):$/gm)].map(([, job]) => job ?? '');
+    expect(names).toEqual(['check-tag', 'verify', 'draft', 'bundle', 'attach']);
+    expect(names.filter((job) => block(jobs, job, 2).includes('contents: write'))).toEqual(['draft', 'attach']);
+    expect((workflow.match(/--clobber/g) ?? []).length).toBe(1);
 
     expectPinnedActions(workflow);
     expectNeverLatest(workflow);
@@ -180,9 +206,80 @@ describe('the desktop workflows', () => {
     expect(workflow).not.toMatch(/TAURI_SIGNING|APPLE_|createUpdaterArtifacts/);
   });
 
-  it("leaves the npm release workflow's trigger to v* tags", () => {
+  it("leaves the npm release workflow's trigger to v* tags, and its publish job builds the packages alone", () => {
     const release = read('.github/workflows/release.yml');
     expect(block(block(release, 'on'), 'push', 2)).toBe("  push:\n    tags: ['v*']");
+    // The job that holds the publish's identity builds no app: `pnpm build` at the root builds apps/desktop too.
+    const publish = block(block(release, 'jobs'), 'publish', 2);
+    expect(publish).toContain('- run: pnpm -r --filter "./packages/**" run build');
+    expect(publish).not.toMatch(/- run: pnpm build\b/);
+    expect(JSON.parse(read('package.json')).scripts.build).toContain('--filter "./apps/**"');
+    // The verify legs still build everything `pnpm verify` checks, the app's UI with it.
+    expect(block(block(release, 'jobs'), 'verify', 2)).toContain('- run: pnpm verify');
+    expect(JSON.parse(read('package.json')).scripts.verify).toContain('pnpm build');
+  });
+
+  it("desktop.yml runs for every file of the rest of the repository the app's checks read", () => {
+    const workflow = read(DESKTOP_YML);
+    const patterns = [...block(block(workflow, 'on'), 'pull_request', 2).matchAll(/^\s+- '([^']+)'$/gm)].map(
+      ([, glob]) => glob ?? '',
+    );
+    const covers = (path: string) =>
+      patterns.some((glob) =>
+        new RegExp(
+          `^${glob
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '\u0000')
+            .replace(/\*/g, '[^/]*')
+            .replace(/\u0000/g, '.*')}$`,
+        ).test(path),
+      );
+    // Every file outside apps/desktop that the app's tests and scripts import or read.
+    const sources = ['src/test', 'scripts'].flatMap((folder) =>
+      readdirSync(join(APP, folder), { recursive: true })
+        .map((entry) => join(APP, folder, String(entry)))
+        .filter((path) => /\.(?:ts|tsx|mjs)$/.test(path)),
+    );
+    const outside = new Set<string>();
+    for (const source of sources) {
+      for (const [, relative] of readFileSync(source, 'utf8').matchAll(/['"`]((?:\.\.\/){3,4}[\w./-]+)['"`]/g)) {
+        const target = join(dirname(source), relative ?? '')
+          .slice(ROOT.length + 1)
+          .replaceAll('\\', '/');
+        if (!target.startsWith('apps/desktop/')) outside.add(target);
+      }
+    }
+    for (const read of [
+      'README.md',
+      '.gitignore',
+      '.github/workflows/release.yml',
+      'capabilities.json',
+      'packages/core/package.json',
+      'test/helpers/printed-command-guard.mjs',
+      'scripts/channels.mjs',
+    ]) {
+      outside.add(read);
+    }
+    expect(outside.size).toBeGreaterThan(8);
+    for (const path of outside) expect(covers(path), `${path} is not in desktop.yml's paths`).toBe(true);
+    // And push is filtered the same way.
+    expect(block(block(workflow, 'on'), 'push', 2)).toContain(
+      block(block(workflow, 'on'), 'pull_request', 2).split('\n').slice(2).join('\n'),
+    );
+  });
+
+  it('the Rust toolchain is pinned once, and the workflows install that one', () => {
+    const pinned = read('apps/desktop/src-tauri/rust-toolchain.toml');
+    expect(pinned).toMatch(/^channel = "\d+\.\d+\.\d+"$/m);
+    expect(pinned).toMatch(/^components = \["rustfmt", "clippy"\]$/m);
+    const manifest = read('apps/desktop/src-tauri/Cargo.toml');
+    const floor = /^rust-version = "(\d+)\.(\d+)"$/m.exec(manifest);
+    const [major, minor] = PINNED_RUST.split('.').map(Number);
+    expect(Number(floor?.[1]) * 1000 + Number(floor?.[2])).toBeLessThanOrEqual((major ?? 0) * 1000 + (minor ?? 0));
+    // The signing Mac adds its targets to the pinned toolchain: from the folder that pins it.
+    expect(read(RELEASE_SH)).toContain(
+      '(cd apps/desktop/src-tauri && rustup target add aarch64-apple-darwin x86_64-apple-darwin)',
+    );
   });
 });
 
