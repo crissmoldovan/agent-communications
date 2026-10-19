@@ -4,9 +4,11 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
   daemonDependencyClosure,
@@ -19,9 +21,12 @@ import {
   runtimeLockBuildInput,
 } from '../scripts/laya-release-gate.mjs';
 import { buildFixtureRuntimeLock, readPrivateRuntimeClosure } from '../scripts/laya-runtime-lock.mjs';
+import { BOUNDARY_RUNNER } from '../scripts/verify-laya-boundary-gate.mjs';
+import { GATE_RUNNER, GATE_SUBJECT_FILES, GATE_WORKER_ENTRY } from '../scripts/verify-laya-quality-gate.mjs';
 import {
   boundaryEvidence,
   codeOf,
+  copyInto,
   dormantRoot,
   offeredRoot,
   RELEASE_LISTS,
@@ -201,6 +206,31 @@ test('E2 release gate: a real lock without passing real-Mac boundary evidence is
       '- [x] TCP, UDP, fetch and UDS denied\n',
     );
     assert.equal(await codeOf(() => gate(root)), 'LAYA_RELEASE_BOUNDARY');
+  });
+});
+
+test("E2 release gate: the owner's manual macOS checklist is supplemental: no release check reads it, and in the evidence's place it is refused", async () => {
+  const checklist = await readFile(join(ROOT, 'test/laya-manual-macos-checklist.md'), 'utf8');
+  assert.match(checklist, /cannot satisfy the release gate/u, 'the checklist says plainly what it is not');
+  assert.ok(
+    checklist.includes('packages/events-laya-runtime/gate/macos-boundary-v1.json'),
+    'and names the machine-produced boundary evidence that is the gate',
+  );
+  for (const file of [
+    'scripts/laya-release-gate.mjs',
+    'scripts/release.mjs',
+    'scripts/verify-laya-boundary-gate.mjs',
+    'scripts/verify-laya-quality-gate.mjs',
+    '.github/workflows/release.yml',
+    '.github/workflows/laya-quality-gate.yml',
+  ])
+    assert.doesNotMatch(await readFile(join(ROOT, file), 'utf8'), /manual-macos-checklist/u, `${file} never reads it`);
+  await withOffered(async (root, metrics) => {
+    await writeQualityReport(root, metrics, BOTH);
+    await mkdir(join(root, 'packages/events-laya-runtime/gate'), { recursive: true });
+    await writeFile(join(root, 'packages/events-laya-runtime/gate/macos-boundary-v1.json'), checklist);
+    const refused = await refusalOf(() => gate(root));
+    assert.equal(refused?.code, 'LAYA_RELEASE_BOUNDARY', 'the ticked checklist in the evidence’s place is refused');
   });
 });
 
@@ -415,5 +445,211 @@ test('E2 release gate: the local release runs the same gate before its verify an
   assert.match(script, /\} catch \(error\) \{\n {2}refuse\(\n {4}`the Laya release gate refused: /);
   for (const later of ['if (failures.length > 0) {', "runLoud('pnpm', ['verify'])", "'publish',"]) {
     assert.ok(call < script.indexOf(later), `the gate runs before ${later}`);
+  }
+});
+
+// ------------------------------------------------------------------------------------------------ end to end (E2 Task 13)
+
+/*
+ * The release rule end to end, on copied release states only: the release job's own gate command and the local release
+ * script run as a release runs them, under the loopback seal, with `git`, `npm` and `pnpm` replaced by stand-ins that
+ * record every call. Nothing here can reach a registry, the real workflow, a tag or a publish.
+ */
+
+const POSIX_ONLY = process.platform === 'win32' && 'the release tool stand-ins are POSIX shell scripts';
+const SEAL_URL = pathToFileURL(join(ROOT, 'test/helpers/loopback-seal-preload.mjs')).href;
+/** A reviewed-shaped real lock (E2 Task 2's fixture lock): anything but the placeholder needs every gate. */
+const REAL_LOCK = 'packages/events-daemon/test/fixtures/laya/lock-expected.json';
+
+/**
+ * Phase E's two release gates and the release list, replaced in the copy: their own proofs are E3's and E13's and
+ * `release-packages.test.mjs`'s; here the question is only where Laya's gate stands in a release.
+ */
+const RELEASE_STAND_INS = Object.freeze({
+  'scripts/packages.mjs':
+    "// The copied state's release list: the daemon alone.\nexport const SCOPE = '@agentcomms';\nexport const PUBLISHABLE = Object.freeze(['events-daemon']);\nexport const PACKAGES = Object.freeze(['events-daemon']);\n",
+  'scripts/verify-events-phase-e-prerequisites.mjs':
+    "// Phase E's prerequisite gate is proved by E3 and E13; this copy passes it.\nexport async function verifyPhaseEPrerequisites() {\n  return [];\n}\n",
+  'scripts/verify-events-phase-e-tests.mjs':
+    "// Phase E's strict-test gate is proved by E3 and E13; this copy passes it.\nexport async function verifyPhaseETestManifest() {\n  return [];\n}\n",
+});
+
+/** `git` on main and in step with its remote, `npm` signed in with nothing published, `pnpm` doing nothing. */
+const TOOL_STAND_INS = Object.freeze({
+  git: `case "$1 $2" in
+  "status --porcelain") ;;
+  "rev-parse --abbrev-ref") echo main ;;
+  "rev-parse HEAD"|"rev-parse origin/main") echo 0000000000000000000000000000000000000013 ;;
+esac`,
+  npm: `case "$1" in
+  whoami) echo synthetic-release-owner ;;
+  *) exit 1 ;;
+esac`,
+  pnpm: 'exit 0',
+});
+
+function relativeImports(source) {
+  return [...source.matchAll(/(?:from\s*|import\s*\()(['"])(\.[^'"]+)\1/g)].map((match) => match[2]);
+}
+
+/** Copies one script and every relative module it reaches, as the release would load them, into `root`. */
+async function copyModuleClosure(root, entry) {
+  const pending = [entry];
+  const copied = new Set();
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (copied.has(file) || Object.hasOwn(RELEASE_STAND_INS, file)) continue;
+    copied.add(file);
+    await copyInto(root, [file]);
+    for (const specifier of relativeImports(await readFile(join(ROOT, file), 'utf8'))) {
+      const target = relative(ROOT, resolve(dirname(join(ROOT, file)), specifier));
+      if (!target.split('/').includes('node_modules')) pending.push(target);
+    }
+  }
+}
+
+/**
+ * A copied release state: this repository's release inputs, the shipped lock or `lock`, the Laya gate's modules (and
+ * the local release's, with `release`), the installed modules linked, and the tool stand-ins on an otherwise empty PATH.
+ */
+async function releaseState({ lock, release = false } = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'laya-release-e2e-'));
+  await copyInto(root, ['package.json', '.github/workflows/release.yml', ...Object.values(SHIPPED)]);
+  // What the gate's verifiers bind a candidate to: its subject, the worker with everything it imports, both runners.
+  await copyInto(root, [...GATE_SUBJECT_FILES, GATE_RUNNER, BOUNDARY_RUNNER]);
+  await copyModuleClosure(root, GATE_WORKER_ENTRY);
+  await copyModuleClosure(root, 'scripts/laya-release-gate.mjs');
+  if (release) await copyModuleClosure(root, 'scripts/release.mjs');
+  for (const [path, text] of Object.entries(RELEASE_STAND_INS)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), text);
+  }
+  if (lock !== undefined) await writeFile(join(root, SHIPPED.runtimeLock), await readFile(join(ROOT, lock)));
+  for (const directory of ['', 'packages/events-daemon'])
+    await symlink(await realpath(join(ROOT, directory, 'node_modules')), join(root, directory, 'node_modules'), 'dir');
+  const bin = join(root, '.release-tools');
+  const calls = join(bin, 'calls');
+  await mkdir(bin, { recursive: true });
+  for (const [tool, body] of Object.entries(TOOL_STAND_INS)) {
+    await writeFile(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> "${calls}"\n${body}\n`);
+    await chmod(join(bin, tool), 0o755);
+  }
+  const env = { PATH: bin, HOME: join(root, '.home'), TMPDIR: join(root, '.tmp') };
+  await mkdir(env.HOME, { recursive: true });
+  await mkdir(env.TMPDIR, { recursive: true });
+  return {
+    root,
+    env,
+    calls: async () => (await readFile(calls, 'utf8').catch(() => '')).split('\n').filter(Boolean),
+  };
+}
+
+/** Runs node with the loopback seal first; a non-zero exit is an answer, not a thrown error. */
+async function sealedNode(args, { cwd, env }) {
+  try {
+    const { stdout, stderr } = await exec(process.execPath, ['--import', SEAL_URL, ...args], { cwd, env });
+    return { status: 0, output: `${stdout}${stderr}`, stdout, stderr };
+  } catch (error) {
+    if (typeof error.code !== 'number') throw error;
+    const stdout = String(error.stdout ?? '');
+    const stderr = String(error.stderr ?? '');
+    return { status: error.code, output: `${stdout}${stderr}`, stdout, stderr };
+  }
+}
+
+/** The release job's Laya step, read from the workflow: its command words after `node`, and its environment. */
+async function layaJobStep(root) {
+  const job = jobBlock(await readFile(join(root, '.github/workflows/release.yml'), 'utf8'), 'laya');
+  const step =
+    /\n {6}- name: Laya ships dormant, or with every gate's evidence\n {8}env:\n((?: {10}[A-Z_]+: '[^']*'\n)+) {8}run: node ([^\n]+)\n/.exec(
+      job,
+    );
+  assert.ok(step, 'the release job has its Laya gate step');
+  const env = Object.fromEntries(
+    [...step[1].matchAll(/ {10}([A-Z_]+): '([^']*)'/g)].map((match) => [match[1], match[2]]),
+  );
+  return { args: step[2].split(' '), env };
+}
+
+test("E2 release end to end: the release job's gate refuses a copied state shipping a real lock without gate evidence, before any registry request", {
+  skip: POSIX_ONLY,
+}, async () => {
+  const refused = await releaseState({ lock: REAL_LOCK });
+  try {
+    const step = await layaJobStep(refused.root);
+    assert.deepEqual(
+      step.env,
+      { AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1' },
+      'the job hands the gate its owner-only rebuild',
+    );
+    const result = await sealedNode(step.args, { cwd: refused.root, env: { ...refused.env, ...step.env } });
+    assert.notEqual(
+      result.status,
+      0,
+      `the step fails, so the publish job that needs it never starts\n${result.output}`,
+    );
+    assert.match(
+      result.stderr,
+      /^LAYA_RELEASE_QUALITY: .*QUALITY_GATE_ABSENT/u,
+      'the missing aggregate evidence refuses first, before the rebuild that would ask the registry',
+    );
+    assert.doesNotMatch(result.output, /loopback seal refused/u, 'and nothing tried to reach a registry');
+    assert.deepEqual(await refused.calls(), [], 'the gate runs no release tool');
+  } finally {
+    await removeRoot(refused.root);
+  }
+  const shipped = await releaseState();
+  try {
+    const step = await layaJobStep(shipped.root);
+    const result = await sealedNode(step.args, { cwd: shipped.root, env: { ...shipped.env, ...step.env } });
+    assert.equal(result.status, 0, result.output);
+    assert.equal(
+      result.stdout,
+      'Laya release gate: the placeholder lock ships, so Laya stays unavailable on every platform\n',
+      'the state as this repository ships it passes, dormant',
+    );
+  } finally {
+    await removeRoot(shipped.root);
+  }
+});
+
+test('E2 release end to end: the local release refuses a copied state shipping a real lock without gate evidence, before its verify and any publish', {
+  skip: POSIX_ONLY,
+}, async () => {
+  const state = await releaseState({ lock: REAL_LOCK, release: true });
+  try {
+    const result = await sealedNode(['scripts/release.mjs'], { cwd: state.root, env: state.env });
+    assert.equal(result.status, 1, result.output);
+    assert.match(result.output, /Refusing to release:/u);
+    assert.match(result.output, /the Laya release gate refused: LAYA_RELEASE_QUALITY: /u);
+    assert.doesNotMatch(result.output, /loopback seal refused/u, 'nothing tried to reach a registry');
+    const calls = await state.calls();
+    assert.ok(calls.includes('npm whoami'), 'the release reached its own preflight checks');
+    assert.deepEqual(
+      calls.filter((call) => call.startsWith('pnpm ')),
+      [],
+      'it stopped before `pnpm verify` and before any `pnpm publish`',
+    );
+  } finally {
+    await removeRoot(state.root);
+  }
+});
+
+test('E2 release end to end: the local release rehearses the shipped placeholder state to its end, with Laya checked unavailable', {
+  skip: POSIX_ONLY,
+}, async () => {
+  const state = await releaseState({ release: true });
+  try {
+    const result = await sealedNode(['scripts/release.mjs'], { cwd: state.root, env: state.env });
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Laya: the placeholder lock ships, so Laya stays unavailable on every platform\./u);
+    assert.match(result.output, /Nothing was published\./u);
+    assert.deepEqual(
+      (await state.calls()).filter((call) => call.startsWith('pnpm ')),
+      ['pnpm verify'],
+      'a rehearsal verifies and sends nothing',
+    );
+  } finally {
+    await removeRoot(state.root);
   }
 });

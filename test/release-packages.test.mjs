@@ -50,6 +50,38 @@ test('E2 runtime package: private dependency declaration reaches no package, sur
   assert.equal(DRIVERS['events-laya-runtime'], undefined);
 });
 
+/**
+ * E2: what the daemon's publish packs, as `pnpm pack` lists it (no tarball is written, and a dead registry stands in
+ * for npm): Laya's three reviewed assets — the lock exactly the fail-closed placeholder — and its worker, and nothing
+ * of the runtime, a model or a test fixture. The packed consumer check proves the same of an installed tarball.
+ */
+test('E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model', {
+  skip: process.platform === 'win32' && 'pnpm is a .cmd shim on Windows; the packed list is the same on every platform',
+}, async () => {
+  const daemon = join(ROOT, 'packages', 'events-daemon');
+  const { stdout } = await exec('pnpm', ['pack', '--dry-run', '--json'], {
+    cwd: daemon,
+    encoding: 'utf8',
+    env: { ...process.env, npm_config_registry: 'http://127.0.0.1:9/' },
+  });
+  const files = JSON.parse(stdout).files.map((file) => file.path);
+  for (const asset of ['laya-enablement-disclosures.json', 'laya-manifest.json', 'laya-runtime.json'])
+    assert.ok(files.includes(asset), `the tarball carries ${asset}`);
+  assert.ok(files.includes('dist/laya-worker.mjs'), 'the tarball carries the built worker (run `pnpm build` first)');
+  assert.equal(
+    await readFile(join(daemon, 'laya-runtime.json'), 'utf8'),
+    '{\n  "schemaVersion": 1,\n  "blocked": "E2_EXTERNAL_REFERENCE_BLOCKED"\n}\n',
+    'and the lock it packs is the placeholder: Laya ships held',
+  );
+  assert.deepEqual(
+    files.filter((path) =>
+      /\.onnx|laya_config|tokenizer|node_modules|^test\/|^src\/|events-laya-runtime|\.tgz$/u.test(path),
+    ),
+    [],
+    'no model, tokenizer, runtime tree, source, test fixture or archive is packed',
+  );
+});
+
 /** Runs a script and returns its exit status and output; a refusal is an answer, not a thrown error. */
 async function runScript(script, args, options = {}) {
   try {

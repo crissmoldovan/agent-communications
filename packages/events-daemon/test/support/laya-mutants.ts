@@ -218,6 +218,12 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-laya-runtime/README.md',
     'packages/events-laya-runtime/gate/macos-boundary-v1.schema.json',
     'packages/events-daemon/test/fixtures/laya/quality/metrics-v1.json',
+    // E2 Task 13's release end-to-end oracles copy a whole release candidate: the gate's verifiers bind its subject
+    // (these two among them) and both gate runners, which no oracle imports.
+    'packages/events-daemon/tsdown.config.ts',
+    'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
+    'scripts/run-laya-quality-gate.mjs',
+    'scripts/run-laya-macos-boundary-gate.mjs',
   ];
   for (const file of files) await copyFile(root, file);
   // A test spawns these entries rather than importing them, so their own relative imports are copied too: the shipped

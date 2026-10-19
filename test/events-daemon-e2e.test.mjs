@@ -237,6 +237,25 @@ test('E2: the built daemon reads its shipped Laya assets and keeps Laya held, th
   }
 });
 
+test('E2: the packed daemon consumer requires Laya held, its assets and worker, and no runtime or model installed', async () => {
+  const check = await readFile(new URL('../packages/events-daemon/test/consumer-check.mjs', import.meta.url), 'utf8');
+  for (const asset of ["'laya-manifest.json'", "'laya-runtime.json'", "'laya-enablement-disclosures.json'"])
+    assert.ok(check.includes(asset), `the packed consumer reads ${asset}`);
+  assert.match(check, /'laya-worker\.mjs'/u, 'the packed consumer reads the built worker');
+  assert.match(
+    check,
+    /"blocked": "E2_EXTERNAL_REFERENCE_BLOCKED"/u,
+    'and requires the placeholder lock, byte for byte',
+  );
+  assert.match(check, /installedPackages\(/u, 'it walks every package the install placed');
+  assert.match(check, /@receptron/u, 'for the Laya runtime');
+  assert.match(check, /onnxruntime/u, 'and ONNX Runtime');
+  assert.match(check, /\.onnx/u, 'and for any model file');
+  assert.match(check, /'judge', 'kind', 'enable', 'laya'/u, 'it asks the installed owner to enable Laya');
+  assert.match(check, /AGENT_COMMS_DATA_DIR/u, 'with its data directory pinned');
+  assert.match(check, /join\(dataDir, 'events', 'laya'\)/u, 'and requires no Laya directory afterwards');
+});
+
 test('REL-B1: the Gmail end-to-end path is sealed to the repository fake', async () => {
   const source = await readFile(new URL(import.meta.url), 'utf8');
   assert.match(source, /packages\/gmail\/test\/support\/harness\.ts/);

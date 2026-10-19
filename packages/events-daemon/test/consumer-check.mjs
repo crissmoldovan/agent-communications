@@ -1,7 +1,7 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,11 +17,92 @@ if (windows) await assert.rejects(() => status(), refusesWindows);
 else assert.deepEqual(await status(), { owner: 'not-running' });
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events-daemon')));
 const packageRoot = join(dist, '..');
-for (const asset of ['laya-manifest.json', 'laya-runtime.json']) {
-  await readFile(join(packageRoot, asset), 'utf8');
-}
 const cli = join(dist, 'cli.mjs');
 const installed = JSON.parse(await readFile(join(dist, '..', 'package.json'), 'utf8'));
+
+// E2: the packed daemon carries Laya's three reviewed assets and its worker, and ships Laya held — the fail-closed
+// placeholder lock, byte for byte — with no Laya runtime, ONNX package or model anywhere in what the install brought.
+const PLACEHOLDER_LOCK = '{\n  "schemaVersion": 1,\n  "blocked": "E2_EXTERNAL_REFERENCE_BLOCKED"\n}\n';
+const LAYA_UNAVAILABLE = { kind: 'unavailable', code: 'E2_EXTERNAL_REFERENCE_BLOCKED', phase: 'E2' };
+for (const asset of ['laya-manifest.json', 'laya-runtime.json', 'laya-enablement-disclosures.json']) {
+  await readFile(join(packageRoot, asset), 'utf8');
+}
+assert.equal(
+  await readFile(join(packageRoot, 'laya-runtime.json'), 'utf8'),
+  PLACEHOLDER_LOCK,
+  'the packed daemon ships Laya held, behind the placeholder lock',
+);
+assert.deepEqual(
+  JSON.parse(await readFile(join(packageRoot, 'laya-manifest.json'), 'utf8')).promptTemplates,
+  ['laya-noul-v1'],
+  'the packed manifest offers exactly the binary template',
+);
+const worker = await readFile(join(dist, 'laya-worker.mjs'), 'utf8');
+const workerImports = [...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1]);
+assert.ok(
+  workerImports.every((specifier) => specifier.startsWith('node:') || specifier.startsWith('./')),
+  `the packed Laya worker imports only Node built-ins and its own chunks: ${workerImports.join(', ')}`,
+);
+for (const hook of ['preinstall', 'install', 'postinstall', 'prepare'])
+  assert.equal(installed.scripts?.[hook], undefined, `the packed daemon has no ${hook} script`);
+for (const name of Object.keys({ ...installed.dependencies, ...installed.optionalDependencies }))
+  assert.doesNotMatch(
+    name,
+    /laya|onnxruntime|@huggingface\/tokenizers/i,
+    `the packed daemon does not depend on ${name}`,
+  );
+
+/** Every package directory the install placed, nested ones included, by its package name. */
+async function installedPackages(modules) {
+  const found = [];
+  const entries = await readdir(modules, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const names = entry.name.startsWith('@')
+      ? (await readdir(join(modules, entry.name), { withFileTypes: true }))
+          .filter((child) => child.isDirectory())
+          .map((child) => `${entry.name}/${child.name}`)
+      : [entry.name];
+    for (const name of names) {
+      found.push(name);
+      found.push(...(await installedPackages(join(modules, name, 'node_modules'))));
+    }
+  }
+  return found;
+}
+
+/** Every file below a directory, as a path relative to it. */
+async function filesBelow(directory, prefix = '') {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    const path = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...(await filesBelow(join(directory, entry.name), path)));
+    else found.push(path);
+  }
+  return found;
+}
+
+const consumerModules = join(process.cwd(), 'node_modules');
+const placed = await installedPackages(consumerModules);
+assert.ok(placed.includes('@agentcomms/events-daemon'), 'the consumer installed the packed daemon');
+const runtimeLike = placed.filter((name) =>
+  /^@receptron\/|^onnxruntime|^@huggingface\/tokenizers$|^@agentcomms\/events-laya-runtime$/.test(name),
+);
+assert.deepEqual(runtimeLike, [], 'no Laya runtime or ONNX package is anywhere in the installed tree');
+const lockfile = JSON.parse(await readFile(join(process.cwd(), 'package-lock.json'), 'utf8'));
+assert.deepEqual(
+  Object.keys(lockfile.packages ?? {}).filter((path) =>
+    /@receptron|onnxruntime|@huggingface\/tokenizers|laya-runtime/.test(path),
+  ),
+  [],
+  'and none in what npm recorded installing',
+);
+assert.deepEqual(
+  (await filesBelow(packageRoot)).filter((path) => /\.onnx(?:\.data)?$|laya_config\.json$|^node_modules\//.test(path)),
+  [],
+  'the packed daemon carries no model file and no bundled dependency tree',
+);
+
 // `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
 const sealUrl = new URL('./loopback-seal-preload.mjs', import.meta.url).href;
 const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help'], {
@@ -111,10 +192,13 @@ if (process.platform !== 'win32') {
   const root = await mkdtemp(join('/tmp', 'events-daemon-consumer-'));
   const stateDir = join(root, 'state');
   const configDir = join(root, 'config');
+  const dataDir = join(root, 'data');
   const env = {
     ...process.env,
     AGENT_COMMS_STATE_DIR: stateDir,
     AGENT_COMMS_CONFIG_DIR: configDir,
+    // Pinned, so this check can see that Laya's artifact directory is never created.
+    AGENT_COMMS_DATA_DIR: dataDir,
     AGENT_COMMS_UPDATE_CHECK: 'off',
     NO_COLOR: '1',
   };
@@ -182,6 +266,31 @@ if (process.platform !== 'win32') {
     } finally {
       await mcp.close();
     }
+    // Laya held, through the installed CLI against the installed owner: every way to turn it on names the reason.
+    const daemonCli = (...args) =>
+      JSON.parse(
+        execFileSync(process.execPath, ['--import', sealUrl, cli, '--state-dir', stateDir, '--json', ...args], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env,
+        }),
+      );
+    assert.deepEqual(
+      daemonCli('judge', 'kind', 'enable', 'laya'),
+      LAYA_UNAVAILABLE,
+      'judge kind enable laya is refused',
+    );
+    assert.deepEqual(
+      daemonCli('judge', 'kinds', 'list').find((entry) => entry.kind === 'laya'),
+      { kind: 'laya', state: 'unavailable', code: 'E2_EXTERNAL_REFERENCE_BLOCKED' },
+      'judge kinds list shows Laya unavailable',
+    );
+    const model = daemonCli('judge', 'model', 'status');
+    assert.deepEqual(
+      { state: model.state, reason: model.reason, lock: model.runtimeLockDigest },
+      { state: 'unavailable', reason: 'E2_EXTERNAL_REFERENCE_BLOCKED', lock: null },
+      'judge model status says why',
+    );
     const stopped = execFileSync(
       process.execPath,
       ['--import', sealUrl, cli, '--state-dir', stateDir, '--json', 'stop'],
@@ -193,6 +302,11 @@ if (process.platform !== 'win32') {
     );
     assert.equal(stopped, '{"stopping":true}\n');
     assert.equal(await exited, 0, stderr);
+    await assert.rejects(
+      stat(join(dataDir, 'events', 'laya')),
+      { code: 'ENOENT' },
+      'no Laya runtime, model or directory was installed or created',
+    );
   } finally {
     if (owner.exitCode === null) owner.kill('SIGTERM');
     await exited.catch(() => undefined);
@@ -200,4 +314,6 @@ if (process.platform !== 'win32') {
   }
 }
 
-console.log('events-daemon consumer check: package import, foreground owner, local CLI and MCP control OK');
+console.log(
+  'events-daemon consumer check: package import, Laya held with no runtime or model installed, foreground owner, local CLI and MCP control OK',
+);
