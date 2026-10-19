@@ -26,7 +26,7 @@ import {
 import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
-import { resolveName } from '../names.ts';
+import { findById, resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
 import {
@@ -278,6 +278,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   }
 
   checks.push(await standingCheck(core, readable, handoffs));
+  checks.push(...(await standingLedgerChecks(core, readable ? config : null, handoffs)));
 
   const keyring = options.keyring !== undefined ? options.keyring : await loadKeyringModule();
   // `probeKeychain` loads the real module when handed none, so a machine without it is answered here instead.
@@ -345,6 +346,53 @@ async function standingCheck(core: Core, readable: boolean, handoffs: CliHandoff
       }),
     ),
   };
+}
+
+/**
+ * Each account's acknowledgement ledger that holds a line this release cannot read (design
+ * 2026-10-19-standing-approvals, the lead's call after review): a row each, naming the account, its lines and where
+ * the file is. While one does, no standing approval of that account can be used — its counts cannot be known, and a
+ * count is never guessed downwards — and nothing but this says why. Something to put right, not a fault of the
+ * machine, so a warning. The way back is the person's: end that account's standing approvals, then move the file
+ * aside; a new one starts empty. Nothing at all when every ledger reads whole.
+ */
+async function standingLedgerChecks(core: Core, config: Config | null, handoffs: CliHandoffs): Promise<DoctorCheck[]> {
+  let found: Awaited<ReturnType<Core['acks']['unreadable']>>;
+  try {
+    found = await core.acks.unreadable();
+  } catch (error) {
+    return [
+      {
+        name: 'standing ledger',
+        ok: true,
+        warn: true,
+        detail: `could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+  return found.map(({ accountId, path, lines }) => {
+    const account = config === null ? undefined : findById(config, 'account', accountId)?.alias;
+    const named = account === undefined ? accountId : `${shownText(account, 64)} (${accountId})`;
+    const which =
+      lines.length === 1
+        ? `line ${lines[0]}`
+        : `lines ${lines.slice(0, 10).join(', ')}${lines.length > 10 ? ', …' : ''}`;
+    const end = handoffSentence(
+      handoffs.core(['standing', 'off']),
+      (off) =>
+        `End ${account === undefined ? "this account's" : `${shownText(account, 64)}'s`} standing approvals — ${off}, or standing revoke for each`,
+      { instead: "End this account's standing approvals with standing off, or standing revoke for each" },
+    );
+    return {
+      name: 'standing ledger',
+      ok: true,
+      warn: true,
+      detail: `${named}: ${which} of its acknowledgement ledger cannot be read, so none of its standing approvals can be used until it reads whole — ${shownPath(path)}`,
+      fix: remedy(
+        `${end}; then move the file aside (rename it, or move it out of its folder): ${shownPath(path)}. A new ledger starts empty, and its counts start again.`,
+      ),
+    };
+  });
 }
 
 /**

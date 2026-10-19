@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ACCOUNT_ID_PATTERN } from './config.ts';
 import { CommsError } from './errors.ts';
@@ -122,8 +122,8 @@ export class AckLedger {
     return join(this.directory, `${accountId}.jsonl`);
   }
 
-  /** Every line, read: the entries, and how many lines this release cannot read. */
-  async #read(path: string): Promise<{ entries: AckEntry[]; unreadable: number }> {
+  /** Every line, read: the entries, and the number — from 1 — of each line this release cannot read. */
+  async #read(path: string): Promise<{ entries: AckEntry[]; unreadable: number[] }> {
     let text = '';
     try {
       text = await readFile(path, 'utf8');
@@ -131,14 +131,45 @@ export class AckLedger {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const entries: AckEntry[] = [];
-    let unreadable = 0;
-    for (const line of text.split('\n')) {
+    const unreadable: number[] = [];
+    for (const [index, line] of text.split('\n').entries()) {
       if (line.trim() === '') continue;
       const entry = entryOf(line);
-      if (entry === null) unreadable += 1;
+      if (entry === null) unreadable.push(index + 1);
       else entries.push(entry);
     }
     return { entries, unreadable };
+  }
+
+  /** Where an account's ledger is kept: `<state>/standing/<accountId>.jsonl`, for a person told to move it aside. */
+  pathOf(accountId: string): string {
+    return this.#path(accountId);
+  }
+
+  /**
+   * Every account's ledger on this machine that holds a line this release cannot read, with the number of each such
+   * line, for the doctor (design 2026-10-19-standing-approvals, the lead's call after review): while one does, no
+   * standing approval of that account can be used — what it counts cannot be known — and nothing else says so. Reads
+   * without the lock: a look, and every line it reads was written whole.
+   */
+  async unreadable(): Promise<{ accountId: string; path: string; lines: number[] }[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const found: { accountId: string; path: string; lines: number[] }[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.jsonl')) continue;
+      const accountId = name.slice(0, -'.jsonl'.length);
+      if (!ACCOUNT_ID_PATTERN.test(accountId)) continue;
+      const path = this.#path(accountId);
+      const { unreadable } = await this.#read(path);
+      if (unreadable.length > 0) found.push({ accountId, path, lines: unreadable });
+    }
+    return found;
   }
 
   /**
@@ -160,13 +191,13 @@ export class AckLedger {
     }
     return withFileLock(`${path}.lock`, async () => {
       const { entries, unreadable } = await this.#read(path);
-      if (unreadable > 0) {
+      if (unreadable.length > 0) {
         throw new CommsError(
           'BAD_DATA',
           'nothing was sent: this account’s standing acknowledgement ledger has a line that cannot be read',
           {
-            hint: 'No standing approval of this account can be used until the ledger reads whole: what it counts cannot be known. Ask the person instead.',
-            details: { unreadable },
+            hint: 'No standing approval of this account can be used until the ledger reads whole: what it counts cannot be known. Ask the person instead; the doctor says which line, and how to recover.',
+            details: { unreadable: unreadable.length, lines: unreadable },
           },
         );
       }

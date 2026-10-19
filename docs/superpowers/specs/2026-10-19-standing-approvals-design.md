@@ -469,3 +469,10 @@ word.
    `standing: { state: 'pending' | 'active' | 'ended', reason? }`, read as `standing list` reads it (a live `never`
    ends it at a look). A pending one is waited on as before; an ended one ends `final`, with the store's reason.
    **(lead's call, after review)**
+8. **An unreadable ledger line still fails closed, and is no longer silent** (S6, S10; core review C7). A line of an
+   account's acknowledgement ledger that this release cannot read still refuses every use of that account's standing
+   approvals, `BAD_DATA`, now with the line numbers in `details.lines`. The doctor adds a `standing ledger` warning for
+   each such ledger, naming the account, its lines and the file, `<state>/standing/<accountId>.jsonl`. There is no
+   repair command. The recovery is documented (core README, and the doctor's fix): the person ends that account's
+   standing approvals with `standing off`, or `standing revoke` for each, then moves the file aside; a new ledger starts
+   empty. **(lead's call, after review)**

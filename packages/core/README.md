@@ -139,6 +139,12 @@ Tightening the change policy ends every one too, and a send policy of `never`, o
 account's; loosening again revives none. `doctor` lists the active ones and when each ends. Over MCP, `comms_standing`
 reports them, and with `narrow`, `revoke` or `off` changes them; nothing in core creates or widens one.
 
+Every use is counted in the account's acknowledgement ledger, `standing/<account id>.jsonl` in the state folder
+(`agentcomms paths` shows where that is). If a line of it cannot be read — a disk that filled mid-write — none of that
+account's standing approvals can be used, since what they have counted cannot be known, and `doctor` names the account,
+the line and the file. To recover, end that account's standing approvals (`standing off`, or `standing revoke` for
+each), then move the file aside; a new ledger starts empty, and you can make new standing approvals.
+
 **What it does not defend.** It holds against an agent acting through the MCP tools. An agent with an unrestricted
 shell, running as you, is out of its reach: it can already get past the terminal check, edit the configuration and run
 these commands as you — and so can anyone who can write to the configuration directory. Under the `chat` send policy

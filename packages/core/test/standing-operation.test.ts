@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { appendFileSync, renameSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -789,4 +790,47 @@ test('doctor lists active standing approvals and when they expire', async () => 
   assert.doesNotMatch(listed?.detail ?? '', new RegExp(waiting.approvalId), 'one waiting for its code is not in force');
   assert.doesNotMatch(listed?.detail ?? '', new RegExp(ended.approvalId), 'an ended one is not listed');
   assert.match(listed?.detail ?? '', /^1 in force/);
+});
+
+test('doctor names an acknowledgement ledger line that cannot be read, and how to recover', async () => {
+  const { core, env } = machine();
+  const rows = async () =>
+    (await doctor(core, env, { keyring: null })).checks.filter((check) => check.name === 'standing ledger');
+  assert.deepEqual(await rows(), [], 'nothing at all while every ledger reads whole');
+  const record = await standing(core, { limits: { perThread: 3 } });
+  await mintStandingUse(core, use(record, '15.000001'));
+  const path = core.acks.pathOf(ACME);
+  // A line cut short, as a disk that filled mid-write leaves it, and one more after it that reads.
+  appendFileSync(path, '{"kind":"use","at":\n');
+  await mintStandingUse(core, use(record, '15.000002')).catch(() => undefined);
+  appendFileSync(
+    path,
+    `${JSON.stringify({ kind: 'outcome', at: '2026-10-19T09:00:01.000Z', childId: 'x', outcome: 'sent', notice: 'none' })}\n`,
+  );
+
+  const [row, ...more] = await rows();
+  assert.equal(more.length, 0);
+  assert.equal(row?.ok, true, 'a warning, not a fault of the machine');
+  assert.equal(row?.warn, true);
+  assert.match(
+    row?.detail ?? '',
+    new RegExp(`^acme/slack \\(${ACME}\\): line 2 of its acknowledgement ledger cannot be read`),
+  );
+  assert.match(row?.detail ?? '', /none of its standing approvals can be used/);
+  assert.ok((row?.detail ?? '').includes(path), 'it says where the ledger is');
+  assert.match(String(row?.fix ?? ''), /standing off|standing revoke/);
+  assert.match(String(row?.fix ?? ''), /move the file aside/);
+  // And a use is refused, saying which line and pointing at the doctor.
+  await assert.rejects(
+    mintStandingUse(core, use(record, '15.000003')),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      error.code === 'BAD_DATA' &&
+      JSON.stringify(error.details?.lines) === '[2]' &&
+      /doctor/.test(error.hint ?? ''),
+  );
+  // The recovery the row gives: end them, move the file aside — and the doctor has nothing more to say.
+  await standingChange(core, { off: true });
+  renameSync(path, `${path}.aside`);
+  assert.deepEqual(await rows(), []);
 });
