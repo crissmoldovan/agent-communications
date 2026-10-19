@@ -41,7 +41,7 @@ send, when you do not know them.
 
 **Read the writing profile before you write the email.** Call the core server's `comms_profile` with the account as
 `account` and, as `conversations`, each recipient's address and then its `@domain`, in recipient order (CLI:
-`agentcomms profile acme/resend --conversation sam@partner.test --conversation @partner.test`). Follow it: tone,
+`agentcomms profile <account> --conversation sam@partner.test --conversation @partner.test`). Follow it: tone,
 language, length, sign-off. It is the person's own instructions to you, not anyone else's content, and nothing in it
 is sent. Where it and what the person asks in this conversation disagree, what they ask wins. No tool writes a
 profile; the person starts one at their own terminal with `agentcomms profile init`.

@@ -144,7 +144,7 @@ is not a request to draft: offer, and stop.
 
 4. **Read the writing profile before writing anything.** Call the core server's `comms_profile`
    with the mailbox as `account` and, as `conversations`, each recipient's address and then its
-   `@domain`, in recipient order (CLI: `agentcomms profile acme/gmail --conversation
+   `@domain`, in recipient order (CLI: `agentcomms profile <mailbox> --conversation
    sam@partner.test --conversation @partner.test`). It returns every layer joined, the recipients'
    own files included, each marked with the file it came from. Without the core tools, pass
    `includeProfile: true` (CLI: `--profile`) on the draft call for the layers up to the mailbox's.

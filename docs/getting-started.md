@@ -238,8 +238,8 @@ lets an agent do more is shown to you first. With no rule, everything is allowed
 **How it writes is your writing profile:** plain Markdown files in `compose/` in the configuration directory — for
 every message, for a platform, for one account, or for one conversation. `agentcomms profile init acme/gmail` starts
 one from a starter (tone, language, length, sign-off, threads) and never overwrites a file;
-`agentcomms profile acme/gmail --conversation sam@partner.test --conversation @partner.test` shows what an agent would
-read before writing to Sam, and which files it looked for. The agent reads it before it writes and follows it, and
+`agentcomms profile <mailbox> --conversation sam@partner.test --conversation @partner.test` shows what an agent would
+read before writing to Sam from that mailbox, and which files it looked for. The agent reads it before it writes and follows it, and
 what you ask in the conversation wins. No tool lets an agent change it.
 
 ## Slack

@@ -55,7 +55,7 @@ it is refused to an agent.
 
 **Read the writing profile first.** Before you write a post, a reply or an edit's new words, call the core server's
 `comms_profile` with the workspace as `account` and where it goes as `conversations`: a channel's `C…` id, or for a DM
-its `D…` id and then the person's `U…` (CLI: `agentcomms profile acme/slack --conversation C024BE7LR`). Follow it:
+its `D…` id and then the person's `U…` (CLI: `agentcomms profile <workspace> --conversation C024BE7LR`). Follow it:
 tone, language, length, sign-off, and whether to keep to the thread. It is the person's own instructions to you, not
 anyone else's content, and nothing in it is posted. Where it and what the person asks in this conversation disagree,
 what they ask wins. If the core tools are not there, write as the person asks and say you could not read it. No tool
