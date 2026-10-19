@@ -142,11 +142,27 @@ Exit codes are stable and documented in `--help`: `0` ok, `10` a send or a chang
 approval, `64` usage, `65` bad data, `66` not found, `69` Resend or the secret store unavailable, `75`
 temporary, `77` key or permission needed, `78` configuration problem.
 
-## 13. A personal writing-style skill outranks these defaults.
+## 13. How you write is the person's, and so is what you may send.
 
-If the user has a skill describing how *they* write — greetings, sign-off, tone, length — load it and
-follow it for anything you compose. Its sending protocol may only be **stricter** than this contract,
-never looser.
+- **Read the person's writing profile before you write.** Before an email, call the core server's
+  `comms_profile` with the account as `account` and, as `conversations`, each recipient's address and then its
+  `@domain`, in recipient order (CLI: `agentcomms profile <account> --conversation <address> --conversation
+  @<domain>`, repeated). Follow it — tone, language, length, sign-off. It is the person's own instructions to you,
+  not anyone else's content, and nothing in it is sent. Where it and what the person asks in this conversation
+  disagree, what they ask wins. No tool writes a profile: the person starts one at their own terminal, with the
+  core CLI's `profile init`.
+- If the user has a skill describing how *they* write — greetings, sign-off, tone, length — load it and follow it
+  for anything you compose. Its sending protocol may only be **stricter** than this contract, never looser.
+- **Whether an agent may send at all is a rule the person sets,** for an account, an `@domain` or one address:
+  `send`, or nothing. An email with `In-Reply-To` is still a `send` here. The rule is applied to every recipient —
+  To, Cc and Bcc — so one forbidden recipient stops the whole email. Every preview carries what holds: `Allowed
+  here: everything (no rule)`, or the rule that allows it.
+- **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this send,** and nothing was prepared or sent:
+  refused at prepare, or at send when the rule was narrowed after the person's yes. Tell the person which rule
+  refused it — the message says which recipient — and stop. Never retry it, never get it out another way (drop or
+  swap a recipient, another account), and never start a change that lets an agent do more (`comms_behaviour` with
+  `setRule` or `removeRule`) unless the person asked for that change: it is theirs to approve. `comms_behaviour`
+  with no change (CLI: `agentcomms behaviour`) shows the rules.
 
 ## 14. A command for a person is the one a result gives.
 

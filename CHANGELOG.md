@@ -3,6 +3,96 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**You can decide what an agent may do at all, on each account and in each conversation, and how it writes there.**
+Until now the only boundary was the send policy and your yes to each message: in a workspace that could post, every act
+was open to the agent, and nothing said "this account may reply but never start a conversation". Now a rule can say
+exactly that, and the tools hold it, before anything reaches a preview and again at send. How the agent writes —
+tone, language, length, sign-off, threads — comes from a writing profile you keep for every channel and conversation,
+which the agent reads before it writes, so the first preview is already in your way of writing.
+
+**What an agent may do: `agentcomms behaviour`, and `comms_behaviour`.** A rule names an account, optionally one
+conversation — a Slack channel, DM or person (`C…`, `G…`, `D…`, `U…`), or a mail address or `@domain` — and the acts an
+agent may start there, and only those: `post`, `reply`, `reaction`, `edit`, `delete` and `file` on Slack, `send` and
+`reply` on Gmail, `send` on Resend.
+
+- `agentcomms behaviour allow cue/slack reply,reaction` lets an agent only reply and react in that workspace;
+  `agentcomms behaviour allow acme/gmail none --conversation @client.test` lets it send nothing to anyone there;
+  `agentcomms behaviour` shows every rule and what each account allows, across it and in each conversation a rule
+  names; `agentcomms behaviour clear <account> [--conversation <id>]` takes one away. Over MCP, `comms_behaviour` with
+  `setRule` or `removeRule`, and with no change it only reports.
+- **The most specific rule wins:** a conversation over its account, and for mail an address over its `@domain`. A
+  Slack DM is matched by its `D…` rule and by the person's `U…` rule together, and only what both allow holds.
+- **A rule that only narrows applies at once.** One that lets an agent do more — an act added, a rule removed whose
+  fallback is wider, a conversation allowed more than its account — is a change you approve first, its preview showing
+  each level before → after. An agent may start one, but the skills tell it to only when you asked.
+- **A rule fails closed.** It binds to the account's id, so a rename keeps it, and a rule left behind by a removed
+  account still holds an account connected again under that name. An act this release does not know narrows its rule;
+  a rule it cannot read at all makes its account allow nothing, and `doctor` says so. Addresses and domains match
+  whatever their case, whether a domain is written in Unicode or in its `xn--` form, and with or without a trailing dot:
+  a rule for `@bücher.de` holds mail to `kunde@xn--bcher-kva.de`. A rule naming a domain that is not one is refused when
+  added, and one written by hand makes its account allow nothing.
+
+**An act a rule does not allow is refused, and the agent stops.** "this agent may only reply and react in #general
+(cue/slack)": `ACT_NOT_ALLOWED`, before any preview or approval exists, so nothing waits for you. The same refusal
+stops an act you said yes to when you narrowed the rule afterwards, before Slack, Gmail or Resend is called. The hint
+reads the same on every channel: nothing was done, the `behaviour` command (as this machine runs it) and
+`comms_behaviour` show the rules, and the agent tells you which rule stopped it and does not try again. It never names
+a command that changes the rules.
+
+**Every channel checks every act, at prepare and at send.**
+
+- **Slack:** a post with no thread is `post`, one in a thread `reply`; a file needs `file` and, for where it lands,
+  `post` or `reply`; a reaction is `reaction`; an edit is `edit`, and `file` as well when it adds files; a deletion is
+  `delete`. Each is checked in `slack_post_prepare`, `slack_react`, `slack_edit_prepare` and `slack_delete_prepare`, and
+  again in the one place every send passes before Slack is called.
+- **Gmail:** every recipient — To, Cc and Bcc — is checked on their own, and one forbidden recipient refuses the whole
+  message, naming them. `gmail_send_prepare` and `gmail_draft_send` refuse alike; drafts stay possible under every
+  rule, since a draft reaches nobody.
+- **Resend:** the same for every recipient of `resend_send_prepare`, and again at `resend_send_execute`. A Resend email
+  with `In-Reply-To` is still a `send`: Resend has no threads here.
+
+**A Gmail reply is proven from the mailbox.** A message counts as a `reply` only when its `In-Reply-To` names a message
+that is in this mailbox, which prepare asks Gmail with one search and binds into the approval. A forward, a message
+whose `In-Reply-To` names nothing here, or a thread id alone (Gmail gives every draft one) is a `send`. When a rule
+allows replies but not sends, and the message was meant as a reply it could not prove, the refusal says so. An
+approval prepared before this release is checked as both a reply and a send when its `In-Reply-To` could make it
+either: the stricter reading.
+
+**Writing profiles for every channel and conversation: `agentcomms profile`, and `comms_profile`.** A profile is
+Markdown you keep in `compose/` in the configuration directory, now in five layers, each refining the one before:
+`default.md`, `user.md`, the platform's (`gmail.md`, `slack.md` or `resend.md`), the account's
+(`inbox-<account>.md`, as before, now for Slack and Resend accounts too, such as `inbox-cue__slack.md`) and each
+conversation's (`conversation-<account>__<conversation>.md`). For mail every recipient's file is read, the address's
+before its domain's; for a Slack DM, both the DM's and the person's.
+
+- `agentcomms profile cue/slack --conversation C0123ABC` (and `comms_profile` with `account` and `conversations`)
+  shows the joined profile for that place, each part marked with its file, and every file it would read, written or
+  not. It only reads, and needs no approval.
+- `agentcomms profile init [<account>] [--conversation <id>]` starts the missing file for that place from a starter —
+  Tone, Language, Length, Sign-off and Threads, one example line each — prints its path, and never overwrites a file.
+  It is the command line's only: no tool lets an agent write a profile, because something it read could otherwise
+  change how every later message is written.
+- The skills tell agents to read it before writing any message, and to follow it; where it and what you ask in the
+  conversation disagree, what you ask wins. Nothing checks a message against it: it is guidance, and you still see every
+  message before it goes. Gmail's draft tools keep `includeProfile` as it was.
+
+Why: people asked for control over what an agent may do at all — "react and reply, but never start a conversation,
+edit or delete" — and over how it writes, at every level: per message, per account, per conversation and by kind. A boundary has to hold even when an agent is confused, or told otherwise by something it read, so the
+tools enforce it; a style is yours to describe, and your yes to each preview is what checks it.
+
+**Upgrading.**
+- Nothing to change: with no rule, everything is allowed, exactly as in 0.21.0, and the profile files you wrote keep
+  working — `inbox-<mailbox>.md` is the account layer now.
+- **Restart your MCP clients after updating.** A server started before 0.22.0 holds no rule until its client starts it
+  again. The first rule you add says so, and `agentcomms doctor` names every registered server older than 0.22.0 while
+  any rule exists.
+- One new error code, `ACT_NOT_ALLOWED` (exit 10, the refusal class of `POLICY_NEVER`), and one new line in every
+  send, post, reaction, edit and deletion preview, `Allowed here: …`.
+- A Slack post, reaction, edit or deletion in a DM that was prepared before you updated, and not yet sent, has to be
+  prepared again. One in a channel, a Gmail send and a Resend send do not.
+
 ## 0.21.0
 
 **Organisation profiles can gain new fields without breaking members on an older release, and the rough edges found

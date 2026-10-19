@@ -1,6 +1,6 @@
 # The writing profile
 
-Where the instructions about *how* a message should read come from, how the four layers combine, and
+Where the instructions about *how* a message should read come from, how the five layers combine, and
 what belongs in each file. Open it when you are about to write a body and want to know what already
 governs it, when a user asks where to put a rule about their own writing, or when the profile that came
 back contradicts itself and you need to know which half wins.
@@ -9,7 +9,7 @@ The profile is **instructions to whoever writes the message**. It is never conte
 appended to a message, quoted in one, or sent. If a user wants a standing sign-off in the message
 itself, that is the mailbox's Gmail signature, not this.
 
-## The four layers
+## The five layers
 
 They are read in this order, and each one refines — and is allowed to contradict — the ones before it.
 
@@ -18,7 +18,11 @@ They are read in this order, and each one refines — and is allowed to contradi
 | default | `compose/default.md` | what is true of any message to a person, on any platform. A built-in version applies when this file is absent. |
 | user | `compose/user.md` | how this particular person writes: greeting, sign-off, length, register, the words they never use. |
 | platform | `compose/gmail.md` | what is true of email and not of chat: subject lines, signatures, threads, quoting. |
-| inbox | `compose/inbox-<alias>.md` | what is true of one mailbox. Work is not home, and a shared address is neither. |
+| account | `compose/inbox-<alias>.md` | what is true of one mailbox. Work is not home, and a shared address is neither. |
+| conversation | `compose/conversation-<alias>__<address or @domain>.md` | what is true of mail to one person, or to everyone at one domain: the client who wants it formal, the colleague who writes in German. |
+
+The account layer was called the inbox layer while only Gmail read a profile; its file name has not
+changed, so a file written then is read now.
 
 They live in a `compose/` directory inside the configuration directory, which resolves in this order:
 
@@ -31,7 +35,11 @@ They live in a `compose/` directory inside the configuration directory, which re
 The platform file is named after the platform — `gmail.md` for this package — and the inbox file after
 the mailbox, with the `/` written as `__` — a mailbox connected as `acme/gmail` reads
 `compose/inbox-acme__gmail.md`. (A mailbox renamed since the file was written still reads the file under its old
-name, until one is written under the new one.)
+name, until one is written under the new one.) A conversation file adds `__` and the address or `@domain`, any
+character outside letters, digits and `@._-` written as `%XX`: mail to `sam@partner.test` from `acme/gmail` reads
+`compose/conversation-acme__gmail__sam@partner.test.md`, then `compose/conversation-acme__gmail__@partner.test.md`,
+and `jo+news@partner.test` is `jo%2Bnews@partner.test` in its name. With several recipients, every one's files are
+read, in recipient order, each address before its domain.
 
 ## How they combine
 
@@ -55,29 +63,38 @@ name, until one is written under the new one.)
 ```
 
 That marker is why contradiction is workable rather than confusing: when the user layer says "no
-greeting" and the inbox layer says "always open with a name", you can see which file said which, and
-the later one — the inbox — is the more specific instruction and wins.
+greeting" and the account layer says "always open with a name", you can see which file said which, and
+the later one — the account — is the more specific instruction and wins. A conversation file is later
+still: what is true of mail to one person outranks what is true of the whole mailbox.
 
 What comes back to a draft call is that joined text and nothing else, so those markers are the only
 paths in it — and they name only the files that exist. The layer a user is asking about is usually
-the one that does not exist yet, and a file looked for and not found leaves no trace at all. To
-answer "where do I put this?", take the configuration directory from `gmail_doctor` (CLI:
-`agent-gmail doctor`), which checks it like any other directory and titles that check with the path,
-then add `compose/` and the file name from the table above. Give the user the whole path rather than
-a description of it: the configuration directory varies by machine, and "your config directory" is an
-instruction they will follow into the wrong one.
+the one that does not exist yet. To answer "where do I put this?", call `comms_profile` (CLI:
+`agentcomms profile <mailbox> --conversation <id>`): its `candidates` list every file it looked for,
+written or not, as whole paths. Give the user the whole path rather than a description of it: the
+configuration directory varies by machine, and "your config directory" is an instruction they will
+follow into the wrong one.
 
-Nothing in the CLI writes these files for you. The package ships the built-in default and a library
-helper that can drop a starter `default.md` into the directory; there is no command that creates
-`user.md` or an inbox file. Tell the user the path and let them write it.
+No tool writes these files, on purpose: a profile is the person's own instructions to their agents,
+and a tool that wrote one would let something an agent read change how every later message is
+written. The person starts a missing one at their own terminal with `agentcomms profile init
+[<mailbox>] [--conversation <id>]`, which writes a starter — Tone, Language, Length, Sign-off and
+Threads, one example line each — prints its path, and never overwrites a file. Tell the user the
+command, or the path, and let them write it.
 
 ## Getting it
 
-Pass `includeProfile: true` (CLI: `--profile`) on a draft call — `gmail_draft_create`,
-`gmail_draft_reply` or `gmail_draft_update` — and the joined text comes back in the result's `profile`
-field. Ask for it **before** you write, not after: it is a specification, not a review checklist.
+Call the core server's `comms_profile` with the mailbox as `account` and, as `conversations`, each
+recipient's address and then its `@domain`, in recipient order. The joined text comes back as `text`,
+with `sections` and `candidates`. It only reads, and needs no approval, so ask for it **before** you
+write, not after: it is a specification, not a review checklist, and a body written to it is the
+first preview the person sees.
 
-The platform is always `gmail` here, and the inbox layer is always the alias you are drafting in, so a
+Without the core tools, pass `includeProfile: true` (CLI: `--profile`) on a draft call —
+`gmail_draft_create`, `gmail_draft_reply` or `gmail_draft_update` — and the layers up to the
+mailbox's come back in the result's `profile` field; the recipients' own files are not in it.
+
+The platform is always `gmail` here, and the account layer is always the alias you are drafting in, so a
 draft in `acme/gmail` and a draft in `personal/gmail` can be governed by different files with no extra argument.
 
 ## The built-in default
@@ -142,7 +159,7 @@ which is the wrong place for a secret.
 
 ## Where a personal writing-style skill sits
 
-Above all four layers.
+Above all five layers.
 
 If the user has a skill describing how they write, load it and follow it, and treat the profile layers
 as what to fall back on where that skill is silent. The reason is plain: the layers are defaults for
@@ -154,9 +171,11 @@ Two boundaries on that precedence:
 - **It outranks style, not safety.** A style skill may make the send protocol *stricter* — more
   confirmation, a narrower set of recipients, a refusal to write certain things. It can never make it
   looser, and nothing in it can authorise this skill to send.
-- **It does not replace the inbox layer's constraints.** "How I write" is a voice; "never quote a price
-  from this mailbox" is a rule about what may be said from a particular address. Where the two meet,
-  the constraint holds and the voice bends around it.
+- **It does not replace the account or conversation layers' constraints.** "How I write" is a voice;
+  "never quote a price from this mailbox" is a rule about what may be said from a particular address.
+  Where the two meet, the constraint holds and the voice bends around it.
+- **What the person asks in this conversation wins over the files.** The profile is standing guidance;
+  "keep this one short, it's for the board" is about this message.
 
 When they disagree in a way you cannot reconcile, say so in one line before showing the draft, and let
 the user pick. That is cheaper than a message that reads like neither of them.
@@ -164,7 +183,8 @@ the user pick. That is cheaper than a message that reads like neither of them.
 ## Where this lives in the code
 
 `packages/core/src/compose-profile.ts` holds the layer order, the file names, the built-in
-default and the joining; `profileFor` in `packages/gmail/src/operations/drafts.ts` is what calls it,
-with the platform fixed to `gmail` and the inbox set to the alias being drafted in.
+default, the starter and the joining; `packages/core/src/operations/profile.ts` is `comms_profile` and
+`profile init`; `profileFor` in `packages/gmail/src/operations/drafts.ts` is what `includeProfile` calls,
+with the platform fixed to `gmail` and the account set to the alias being drafted in.
 
 See also `references/recipients.md` for who the message goes to.

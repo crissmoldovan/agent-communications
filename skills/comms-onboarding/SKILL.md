@@ -143,6 +143,22 @@ word (`agent`, `assistant`, `twin`, `minion`, `bot`, `fake` or `AI`) or a name f
 none is a change: show the preview, get their yes, call again with `approvalId`. Add a rule `as: "me"`
 — a kind of message sent as them, unlabelled — only when they ask for that.
 
+**What an agent may do there** is theirs to narrow, per account or per conversation: for example reply and react
+in a Slack channel, but never start a conversation, edit or delete. `comms_behaviour` with `setRule: { account,
+conversation, acts }` — `conversation` left out for the whole account, `acts: []` for nothing — sets it (CLI:
+`agentcomms behaviour allow <account> reply,reaction --conversation <id>`), and with no change shows every rule.
+With no rule every act is allowed, as before. A rule that only narrows applies at once; one that lets an agent do
+more, or `removeRule`, is a change: show the preview and get their yes. Offer it once, set one only when they ask,
+and never start a loosening they did not ask for. A server started before 0.22.0 holds no rule until its client
+restarts it; the first rule's result says so, and `comms_doctor` names any such server.
+
+**How an agent writes** is the person's writing profile: Markdown files they keep, for every message, one channel,
+one account or one conversation. `comms_profile` with the `account` and its `conversations` shows the joined text
+and every file it reads, written or not; no tool writes one, and the person starts a missing file from a starter at
+their own terminal with `agentcomms profile init <account>`. Before you write any message on their behalf, call
+`comms_profile` for the account and the conversation, and follow it; what they ask in this conversation wins. On
+`ACT_NOT_ALLOWED`, tell them which rule refused it and stop: never retry it another way.
+
 ## 5. Check, and hand over
 
 - `comms_doctor`, `gmail_doctor`, `slack_doctor`, `resend_doctor` and `whatsapp_status`, for the
@@ -173,6 +189,8 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | WhatsApp | `agent-whatsapp add <name>`, then `agent-whatsapp sync --account <name>`, at the Mac's terminal |
 | Policies | `agent-gmail inbox policy <name> --send <policy> --change <policy>`, `agent-slack workspace policy <name> --send <policy> --change <policy>`, `agent-resend account policy <name> --send <policy> --change <policy>`, `agentcomms policy confirm` |
 | The agent label | `agentcomms label`; `agentcomms label word <word>`, `agentcomms label name "<name>"` |
+| What an agent may do | `agentcomms behaviour`; `agentcomms behaviour allow <account> <act,…\|none> [--conversation <id>]`, `agentcomms behaviour clear <account> [--conversation <id>]` |
+| The writing profile | `agentcomms profile [<account>] [--conversation <id>…]`; `agentcomms profile init [<account>] [--conversation <id>]`, the person's, at their terminal |
 | Check | `agentcomms doctor`, `agent-gmail doctor`, `agent-slack doctor`, `agent-resend doctor`, `agent-whatsapp status` |
 
 A change stops with exit `10`, its preview and an approval id, and changes nothing — with one
@@ -194,5 +212,7 @@ once. A person running a command at a terminal approves there and then: `yes`, o
 - **An own-app port that does not match the manifest.** Slack matches the redirect URL exactly; use the port
   the manifest was made with.
 - **Promising the tools before the restart.** Registered servers start in the next session.
+- **Setting a behaviour rule nobody asked for,** or loosening one to get past `ACT_NOT_ALLOWED`. The rules are the
+  person's; offer, and let them choose.
 - **A token in chat.** Never ask for one, never accept one. `agent-slack app update` reads the
   configuration token from a hidden prompt in the person's own terminal.

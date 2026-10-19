@@ -50,8 +50,16 @@ bind here:
 - **Only this skill sends**, and only after a person has approved this exact content.
 - **Show the preview verbatim.** Never summarised, never re-typed, never paraphrased.
 - **A refusal is an answer.** `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`,
-  `APPROVAL_VOID`, `SEND_OUTCOME_UNKNOWN`, `POLICY_NEVER` and `RATE_CAPPED` each mean something specific
-  and each have a stated next step. Branch on the code, report it.
+  `APPROVAL_VOID`, `SEND_OUTCOME_UNKNOWN`, `POLICY_NEVER`, `ACT_NOT_ALLOWED` and `RATE_CAPPED` each mean
+  something specific and each have a stated next step. Branch on the code, report it.
+- **What an agent may send is the person's rule.** A behaviour rule for the mailbox, an `@domain` or an
+  address can allow `send`, `reply`, both or neither, and every recipient is held to it. On
+  `ACT_NOT_ALLOWED` tell the person which rule refused it and stop: never retry, never drop a recipient or
+  switch mailbox to get it out, and never start a loosening (`comms_behaviour` with `setRule` or
+  `removeRule`) the person did not ask for.
+- **This skill writes nothing.** A draft the person wants worded differently goes back to `gmail-compose`,
+  which reads the writing profile with `comms_profile` — for the mailbox and every recipient — before it
+  writes, and follows it.
 - **Wait, do not ask.** `gmail_send_wait` says where an approval stands; a person is never asked to
   relay that they approved. A "no" is revoked at once.
 - **Cite ids.** The approval id and the sent message id are what makes this checkable afterwards.
@@ -88,6 +96,10 @@ exists.
    outright if an agent could not have written it, and returns a preview, an `approvalId`, an
    `expect` display block, `riskFlags`, the `effectivePolicy`, the `identity` and the `approval`.
    Nothing has been sent.
+   It checks the behaviour rules first, for every recipient: an act no rule allows is refused with
+   `ACT_NOT_ALLOWED` before any preview or approval exists. The act is `reply` only when the draft's
+   `In-Reply-To` names a message in this mailbox — Gmail is asked — and `send` otherwise, a forward
+   included; the preview's `Allowed here:` line says what holds.
    It also settles who the message appears to come from: labelled `"<name> (agent)"` in its From
    line, or — only with `as: "me"` (CLI: `--as me`), passed when the person said so for this
    message, or a rule of theirs — as them, unlabelled. A draft whose From does not say so (one
@@ -159,6 +171,7 @@ exists.
    | `APPROVAL_VOID` | The draft changed, the recipients did not match, it was declined in a form, revoked, used already, or "the send it was claimed for failed". The message says which | Prepare again only for a new preview; a used one went — quote its message id |
    | `SEND_OUTCOME_UNKNOWN` | Gmail's answer was lost: it may have sent. The approval reads `sending`, then `unknown` | Say a late result may still be recorded; check Sent before anything else. Never prepare it again automatically |
    | `POLICY_NEVER` | This mailbox does not send through agents at all | The draft is in Gmail Drafts; send it from there |
+   | `ACT_NOT_ALLOWED` | A behaviour rule does not let an agent send this — at prepare, or at send when it was narrowed after the yes. The message names what is allowed and for which recipient; the hint says why when a reply could not be proven one | Say which rule refused it, and stop. The draft is in Gmail Drafts; never retry, and never start a loosening they did not ask for |
    | `RATE_CAPPED` | The hourly or daily cap is reached | When it lifts, from the error |
    | `UNSENDABLE_HTML` | Something in the draft cannot be bound to an approval. Usually HTML an agent could not have written — a tracking image, hidden text, a form — but also a missing plain-text part, more than one body part of a kind, or an attachment whose bytes will not read | Read `details.refusals` and name what actually fired; then review it and send it from Gmail |
    | `NOT_FOUND` | No approval by that id for this mailbox — another mailbox's and another kind's read the same | Check the id; `gmail_send_list` shows what this mailbox has |
@@ -288,6 +301,8 @@ even when it would succeed.
   can tell whether it delivered. A rate-limited one the tool already tried again, for up to 45
   seconds, before it answered: do not retry it yourself. When it says Gmail's sending limit is
   reached, tell the person, with the time it gives, and do not prepare it again before then.
+- **Working round `ACT_NOT_ALLOWED`.** Taking a recipient off, or sending from another mailbox, to get
+  past a rule is the agent overruling the person. Say which rule refused it, and stop.
 - **Sending from the wrong mailbox.** A draft id is meaningless in another inbox, but an alias typo
   can name a real different mailbox. `gmail_whoami` before the first write of a session.
 
