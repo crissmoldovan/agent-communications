@@ -29,7 +29,7 @@ applies a change it did not plan itself.
 | [`comms_attach`](#comms_attach) | Report or change which local files may be attached to a draft, an email or a post: the folders they may come from, the paths they never may, and the built-in list the jail always applies. |
 | [`comms_label`](#comms_label) | Report or change how what an agent sends is labelled: the person's name and a word in parentheses — "Jo Example (agent)" — so recipients can tell the agent sent it. |
 | [`comms_orgs_list`](#comms_orgs_list) | The organisation profiles added here: each one’s label, where it was read from and its SHA-256, its Google clients (which is active, which mailboxes use each) and its Slack apps, and any drift with the call that repairs it. |
-| [`comms_org_show`](#comms_org_show) | One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, and any drift from what was approved, each with the call that repairs it. |
+| [`comms_org_show`](#comms_org_show) | One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, any drift from what was approved, each with the call that repairs it, and `extensions`: which of the profile’s extensions are applied here, and which are not, with the release each needs. |
 | [`comms_org_add`](#comms_org_add) | Add an organisation’s profile — the small JSON file naming its Google OAuth client and Slack apps — so its members’ accounts can use them, beside whatever is here already. |
 | [`comms_org_update`](#comms_org_update) | Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. |
 | [`comms_org_remove`](#comms_org_remove) | Forget an organisation profile, and delete the OAuth clients it made here with their secrets; clients the person registered themselves are left as they are. |
@@ -160,7 +160,7 @@ Takes no arguments.
 
 ### `comms_org_show`
 
-One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, and any drift from what was approved, each with the call that repairs it. Never includes a client secret or the profile’s contents.
+One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, any drift from what was approved, each with the call that repairs it, and `extensions`: which of the profile’s extensions are applied here, and which are not, with the release each needs. Never includes a client secret or the profile’s contents.
 
 *read-only*
 
@@ -184,7 +184,7 @@ Add an organisation’s profile — the small JSON file naming its Google OAuth 
 
 ### `comms_org_update`
 
-Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, and `forOtherAddresses: "off"`, apply at once and are listed in the result.
+Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, a tighter update cap from the organisation, and `forOtherAddresses: "off"` apply at once, even beside a change that waits, and are listed in the result; a looser cap is approved first. An extension the profile marks optional that this release does not know is skipped and named in `extensions`; one it marks required refuses the update (NEEDS_NEWER_RELEASE), changing nothing — update first, then call it again.
 
 *writes*
 

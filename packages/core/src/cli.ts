@@ -144,7 +144,8 @@ Usage — run these with this CLI, each as the words after its program:
   org update <organisation> [--source <file>] [--for-other-addresses on|off] [--adopt <client>]
                                 [--store keychain|file] [--approval <id>]
                                 read a profile again and repair drift: a changed profile, a new
-                                source and --for-other-addresses on are approved first
+                                source, a looser update cap and --for-other-addresses on are
+                                approved first; a tighter cap applies at once
   org remove <organisation> [--approval <id>]
                                 forget a profile and the clients it made: approved first
   label                         how what an agent sends is labelled — "Jo Example (agent)" — and who

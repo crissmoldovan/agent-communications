@@ -571,7 +571,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Show an organisation profile',
       description:
-        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, and any drift from what was approved, each with the call that repairs it. Never includes a client secret or the profile’s contents.',
+        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, any drift from what was approved, each with the call that repairs it, and `extensions`: which of the profile’s extensions are applied here, and which are not, with the release each needs. Never includes a client secret or the profile’s contents.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
       },
@@ -624,7 +624,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Update an organisation profile',
       description:
-        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, and `forOtherAddresses: "off"`, apply at once and are listed in the result.',
+        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, a tighter update cap from the organisation, and `forOtherAddresses: "off"` apply at once, even beside a change that waits, and are listed in the result; a looser cap is approved first. An extension the profile marks optional that this release does not know is skipped and named in `extensions`; one it marks required refuses the update (NEEDS_NEWER_RELEASE), changing nothing — update first, then call it again.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
         source: z.string().min(1).optional().describe('read the profile from this file from now on'),

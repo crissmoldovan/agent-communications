@@ -329,7 +329,7 @@
       "operation": "orgUpdateChange",
       "argv": ["parity"],
       "args": { "organisation": "parity" },
-      "reason": "Reading a profile again: a changed profile, a new source and serving other addresses are approved first; repairing drift, and turning other addresses off, apply at once (design 2026-10-02 §D8)."
+      "reason": "Reading a profile again: a changed profile, a new source, a looser update cap and serving other addresses are approved first; repairing drift, a tighter update cap and turning other addresses off apply at once (design 2026-10-02 §D8, 2026-10-19 X6)."
     },
     {
       "id": "core.org.remove",
