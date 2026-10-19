@@ -1,8 +1,8 @@
 import {
+  type ActDecision,
   type ApprovalObject,
   type ApprovalRecord,
   type AttachPolicy,
-  type ChannelPreview,
   CommsError,
   canonicalJson,
   type Expectation,
@@ -29,6 +29,16 @@ import { FILE_POST_UNFURLS, urlsInWords } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
 import { appTokenRefusal } from './app-token.ts';
 import {
+  actRefusal,
+  allowedHere,
+  type BehaviourCheck,
+  behaviourBinding,
+  editActs,
+  placeNamesOf,
+  placesOf,
+  type SlackPreview,
+} from './behaviour.ts';
+import {
   decideEditLabel,
   editLine,
   labelBinding,
@@ -49,6 +59,7 @@ import {
   attachPolicyFor,
   CONTAINS_FILES,
   claimOrHandOver,
+  composedPost,
   discarded,
   fenceFirstStep,
   filesAsRecorded,
@@ -71,7 +82,6 @@ import {
   roomOf,
   settledWith,
   throttledRequest,
-  viewPost,
   waitingHint,
 } from './send.ts';
 
@@ -320,7 +330,9 @@ async function actorOf(
 
 /** An edit as it would be made now: what a person is shown, and the digest that binds exactly that. */
 export interface EditView {
-  readonly preview: ChannelPreview;
+  /** With the line saying what the rules allow where the message is (design 2026-10-19-agent-behaviour-rules, B4). */
+  readonly preview: SlackPreview;
+  /** Binds the edit, and where it lands for the rules: for a DM, the person it is with (`behaviourBinding`). */
   readonly digest: string;
   readonly request: EditRequest;
   /** Why the room could not be read, when it could not — so its reach is a gap, not a number. */
@@ -334,6 +346,10 @@ export interface EditView {
   readonly label: SlackLabel | undefined;
   /** Whose token makes it: the person's, or the app's for an app message this account posted (S5). */
   readonly via: 'person' | 'app';
+  /** What the behaviour rules are asked of it (B2–B4): `edit`, and `file` when it adds files, where the message is. */
+  readonly check: BehaviourCheck;
+  /** What the rules allow there now: what its preview's line says, and what prepare refuses by. */
+  readonly decision: ActDecision;
 }
 
 /**
@@ -439,9 +455,24 @@ function editWarnings(
  * A draft with no words keeps the message's: they are sent back exactly as Slack holds them — escaped, mentions as
  * spans — so a mention in them stays one, which words typed again from a read could not promise. They are previewed and
  * counted from that text, as a post of it would be.
+ *
+ * The behaviour rules are asked of the edit's own acts (design 2026-10-19-agent-behaviour-rules, B2–B4) — `edit`, and
+ * `file` when it adds files — where the message is, never of the post its words would be: bound into its digest, and
+ * the preview's line. Refusing is prepare's, and the claim's (`claimOrHandOver`).
  */
 export async function viewEdit(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'handoffs' | 'label' | 'appPosts'>,
+  deps: Pick<
+    PrepareDeps,
+    | 'call'
+    | 'workspaceId'
+    | 'workspaceName'
+    | 'postingAs'
+    | 'handoffs'
+    | 'label'
+    | 'appPosts'
+    | 'accountId'
+    | 'currentConfig'
+  >,
   draft: SlackDraft,
   ts: string,
   removeFiles: readonly string[],
@@ -463,8 +494,11 @@ export async function viewEdit(
   }
   // The post the edit's words and new files would be, checked, read and counted as a post of them is (§E6).
   const words = keepsWords ? { ...draft, payload: payloadOf(message.text, draft.payload.channel, undefined) } : draft;
-  // The words as a post of them would be read, without a post's label: an edit's label is its own (S5).
-  const view = await viewPost({ ...deps, label: undefined }, words, book);
+  // The words as a post of them would be read, without a post's label: an edit's label is its own (S5), and so are its
+  // acts (B2).
+  const view = await composedPost({ ...deps, label: undefined }, words, book);
+  const check: BehaviourCheck = { acts: editActs(files?.add.length ?? 0), places: view.places, names: view.names };
+  const here = await allowedHere(deps, check);
   // An app message stays the app's: its name already says an agent wrote it, and only its bot token can change it.
   const label: SlackLabel | undefined =
     via === 'app'
@@ -491,8 +525,9 @@ export async function viewEdit(
   // Every address in the words, bare or not: an edit cannot turn unfurling off, so any of them may unfurl.
   const urls = urlsInWords(request.text);
   const thread = threadShown(message);
-  const preview: ChannelPreview = {
+  const preview: SlackPreview = {
     ...view.preview,
+    allowedHere: here.line,
     // Who it appears to come from (S7), and the words as they will read: the label in them, when it is there.
     ...(label === undefined ? {} : { postingAs: editLine(label), body: decodeSlackText(text, book.names()).text }),
     ...(thread === undefined ? {} : { thread }),
@@ -527,6 +562,8 @@ export async function viewEdit(
       message: targetDigest(message, 'edit'),
       // Who it appears to come from, for any edit but one as the person, unlabelled, as every edit before the label was.
       ...(unlabelled(label) ? {} : { label: labelBinding(label as SlackLabel) }),
+      // Where it lands, for the rules (B4): for a DM, the person it is with — the rest the fields above bind already.
+      ...behaviourBinding(check),
     }),
   );
   return {
@@ -540,6 +577,8 @@ export async function viewEdit(
     keepsWords,
     label,
     via,
+    check,
+    decision: here.decision,
   };
 }
 
@@ -574,8 +613,11 @@ export interface PreparedEdit {
   /** The message it edits. */
   readonly channel: string;
   readonly ts: string;
-  /** The words it has now and the words it will have, its files, the reach, and what to notice. */
-  readonly preview: ChannelPreview;
+  /**
+   * The words it has now and the words it will have, its files, the reach, what to notice, and what the rules allow
+   * there (`renderSlackPreview` shows it).
+   */
+  readonly preview: SlackPreview;
   readonly expect: Expectation;
   readonly policy: SendPolicy;
   readonly requiredPolicy: SendPolicy;
@@ -596,6 +638,9 @@ function changesFiles(draft: SlackDraft, removeFiles: readonly string[]): boolea
  * Prepares one edit, and shows what it will be. Nothing is changed here: the permit stays closed, and Slack is only
  * read — the message, and the room. An edit that adds files reads each one again first, as a post with files does, so
  * nobody is shown a file that is no longer the one the draft recorded.
+ *
+ * An edit the behaviour rules do not allow where the message is — `edit`, or `file` for one that adds files — is
+ * refused with `ACT_NOT_ALLOWED` before any approval is made (design 2026-10-19-agent-behaviour-rules, B4).
  */
 export async function prepareMessageEdit(
   deps: PrepareDeps,
@@ -610,7 +655,7 @@ export async function prepareMessageEdit(
   requireChatWrite(deps, 'edit');
   if (changesFiles(draft, removeFiles)) requireFileSending(deps);
   await filesAsRecorded(deps, draft);
-  const { preview, digest, payload, message, files, label } = await viewEdit(
+  const { preview, digest, payload, message, files, label, check, decision } = await viewEdit(
     deps,
     draft,
     ts,
@@ -618,6 +663,7 @@ export async function prepareMessageEdit(
     book,
     requested,
   );
+  if (!decision.allowed) throw await actRefusal(deps, decision, check);
   const where = { channel: message.channel, ts };
   const riskFlags = [
     EDITS_MESSAGE,
@@ -802,6 +848,7 @@ async function editClassified(
       inboxSub: deps.postingAs,
       expect: editExpectation(where, view.preview.notifies, bound.removeFiles),
     },
+    view.check,
     waitingHint('edit', deps.surface, approvalId, deps.handoffs),
     () => cancelled('edit', notUsed('edit')),
   );
@@ -1209,16 +1256,23 @@ export interface DeletionPreview {
   readonly files: readonly string[];
   readonly warnings: readonly string[];
   readonly context: { readonly workspace: string; readonly approvalId?: string | undefined; readonly note: string };
+  /** What the rules allow where the message is (design 2026-10-19-agent-behaviour-rules, B4): `Allowed here: …`. */
+  readonly allowedHere?: string | undefined;
   readonly policy?: string | undefined;
 }
 
 /** A deletion as it would be made now: what a person is shown, and the digest that binds exactly that. */
 export interface DeletionView {
   readonly preview: DeletionPreview;
+  /** Binds the deletion, and where it lands for the rules: for a DM, the person it is with (`behaviourBinding`). */
   readonly digest: string;
   readonly message: TargetMessage;
   /** Whose token deletes it: the person's, or the app's for an app message this account posted (S5). */
   readonly via: 'person' | 'app';
+  /** What the behaviour rules are asked of it (B2–B4): a `delete`, where the message is. */
+  readonly check: BehaviourCheck;
+  /** What the rules allow there now: what its preview's line says, and what prepare refuses by. */
+  readonly decision: ActDecision;
 }
 
 /** Where a deletion's approval says what it is for, in place of the draft an edit has: the message itself. */
@@ -1250,11 +1304,25 @@ function deletionWarnings(message: TargetMessage): string[] {
  * Reads the message and its conversation, and builds the deletion's preview and digest from that one reading — for
  * preparing, the approval screen and deleting alike, as `viewEdit` is for an edit.
  *
- * The conversation is read only for its name: a deletion reaches nobody, so there is no reach to count and no
- * membership to require. One that cannot be read is named by its id.
+ * The conversation is read only for its name, and — a DM — for the person it is with: a deletion reaches nobody, so
+ * there is no reach to count and no membership to require. One that cannot be read is named by its id.
+ *
+ * The behaviour rules are asked of it here (design 2026-10-19-agent-behaviour-rules, B4): a `delete`, where the
+ * message is — bound into its digest, and the preview's line. Refusing is prepare's, and the claim's.
  */
 export async function viewDeletion(
-  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs' | 'label' | 'appPosts'>,
+  deps: Pick<
+    PrepareDeps,
+    | 'call'
+    | 'workspaceId'
+    | 'workspaceName'
+    | 'postingAs'
+    | 'label'
+    | 'appPosts'
+    | 'handoffs'
+    | 'accountId'
+    | 'currentConfig'
+  >,
   where: { channel: string; ts: string },
   book: NameBook,
 ): Promise<DeletionView> {
@@ -1263,6 +1331,12 @@ export async function viewDeletion(
   const via = await actorOf(deps, message, 'delete');
   const { channel } = await roomOf(deps.call, where.channel);
   if (channel) book.addChannel(channel);
+  const check: BehaviourCheck = {
+    acts: ['delete'],
+    places: placesOf(where.channel, channel),
+    names: placeNamesOf(where.channel, channel, book),
+  };
+  const here = await allowedHere(deps, check);
   const thread = threadShown(message);
   const preview: DeletionPreview = {
     workspace: deps.workspaceName,
@@ -1276,6 +1350,7 @@ export async function viewDeletion(
     files: message.files.map((file) => file.name),
     warnings: deletionWarnings(message),
     context: { workspace: deps.workspaceName, note: 'nothing has been deleted' },
+    allowedHere: here.line,
   };
   const digest = sha256Hex(
     canonicalJson({
@@ -1287,9 +1362,11 @@ export async function viewDeletion(
       message: targetDigest(message, 'delete'),
       // Who deletes it, for an app message: a deletion by the app's token is not the person's (S5).
       ...(via === 'app' ? { via: 'app', botUserId: deps.label?.app?.userId ?? null } : {}),
+      // Where it lands, for the rules (B4): for a DM, the person it is with — the rest the fields above bind already.
+      ...behaviourBinding(check),
     }),
   );
-  return { preview, digest, message, via };
+  return { preview, digest, message, via, check, decision: here.decision };
 }
 
 /**
@@ -1329,6 +1406,8 @@ export function renderDeletionPreview(preview: DeletionPreview): string {
     '',
     `── deletes the message at ${truncateDisplay(preview.ts, 40)} in ${truncateDisplay(preview.channel, 60)}`,
   );
+  // What the rules allow here (B4), beside what has to happen before it is deleted, as a post's preview has it.
+  if (preview.allowedHere) lines.push(escapeForDisplay(preview.allowedHere));
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }
@@ -1351,7 +1430,8 @@ export interface PreparedDeletion {
  * Prepares one deletion, and shows what would be deleted. Nothing is deleted here: Slack is only read.
  *
  * At the workspace's policy, raised by nothing (§E7): a deletion notifies nobody, and the account's own words are
- * what it removes.
+ * what it removes. A deletion the behaviour rules do not allow where the message is is refused with `ACT_NOT_ALLOWED`
+ * before any approval is made (design 2026-10-19-agent-behaviour-rules, B4).
  */
 export async function prepareDeletion(
   deps: PrepareDeps,
@@ -1360,7 +1440,8 @@ export async function prepareDeletion(
 ): Promise<PreparedDeletion> {
   refuseNever(deps.policy, 'delete');
   requireChatWrite(deps, 'delete');
-  const { preview, digest, message } = await viewDeletion(deps, where, book);
+  const { preview, digest, message, check, decision } = await viewDeletion(deps, where, book);
+  if (!decision.allowed) throw await actRefusal(deps, decision, check);
   const riskFlags = [
     DELETES_MESSAGE,
     ...(message.replyCount > 0 ? [HAS_REPLIES] : []),
@@ -1511,6 +1592,7 @@ async function deleteClassified(
       inboxSub: deps.postingAs,
       expect: deletionExpectation(where),
     },
+    view.check,
     waitingHint('delete', deps.surface, approvalId, deps.handoffs),
     () => cancelled('delete', notUsed('delete')),
   );

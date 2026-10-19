@@ -4,7 +4,6 @@ import {
   CommsError,
   ensureSendEpochConfig,
   ownerOf,
-  renderChannelPreview,
   truncateDisplay,
 } from '@agentcomms/core';
 import { openDraftStore, type SlackDraft } from '../compose/drafts.ts';
@@ -18,6 +17,7 @@ import {
   viewDeletion,
   viewEdit,
 } from './amend.ts';
+import { renderSlackPreview } from './behaviour.ts';
 import { gateDepsFor } from './gate.ts';
 import { reactionLabelOf, reactionLine, requestedOf } from './label.ts';
 import { NameBook } from './people.ts';
@@ -26,6 +26,7 @@ import {
   type PostView,
   REACH_UNKNOWN,
   type ReactionOptions,
+  reactionAllowedHere,
   reactionOfApproval,
   viewPost,
 } from './send.ts';
@@ -87,9 +88,15 @@ async function approvalAndWorkspace(context: SlackContext, approvalId: string) {
  *
  * Every part is escaped and cut to one line. The emoji name and the channel are whatever the agent passed, and this
  * is printed at the terminal of the person about to type a code — the one place a control sequence would do most
- * harm.
+ * harm. Then what the behaviour rules allow where it lands (design 2026-10-19-agent-behaviour-rules, B4), as every
+ * preview says it.
  */
-function renderReaction(workspace: string, record: ApprovalRecord, reaction: ReactionOptions): string {
+function renderReaction(
+  workspace: string,
+  record: ApprovalRecord,
+  reaction: ReactionOptions,
+  allowedHere: string,
+): string {
   const act = reaction.remove
     ? `Remove :${truncateDisplay(reaction.name, 60)}: from`
     : `Add :${truncateDisplay(reaction.name, 60)}: to`;
@@ -104,6 +111,7 @@ function renderReaction(workspace: string, record: ApprovalRecord, reaction: Rea
     ].join(' · '),
     ...(label === undefined ? [] : [`From: ${reactionLine(label)}`]),
     `${act} the message at ${truncateDisplay(reaction.ts, 40)} in ${truncateDisplay(reaction.channel, 40)}, as ${truncateDisplay(record.inboxSub ?? 'this account', 60)}.`,
+    truncateDisplay(allowedHere, 200),
   ].join('\n');
 }
 
@@ -321,8 +329,14 @@ export async function beginApproval(
 
   const reaction = reactionOfApproval(record, account.workspace, botUserIdOf(account));
   if (reaction) {
+    // From the approval and the configuration alone: the reaction's screen asks Slack nothing.
+    const allowed = await reactionAllowedHere(
+      { currentConfig: () => context.config(), accountId: account.id, workspaceName: name, handoffs: context.handoffs },
+      record,
+      reaction,
+    );
     const challenge = await context.core.approvals.issueChallenge(approvalId, 'send', context.platform);
-    return { approvalId, kind: 'reaction', preview: renderReaction(name, record, reaction), challenge };
+    return { approvalId, kind: 'reaction', preview: renderReaction(name, record, reaction, allowed), challenge };
   }
 
   // A deletion and an edit read the message again, as a post reads the room: shown only if it is what is bound.
@@ -339,7 +353,7 @@ export async function beginApproval(
   const edit = editOfApproval(record);
   if (edit) {
     const { view } = await currentEdit(context, record, name, edit, deps);
-    const preview = renderChannelPreview({
+    const preview = renderSlackPreview({
       ...view.preview,
       context: { ...view.preview.context, approvalId, note: 'nothing has been changed — approving does not change it' },
     });
@@ -349,7 +363,7 @@ export async function beginApproval(
 
   // Shown only if it is what the approval binds.
   const { view } = await currentPost(context, record, name, deps);
-  const preview = renderChannelPreview({
+  const preview = renderSlackPreview({
     ...view.preview,
     context: { ...view.preview.context, approvalId, note: 'nothing has been posted — approving does not post it' },
   });
