@@ -2,6 +2,7 @@ import {
   type ApprovalObject,
   type ApprovalRecord,
   ackNotice,
+  beginsAsAgentLabelled,
   CommsError,
   canonicalJson,
   type ExactPlace,
@@ -393,8 +394,9 @@ function fromAnotherTeam(message: Raw, workspaceId: string): boolean {
 
 /**
  * From another human, by allow-list (S4): a `user` that is a person's id, not Slackbot, not this account; no `bot_id`,
- * `app_id`, `bot_profile` or `subtype` at all; not in this account's app-posts record; and not a bot or an app's user
- * by `users.info`. Whatever cannot be read is not a person: `null`.
+ * `app_id`, `bot_profile` or `subtype` at all, and words that do not begin as an agent's labelled post — another
+ * person's agent posting as them is not them (`madeByMachine`); not in this account's app-posts record; and not a bot
+ * or an app's user by `users.info`. Whatever cannot be read is not a person: `null`.
  *
  * And whether they are from outside (S5, the lead's call after review): `external` for a guest (`is_restricted`,
  * `is_ultra_restricted`), a stranger, someone whose `team_id` is not this workspace's or who has none, or a message
@@ -403,7 +405,8 @@ function fromAnotherTeam(message: Raw, workspaceId: string): boolean {
 async function human(gate: GateDeps, channel: string, message: Raw): Promise<'internal' | 'external' | null> {
   const user = message.user;
   if (typeof user !== 'string' || !PERSON.test(user) || user === SLACKBOT || user === gate.postingAs) return null;
-  for (const field of NOT_TYPED) if (Object.hasOwn(message, field)) return null;
+  // Marked as made by a bot, an app, a workflow or Slack — or labelled as an agent's, someone else's agent included.
+  if (madeByMachine(message)) return null;
   const ts = str(message.ts);
   if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return null;
   let person: Raw;
@@ -424,29 +427,49 @@ async function human(gate: GateDeps, channel: string, message: Raw): Promise<'in
 }
 
 /**
- * The ts of every message this product sent in `channel` since `from`, by the audit's record of what was sent: read
- * from a day before it, so a clock a little behind Slack's misses nothing.
+ * The ts of every message this product sent for the person in `channel` since `from`, by the audit's record of what
+ * was sent: read from a day before it, so a clock a little behind Slack's misses nothing.
+ *
+ * Matched by the person, not only by the account (the lead's call, after review): a workspace removed and added again
+ * is a new account id, and what the old one sent as them is theirs no more than before. A post is this product's for
+ * the person when it was this account's, or its record names their Slack user id and team, or — written by a release
+ * that recorded neither — any account's at that channel and ts: one this cannot tell apart counts as this product's.
  */
 async function sentByThisProduct(
   context: SlackContext,
-  accountId: string,
+  gate: Pick<GateDeps, 'accountId' | 'postingAs' | 'workspaceId'>,
   channel: string,
   from: number,
 ): Promise<Set<string>> {
   const since = new Date(from - DAY_MS).toISOString();
-  const records = await context.core.audit.tail({ inbox: accountId, since, limit: Number.MAX_SAFE_INTEGER });
+  const records = await context.core.audit.tail({ since, limit: Number.MAX_SAFE_INTEGER });
   const sent = new Set<string>();
   for (const record of records) {
-    if (record.operation !== 'slack.post' || record.ids?.channel !== channel) continue;
-    if (typeof record.ids.ts === 'string') sent.add(record.ids.ts);
+    const ids = record.ids;
+    if (record.operation !== 'slack.post' || ids?.channel !== channel || typeof ids.ts !== 'string') continue;
+    const theirs =
+      record.inboxId === gate.accountId ||
+      (ids.user === gate.postingAs && ids.team === gate.workspaceId) ||
+      (ids.user === undefined && ids.team === undefined);
+    if (theirs) sent.add(ids.ts);
   }
   return sent;
 }
 
 /**
- * Whether the thread is one the person is in (S5): a message their own user id posted in the last 14 days, with no
- * `bot_id`, that this product did not send — not in the app-posts record, and not in the audit's record of what was
- * sent. A mention is not a post.
+ * Whether a message carries a mark of being made by something other than a person typing (S4): any of `bot_id`,
+ * `app_id`, `bot_profile` or `subtype`, or words that begin as an agent's labelled post do (`beginsAsAgentLabelled`,
+ * the lead's call after review) — which holds when Slack set none of the marks on a post made with a person's token.
+ */
+function madeByMachine(message: Raw): boolean {
+  if (NOT_TYPED.some((field) => Object.hasOwn(message, field))) return true;
+  return typeof message.text === 'string' && beginsAsAgentLabelled(message.text);
+}
+
+/**
+ * Whether the thread is one the person is in (S5): a message their own user id posted in the last 14 days, with none
+ * of `bot_id`, `app_id`, `bot_profile` or `subtype` and not labelled as an agent's (`madeByMachine`), that this product
+ * did not send — not in the app-posts record, and not in the audit's record of what was sent. A mention is not a post.
  */
 async function personPostedIn(
   context: SlackContext,
@@ -458,10 +481,10 @@ async function personPostedIn(
   let sent: Set<string> | undefined;
   for (const message of messages) {
     const ts = str(message.ts);
-    if (ts === undefined || message.user !== gate.postingAs || Object.hasOwn(message, 'bot_id')) continue;
+    if (ts === undefined || message.user !== gate.postingAs || madeByMachine(message)) continue;
     if (msOf(ts) < now - STANDING_THREAD_LOOKBACK_MS) continue;
     if (gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) continue;
-    sent ??= await sentByThisProduct(context, gate.accountId, channel, now - STANDING_THREAD_LOOKBACK_MS);
+    sent ??= await sentByThisProduct(context, gate, channel, now - STANDING_THREAD_LOOKBACK_MS);
     if (!sent.has(ts)) return true;
   }
   return false;
@@ -469,19 +492,19 @@ async function personPostedIn(
 
 /**
  * Whether a thread's parent is the person's own message, which they posted themselves (S4, the lead's call after
- * build): their user id, none of `bot_id`, `app_id`, `bot_profile` or `subtype`, and not one this product sent — not
+ * build): their user id, none of `bot_id`, `app_id`, `bot_profile` or `subtype` and no agent label at the start of its
+ * words (`madeByMachine`, after review), and not one this product sent — not
  * in the app-posts record, nor in the audit's record of what was sent, the test `threads-i-am-in` makes of their posts.
  * The audit is read as far back as the parent, however old the thread. A parent from a bot, an app, Slackbot or this
  * account's app is never this; and the message acknowledged is always another person's, never the person's own.
  */
 async function startedByPerson(context: SlackContext, gate: GateDeps, channel: string, parent: Raw): Promise<boolean> {
-  if (parent.user !== gate.postingAs) return false;
-  for (const field of NOT_TYPED) if (Object.hasOwn(parent, field)) return false;
+  if (parent.user !== gate.postingAs || madeByMachine(parent)) return false;
   const ts = str(parent.ts);
   // A ts that is no time cannot say how far back to read what this product sent: not the person's, then.
   if (ts === undefined || !Number.isFinite(msOf(ts))) return false;
   if (gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
-  return !(await sentByThisProduct(context, gate.accountId, channel, msOf(ts))).has(ts);
+  return !(await sentByThisProduct(context, gate, channel, msOf(ts))).has(ts);
 }
 
 /** How a place is named on the person's screen: `#name`, the DM with someone, or its id. Someone in Slack chose it. */

@@ -527,3 +527,16 @@ word.
     whose members are not read one by one. An external author refuses, `external`, unless the place was named exactly
     and approved as shared with another organisation. An Enterprise Grid's other workspaces read as other teams there:
     refused, the safe way to be wrong. **(lead's call, after review)**
+14. **"Sent by this product" no longer fails open** (S4, S5; Slack review S3). Three gaps, each closed:
+    - **A label at the start of the words** (`beginsAsAgentLabelled`, core): a message whose text begins as a labelled
+      fallback's — `<name> (<word>): `, or `Sent by <name> (<word>)`, for any label word in any case — is never a
+      person's. As the message, or its thread's first message, it refuses `not-human`, whoever's agent posted it; as
+      the person's own post, it is not theirs, for a thread they started or under `threads-i-am-in`.
+    - **The audit matched by the person, not only the account:** every post this product makes now records the
+      person's Slack user id and team in its audit ids (`user`, `team`). A post counts as this product's when its
+      record is this account's, or names that user and team, or — written by a release that recorded neither — any
+      account's at that channel and ts. A workspace removed and added again, a new account id, still knows what it
+      sent as the person.
+    - **All four marks in `threads-i-am-in`:** the person's post counts only with none of `bot_id`, `app_id`,
+      `bot_profile` or `subtype`, as a thread they started already required.
+    **(lead's call, after review)**

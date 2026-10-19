@@ -525,6 +525,101 @@ test('a thread this product started for the person, or an app with their token, 
   assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
 });
 
+test('a message that begins as an agent’s labelled post is never a person’s, whoever’s agent it was', async (t) => {
+  const w = await world(t);
+  const s = await inEng(w);
+  // Another person's agent, posting as them with their token, labelled: no marker Slack sets says so.
+  const theirAgent = say(w, { channel: ENG, text: `${escapeForSlack(fallbackTextPrefix('Sam Lee (agent)'))}On it` });
+  assertRefused(await refused(acknowledge(w, withEyes(s, ENG, theirAgent)), 'their agent'), 'not-human', 'their agent');
+  // Any label word, in any case, and a post with no words.
+  for (const text of ['Sam (assistant): looking', 'sam (AI): done', 'Sent by Sam (bot)']) {
+    w.clock.now += 1_000;
+    const ts = say(w, { channel: ENG, text });
+    assertRefused(await refused(acknowledge(w, withEyes(s, ENG, ts)), text), 'not-human', text);
+  }
+  // As a thread's first message: another's agent, or this product's labelled post as the person that no record holds.
+  for (const [user, text] of [
+    [SAM, 'Sam Lee (agent): the deploy is stuck'],
+    [SELF, `${escapeForSlack(fallbackTextPrefix('Jo Example (agent)'))}deploying at noon`],
+  ] as const) {
+    w.clock.now += 1_000;
+    const parent = say(w, { channel: ENG, user, text, ago: 60_000 });
+    const ts = say(w, { channel: ENG, user: ANA, thread_ts: parent });
+    assertRefused(await refused(acknowledge(w, withEyes(s, ENG, ts)), text), 'not-human', `a parent: ${text}`);
+  }
+  nothingSent(w, 'labelled posts');
+  assert.equal((await ledger(w)).uses.length, 0);
+});
+
+test('the person’s post an app made, labelled, or this product sent under an old account, is not theirs', async (t) => {
+  const w = await world(t);
+  const anywhere = await standing(w, { reactions: ['eyes'], places: 'threads-i-am-in' });
+  const exact = await standing(w, { reactions: ['eyes'], places: [ENG] });
+  // Under threads-i-am-in, the person's only post in a thread, with each of the four marks or a label: not theirs.
+  for (const [what, marks] of [
+    ['an app_id', { app_id: 'A0OTHERAPP' }],
+    ['a subtype', { subtype: 'thread_broadcast' }],
+    ['a bot_profile', { bot_profile: { id: 'B0OTHER', name: 'logger' } }],
+    ['a bot_id', { bot_id: 'B0OTHER' }],
+    ['a label', { text: 'Jo Example (agent): I can take a look' }],
+  ] as const) {
+    w.clock.now += 1_000;
+    const parent = say(w, { channel: ENG, user: ANA, ago: 600_000 });
+    say(w, { channel: ENG, user: SELF, thread_ts: parent, ago: 300_000, text: 'I can take a look', ...marks });
+    const ts = say(w, { channel: ENG, thread_ts: parent, ago: 5_000 });
+    assertRefused(await refused(acknowledge(w, withEyes(anywhere, ENG, ts)), what), 'place-not-covered', what);
+  }
+
+  /*
+   * This product's posts for the person under an account the workspace had before it was removed and added again:
+   * the audit names the old account id, and — written by this release — the person's Slack user id and team; written
+   * by an earlier release, neither. Each is this product's, not the person's.
+   */
+  const OLD = 'acc_OLDOLDOLDOLDOLDO';
+  const posted = async (ids: Record<string, string>) =>
+    w.core.audit.append({ inboxId: OLD, alias: 'acme', operation: 'slack.post', outcome: 'ok', ids });
+  for (const [what, extra] of [
+    ['recorded with the person and team', { user: SELF, team: w.world.teamId }],
+    ['recorded by an earlier release', {}],
+  ] as const) {
+    w.clock.now += 1_000;
+    // As a thread's first message.
+    const parent = say(w, { channel: ENG, user: SELF, ago: 120_000, text: 'notes are up' });
+    await posted({ channel: ENG, ts: parent, ...extra });
+    const onParent = say(w, { channel: ENG, user: ANA, thread_ts: parent, ago: 5_000 });
+    assertRefused(await refused(acknowledge(w, withEyes(exact, ENG, onParent)), what), 'not-human', `parent ${what}`);
+    // As the person's post in a thread, under threads-i-am-in.
+    w.clock.now += 1_000;
+    const thread = say(w, { channel: ENG, user: ANA, ago: 600_000 });
+    const mine = say(w, { channel: ENG, user: SELF, thread_ts: thread, ago: 300_000, text: 'on it' });
+    await posted({ channel: ENG, ts: mine, ...extra });
+    const inThread = say(w, { channel: ENG, thread_ts: thread, ago: 5_000 });
+    assertRefused(
+      await refused(acknowledge(w, withEyes(anywhere, ENG, inThread)), what),
+      'place-not-covered',
+      `post ${what}`,
+    );
+  }
+  nothingSent(w, 'not the person’s');
+  assert.equal((await ledger(w)).uses.length, 0);
+});
+
+test('a post this product makes records whom it was for: the person’s Slack id and team', async (t) => {
+  const w = await world(t);
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
+  await sendPost(
+    w.context,
+    'acme',
+    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+    w.slack,
+  );
+  const [record] = (await w.core.audit.tail({ limit: 100 })).filter(
+    (each) => each.operation === 'slack.post' && each.outcome === 'ok',
+  );
+  assert.equal(record?.ids?.user, SELF);
+  assert.equal(record?.ids?.team, w.world.teamId);
+});
+
 test('a parent of the person’s whose ts cannot be read as a time is refused, not a crash', async (t) => {
   const w = await world(t);
   const s = await inEng(w);

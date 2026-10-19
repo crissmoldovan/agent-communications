@@ -4,6 +4,7 @@ import {
   AGENT_LABEL_WORDS,
   type AgentLabelRule,
   type AgentLabelSettings,
+  beginsAsAgentLabelled,
   classifyAgentLabelChange,
   fallbackLabelLine,
   fallbackTextPrefix,
@@ -229,4 +230,24 @@ test('Slack style: app to labelled loosens, labelled to app tightens (L5)', () =
       },
     ],
   );
+});
+
+test('beginsAsAgentLabelled knows a labelled fallback by its start, for every label word, in any case', () => {
+  for (const word of AGENT_LABEL_WORDS) {
+    const phrase = labelPhrase('Jo Example', word, 80);
+    assert.equal(beginsAsAgentLabelled(`${fallbackTextPrefix(phrase)}Got it`), true, word);
+    assert.equal(beginsAsAgentLabelled(fallbackLabelLine(phrase)), true, `${word}, with no words`);
+    assert.equal(beginsAsAgentLabelled(`${fallbackTextPrefix(phrase).toUpperCase()}GOT IT`), true, `${word}, upper`);
+  }
+  // Slack writes a name's & as &amp;.
+  assert.equal(beginsAsAgentLabelled('Jo &amp; Co (agent): on it'), true);
+  for (const text of [
+    'Got it',
+    'I asked the agent: done',
+    'Jo (helper): hi',
+    'Ask Jo (agent)',
+    'Sent by Kim (minion)s',
+  ]) {
+    assert.equal(beginsAsAgentLabelled(text), false, text);
+  }
 });

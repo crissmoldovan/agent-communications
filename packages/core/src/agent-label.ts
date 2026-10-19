@@ -193,6 +193,23 @@ export function fallbackTextPrefix(phrase: string): string {
   return `${phrase}: `;
 }
 
+/** Every label word, each escaped for a pattern, as one alternation. */
+const LABEL_WORDS_PATTERN = AGENT_LABEL_WORDS.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+/** `<name> (<word>)`: a name holds no parenthesis or line break (`nameProblem`), so the first `(` is the word's. */
+const LABEL_PATTERN = `[^()\\n]{1,160} \\((?:${LABEL_WORDS_PATTERN})\\)`;
+/** What a labelled fallback's text begins with (`fallbackTextPrefix`), or one with no words (`fallbackLabelLine`). */
+const LABELLED_START = new RegExp(`^\\s*(?:${LABEL_PATTERN}: |Sent by ${LABEL_PATTERN}(?:$|\\s))`, 'iu');
+
+/**
+ * Whether `text` begins as a labelled fallback's does — `<name> (<word>): `, or `Sent by <name> (<word>)` for one with
+ * no words — for any of the label words, in any case (design 2026-10-19-standing-approvals, S4, the lead's call after
+ * review). Such a message was posted as a person by an agent, this product's or another person's: never the person's
+ * own words, and never another person's to acknowledge. `&amp;` is how Slack writes a name's `&`, and passes.
+ */
+export function beginsAsAgentLabelled(text: string): boolean {
+  return LABELLED_START.test(text);
+}
+
 /** L3's sentence for an unlabelled message, the first line of its preview. */
 export const UNLABELLED_PREVIEW_LINE = 'Sent as you, with no label: it will look as if you wrote it yourself';
 

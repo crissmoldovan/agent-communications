@@ -36,8 +36,9 @@ its digest, and nothing else. It is refused, with `STANDING_REFUSED` and its rea
 
 - arrived after the standing approval, within the last 15 minutes, and is the newest from someone else in its thread
   or channel, not yet acknowledged under any standing approval;
-- and its thread's first message are from people, by an allow-list that refuses bots, apps, workflows, Slackbot and
-  this account's own posts — though a thread you started yourself counts — and carry no buttons or menus;
+- and its thread's first message are from people, by an allow-list that refuses bots, apps, workflows, Slackbot,
+  this account's own posts and any message that begins with an agent's label, yours or anyone's — though a thread you
+  started yourself counts — and carry nothing to press, by an allow-list of blocks that only show something;
 - is in a place it covers, which has not grown to 50 members or more, or changed who shares it, since you approved it.
 
 A limit reached is `STANDING_LIMIT`, saying which and when it frees. A count is spent when the act is decided and

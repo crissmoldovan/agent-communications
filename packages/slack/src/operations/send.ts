@@ -1630,7 +1630,12 @@ async function recordPosted(
       alias: deps.workspaceName,
       operation: 'slack.post',
       outcome: 'ok',
-      ids,
+      /*
+       * Whom it was posted for, by their Slack user id and team (design 2026-10-19-standing-approvals, the lead's call
+       * after review): what a standing approval reads to know a message was this product's, not the person's own —
+       * past the account id, which a workspace removed and added again does not keep.
+       */
+      ids: { ...ids, user: deps.postingAs, team: deps.workspaceId },
       approvalId,
       ...(reason === undefined ? {} : { reason }),
       ...(deps.surface ? { surface: deps.surface } : {}),
