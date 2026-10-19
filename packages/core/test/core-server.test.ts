@@ -249,6 +249,7 @@ const READING = [
 const CHANGING = [
   'comms_attach',
   'comms_label',
+  'comms_behaviour',
   'comms_org_add',
   'comms_org_update',
   'comms_org_remove',

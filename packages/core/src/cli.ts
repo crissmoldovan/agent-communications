@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { approveAndWaitSentence } from './approval-handoffs.ts';
 import type { PublicApprovalView } from './approval-outcome.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
+import type { BehaviourAct } from './behaviour.ts';
 import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
 import type { PreparedChange } from './changes.ts';
 import {
@@ -37,6 +38,13 @@ import {
   attachChange,
   attachReport,
 } from './operations/attach-settings.ts';
+import {
+  type BehaviourChangeRequest,
+  type BehaviourChangeResult,
+  type BehaviourReport,
+  behaviourChange,
+  behaviourReport,
+} from './operations/behaviour.ts';
 import {
   type ChangePolicyReport,
   changePolicyChange,
@@ -82,7 +90,7 @@ import {
   updatePause,
   updateResume,
 } from './operations/update-settings.ts';
-import { profileSourcePath, shownPath } from './organisations.ts';
+import { profileSourcePath, shownPath, shownText } from './organisations.ts';
 import { resolvePaths } from './paths.ts';
 import { renderDoctor, renderInstall, renderPrune, renderUpdate, renderUpdateCheck } from './render.ts';
 import {
@@ -167,6 +175,15 @@ Usage — run these with this CLI, each as the words after its program:
                                 how an agent's Slack messages look there: app, the default, posts as the
                                 app with Slack's APP tag where it can; labelled posts every one as you,
                                 labelled in its words, and is approved first; app applies at once
+  behaviour                     what an agent may do: every rule, and what each account allows, across it
+                                and in each conversation a rule names
+  behaviour allow <account> <act,…|none> [--conversation <id>] [--approval <id>]
+                                let an agent start only these acts there — post, reply, reaction, edit,
+                                delete, file, send — or none: one that allows more is approved first,
+                                one that only narrows applies at once
+  behaviour clear <account> [--conversation <id>] [--approval <id>]
+                                take a rule away, so the wider one holds there: approved first when that
+                                allows more
   mcp                           run the core MCP server on stdio (what an MCP client starts)
   mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
@@ -202,7 +219,9 @@ rule add --as me, label rule remove --as agent and label style labelled — is s
 you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again with
 --approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
 \`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule
-remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing.
+remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
+may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
+once when it only narrows.
 
 On auto, the default, this machine asks npm once a day whether a newer release is out; on every-14-days, at most
 once every 14 days; on never, not at all. When one is out, a command says so in one line on stderr, at most once a
@@ -353,6 +372,7 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
     case 'org':
       return sub === 'add' || sub === 'update' || sub === 'remove';
     case 'label':
+    case 'behaviour':
       return sub !== undefined;
     default:
       return false;
@@ -374,13 +394,19 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
+/** The other commands that take one of `label`'s options, and which: `behaviour` names a rule's place as it does. */
+const LABEL_OPTIONS_SHARED: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  behaviour: ['conversation'],
+});
+
 /**
  * Refuses `label`'s own options on any other command, as USAGE, before anything runs — as `org`'s are, and for the
- * same reason: an option a command does not read is refused rather than quietly doing nothing.
+ * same reason: an option a command does not read is refused rather than quietly doing nothing. Those another command
+ * shares (`LABEL_OPTIONS_SHARED`) are refused there only by that command's own words.
  */
 function refuseLabelOptionsElsewhere(
   command: string | undefined,
@@ -388,11 +414,20 @@ function refuseLabelOptionsElsewhere(
   help: Handoff,
 ): void {
   if (command === 'label') return;
-  const given = labelOptionsGiven(values);
+  const shared =
+    command !== undefined && Object.hasOwn(LABEL_OPTIONS_SHARED, command) ? LABEL_OPTIONS_SHARED[command] : [];
+  const given = labelOptionsGiven(values).filter((flag) => !shared?.includes(flag));
   if (given.length === 0) return;
+  const owners = (flag: string) => [
+    'label',
+    ...Object.entries(LABEL_OPTIONS_SHARED)
+      .filter(([, flags]) => flags.includes(flag))
+      .map(([owner]) => owner),
+  ];
+  const commands = [...new Set(given.flatMap(owners))];
   throw new CommsError(
     'USAGE',
-    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the label command only`,
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the ${commands.join(' and ')} ${commands.length === 1 ? 'command' : 'commands'} only`,
     { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
   );
 }
@@ -853,6 +888,43 @@ export async function main(
         writeResult(result, output, renderLabelChange);
         return;
       }
+      case 'behaviour': {
+        // label's other options were refused before anything ran (`refuseLabelOptionsElsewhere`): only --conversation.
+        const [, , account, acts, ...extra] = positionals;
+        if (sub === undefined) {
+          if (values.conversation !== undefined) throw usage('the behaviour command takes no --conversation');
+          // Reporting takes no --approval: refused with the rest, before the update check's stop.
+          writeResult(await behaviourReport(core), output, renderBehaviour);
+          return;
+        }
+        const where = values.conversation === undefined ? [] : ['--conversation', values.conversation];
+        const place = {
+          account: account as string,
+          ...(values.conversation === undefined ? {} : { conversation: values.conversation }),
+        };
+        let request: BehaviourChangeRequest;
+        let rerun: string[];
+        if (sub === 'allow') {
+          if (account === undefined || acts === undefined || extra.length > 0) {
+            throw usage('usage: behaviour allow <account> <act,…|none> [--conversation <id>]');
+          }
+          // Checked by the operation, as the tool's are: an act it does not know is refused there, in its words.
+          const listed = acts === 'none' ? [] : acts.split(',').map((act) => act.trim());
+          request = { setRule: { ...place, acts: listed as BehaviourAct[] } };
+          rerun = ['behaviour', 'allow', account, acts, ...where];
+        } else if (sub === 'clear') {
+          if (account === undefined || acts !== undefined) {
+            throw usage('usage: behaviour clear <account> [--conversation <id>]');
+          }
+          request = { removeRule: place };
+          rerun = ['behaviour', 'clear', account, ...where];
+        } else {
+          throw usage('usage: behaviour [allow|clear]');
+        }
+        const result = await gatedChangeAtTerminal(core, behaviourChange(core, request, 'cli'), { ...approval, rerun });
+        writeResult(result, output, renderBehaviourChange);
+        return;
+      }
       case 'channels': {
         if (sub !== undefined) throw usage('usage: channels');
         writeResult(await channelsAvailable(core, env), output, renderChannels);
@@ -1213,6 +1285,48 @@ function renderLabel(report: LabelReport): string {
 
 function renderLabelChange(result: LabelChangeResult): string {
   return [result.note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderLabel(result)].join('\n');
+}
+
+/** What a level allows, as a person reads it: everything where no rule holds, nothing for an empty list. */
+function allowedText(allowed: readonly string[] | 'all'): string {
+  return allowed === 'all' ? 'everything (no rule)' : allowed.length === 0 ? 'nothing' : allowed.join(', ');
+}
+
+/**
+ * What an agent may do, as a person reads it: each account and what it allows, then what holds by name or not at all.
+ * A rule's account there is the file's own words, which a hand edit may have made anything: shown made safe.
+ */
+function renderBehaviour(report: BehaviourReport): string {
+  const lines: string[] = [];
+  if (report.rules.length === 0 && report.unreadable.length === 0) {
+    lines.push('No rules: an agent may start any act, and each one still waits for your yes.');
+  }
+  for (const account of report.accounts) {
+    lines.push('', account.account, `  ${allowedText(account.allowed)}`);
+    for (const { conversation, allowed } of account.conversations) {
+      lines.push(`  in ${conversation}: ${allowedText(allowed)}`);
+    }
+  }
+  const orphans = report.rules.filter((rule) => rule.orphan);
+  if (orphans.length > 0) {
+    lines.push('', 'Rules whose account is not connected now — each still holds, by name:');
+    for (const rule of orphans) {
+      const account = shownText(rule.account, 64);
+      const place = rule.conversation === undefined ? account : `${account} in ${rule.conversation}`;
+      lines.push(`  ${place}: ${allowedText(rule.acts)}`);
+    }
+  }
+  if (report.unreadable.length > 0) {
+    lines.push('', 'Rules this release cannot read — each holds its account to nothing until it is corrected:');
+    for (const entry of report.unreadable) {
+      lines.push(`  ${entry.account === null ? 'every account' : shownText(entry.account, 64)}: ${entry.reason}`);
+    }
+  }
+  return lines.join('\n').replace(/^\n/, '');
+}
+
+function renderBehaviourChange(result: BehaviourChangeResult): string {
+  return [result.note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
 }
 
 /** `attach roots add` and the rest, by their words. */

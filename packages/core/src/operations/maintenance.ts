@@ -3,6 +3,7 @@ import { type PublicApprovalView, publicApproval } from '../approval-outcome.ts'
 import { integrityRefusal, kindOf } from '../approval-stored.ts';
 import type { ApprovalState } from '../approvals.ts';
 import type { AuditRecord } from '../audit.ts';
+import { behaviourAccountsOf, readBehaviourSettings } from '../behaviour.ts';
 import { revokeChange } from '../changes.ts';
 import { type Channel, type ServerId, serverFacts } from '../channel-servers.ts';
 import { listed, manifestOf } from '../channel-words.ts';
@@ -13,7 +14,15 @@ import { type Config, emptyConfig, hasNames, secretsStoreOf } from '../config.ts
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { isGroupOrWorldAccessible } from '../fs.ts';
-import { type CliHandoffs, handoffSentence, isCommand, type Remedy, remedy, requireHandoffs } from '../handoffs.ts';
+import {
+  type CliHandoffs,
+  handoffSentence,
+  handoffSentenceToFill,
+  isCommand,
+  type Remedy,
+  remedy,
+  requireHandoffs,
+} from '../handoffs.ts';
 import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
@@ -44,6 +53,7 @@ import {
   updateVerdict,
 } from '../update-state.ts';
 import { VERSION } from '../version.ts';
+import { orphanedBehaviourRules } from './behaviour.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
 
 /**
@@ -207,6 +217,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   });
 
   if (readable) checks.push(...organisationChecks(config, handoffs));
+  if (readable) checks.push(...behaviourChecks(config, handoffs));
 
   /*
    * Approval records that cannot be used (design 2026-10-05 §D2): a file that cannot be read, or a record whose binding
@@ -294,6 +305,64 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
   return { checks, ok: checks.every((c) => c.ok) };
+}
+
+/**
+ * What would keep a behaviour rule from holding as the person meant it (design 2026-10-19-agent-behaviour-rules, B3):
+ *
+ *  - a rule this release cannot read holds its account — or, naming none, every account — to nothing, so nothing can be
+ *    done there until it is corrected: a failure;
+ *  - a rule whose account is not connected now still holds, by name, whatever account takes that name: safe, since a
+ *    restriction held more widely is, but something to look at.
+ *
+ * Nothing at all on a machine with no rule, so every other doctor reads as it always did. The third row, servers that
+ * enforce no rule, is read with the registrations (`registrationChecks`).
+ */
+function behaviourChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const listing = handoffSentence(handoffs.core(['behaviour']), (command) => ` ${command} lists every rule.`);
+  const { unreadable } = readBehaviourSettings(config);
+  if (unreadable.length > 0) {
+    // Its reason is fixed words; the account is the file's, shown made safe.
+    const held = unreadable.map(
+      (entry) =>
+        `${entry.reason}, so ${entry.account === null ? 'every account' : shownText(entry.account, 64)} allows nothing`,
+    );
+    checks.push({
+      name: 'behaviour rules',
+      ok: false,
+      detail: `${held.join('; ')} until it is corrected`,
+      fix: remedy(
+        `Correct or remove ${unreadable.length === 1 ? 'it' : 'them'} in behaviour.rules in config.json — or, if a later release wrote ${unreadable.length === 1 ? 'it' : 'them'}, update agent-communications.${listing}`,
+      ),
+    });
+  }
+  const orphans = orphanedBehaviourRules(config);
+  if (orphans.length > 0) {
+    const names = new Set(behaviourAccountsOf(config).map((account) => account.account));
+    const held = orphans.map((rule) => {
+      const account = shownText(rule.account, 64);
+      const place = rule.conversation === undefined ? account : `${account} in ${shownText(rule.conversation, 64)}`;
+      return names.has(rule.account)
+        ? `${place} applies by name to ${account}, the account connected under that name now`
+        : `${place} applies to no account connected now, and will to one connected under that name`;
+    });
+    checks.push({
+      name: 'orphaned behaviour rules',
+      ok: true,
+      warn: true,
+      detail: `${orphans.length === 1 ? 'a rule whose account is' : 'rules whose account is'} not connected now still ${orphans.length === 1 ? 'holds' : 'hold'}, by name — a restriction held more widely is safe: ${held.join('; ')}`,
+      fix: remedy(
+        handoffSentenceToFill(
+          handoffs.core(['behaviour', 'allow']),
+          ['<account>', '<act,…|none>'],
+          (command) =>
+            `To bind one to the account connected under its name now, set it again for that account: ${command}.${listing}`,
+        ),
+      ),
+    });
+  }
+  return checks;
 }
 
 /**
@@ -637,8 +706,16 @@ async function registrationChecks(
       detail: managedShimUnsupportedNotice({ platform }),
     });
   }
+  const unenforced: string[] = [];
   for (const channel of report.channels) {
     const name = `${channel.channel} server`;
+    if (actsOnOthers(channel.channel)) {
+      for (const entry of channel.registered) {
+        if (entry.version !== null && enforcesNoRule(entry.version)) {
+          unenforced.push(`the ${channel.label} server registered with ${where(entry)} is ${entry.version}`);
+        }
+      }
+    }
     const latestRuntime = channel.runtimes.reduce<(typeof channel.runtimes)[number] | null>(
       (latest, runtime) =>
         latest === null || (compareVersions(runtime.version, latest.version) ?? 0) > 0 ? runtime : latest,
@@ -733,7 +810,42 @@ async function registrationChecks(
       })(),
     });
   }
+  // B4: a rule is enforced only by servers of 0.22.0 and later, and only once their client has started them again.
+  const settings = config === null ? null : readBehaviourSettings(config);
+  if (settings !== null && settings.rules.length + settings.unreadable.length > 0 && unenforced.length > 0) {
+    const clients = [...new Set(report.channels.flatMap((channel) => channel.registered.map((entry) => entry.client)))];
+    checks.push({
+      name: 'behaviour enforcement',
+      ok: true,
+      warn: true,
+      detail: `${unenforced.join('; ')}, which enforces no behaviour rule: an agent there may start any act, each still waiting for the person's yes`,
+      fix: remedy(
+        handoffSentence(
+          handoffs.core(['update']),
+          (command) =>
+            `Bring every registration to the latest release with ${command}, then restart ${listed(clients, 'and')}: a server started before ${BEHAVIOUR_ENFORCED_SINCE} enforces no rule until its client restarts it.`,
+        ),
+      ),
+    });
+  }
   return checks;
+}
+
+/** The release whose servers enforce the behaviour rules (B4). */
+const BEHAVIOUR_ENFORCED_SINCE = '0.22.0';
+
+/**
+ * Whether a registration's release enforces no behaviour rule: before 0.22.0. A prerelease of 0.22.0 or later — a
+ * branch's build — has the code that enforces them, so it is read as its release.
+ */
+function enforcesNoRule(version: string): boolean {
+  const release = version.replace(/[-+].*$/u, '');
+  return (compareVersions(release, BEHAVIOUR_ENFORCED_SINCE) ?? 0) < 0;
+}
+
+/** A channel whose accounts can act on other people — one with a `send` mode — and so whose server enforces rules. */
+function actsOnOthers(channel: Channel): boolean {
+  return manifestOf(channel)?.accounts?.modes.includes('send') === true;
 }
 
 /** The names of a channel's accounts on this machine, from the map its manifest keeps them in; none for the core. */

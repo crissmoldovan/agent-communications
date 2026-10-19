@@ -25,6 +25,9 @@ npx @agentcomms/core label name "Jo Example"  # your name, for where a channel h
 npx @agentcomms/core label rule add acme/slack --kinds reaction --as me  # reactions sent as you, unlabelled (you approve it)
 npx @agentcomms/core label icon acme/slack :jo-agent:  # the workspace emoji the app's Slack posts show (you approve it)
 npx @agentcomms/core label style acme/slack labelled  # every agent message there as you, labelled, not as the app (you approve it)
+npx @agentcomms/core behaviour     # what an agent may do: every rule, and what each account allows, per conversation too
+npx @agentcomms/core behaviour allow acme/slack reply,reaction  # only reply and react there (narrowing applies at once)
+npx @agentcomms/core behaviour clear acme/slack  # take the rule away, so everything is allowed again (you approve it)
 npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
@@ -81,6 +84,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
 | `comms_label` | how what an agent sends is labelled, as `label`, with each Slack workspace's style; `word`, `name`, `icon`, `addRule` with `as: "me"`, `removeRule` of an `agent` rule and `style` set to `labelled` are approved first, and the other rule changes and `style` back to `app` apply at once |
+| `comms_behaviour` | what an agent may do, as `behaviour`: which acts it may start on each account and in each conversation; `setRule` and `removeRule` that allow more anywhere are approved first, and one that only narrows applies at once |
 | `comms_names_migrate` | rename every account to `organisation/platform`; `dryRun` shows the mapping |
 | `comms_secrets_migrate` | move every credential between the keychain and files |
 | `comms_paths`, `comms_doctor`, `comms_audit_tail` | as `paths`, `doctor` and `audit tail` |
