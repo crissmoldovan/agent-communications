@@ -289,6 +289,186 @@ Consequence for the build (Task 8):
   difference is malformed. The answer is passed on unchanged after the adapter checks it is a finite number in its
   type's range (`noul` 0 to 1). The package rounds it to four places itself.
 
+## Task 9 — how a `choice` answer's probability is produced, and the reference's encoder
+
+Task 8 left `laya-choice2-v1` refused (`template-blocked`): the Phase E provider record marks System One's `choice`
+`criteria` "not stated", and no entry above named where a `choice` answer's probability is or what range it has. The
+Task 9 builder fetched the sources below for the coordinator (session 5b36bfbc) on 2026-10-19, each as raw bytes so
+that its SHA-256 is of the exact document, and read them without installing, importing or running anything. Every
+fact quotes its source; where README prose wraps a word in code formatting, the formatting is dropped and the entry
+says so. The coordinator reviews this record with the commit that adds it.
+
+### hf-laya-card-choice
+
+- id: `hf-laya-card-choice`
+- url: `https://huggingface.co/convaiinnovations/laya/raw/7b928d828b7b0e022f929d9bd2e44165aa270148/README.md`
+- fetchedAt: `2026-10-19T19:53:44Z` (23187 bytes)
+- immutable: `00355613796b3f5860b0d5b20392381d26580ec242e04a1fd150c7f116858602`
+- fact: `the convaiinnovations/laya model card (README.md, byte-identical at revisions 7b928d828b7b0e022f929d9bd2e44165aa270148 and 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851) states "Option markers: Every option is scored at its own [MASK] token, then softmaxed over that question's options." (code formatting of [MASK] dropped); its two-option workaround for issue #156 is {"type": "choice", "instructions": "Is this review positive?", "criteria": {"A": "yes, the review is positive", "B": "no, the review is negative"}}; its examples read a choice answer as answers["department"]["choice"] (the selected key) and name no field holding a choice's per-option probabilities and no numeric range for one`
+- reviewer: `coordinator`
+
+The model API (`https://huggingface.co/api/models/convaiinnovations/laya`, fetched `2026-10-19T19:53:36Z`, response
+SHA-256 `64af79999195edc8d1e1f01a06934ce3bf581a86dd3044cf90a1d47dea9e35c0`) still names revision
+`7b928d828b7b0e022f929d9bd2e44165aa270148`, last modified 2026-10-03, licence apache-2.0, not gated: unchanged since the
+Task 2 record.
+
+### hf-laya-python-reference-choice
+
+- id: `hf-laya-python-reference-choice`
+- url: `https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/rl_agent_api.py`
+- fetchedAt: `2026-10-19T19:53:45Z` (4732 bytes)
+- immutable: `be3b46819c9999c3ef88e0f2ecf6d3ab1cdfed1d9a8b466fc89811e34d44031b`
+- fact: `rl_agent_api.py at 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 system_one(state, questions) takes the Jev request shape {id: {"type": "choice"|"score"|"noul", "instructions": ..., "criteria": ...}}; _to_internal turns a choice criteria list into {c: None for c in crit}; for each question it computes z = logits[r, :k] / self.temperature_by_options.get(temp_bucket(qt, k), self.temperature[qt]), p = np.exp(z - z.max()), p = p / p.sum(); a choice question, with keys = list(q["crit"].keys()), answers {"type": "choice", "choice": keys[int(p.argmax())], "probabilities": {kk: round(float(v), 4) for kk, v in zip(keys, p)}, "confidence": round(confidence_from_probs(p, k), 4), "rl_agent": ext}; a noul question answers {"type": "noul", "noul": round(float(p[1]), 4), "rl_agent": ext}; the result is {"model": "rl-agent", "answers": answers, "usage": {"input_tokens": n_tokens, "output_tokens": 0}} with n_tokens = int(b["attention_mask"].sum())`
+- reviewer: `coordinator`
+
+The SHA-256 is the one `hf-laya-python-reference` recorded on 2026-10-11: the reference file has not changed.
+
+### hf-laya-python-reference-common
+
+- id: `hf-laya-python-reference-common`
+- url: `https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/rl_common.py`
+- fetchedAt: `2026-10-19T19:53:45Z` (19139 bytes)
+- immutable: `8d83611d480c971d640a7b7d3aa2f2219c5e8455e9cc2329fd073681bd8be23e`
+- fact: `rl_common.py at 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 render_options renders a choice question's options as [k if not v else "%s: %s" % (k, v) for k, v in crit.items()] and a noul question's as "false: " + (crit.get("false") or "no, the statement does not hold"), "true: " + (crit.get("true") or "yes, the statement holds"); temp_bucket(qtype, k) is "%s:%s" % (QTYPE_NAMES[int(qtype)], size) with size "2" if k <= 2; build_model(cfg, encoder_dir) with an encoder_dir builds the encoder from AutoConfig.from_pretrained(encoder_dir) and AutoModel.from_config(ecfg, attn_implementation="sdpa") ("offline: architecture only, weights come from the saved state dict")`
+- reviewer: `coordinator`
+
+Its SHA-256 is the one `hf-laya-python-reference` recorded. `rl_agent_config.json` was re-fetched at the same time and
+still has SHA-256 `ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd`; its `choice:2` temperature,
+`1.9063563346862793`, and `noul:2`, `1.983399510383606`, equal the bundle's (`hf-laya-onnx-config`).
+
+### hf-laya-python-reference-encoder-config
+
+- id: `hf-laya-python-reference-encoder-config`
+- url: `https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/encoder/config.json`
+- fetchedAt: `2026-10-19T20:04:28Z` (2083 bytes)
+- immutable: `bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979`
+- fact: `convaiinnovations/laya encoder/config.json at revision 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 is 2083 bytes with SHA-256 bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979, last changed by commit 00c37c405e3c3ad73ee070227614c89cda06b99e (the weights' source revision); it names model_type "modernbert", architectures ["ModernBertForMaskedLM"] and hidden_size 1024`
+- reviewer: `coordinator`
+
+`hf-laya-python-reference` lists `encoder/config.json` among the reference's files without its digest; this entry
+completes it, so every file the reference reads is now bound to a SHA-256. The last-commit id is from
+`https://huggingface.co/api/models/convaiinnovations/laya/paths-info/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`
+(fetched at the same time), which also gives `model.safetensors` LFS SHA-256
+`891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c`, unchanged.
+
+### npm-receptron-laya-0.1.2-choice
+
+- id: `npm-receptron-laya-0.1.2-choice`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-19T19:54:12Z` (`package/dist/laya.js`, 6869 bytes)
+- immutable: `60d5fcd9665732df4f8827468cf369274e17e4ef78a2d35ce5efc0339eee2dc0`
+- fact: `@receptron/laya 0.1.2 dist/laya.js systemOne computes p = softmax(Array.from(logits.subarray(r * K, r * K + k), (v) => v / temp)) with temp = this.config.temperature_by_options[tempBucket(it.qtype, k)] ?? this.config.temperature[it.qtype] ?? 1, and a choice question, with keys = Object.keys(q.crit), answers { type: "choice", choice: keys[best], probabilities: Object.fromEntries(keys.map((kk, i) => [kk, round4(p[i] ?? 0)])), confidence: round4(confidenceFromProbs(p)), rl_agent: ext }, where round4 = (x) => Math.round(x * 1e4) / 1e4`
+- reviewer: `coordinator`
+
+The tarball was fetched again (16328 bytes, SHA-256 `cc488d1e73929a5cdd38fb1f2efa5826a56cc6e6bdaf4424b3d39ba1eb42aac4`,
+SRI `sha512-cTqQC4DEY/wDAHY44EQhbW8wlrO7mZyLVWOy512783LUq55a7nLGGu16wXVi6oi4uNRfR0cLctKcQAxdXCXQfA==`): the same bytes
+as the Task 8 record and the lock.
+
+### npm-receptron-laya-0.1.2-types
+
+- id: `npm-receptron-laya-0.1.2-types`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-19T19:54:12Z` (`package/dist/types.d.ts`, 2191 bytes)
+- immutable: `cc86c1de3f49cfaaf5cc28e72cddec4ddf08b0b5905b757b0288f4ebff0f247f`
+- fact: `@receptron/laya 0.1.2 dist/types.d.ts declares ChoiceQuestion as { type: "choice"; instructions: string | object; criteria: Record<string, string | null> | string[] } with criteria documented as "option -> short description (or null), or a plain list of option names", ChoiceAnswer as { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number; rl_agent: { act_probability: number } }, and NoulAnswer's noul as "P(true)"`
+- reviewer: `coordinator`
+
+### npm-receptron-laya-0.1.2-softmax
+
+- id: `npm-receptron-laya-0.1.2-softmax`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-19T19:54:12Z` (`package/dist/sequence.js`, 4003 bytes)
+- immutable: `9ae537429c31e12320632c9e4f34a8fce4d0df89ae5fe897ad5a929b1ef3be0c`
+- fact: `@receptron/laya 0.1.2 dist/sequence.js toInternal turns a choice criteria list into Object.fromEntries(crit.map((c) => [c, null])), and softmax(z) is const zmax = Math.max(...z); const e = z.map((v) => Math.exp(v - zmax)); const sum = e.reduce((a, b) => a + b, 0); return e.map((v) => v / sum);`
+- reviewer: `coordinator`
+
+Its SHA-256 is the one `npm-receptron-laya-0.1.2-render` recorded.
+
+### npm-receptron-laya-0.1.2-readme
+
+- id: `npm-receptron-laya-0.1.2-readme`
+- url: `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz`
+- fetchedAt: `2026-10-19T19:54:12Z` (`package/README.md`, 5088 bytes)
+- immutable: `630512522e90a5eb139d8b7a5d26b09a93a6ba1014cc1bd8105631ee95e53178`
+- fact: `the @receptron/laya 0.1.2 README says Laya "returns every answer with calibrated probabilities in one forward pass", lists "choice — pick one option, with a probability per option" and "noul — a calibrated P(true) for a yes/no statement" (code formatting of choice and noul dropped), shows result.answers.department.probabilities; // { billing: 0.9415, support: 0.031, sales: 0.0275 }, and says "the output matches the Python implementation to four decimal places"; it states no numeric range for a choice probability`
+- reviewer: `coordinator`
+
+The README in `receptron/laya` at the package's gitHead (`https://raw.githubusercontent.com/receptron/laya/6478649e723122ca24bbf5fb69ed1010023c9750/README.md`,
+fetched `2026-10-19T19:54:34Z`) has the same SHA-256.
+
+### gh-receptron-laya-src-choice
+
+- id: `gh-receptron-laya-src-choice`
+- url: `https://raw.githubusercontent.com/receptron/laya/6478649e723122ca24bbf5fb69ed1010023c9750/src/laya.ts`
+- fetchedAt: `2026-10-19T19:54:34Z` (7189 bytes)
+- immutable: `db1ada2564f45a877094da0c3a0ab46b0e178f860542976ba0fcebba0417cd74`
+- fact: `receptron/laya src/laya.ts at 6478649e723122ca24bbf5fb69ed1010023c9750, the gitHead npm records for 0.1.2, builds a choice answer with keys = Object.keys(q.crit as Record<string, string | null>) and probabilities: Object.fromEntries(keys.map((kk, i) => [kk, round4(p[i] ?? 0)])), the source of the published dist/laya.js line`
+- reviewer: `coordinator`
+
+At the same revision `src/types.ts` (SHA-256 `c95b3a1734ae2b8dd46846986b7aefd1651162446b80130152657651e0bc051a`) declares
+the same `ChoiceQuestion` and `ChoiceAnswer`, and `src/sequence.ts` (SHA-256
+`85cc81992bbe243f2154207c598dedb8b387b448916be2862b3e37903578cc1e`) the same `softmax`. They corroborate the package
+entries; the gate relies on the package bytes and the Python reference, not on these.
+
+### gh-nandhakishorm-laya-readme
+
+- id: `gh-nandhakishorm-laya-readme`
+- url: `https://raw.githubusercontent.com/NandhaKishorM/laya/ffc142012af63d015fa19f05f29f9c5ff329a2cc/README.md`
+- fetchedAt: `2026-10-19T19:54:56Z` (118913 bytes; `ffc142012af63d015fa19f05f29f9c5ff329a2cc` is `main`, "release: 0.4.12", committed 2026-10-19T09:39:55Z)
+- immutable: `405ecc790b63a9d80da36df2f1e699f097fc4c6823c7ee8f61f0f13373592896`
+- fact: `the NandhaKishorM/laya README at ffc142012af63d015fa19f05f29f9c5ff329a2cc says each result["answers"][qid] is an answer dict in which "choice is the selected label", "probabilities is available for choice and score" and noul is P(true), its Decision Primitives table gives choice's output as "Top label, probabilities per option, confidence" and noul's as "Calibrated probability P(true) from 0.0 to 1.0", and its example comments noul as "P(true), a float from 0.0 to 1.0" (code formatting dropped); it states no numeric range for a choice probability`
+- reviewer: `coordinator`
+
+This is the PyPI package's repository, which the owner did not choose as the reference (`hf-laya-python-reference`); it
+corroborates the answer's shape and is not relied on.
+
+### hf-laya-onnx-main-moved
+
+- id: `hf-laya-onnx-main-moved`
+- url: `https://huggingface.co/api/models/receptron/laya-onnx/commits/main`
+- fetchedAt: `2026-10-19T19:54:35Z` (response SHA-256 `756408a85807f592d3b44c93ebe48d9394a9ca459ce150e57d5583d016dee9cc`)
+- immutable: `d42786bdff8a7550316339c5fbf8f46caa83ea1b`
+- fact: `receptron/laya-onnx main moved to d42786bdff8a7550316339c5fbf8f46caa83ea1b on 2026-10-16 ("Recalibrate choice:11+ temperature 0.1006 -> 0.945"); its laya_config.json (355 bytes, SHA-256 c4fab3dd16b6ffdb432ae99334c77fca31e1b4beb0b81be76ca45f707709706a) differs from 68f27dfe5a27a54fb2b1fefc432f43f972e90868's only in temperature_by_options "choice:11+" (0.10058280825614929 to 0.945); at 68f27dfe5a27a54fb2b1fefc432f43f972e90868 laya_config.json still has SHA-256 5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561 and README.md 66f5b09344193c4fa3fb4b8072705cd40381273b249f2456791495174386b199`
+- reviewer: `coordinator`
+
+No fact the manifest pins changed: it names `68f27dfe5a27a54fb2b1fefc432f43f972e90868`, whose files are as recorded, and
+the two templates use the `choice:2` and `noul:2` temperatures, which the new revision leaves alone. Moving to
+`d42786bd` would be a new manifest entry, a new enablement approval and a new gate run.
+
+### What the Task 9 sources state, and what they do not
+
+- **The request.** A `choice` question's `criteria` is an object of option key to short description (or null), or a
+  plain list of option names (`npm-receptron-laya-0.1.2-types`); both implementations turn a list into keys with no
+  description. A key with a description renders as `<key>: <description>` (`hf-laya-python-reference-common`, and
+  `npm-receptron-laya-0.1.2-render` above).
+- **Where the probability is.** `answers.<name>.probabilities.<key>`: one value per option key, in the criteria's key
+  order (`hf-laya-python-reference-choice`, `npm-receptron-laya-0.1.2-choice`, `npm-receptron-laya-0.1.2-types`).
+  `answers.<name>.choice` is only the most probable key and `confidence` is one minus the normalised entropy; neither
+  is a probability of an option.
+- **How it is produced.** Each option's logit, read at its own `[MASK]` marker, is divided by the per-cardinality
+  temperature (`choice:2`, `1.9063563346862793`, for two options), and the probabilities are the softmax of those
+  values over that question's options, rounded to four decimal places — `round(float(v), 4)` in the reference,
+  `Math.round(x * 1e4) / 1e4` in the package (`hf-laya-card-choice`, `hf-laya-python-reference-choice`,
+  `npm-receptron-laya-0.1.2-choice`, `npm-receptron-laya-0.1.2-softmax`).
+- **Its range.** No fetched source states a numeric range for a `choice` probability in words. The card says the
+  options are "softmaxed"; the code is a softmax (`exp(z - max)` divided by its sum) followed by rounding; the README's
+  example shows `{ billing: 0.9415, support: 0.031, sales: 0.0275 }`. The only stated range, "a float from 0.0 to 1.0",
+  is for `noul` (`gh-nandhakishorm-laya-readme`). Nothing here states a range, so no range is recorded as a fact.
+
+Consequence for the build:
+
+- Task 9's gate reads the Python reference's value for each template where these entries put it: `answers.decision.noul`
+  for `laya-noul-v1`, and `answers.decision.probabilities.a` — the affirmative key, asked with
+  `criteria: {"a": "yes, the statement holds", "b": "no, the statement does not hold"}`, the worker's own option text —
+  for `laya-choice2-v1`. The reference's `usage.input_tokens` is compared exactly with the worker's token count before
+  any probability.
+- Both sides' values are checked the way D5 checks any judge value — a finite number within 0 to 1, never clamped — and
+  anything else is refused as malformed. That is a validation, not a recorded range.
+- The record now names the `choice` wire Task 8 lacked. Task 8's worker still refuses `laya-choice2-v1`
+  (`template-blocked`), and its frozen Task 8 fragment anchors that refusal; lifting it is a change to the worker
+  adapter that needs the re-review the plan names, which Task 9 does not make. Until then every gate item for
+  `laya-choice2-v1` is refused, the template cannot pass, and only `laya-noul-v1` can be measured.
+
 ## Not yet recorded (blocks the named task)
 
 - Task 10 (gate): the owner-controlled real-mac boundary gate result for the release candidate, when it first runs.
