@@ -144,6 +144,15 @@ export {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
+// The standing approvals as `agentcomms standing list` and `comms_standing` report them, and ending them at once.
+export {
+  type StandingActView,
+  type StandingChangeRequest,
+  type StandingReport,
+  type StandingView,
+  standingChange,
+  standingReport,
+} from './operations/standing.ts';
 export { type UpdateDeps, updateChange } from './operations/update.ts';
 export {
   type UpdateLevelResult,
