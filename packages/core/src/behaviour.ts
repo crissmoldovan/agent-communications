@@ -302,11 +302,13 @@ function isUnknownSlackPlace(alias: string): boolean {
  * there or a place that is that domain, and `@eu.client.test` wins over `@client.test`), or the whole account.
  * Addresses and domains compare in one form (`normaliseMailConversation`) — both sides, since a rule may come from
  * anywhere and a place is as its channel writes it — and an address's domain is what follows its last `@`, so a quoted
- * local part holding one cannot hide it. A place whose domain is not one meets no conversation rule, only its account's;
- * a Slack place that is no conversation id meets every rule (`isUnknownSlackPlace`).
+ * local part holding one cannot hide it. A mail place whose domain is not one, like a Slack place that is no
+ * conversation id (`isUnknownSlackPlace`), meets every rule of its account at once, so only what all of them allow
+ * holds (lead's call, after the 0.22 dry run): no rule can be read as not naming it, so none is passed by.
  */
 function levelOf(rule: BehaviourRule, alias: string | undefined): number {
   if (alias !== undefined && isUnknownSlackPlace(alias)) return PLACE_LEVEL;
+  if (alias !== undefined && alias.includes('@') && normaliseMailConversation(alias) === null) return PLACE_LEVEL;
   if (rule.conversation === undefined) return ACCOUNT_LEVEL;
   if (alias === undefined) return NO_MATCH;
   if (!rule.conversation.includes('@')) return rule.conversation === alias ? PLACE_LEVEL : NO_MATCH;
