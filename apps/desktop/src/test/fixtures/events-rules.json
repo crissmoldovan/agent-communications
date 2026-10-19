@@ -1,0 +1,18 @@
+[
+  {
+    "rule_id": "rule_example",
+    "version": 1,
+    "digest": "1f3a5c7e9b0d2f4a6c8e0b1d3f5a7c9e1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a",
+    "state": "superseded",
+    "approval_id": null,
+    "authorization_activation_id": null
+  },
+  {
+    "rule_id": "rule_example",
+    "version": 2,
+    "digest": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "state": "active",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3P",
+    "authorization_activation_id": "act_example"
+  }
+]
