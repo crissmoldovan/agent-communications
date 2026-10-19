@@ -22,21 +22,30 @@ agent may start there, and only those: `post`, `reply`, `reaction`, `edit`, `del
   `agentcomms behaviour` shows every rule and what each account allows, across it and in each conversation a rule
   names; `agentcomms behaviour clear <account> [--conversation <id>]` takes one away. Over MCP, `comms_behaviour` with
   `setRule` or `removeRule`, and with no change it only reports.
-- **The most specific rule wins:** a conversation over its account, and for mail an address over its `@domain`. A
-  Slack DM is matched by its `D…` rule and by the person's `U…` rule together, and only what both allow holds.
+- **The most specific rule wins:** a conversation over its account, and for mail an address over the longest
+  `@domain` that covers it. An `@domain` rule holds its subdomains too, and a rule for a subdomain wins over its
+  parent's: `@eu.client.test` over `@client.test`. An address rule holds the address with any `+tag` —
+  `ceo+x@client.test` is `ceo@client.test` — and at Gmail with or without dots, at `gmail.com` or `googlemail.com`
+  alike, so no spelling of an address reaches its mailbox past the rule for it. A Slack DM is matched by its `D…` rule
+  and by the person's `U…` rule together, and only what both allow holds.
 - **A rule that only narrows applies at once.** One that lets an agent do more — an act added, a rule removed whose
   fallback is wider, a conversation allowed more than its account — is a change you approve first, its preview showing
   each level before → after. An agent may start one, but the skills tell it to only when you asked.
 - **A rule fails closed.** It binds to the account's id, so a rename keeps it, and a rule left behind by a removed
   account still holds an account connected again under that name. An act this release does not know narrows its rule;
-  a rule it cannot read at all makes its account allow nothing, and `doctor` says so. Addresses and domains match
+  a rule it cannot read at all makes its account allow nothing, and `doctor` says so. A rule naming an account no
+  account here could ever have — `*`, a name in capitals, a former name whose account is gone — makes every account
+  allow nothing; one naming a former name holds the account it names now; and `agentcomms names migrate` takes every
+  rule with the account it renames. Addresses and domains match
   whatever their case, whether a domain is written in Unicode or in its `xn--` form, and with or without a trailing dot:
   a rule for `@bücher.de` holds mail to `kunde@xn--bcher-kva.de`. A rule naming a domain that is not one is refused when
   added, and one written by hand makes its account allow nothing.
 
 **An act a rule does not allow is refused, and the agent stops.** "this agent may only reply and react in #general
 (cue/slack)": `ACT_NOT_ALLOWED`, before any preview or approval exists, so nothing waits for you. The same refusal
-stops an act you said yes to when you narrowed the rule afterwards, before Slack, Gmail or Resend is called. The hint
+stops an act you said yes to when you narrowed the rule afterwards, before Slack, Gmail or Resend is called — and before
+the approval is used, so loosening the rule again lets the same approval go, once. The approval screen at your terminal
+refuses the same way, and asks you for no code. The hint
 reads the same on every channel: nothing was done, the `behaviour` command (as this machine runs it) and
 `comms_behaviour` show the rules, and the agent tells you which rule stopped it and does not try again. It never names
 a command that changes the rules.
@@ -47,16 +56,23 @@ a command that changes the rules.
   `post` or `reply`; a reaction is `reaction`; an edit is `edit`, and `file` as well when it adds files; a deletion is
   `delete`. Each is checked in `slack_post_prepare`, `slack_react`, `slack_edit_prepare` and `slack_delete_prepare`, and
   again in the one place every send passes before Slack is called.
-- **Gmail:** every recipient — To, Cc and Bcc — is checked on their own, and one forbidden recipient refuses the whole
-  message, naming them. `gmail_send_prepare` and `gmail_draft_send` refuse alike; drafts stay possible under every
-  rule, since a draft reaches nobody.
-- **Resend:** the same for every recipient of `resend_send_prepare`, and again at `resend_send_execute`. A Resend email
-  with `In-Reply-To` is still a `send`: Resend has no threads here.
+- **Gmail:** every recipient — To, Cc and Bcc — is checked on their own, as the act the message is to them, and one
+  forbidden recipient refuses the whole message, naming them. `gmail_send_prepare` and `gmail_draft_send` refuse
+  alike; drafts stay possible under every rule, since a draft reaches nobody.
+- **Resend:** the same for every recipient of `resend_send_prepare`, and again at `resend_send_execute` — before every
+  attempt, so a rule narrowed while a throttle is waited out stops the retry. A Resend email with `In-Reply-To` is
+  still a `send`: Resend has no threads here.
 
-**A Gmail reply is proven from the mailbox.** A message counts as a `reply` only when its `In-Reply-To` names a message
-that is in this mailbox, which prepare asks Gmail with one search and binds into the approval. A forward, a message
-whose `In-Reply-To` names nothing here, or a thread id alone (Gmail gives every draft one) is a `send`. When a rule
-allows replies but not sends, and the message was meant as a reply it could not prove, the refusal says so. An
+**A Gmail reply is proven from the mailbox, and is a reply only to the people on what it answers.** A message counts as
+a `reply` to a recipient only when its `In-Reply-To` names a message in this mailbox — outside Spam and Trash — which
+prepare asks Gmail with one search, and that recipient was on it: its From, Reply-To, To or Cc. To anyone else it goes
+to, it is a `send`, so replying to an unrelated message cannot reach someone new as a reply. Each recipient's act is
+bound into the approval. A forward, a message whose `In-Reply-To` names nothing here, or a thread id alone (Gmail gives
+every draft one) is a `send` to everyone. The preview, and the approval screen at your terminal, say who the reply
+answers — `Checked as: reply to Sam Lee <sam@partner.test>`, the sender's words made safe and on one line — and how
+many recipients get it as a new message. When a rule allows replies but not sends, and the message was meant as a reply
+it could not prove, or a recipient was not on the message it answers, the refusal says which. If Gmail cannot be asked,
+the prepare or send fails `TRANSIENT` — nothing sent, nothing used, try again — rather than reading as "not a reply". An
 approval prepared before this release is checked as both a reply and a send when its `In-Reply-To` could make it
 either: the stricter reading.
 
@@ -89,7 +105,10 @@ tools enforce it; a style is yours to describe, and your yes to each preview is 
   again. The first rule you add says so, and `agentcomms doctor` names every registered server older than 0.22.0 while
   any rule exists.
 - One new error code, `ACT_NOT_ALLOWED` (exit 10, the refusal class of `POLICY_NEVER`), and one new line in every
-  send, post, reaction, edit and deletion preview, `Allowed here: …`.
+  send, post, reaction, edit and deletion preview, `Allowed here: …` — and in a Gmail reply's, `Checked as: …`.
+- `agentcomms doctor` counts a registered server that names no release, or one it cannot read, as one that may enforce
+  no rule, and says so. `agentcomms behaviour` shows every rule made safe: a hand-edited address cannot send an escape
+  sequence to your terminal.
 - A Slack post, reaction, edit or deletion in a DM that was prepared before you updated, and not yet sent, has to be
   prepared again. One in a channel, a Gmail send and a Resend send do not.
 

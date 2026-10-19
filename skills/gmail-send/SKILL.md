@@ -97,9 +97,12 @@ exists.
    `expect` display block, `riskFlags`, the `effectivePolicy`, the `identity` and the `approval`.
    Nothing has been sent.
    It checks the behaviour rules first, for every recipient: an act no rule allows is refused with
-   `ACT_NOT_ALLOWED` before any preview or approval exists. The act is `reply` only when the draft's
-   `In-Reply-To` names a message in this mailbox — Gmail is asked — and `send` otherwise, a forward
-   included; the preview's `Allowed here:` line says what holds.
+   `ACT_NOT_ALLOWED` before any preview or approval exists. The act is decided for each recipient: `reply`
+   only when the draft's `In-Reply-To` names a message in this mailbox, outside Spam and Trash — Gmail is
+   asked — and that recipient was on it (its From, Reply-To, To or Cc); `send` otherwise, a forward
+   included. The preview's `Checked as: reply to …` line names who that message was from, and its
+   `Allowed here:` line says what holds. If Gmail cannot be asked, the result is `TRANSIENT`: nothing was
+   prepared; try again shortly.
    It also settles who the message appears to come from: labelled `"<name> (agent)"` in its From
    line, or — only with `as: "me"` (CLI: `--as me`), passed when the person said so for this
    message, or a rule of theirs — as them, unlabelled. A draft whose From does not say so (one

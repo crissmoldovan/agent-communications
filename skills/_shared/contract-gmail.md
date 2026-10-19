@@ -132,17 +132,23 @@ approval, `64` usage, `65` bad data, `66` not found, `69` provider or secret sto
   for anything you compose. It overrides the defaults in the compose skills. Its send protocol may only be
   **stricter** than this contract, never looser.
 - **What an agent may send is a rule the person sets,** for a mailbox, an `@domain` or one address: `send` (a new
-  message, a forward included), `reply`, both or neither. A message is a `reply` only when its `In-Reply-To` names a
-  message in this mailbox; a thread id alone is not one. The rule is applied to every recipient — To, Cc and Bcc —
-  so one forbidden recipient stops the whole message. Drafts are always allowed: a draft reaches nobody. Every send
-  preview carries what holds: `Allowed here: reply (rule: acme/gmail, @client.test)`, or `Allowed here: everything
-  (no rule)`.
+  message, a forward included), `reply`, both or neither. A message is a `reply` only to the people on the message
+  its `In-Reply-To` names — that message's From, Reply-To, To and Cc — and only when this mailbox holds it outside
+  Spam and Trash; to anyone else it goes to it is a `send`, and a thread id alone is not a reply. The rule is
+  applied to every recipient — To, Cc and Bcc — as the act it is to them, so one forbidden recipient stops the whole
+  message. A rule for an address also holds it with any `+tag` (and at Gmail with or without dots, at gmail.com or
+  googlemail.com), and a rule for an `@domain` holds its subdomains. Drafts are always allowed: a draft reaches
+  nobody. Every send preview carries what holds: `Allowed here: reply (rule: acme/gmail, @client.test)`, or
+  `Allowed here: everything (no rule)` — and for a reply, `Checked as: reply to <who that message was from>`.
 - **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this send,** and nothing was prepared or sent:
   refused at prepare, or at send when the rule was narrowed after the person's yes. Tell the person which rule
   refused it — the message says what is allowed, and for which recipient — and stop. Never retry it, never get it
-  out another way (drop or swap a recipient, another mailbox), and never start a change that lets an agent do more
-  (`comms_behaviour` with `setRule` or `removeRule`) unless the person asked for that change: it is theirs to
-  approve. `comms_behaviour` with no change (CLI: `agentcomms behaviour`) shows the rules.
+  out another way (drop or swap a recipient, write an address another way, another mailbox, or reply to an
+  unrelated message to reach someone new), and never start a change that lets an agent do more (`comms_behaviour`
+  with `setRule` or `removeRule`) unless the person asked for that change: it is theirs to approve.
+  `comms_behaviour` with no change (CLI: `agentcomms behaviour`) shows the rules. A `TRANSIENT` saying Gmail could
+  not be asked whether the draft answers a message is not a refusal: nothing was sent and nothing used, so try the
+  same call again shortly.
 
 ## 10. A command for a person is the one a result gives.
 

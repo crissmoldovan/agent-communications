@@ -74,8 +74,14 @@ command or the labelled PowerShell `&` line the result provides.
 conversation — `post`, `reply`, `reaction`, `edit`, `delete` and `file` on Slack; `send` and `reply` on Gmail; `send`
 on Resend — and the tools refuse any other before a preview, an approval or a send, and again at send if the rule was
 narrowed after the person's yes: `ACT_NOT_ALLOWED`, exit `10`. With no rule, everything is allowed, as before. The
-most specific rule wins — a conversation over its account, and for mail an address over its `@domain` — and every
-recipient of a message is held to the rule for them. Every preview says what holds, in a line such as
+most specific rule wins — a conversation over its account, and for mail an address over the longest `@domain` that
+covers it — and every recipient of a message is held to the rule for them. An address rule holds the address with any
+`+tag` (`ceo+x@client.test` is `ceo@client.test`), and at Gmail with or without dots and at `gmail.com` or
+`googlemail.com` alike; an `@domain` rule holds its subdomains too, and a rule for a subdomain wins over its parent's
+(`@eu.client.test` over `@client.test`). A Gmail message is a `reply` only to the people on the message it answers —
+its From, Reply-To, To and Cc, held in this mailbox outside Spam and Trash — and a `send` to anyone else. A Slack
+destination must be a conversation id (`C…`, `G…`, `D…`); beneath that check, a place that is not one is held to every
+rule of its account. Every preview says what holds, in a line such as
 `Allowed here: reply, reaction (rule: acme/slack, #general)`.
 
 ```sh
@@ -87,7 +93,9 @@ npx @agentcomms/core behaviour clear acme/slack  # take the rule away, so the wi
 
 A rule that only narrows applies at once; one that lets an agent do more — an act added, a rule removed whose fallback
 is wider, a conversation allowed more than its account — is approved first. A rule binds to its account's id, so a
-rename keeps it, and one this release cannot read makes its account allow nothing. A server started before 0.22.0
+rename keeps it — and so does `names migrate` — and one this release cannot read makes its account allow nothing. One
+naming an account no account here could ever have (`*`, a name in capitals, a former name whose account is gone) makes
+every account allow nothing; one naming a former name holds the account it names now. A server started before 0.22.0
 holds no rule until its client restarts it: the first rule's result says so, and `doctor` names any such server.
 
 **How it writes is guidance.** A writing profile is Markdown the person keeps in `compose/` in the config directory, in
