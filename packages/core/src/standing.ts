@@ -1,6 +1,9 @@
 import { isDangerous } from './chars.ts';
+import { type Config, standingEpochOf } from './config.ts';
+import type { Core } from './core.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
 import { CommsError } from './errors.ts';
+import { ensureSendEpochConfig } from './send-epoch.ts';
 import { isStandardEmoji, READS_AS_APPROVAL, STANDARD_EMOJI } from './standing-emoji.ts';
 
 /**
@@ -449,4 +452,18 @@ export function standingLimitReached(
     `nothing was sent: this standing approval allows ${allowed} ${LIMIT_WORDS[limit]}, and that is reached, ${frees}`,
     { hint, details: { limit, allowed, freesAt } },
   );
+}
+
+/**
+ * Ends every standing approval at once (S8): the standing epoch raised by one, in one locked write of the
+ * configuration, which `ConfigStore.update` never lets fall back. Every standing record and every unused child binds
+ * the epoch it was made under, so each has ended from this moment, whatever any record still says. The configuration
+ * is made version 3 first, where the epoch lives. Returns the new epoch.
+ */
+export async function raiseStandingEpoch(core: Core): Promise<number> {
+  await ensureSendEpochConfig(core);
+  const written = await core.config.update(
+    (config) => ({ ...config, standingEpoch: standingEpochOf(config) + 1 }) as Config,
+  );
+  return standingEpochOf(written);
 }

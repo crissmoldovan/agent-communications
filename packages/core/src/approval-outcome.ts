@@ -16,6 +16,7 @@ import {
   defaultChangePolicy,
   governingChangePolicy,
   type SendPolicy,
+  standingEpochOf,
 } from './config.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { sendEpochOf } from './send-epoch.ts';
@@ -52,6 +53,11 @@ export interface LiveGate {
   readonly changePolicy?: ChangePolicy | undefined;
   /** The owner's send epoch (`sendEpochOf`). Only for a present owner. */
   readonly sendEpoch?: number | undefined;
+  /**
+   * The configuration's standing epoch (`standingEpochOf`, design 2026-10-19-standing-approvals, S8), for every record:
+   * one number for the whole configuration, not an owner's.
+   */
+  readonly standingEpoch?: number | undefined;
 }
 
 /** The mailbox or account a record's owner id names in `config`, or undefined when there is none. */
@@ -79,14 +85,18 @@ export function liveGateOf(
 ): LiveGate {
   const governing = (fallback: ChangePolicy): ChangePolicy =>
     record.kind === 'change' && record.change !== undefined ? governingChangePolicy(config, record.change) : fallback;
-  if (record.ownerScope !== 'owner') return { owner: 'none', changePolicy: governing(defaultChangePolicy(config)) };
+  const standingEpoch = standingEpochOf(config);
+  if (record.ownerScope !== 'owner') {
+    return { owner: 'none', changePolicy: governing(defaultChangePolicy(config)), standingEpoch };
+  }
   const entry = ownerEntry(config, record.inboxId);
-  if (entry === undefined) return { owner: 'removed' };
+  if (entry === undefined) return { owner: 'removed', standingEpoch };
   return {
     owner: 'present',
     sendPolicy: entry.sendPolicy ?? config.defaults.sendPolicy,
     changePolicy: governing(entry.changePolicy ?? defaultChangePolicy(config)),
     sendEpoch: sendEpochOf(config, record.inboxId),
+    standingEpoch,
   };
 }
 
