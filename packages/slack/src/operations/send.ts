@@ -813,6 +813,57 @@ export interface PostDeps extends PrepareDeps {
   readonly signal?: AbortSignal | undefined;
   /** How a throttled act waits before it tries again (design 2026-10-08 §R2): core's pacing when left out. */
   readonly sendPacing?: (() => SendPacing) | undefined;
+  /**
+   * The standing approval this act is one use of (design 2026-10-19-standing-approvals, S9): set by `ack` alone, the one
+   * caller whose approval is a standing approval's child. Every other caller leaves it out, and is refused a child —
+   * so a child is sent only on the path that counts it, records its outcome and raises its notice.
+   */
+  readonly standingUse?: { readonly standingId: string } | undefined;
+}
+
+/** Whether `record` is one use of a standing approval: a child `ack` minted, by any of the marks only a child has. */
+export function isStandingChild(record: ApprovalRecord | null | undefined): boolean {
+  if (record === null || record === undefined) return false;
+  return record.route === 'standing' || record.approvedVia === 'standing' || record.standingId !== undefined;
+}
+
+/**
+ * Refuses an approval on the wrong path (S9): a standing child on any path but `ack`'s, and anything but the child of
+ * the standing approval `ack` is using on its own. Before anything is asked of Slack and before the claim, so the
+ * refusal spends nothing: a child handed to `post send` is still there for the acknowledgement it was minted for.
+ */
+export function requireClaimRoute(
+  deps: Pick<PostDeps, 'standingUse'>,
+  approvalId: string,
+  record: ApprovalRecord | null | undefined,
+): void {
+  const wanted = deps.standingUse?.standingId;
+  const child = isStandingChild(record);
+  if (wanted === undefined) {
+    if (!child) return;
+    throw new CommsError(
+      'APPROVAL_VOID',
+      'nothing was sent: this approval is one use of a standing approval, and only its acknowledgement sends it',
+      {
+        hint: 'Prepare this act itself and show the person its preview. An acknowledgement under a standing approval is made with slack_ack, or the ack command, and nothing else.',
+        details: { approvalId, reason: 'standing-child' },
+      },
+    );
+  }
+  if (record === null || record === undefined || (child && record.standingId === wanted)) return;
+  throw new CommsError('UNEXPECTED', 'nothing was sent: an acknowledgement was handed an approval it did not mint', {
+    hint: 'This is a bug — please report it.',
+    details: { approvalId, reason: 'not-this-standing-child' },
+  });
+}
+
+/** The approval as the claim will find it, read without claiming: `null` when it cannot be read, for the claim to say. */
+async function recordForClaim(deps: PostDeps, approvalId: string): Promise<ApprovalRecord | null> {
+  try {
+    return (await deps.approvals.inspect(approvalId, { kind: 'send', owner: deps.accountId })).outcome.record ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export interface PostedMessage {
@@ -1018,14 +1069,16 @@ export async function claimOrHandOver(
   pendingHint: string,
   unclaimed: () => CommsError = () => cancelledPost(NOT_USED),
 ): Promise<{ claimToken: string; claimed: ApprovalObject }> {
+  // A standing child only on `ack`'s path, and nothing else there (S9): every act comes through here to be claimed.
+  requireClaimRoute(deps, approvalId, await recordForClaim(deps, approvalId));
   await requireAllowed(deps, check);
+  let claim: SendClaim;
   try {
-    const { claimToken, approval } = await deps.approvals.claimForSend(approvalId, live, {
+    claim = await deps.approvals.claimForSend(approvalId, live, {
       pendingHint,
       signal: deps.signal,
       platform: deps.handoffs.platform,
     });
-    return { claimToken, claimed: approval };
   } catch (error) {
     if (isCancelledPost(error)) throw withApproval(unclaimed(), approvalOfError(error));
     if (!(error instanceof CommsError) || error.code !== 'APPROVAL_PENDING') throw error;
@@ -1036,6 +1089,22 @@ export async function claimOrHandOver(
       details: { ...error.details, command: approveCommand(approvalId, deps.handoffs) },
     });
   }
+  /*
+   * The record as the claim took it, held to the same rule: a record that was not what the look before the claim read
+   * — written over in between — is not sent on this path either. Claimed, it cannot be put back, so it is recorded as
+   * failed: nothing was sent.
+   */
+  try {
+    requireClaimRoute(deps, approvalId, claim.record);
+  } catch (refused) {
+    try {
+      await deps.approvals.complete(approvalId, claim.claimToken, { error: messageOf(refused) });
+    } catch {
+      // Left sending, it reads unknown once its lease runs out: never sent either way.
+    }
+    throw refused;
+  }
+  return { claimToken: claim.claimToken, claimed: claim.approval };
 }
 
 /**
@@ -1084,6 +1153,8 @@ export async function postPrepared(
   );
   if (outcome.error) throw outcome.error;
   try {
+    // A standing child goes only through `ack`, and `ack` only with its own (S9): refused before Slack is asked.
+    requireClaimRoute(deps, approvalId, outcome.record);
     return await postClassified(deps, draft, approvalId, expectChannel, book, requestedOf(outcome.record?.riskFlags));
   } catch (error) {
     throw withApproval(error, outcome.approval);
@@ -2033,19 +2104,6 @@ async function reactionLabel(
   );
 }
 
-/**
- * What a reaction's approval says the message asked for: read without claiming, so the claim that follows refuses
- * exactly as it always did. Nothing here is believed on its own — the digest decides.
- */
-async function requestedForApproval(deps: PostDeps, approvalId: string): Promise<'agent' | 'me' | undefined> {
-  try {
-    const { outcome } = await deps.approvals.inspect(approvalId, { kind: 'send', owner: deps.accountId });
-    return requestedOf(outcome.record?.riskFlags);
-  } catch {
-    return undefined;
-  }
-}
-
 export interface ReactionOptions {
   readonly channel: string;
   readonly ts: string;
@@ -2069,6 +2127,34 @@ function reactionExpectation(options: ReactionOptions): Expectation {
 /** Where a reaction's approval says what it is for, in place of the draft a post has. */
 function reactionDraftId(options: ReactionOptions): string {
   return `reaction:${options.channel}:${options.ts}`;
+}
+
+/**
+ * What a reaction's approval is bound to, for one minted rather than prepared — a standing approval's child (design
+ * 2026-10-19-standing-approvals, S9): the fields `prepareReaction` gives its record, from the same functions, so the
+ * claim `reactPrepared` makes of it compares exactly what it compares of any reaction. With the check the rules are
+ * asked of it, which its digest binds.
+ */
+export async function reactionApprovalFields(
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'postingAs'>,
+  options: ReactionOptions,
+  label: SlackLabel | undefined,
+): Promise<{
+  draftId: string;
+  draftMessageId: string;
+  contentDigest: string;
+  expect: Expectation;
+  check: BehaviourCheck;
+}> {
+  const check = await reactionCheckOf(options, roomOnce(deps.call, options.channel));
+  const digest = reactionDigest(deps, options, label, check);
+  return {
+    draftId: reactionDraftId(options),
+    draftMessageId: digest,
+    contentDigest: digest,
+    expect: reactionExpectation(options),
+    check,
+  };
 }
 
 /**
@@ -2327,14 +2413,19 @@ export async function reactPrepared(
   approvalId: string,
   options: ReactionOptions,
 ): Promise<ReactionResult> {
+  /*
+   * The approval, read without claiming, so the claim that follows refuses exactly as it always did: what the message
+   * asked for, which nothing here believes on its own — the digest decides — and whether it is a standing child, which
+   * only `ack` sends (S9), refused before Slack is asked anything.
+   */
+  const record = await recordForClaim(deps, approvalId);
+  requireClaimRoute(deps, approvalId, record);
   const room = roomOnce(deps.call, options.channel);
   // Where it lands, decided again as it was prepared, and bound: a DM read as with someone else is a different act.
   const check = await reactionCheckOf(options, room);
   // Who reacts, decided again as it was prepared: a reaction the app can no longer make is a different act, refused.
   const label =
-    deps.label === undefined
-      ? undefined
-      : await reactionLabel(deps, options, await requestedForApproval(deps, approvalId), room);
+    deps.label === undefined ? undefined : await reactionLabel(deps, options, requestedOf(record?.riskFlags), room);
   const digest = reactionDigest(deps, options, label, check);
   // The app's call for a reaction the app makes, opened before the claim (S6); the person's otherwise.
   const reactor = label?.route === 'app' ? await appCall(deps) : deps.call;

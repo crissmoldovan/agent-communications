@@ -23,6 +23,7 @@ import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { INSTALL_MODES, MANIFEST_MODES } from '../manifest.ts';
+import { ack } from '../operations/ack.ts';
 import {
   CHANGE_POLICIES,
   connectWorkspace,
@@ -1110,6 +1111,45 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         );
         return reply(
           outcome.status === 'narrowed' ? standingNarrowedView(outcome.record) : standingPreparedView(outcome.prepared),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): `agent-slack ack`. It names the message and the
+   * content by its digest, and nothing else — no draft, no words, no removal — so the gate builds the payload, and every
+   * check a person would otherwise have made is the gate's.
+   */
+  server.registerTool(
+    'slack_ack',
+    {
+      title: 'Acknowledge under a standing approval',
+      description:
+        'Acknowledge, without asking, a message that has just arrived from another person — with a reaction or a reply the person wrote in advance and approved at their terminal as a standing approval. Use it only on a message that just arrived, the newest from someone else in its thread or channel, and only with a content digest comms_standing shows for that standing approval: you never write the words. It goes out as your agent — the app, or labelled — and the person is told on their screen. Without a standing approval that covers it, ask the person instead. STANDING_REFUSED or STANDING_LIMIT means it does not cover this act: stop and ask the person, and do not try again. The same as the command line’s `ack`.',
+      inputSchema: {
+        ...workspaceArg,
+        standingId: z.string().describe('the standing approval, as comms_standing lists it'),
+        channel: z.string().describe('the conversation the message is in: C…, G… or D…'),
+        ts: z.string().describe('the message, by its ts as a read returned it'),
+        content: z.string().describe('the content, by the digest comms_standing shows for it: 64 hex characters'),
+      },
+      annotations: outward,
+    },
+    async (args) => {
+      try {
+        const name = await resolve(args.workspace);
+        await ownApproval(args.standingId, 'standing');
+        // The operation `ack` runs: see `ack`.
+        return reply(
+          await ack(
+            context,
+            name,
+            { standingId: args.standingId, channel: args.channel, ts: args.ts, content: args.content },
+            slackDeps,
+          ),
         );
       } catch (error) {
         return fail(error);

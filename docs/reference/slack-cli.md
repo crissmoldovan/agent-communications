@@ -49,6 +49,7 @@ Scripts should read these rather than parse output.
 | [`post`](#agent-slack-post) | take a draft through the approval gate |
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
 | [`standing`](#agent-slack-standing) | acknowledgements your agent may send without asking, once you approve them here with a code |
+| [`ack`](#agent-slack-ack) | acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent |
 | [`edit`](#agent-slack-edit) | change the words of a message this account posted, through the gate |
 | [`delete`](#agent-slack-delete) | delete a message this account posted, through the gate |
 | [`approval`](#agent-slack-approval) | where an approval stands |
@@ -517,6 +518,22 @@ agent-slack standing add [options]
 | `--per-day <n>` | acts a day: 1 to 100, 30 when left out | — |
 | `--expires <days>` | how long it lasts once approved, as 7d: 1d to 30d, 7d when left out | — |
 | `--replaces <id>` | the standing approval this replaces: narrower applies at once, wider asks for a code | — |
+
+### `agent-slack ack`
+
+acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent
+
+```
+agent-slack ack [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--standing <id>` | the standing approval, as standing list shows it | — |
+| `--channel <id>` | the conversation the message is in | — |
+| `--ts <ts>` | the message | — |
+| `--content <digest>` | the content, by the digest standing list shows for it | — |
 
 ### `agent-slack edit`
 

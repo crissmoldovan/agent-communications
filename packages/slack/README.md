@@ -538,6 +538,8 @@ on stdio directly.
 | `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
 | `slack_edit_prepare`, `slack_edit_send` | change the words or files of a message this account posted, through the same gate — `agent-slack edit prepare` and `edit send` |
 | `slack_delete_prepare`, `slack_delete_send` | delete a message this account posted, through the same gate — `agent-slack delete prepare` and `delete send` |
+| `slack_standing_add` | prepare a standing approval — fixed reactions or replies, places, limits and an expiry — for the person to approve at their terminal with its code; approves nothing — `agent-slack standing add` |
+| `slack_ack` | acknowledge, without asking, a message that just arrived, with a content a standing approval holds, by its digest; as the agent, never as you — `agent-slack ack` |
 | `slack_approval_wait` | where an approval stands, now or once a person approves it — only looks; `agent-slack approval wait` |
 | `slack_draft_create`, `slack_draft_update` | write a draft, or change one — words, channel, thread, mentions or files — without preparing it |
 | `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |

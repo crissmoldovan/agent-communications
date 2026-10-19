@@ -55,6 +55,7 @@ import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
 import { type InstallMode, parseMode, renderAgentManifest, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
+import { ack } from '../operations/ack.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
@@ -1610,6 +1611,45 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             result.state === 'approved'
               ? 'Approved. The standing approval is in force: your agent may now acknowledge, within it, without asking.'
               : 'Cancelled. Nothing was approved, and the standing approval is ended.',
+          streams,
+        );
+      }),
+    );
+
+  /*
+   * Using a standing approval (design 2026-10-19-standing-approvals, S9): the agent names the message and the content by
+   * its digest, and nothing else — no draft, no words, no removal. The gate builds the payload and decides everything a
+   * person would otherwise have been asked.
+   */
+  workspaceOption(program.command('ack'))
+    .description(
+      'acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent',
+    )
+    .requiredOption('--standing <id>', 'the standing approval, as standing list shows it')
+    .requiredOption('--channel <id>', 'the conversation the message is in')
+    .requiredOption('--ts <ts>', 'the message')
+    .requiredOption('--content <digest>', 'the content, by the digest standing list shows for it')
+    .action(
+      act(async (context, _options, flags: Options) => {
+        // The same operation as `slack_ack`: see `ack`.
+        const done = await ack(
+          context,
+          String(flags.workspace),
+          {
+            standingId: String(flags.standing),
+            channel: String(flags.channel),
+            ts: String(flags.ts),
+            content: String(flags.content),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(
+          done,
+          output(),
+          (data) =>
+            `${data.act === 'reaction' ? 'Reacted to' : 'Replied in the thread of'} ${data.ts} in ${data.channel}, ${
+              data.label?.route === 'app' ? 'as the app' : 'labelled as your agent'
+            }, under standing approval ${data.standingId}. Notice: ${data.notice}.`,
           streams,
         );
       }),

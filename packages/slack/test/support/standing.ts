@@ -1,6 +1,14 @@
 import { PassThrough } from 'node:stream';
 import type { TestContext } from 'node:test';
-import { type ApprovalRecord, asV2, type Core, openCore, type Streams } from '@agentcomms/core';
+import {
+  type ApprovalRecord,
+  asV2,
+  type Core,
+  type Notifier,
+  openCore,
+  type StandingNotice,
+  type Streams,
+} from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { SLACK_CALLER } from '../../src/caller.ts';
@@ -52,12 +60,18 @@ export const VENDORS = 'C0VENDORS';
 export const GRIDROOM = 'C0GRIDROOM';
 /** `#blind`: how many are in it cannot be read. */
 export const BLIND = 'C0BLIND';
-/** `#secret`: private, and the app's bot user has not joined it. */
-export const SECRET = 'G0SECRET';
+/** `#private`: a private channel, which the app's bot user has not joined. */
+export const PRIVATE = 'G0PRIVATE';
 /** A group DM of the person, Sam and Ana, whose answer carries no `num_members`. */
 export const MPIM = 'G0MPIM';
 /** The DM with Sam. */
 export const SAM_DM = 'D0SAM';
+/** `#mixed`: an outsider in it, though Slack does not say it is shared. */
+export const MIXED = 'C0MIXED';
+/** `#strange`: someone Slack calls a stranger in it, and no sharing flag. */
+export const STRANGE = 'C0STRANGE';
+/** `#extonly`: shared with another organisation by Slack's flag, though everyone in it reads as from here. */
+export const EXTONLY = 'C0EXTONLY';
 
 /** Sixty members of `#general`, the person among them. */
 const CROWD = [SELF, ...Array.from({ length: 59 }, (_, index) => `U0C${String(index).padStart(3, '0')}`)];
@@ -71,9 +85,12 @@ export function standingRooms(): Record<string, WorldRoom> {
     [VENDORS]: { name: 'vendors', is_pending_ext_shared: true, members: [SELF, ANA, BOT] },
     [GRIDROOM]: { name: 'grid', is_org_shared: true, members: [SELF, GRID, BOT] },
     [BLIND]: { name: 'blind', num_members: null, members_unreadable: true, members: [SELF, SAM] },
-    [SECRET]: { name: 'secret', is_private: true, members: [SELF, SAM] },
+    [PRIVATE]: { name: 'private', is_private: true, members: [SELF, SAM] },
     [MPIM]: { name: 'mpdm-jo--sam--ana-1', is_mpim: true, num_members: null, members: [SELF, SAM, ANA] },
     [SAM_DM]: { is_im: true, user: SAM, members: [SELF, SAM] },
+    [MIXED]: { name: 'mixed', members: [SELF, SAM, OUTSIDER, BOT] },
+    [STRANGE]: { name: 'strange', members: [SELF, SAM, STRANGER, BOT] },
+    [EXTONLY]: { name: 'extonly', is_ext_shared: true, members: [SELF, SAM, BOT] },
   };
 }
 
@@ -101,6 +118,8 @@ export interface StandingWorld {
   readonly slack: { fetch: FakeSlack['fetch'] };
   /** The test's clock, in milliseconds: move it, and everything here sees the time move. */
   readonly clock: { now: number };
+  /** Every notice raised on the person's screen, when the world was made with the recording notifier. */
+  readonly notices: StandingNotice[];
   /** What Slack was asked, by method. */
   requests(method: string): SlackRequest[];
 }
@@ -113,6 +132,8 @@ export interface StandingWorldOptions {
   readonly bot?: boolean;
   readonly rooms?: Record<string, WorldRoom>;
   readonly messages?: WorldMessage[];
+  /** What raises a standing act's notice: one that records into `notices` when left out, none at all for `null`. */
+  readonly notify?: Notifier | null;
 }
 
 export async function standingWorld(t: TestContext, options: StandingWorldOptions = {}): Promise<StandingWorld> {
@@ -126,16 +147,24 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
   });
   const fake = await startFakeSlack();
   t.after(() => fake.close());
+  const clock = { now: Date.now() };
   const world = fake.world({
     self: SELF,
     botUserId: BOT,
     users: standingUsers(),
     rooms: options.rooms ?? standingRooms(),
     messages: options.messages ?? [],
+    // What the gate posts is timed by the test's clock, so it reads as just posted.
+    tsNow: () => clock.now,
   });
-  const clock = { now: Date.now() };
   const now = () => new Date(clock.now);
   const core = openCore({ env: harness.env, caller: SLACK_CALLER, now });
+  const notices: StandingNotice[] = [];
+  const recording: Notifier = async (notice) => {
+    notices.push(notice);
+    return { raised: true };
+  };
+  const notify = options.notify === null ? undefined : (options.notify ?? recording);
   const context = new SlackContext({
     core,
     env: harness.env,
@@ -143,6 +172,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     now,
     platform: 'darwin',
     surface: 'mcp',
+    ...(notify === undefined ? {} : { notify }),
   });
   return {
     harness,
@@ -152,6 +182,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     world,
     slack: { fetch: fake.fetch },
     clock,
+    notices,
     requests: (method) => fake.requests.filter((request) => request.method === method),
   };
 }
@@ -232,6 +263,7 @@ export async function cli(
     openBrowser: () => undefined,
     probe: (input, init) => w.harness.probe(input, init),
     read: w.fake.fetch,
+    ...(w.context.notify === undefined ? {} : { notify: w.context.notify }),
   });
   const stdout = options.streams === undefined ? fallback.out() : (options.streams.said?.() ?? '');
   const stderr = options.streams === undefined ? fallback.err() : '';
@@ -257,6 +289,7 @@ export async function mcp(w: StandingWorld, t: TestContext): Promise<McpClient> 
     fetch: w.fake.fetch,
     platform: 'darwin',
     now: () => new Date(w.clock.now),
+    ...(w.context.notify === undefined ? {} : { notify: w.context.notify }),
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });

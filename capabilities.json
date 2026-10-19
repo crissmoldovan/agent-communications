@@ -1574,6 +1574,15 @@
       "reason": "Prepares a standing approval, reading each place's name, member count and sharing for its preview (design 2026-10-19-standing-approvals, §8.1). Neither side approves it: only the person's code at a terminal does, through `approve`."
     },
     {
+      "id": "slack.ack",
+      "package": "slack",
+      "cli": "ack",
+      "mcp": "slack_ack",
+      "status": "both",
+      "operation": "ack",
+      "reason": "Sends one acknowledgement under a standing approval (design 2026-10-19-standing-approvals, S9): the message and a content digest, no draft. Its one-shot child is claimed through the same path as every Slack act."
+    },
+    {
       "id": "slack.edit.prepare",
       "package": "slack",
       "cli": "edit prepare",
