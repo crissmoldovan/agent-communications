@@ -43,6 +43,11 @@ export * from './approval-validate.ts';
 export { renderApprovalWait, type WaitCallContext, waitCallOptions } from './approval-wait-surface.ts';
 export * from './approvals.ts';
 export * from './audit.ts';
+/*
+ * What an agent may do (design 2026-10-19-agent-behaviour-rules): the rules, read fail-closed, the one decision every
+ * channel's prepare and execute make, and how a change to them is judged.
+ */
+export * from './behaviour.ts';
 export * from './change-flow.ts';
 export * from './changes.ts';
 export * from './channel-manifest.ts';

@@ -12,9 +12,11 @@ import {
   isAgentLabelWord,
   isSlackStyle,
   labelPhrase,
+  MAIL_CONVERSATION_PATTERN as MAIL_CONVERSATION,
   type MessageIdentity,
   readAgentLabelSettings,
   resolveIdentity,
+  SLACK_CONVERSATION_PATTERN as SLACK_CONVERSATION,
   type SlackStyle,
   slackAgentAppOf,
   slackStyleOf,
@@ -68,11 +70,6 @@ const LABELLED: Readonly<Record<string, { kinds: readonly ActKind[]; conversatio
  * limit when it prepares.
  */
 const NAME_SETTING_LIMIT = 80;
-
-/** A Slack channel or DM (`C…`, `G…`, `D…`), or a person (`U…`, or `W…` on Enterprise Grid). */
-const SLACK_CONVERSATION = /^[CGDUW][A-Z0-9]{2,}$/u;
-/** An address, or `@domain` for every address there. */
-const MAIL_CONVERSATION = /^(?:[^\s@<>(),;:"\\]+)?@[^\s@<>(),;:"\\]+$/u;
 
 export interface LabelKindView {
   kind: ActKind;
