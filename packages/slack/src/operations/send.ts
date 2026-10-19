@@ -2124,6 +2124,8 @@ export async function prepareReaction(
   if (deps.policy === 'never') {
     throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)');
   }
+  // A conversation by its id, never by its name: a name would be held to no rule (review of spec 2, finding 8).
+  requireConversation(options.channel, deps.workspaceName, deps.handoffs);
   const room = roomOnce(deps.call, options.channel);
   // The behaviour rules first (design 2026-10-19, B4): a reaction they do not allow here makes no approval.
   const check = await reactionCheckOf(options, room);
@@ -2327,6 +2329,8 @@ export async function reactPrepared(
   approvalId: string,
   options: ReactionOptions,
 ): Promise<ReactionResult> {
+  // Refused as at prepare, before Slack is asked anything: an approval made before the check cannot carry a name past it.
+  requireConversation(options.channel, deps.workspaceName, deps.handoffs);
   const room = roomOnce(deps.call, options.channel);
   // Where it lands, decided again as it was prepared, and bound: a DM read as with someone else is a different act.
   const check = await reactionCheckOf(options, room);

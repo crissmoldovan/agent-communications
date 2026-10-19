@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { asV2, type CommsError } from '@agentcomms/core';
 import { renderDeletionPreview } from '../src/operations/amend.ts';
 import { beginApproval } from '../src/operations/approve.ts';
-import { renderSlackPreview } from '../src/operations/behaviour.ts';
+import { renderSlackPreview, requireAllowed } from '../src/operations/behaviour.ts';
+import { createDraft, updateDraft } from '../src/operations/drafts.ts';
 import { gateDepsFor } from '../src/operations/gate.ts';
 import {
   prepareDelete,
@@ -380,4 +383,124 @@ test('every preview carries the Allowed here line, naming the rule that holds', 
   // Elsewhere in the account, the account's rule holds, and the line says so without a place.
   const inDm = await prepareReaction(await gateDepsFor(w.context, 'acme', w.slack), { ...WANTED, channel: SAM_DM });
   assert.equal(inDm.allowedHere, 'Allowed here: reaction (rule: acme)');
+});
+
+// ── A destination that is no conversation id ────────────────────────────────────────────────────────────────────
+
+/**
+ * Slack's `chat.postMessage` takes a channel's name as well as its id, and a name matches no rule: so `eng` once went
+ * into #eng past a rule for `C0ENG` (review of spec 2, finding 8). A name, `#name` and an id in lower case are refused
+ * as the usage error they are, before Slack is asked anything and before any approval is made.
+ */
+const NOT_IDS = ['eng', '#eng', 'c0eng'];
+
+/** The refusal of a destination that is no conversation id: USAGE, pointing at where the ids are listed. */
+function assertNotAnId(error: CommsError, channel: string): void {
+  assert.equal(error.code, 'USAGE', `${channel}: ${error.message}`);
+  assert.equal(error.details?.reason, 'not-a-conversation', channel);
+  assert.equal(error.details?.channel, channel);
+  assert.match(error.message, /is not a conversation id/, channel);
+  assert.match(error.hint ?? '', /slack_channels/, `${channel}: the hint does not say where the ids are listed`);
+}
+
+/** A draft file rewritten by hand, as anything with a shell can. */
+async function handEdit(
+  w: BehaviourWorld,
+  draftId: string,
+  edit: (draft: { payload: Record<string, unknown> }) => void,
+) {
+  const path = join(w.harness.core.paths.stateDir, 'slack', 'drafts', `${draftId}.json`);
+  const draft = JSON.parse(await readFile(path, 'utf8')) as { payload: Record<string, unknown> };
+  edit(draft);
+  await writeFile(path, `${JSON.stringify(draft, null, 2)}\n`);
+}
+
+test('a post to a channel by its name, #name or a lower-case id is refused at prepare, before Slack is asked', async (t) => {
+  for (const channel of NOT_IDS) {
+    const w = await behaviourWorld(t);
+    await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+    const error = await refusedWith(
+      prepareDraftPost(w.context, 'acme', { channel, text: 'shipping' }, w.slack),
+      `a post to ${channel}`,
+    );
+    assertNotAnId(error, channel);
+    assert.equal(await approvalCount(w.harness), 0, `${channel}: an approval was made`);
+    assert.deepEqual(
+      w.fake.requests.map((request) => request.method),
+      [],
+      `${channel}: Slack was asked something`,
+    );
+  }
+});
+
+test('a draft cannot be written or moved to a channel by its name', async (t) => {
+  const w = await behaviourWorld(t);
+  const draft = await createDraft(w.context, 'acme', { channel: ENG, text: 'shipping' });
+  for (const channel of NOT_IDS) {
+    assertNotAnId(await refusedWith(createDraft(w.context, 'acme', { channel, text: 'shipping' }), channel), channel);
+    assertNotAnId(await refusedWith(updateDraft(w.context, 'acme', draft.draftId, { channel }), channel), channel);
+  }
+  assert.equal(w.fake.requests.length, 0);
+});
+
+test('a reaction in a channel by its name, #name or a lower-case id is refused before Slack is asked', async (t) => {
+  for (const channel of NOT_IDS) {
+    const w = await behaviourWorld(t);
+    await setRules(w.harness, [{ conversation: ENG, acts: ['post'] }]);
+    const wanted = { channel, ts: MINE, name: 'eyes' };
+    assertNotAnId(await refusedWith(react(w.context, 'acme', wanted, undefined, w.slack), channel), channel);
+    // The gate's own step refuses it as well, for any caller that reaches it another way.
+    const gate = await gateDepsFor(w.context, 'acme', w.slack);
+    assertNotAnId(await refusedWith(prepareReaction(gate, wanted), channel), channel);
+    assert.equal(await approvalCount(w.harness), 0, `${channel}: an approval was made`);
+    assert.deepEqual(
+      w.fake.requests.map((request) => request.method),
+      [],
+      `${channel}: Slack was asked something`,
+    );
+  }
+});
+
+test('a draft file that names a channel by its name is refused at prepare and at send, and nothing posts', async (t) => {
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+  // A reply in #eng, which the rule allows: prepared, so the send below has an approval to claim.
+  const draft = await createDraft(w.context, 'acme', { channel: ENG, text: 'shipping', threadTs: MINE });
+  const prepared = await prepareDraftPost(w.context, 'acme', { draftId: draft.draftId }, w.slack);
+  // The file then names the room by its name, and leaves its thread: a new message at the top of #eng, to Slack.
+  await handEdit(w, draft.draftId, (file) => {
+    file.payload.channel = 'eng';
+    delete file.payload.thread_ts;
+  });
+  assertNotAnId(
+    await refusedWith(prepareDraftPost(w.context, 'acme', { draftId: draft.draftId }, w.slack), 'prepare'),
+    'eng',
+  );
+  assertNotAnId(
+    await refusedWith(
+      sendPost(
+        w.context,
+        'acme',
+        { draftId: draft.draftId, approvalId: prepared.approvalId, expectChannel: 'eng' },
+        w.slack,
+      ),
+      'send',
+    ),
+    'eng',
+  );
+  assert.equal(w.asked('chat.postMessage'), 0, 'a post went to a channel named by its name');
+  assert.equal(asV2(await w.harness.core.approvals.get(prepared.approvalId))?.state, 'pending');
+});
+
+test('beneath the refusal, a place that is no conversation id is held to every rule of the account', async (t) => {
+  // The core's backstop (B4, review of spec 2): were a name ever to reach the rules, no rule could be said not to be for it.
+  const w = await behaviourWorld(t);
+  await setRules(w.harness, [{ conversation: ENG, acts: ['reply'] }]);
+  const gate = await gateDepsFor(w.context, 'acme', w.slack);
+  for (const place of NOT_IDS) {
+    const error = await refusedWith(requireAllowed(gate, { acts: ['post'], places: [[place]] }), place);
+    assert.equal(error.code, 'ACT_NOT_ALLOWED', place);
+    assert.equal(error.details?.act, 'post', place);
+  }
+  await requireAllowed(gate, { acts: ['reply'], places: [['eng']] });
 });

@@ -1301,7 +1301,10 @@ test('`draft show` and `draft list` show a hidden character escaped, as the prev
   try {
     const text = 'Approve invoice 1\u200b0\u202e00 now';
     const escaped = 'Approve invoice 1<U+200B>0<U+202E>00 now';
-    const { draftId } = await cliData<{ draftId: string }>(harness, [
+    const hidden = /\u200b|\u200d|\u202e|\u2060/;
+    // A channel with a hidden character in it is no conversation id (review of spec 2, finding 8): no draft is written
+    // to it, and the refusal shows the character it found, escaped.
+    const notAnId = await cliError(harness, [
       'draft',
       'create',
       '--workspace',
@@ -1310,18 +1313,29 @@ test('`draft show` and `draft list` show a hidden character escaped, as the prev
       'C1\u2060',
       '--text',
       text,
+    ]);
+    assert.equal(notAnId.code, 'USAGE');
+    assert.equal(notAnId.details?.reason, 'not-a-conversation');
+    assert.ok(notAnId.message.includes('"C1<U+2060>"'), notAnId.message);
+    assert.doesNotMatch(notAnId.message, hidden);
+    const { draftId } = await cliData<{ draftId: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      'C1',
+      '--text',
+      text,
       '--thread',
       '1700000000.000100\u200d',
     ]);
-    const hidden = /\u200b|\u200d|\u202e|\u2060/;
 
     const shown = await printed(harness, ['draft', 'show', draftId, '--workspace', 'acme']);
     assert.ok(shown.includes(escaped), shown);
-    assert.ok(shown.includes('C1<U+2060>'), shown);
     assert.ok(shown.includes('1700000000.000100<U+200D>'), shown);
     const listed = await printed(harness, ['draft', 'list', '--workspace', 'acme']);
     assert.ok(listed.includes(escaped), listed);
-    assert.ok(listed.includes('C1<U+2060>'), listed);
     for (const [where, words] of Object.entries({ 'draft show': shown, 'draft list': listed })) {
       assert.doesNotMatch(words, hidden, `${where} prints no hidden character as it is`);
       assert.doesNotMatch(words, /invoice 1000/, `${where} does not drop one either`);
@@ -1343,6 +1357,18 @@ test('`draft show` and `draft list` show a hidden character escaped, as the prev
     assert.equal(draft.problem, undefined);
     const { drafts } = ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' }));
     assert.deepEqual(drafts, [draft]);
+
+    // A draft file whose channel was written by hand with one is shown with it escaped, by both commands.
+    await handEdit(harness, draftId, (file) => {
+      (file.payload as Record<string, unknown>).channel = 'C1\u2060';
+    });
+    for (const [where, words] of Object.entries({
+      'draft show': await printed(harness, ['draft', 'show', draftId, '--workspace', 'acme']),
+      'draft list': await printed(harness, ['draft', 'list', '--workspace', 'acme']),
+    })) {
+      assert.ok(words.includes('C1<U+2060>'), `${where}: ${words}`);
+      assert.doesNotMatch(words, hidden, `${where} prints no hidden character as it is`);
+    }
   } finally {
     await close();
   }

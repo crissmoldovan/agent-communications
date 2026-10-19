@@ -36,7 +36,8 @@ function rooms(): Record<string, WorldRoom> {
     C2: { name: 'partners', is_ext_shared: true, members: ['U0001', 'U9'] },
     D1: { is_im: true, user: 'U2', members: ['U0001', 'U2'] },
     D2: { is_im: true, user: 'U0001', members: ['U0001'] },
-    M1: { name: 'mpdm-a--b--c', is_mpim: true, members: ['U0001', 'U2', 'U3'] },
+    // A group DM: a G… id, as Slack gives one — never a name, which no act may name its room by.
+    G3: { name: 'mpdm-a--b--c', is_mpim: true, members: ['U0001', 'U2', 'U3'] },
   };
 }
 
@@ -160,7 +161,7 @@ test('a DM, a group DM and the person’s own DM take the labelled fallback, eac
   const reasons: Record<string, string> = {
     D1: FALLBACK_REASONS.im,
     D2: FALLBACK_REASONS.self,
-    M1: FALLBACK_REASONS.mpim,
+    G3: FALLBACK_REASONS.mpim,
   };
   for (const [channel, reason] of Object.entries(reasons)) {
     const prepared = await prepare(w, { channel });

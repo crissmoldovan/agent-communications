@@ -46,22 +46,16 @@ export interface TargetMessage extends MessageAt {
  * ts in its draft id — holds nothing but digits and one point.
  */
 const MESSAGE_TS = /^\d{1,12}\.\d{1,8}$/;
-/* A conversation id: a channel's C…, a private channel's G…, a DM's D…. A user id is refused before this, in its own words. */
-const CONVERSATION_ID = /^[CGD][A-Z0-9]{1,39}$/;
 
 /**
  * Refuses a channel or a ts that cannot name a message, before Slack is asked about it.
  *
- * A user id first, in the words a post's refusal uses (#43): a DM is a conversation with an id of its own.
+ * The channel as every act's destination is refused (`requireConversation`): a user id in the words a post's refusal
+ * uses (#43), since a DM is a conversation with an id of its own; anything else that is no conversation id — a name,
+ * `#name`, an id in lower case — in the words a post's and a reaction's use.
  */
 export function requireMessageAt(where: MessageAt, alias: string, handoffs: CliHandoffs): void {
   requireConversation(where.channel, alias, handoffs);
-  if (!CONVERSATION_ID.test(where.channel)) {
-    throw new CommsError('USAGE', `"${truncateDisplay(where.channel, 60)}" is not a conversation id`, {
-      hint: 'Pass the id of the channel the message is in: a channel’s C… or G…, or a DM’s D….',
-      details: { channel: where.channel, reason: 'not-a-conversation' },
-    });
-  }
   requireMessageTs(where.ts);
 }
 
