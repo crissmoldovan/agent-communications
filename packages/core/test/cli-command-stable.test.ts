@@ -27,6 +27,8 @@ import { moduleUrl, realTemp, suiteEntry, VERSION, writeManaged, writePackage } 
  */
 
 const NODE: NodeRuntime = { version: 'v22.18.0', execArgv: [] };
+/** The Node a POSIX launcher written here would start: a full POSIX path on every platform, never run. */
+const LAUNCHER_NODE = '/usr/bin/node';
 const FOUR: readonly PathName[] = ['configDir', 'stateDir', 'dataDir', 'secretsDir'];
 const WORDS = ['update', '--background-job', 'off'];
 
@@ -86,7 +88,7 @@ test("from a managed runtime, a command names the installation's stable launcher
   const before = located(locateCliCommand(request(paths, core.root, 'core', 'core'), NODE));
   assert.deepEqual(before.words, [process.execPath, core.entry, ...pins, ...WORDS]);
 
-  await writeLauncher(paths.dataDir, 'core', process.execPath, { platform: 'linux' });
+  await writeLauncher(paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'linux' });
   await switchPointer(paths.dataDir, 'core', runtimeOf(core.root));
   const { launcher } = launcherPaths(paths.dataDir, 'core');
   for (const platform of ['linux', 'darwin'] as const) {
@@ -106,7 +108,7 @@ test('a launcher that starts another release, or none, is not named: the command
   const { paths, pins } = installation();
   const core = writeManaged(paths.dataDir, 'core');
   const older = writeManaged(paths.dataDir, 'core', { version: '0.0.1' });
-  await writeLauncher(paths.dataDir, 'core', process.execPath, { platform: 'linux' });
+  await writeLauncher(paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'linux' });
   // The pointer names 0.0.1: the launcher would run another release than the one printing.
   await switchPointer(paths.dataDir, 'core', runtimeOf(older.root));
   assert.deepEqual(located(locateCliCommand(request(paths, core.root, 'core', 'core'), NODE)).words, [
@@ -118,7 +120,7 @@ test('a launcher that starts another release, or none, is not named: the command
   // A launcher with no pointer starts nothing.
   const bare = installation();
   const alone = writeManaged(bare.paths.dataDir, 'core');
-  await writeLauncher(bare.paths.dataDir, 'core', process.execPath, { platform: 'linux' });
+  await writeLauncher(bare.paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'linux' });
   assert.deepEqual(located(locateCliCommand(request(bare.paths, alone.root, 'core', 'core'), NODE)).words, [
     process.execPath,
     alone.entry,
@@ -130,7 +132,7 @@ test('a launcher that starts another release, or none, is not named: the command
 test("a runtime outside this installation's data folder is named as before, whatever launcher the folder has", async () => {
   const { temp, paths, pins } = installation();
   const ours = writeManaged(paths.dataDir, 'core');
-  await writeLauncher(paths.dataDir, 'core', process.execPath, { platform: 'linux' });
+  await writeLauncher(paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'linux' });
   await switchPointer(paths.dataDir, 'core', runtimeOf(ours.root));
   // The same release, installed under another data folder than the one this command pins.
   const elsewhere = writeManaged(join(temp, 'other-data'), 'core');
@@ -152,7 +154,7 @@ test("a channel's command for core names core's stable launcher when it starts t
   assert.deepEqual(before.words, [process.execPath, join(carried, 'dist', 'cli.mjs'), ...pins, ...WORDS]);
 
   const core = writeManaged(paths.dataDir, 'core');
-  await writeLauncher(paths.dataDir, 'core', process.execPath, { platform: 'linux' });
+  await writeLauncher(paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'linux' });
   await switchPointer(paths.dataDir, 'core', runtimeOf(core.root));
   const { launcher } = launcherPaths(paths.dataDir, 'core');
   const result = locateCliCommand(request(paths, gmail.root, 'gmail', 'core'), NODE);
@@ -210,7 +212,7 @@ test('the background job’s “To remove it” command, set up from a managed r
     `${JSON.stringify({ version: 2, secrets: { store: 'file' } })}\n`,
   );
   const runtime = writeManaged(paths.dataDir, 'core');
-  await writeLauncher(paths.dataDir, 'core', process.execPath, { platform: 'darwin' });
+  await writeLauncher(paths.dataDir, 'core', LAUNCHER_NODE, { platform: 'darwin' });
   await switchPointer(paths.dataDir, 'core', runtimeOf(runtime.root));
   const { launcher } = launcherPaths(paths.dataDir, 'core');
   // Core as it runs from that runtime: its caller is the runtime's own CLI module.
