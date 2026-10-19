@@ -7,6 +7,7 @@ import {
   type BehaviourSettings,
   behaviourAccountsOf,
   isBehaviourAct,
+  normaliseMailConversation,
   readBehaviourSettings,
 } from '../behaviour.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -208,8 +209,11 @@ function checkedPlace(value: unknown): Place {
   if (typeof conversation !== 'string' || conversation.trim() === '') {
     throw new CommsError('USAGE', 'a conversation is a Slack channel or person id, an address, or @domain');
   }
-  // A mail rule is matched in lower case; kept that way, two spellings of one address are one rule.
-  return { account, conversation: conversation.includes('@') ? conversation.toLowerCase() : conversation };
+  if (!conversation.includes('@')) return { account, conversation };
+  // A mail rule is kept in the one form it is matched in — lower-cased, its domain in ASCII, no trailing dot — so two
+  // spellings of one address or domain are one rule. One whose domain is not one is refused where its kind is checked
+  // (`checkRuleFits`), in the words of the account it is for.
+  return { account, conversation: normaliseMailConversation(conversation) ?? conversation.toLowerCase() };
 }
 
 function checkedActs(acts: unknown): BehaviourAct[] {
@@ -430,6 +434,11 @@ function checkRuleFits(rule: Place & { acts: readonly BehaviourAct[] }, account:
   if (acting.conversation === 'mail' && !MAIL_CONVERSATION_PATTERN.test(rule.conversation)) {
     throw new CommsError('USAGE', `${JSON.stringify(rule.conversation)} is not an address or @domain`, {
       hint: 'Give an address, or @domain for everyone there: a message with any recipient there is held to it.',
+    });
+  }
+  if (acting.conversation === 'mail' && normaliseMailConversation(rule.conversation) === null) {
+    throw new CommsError('USAGE', `the domain of ${JSON.stringify(rule.conversation)} is not one`, {
+      hint: 'Give the domain as it is written in an address — in Unicode or in its xn-- form, either is the same domain.',
     });
   }
 }

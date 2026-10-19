@@ -210,6 +210,21 @@ test('setRule that tightens applies at once with no approval, binds the account 
   });
   assert.deepEqual(await listApprovals(m.core), [], 'none of them asked anybody');
 
+  // A domain in Unicode, or fully qualified with its trailing dot, is kept in the one form rules are compared in.
+  applied(await run(m, { setRule: { account: 'acme/gmail', conversation: '@Bücher.DE.', acts: [] } }));
+  assert.equal(((await stored(m)) as { conversation?: string }[]).at(-1)?.conversation, '@xn--bcher-kva.de');
+  const again2 = applied(
+    await run(m, { setRule: { account: 'acme/gmail', conversation: '@xn--bcher-kva.de', acts: [] } }),
+  );
+  assert.equal(again2.changed, false, 'the same domain in another spelling is the same rule');
+  const mailQuery = { accountId: inbox.id, account: 'acme/gmail', acts: ['send' as const] };
+  assert.equal(
+    allowedAct(await m.core.config.load(), { ...mailQuery, places: [['kunde@xn--bcher-kva.de']] }).allowed,
+    false,
+  );
+  // And it is found to take away in either spelling: removing it loosens, so it waits rather than is not found.
+  waiting(await run(m, { removeRule: { account: 'acme/gmail', conversation: '@BÜCHER.de' } }));
+
   // The same rule again changes nothing, and asks nobody.
   const again = applied(await run(m, { setRule: { account: 'acme/slack', acts: ['reply', 'reaction'] } }));
   assert.equal(again.changed, false);
@@ -303,6 +318,14 @@ test('what a rule names is checked against the account it is for, and every othe
     rules: [unreadable, { account: 'acme/slack', accountId: slack.id, acts: ['reaction'] }],
     note: 'kept',
   });
+  // A domain that is not one is refused before anything is written: as a rule it could only allow nothing.
+  for (const conversation of ['@exa|mple.com', 'bob@xn--a.com', '@client.com..']) {
+    await assert.rejects(
+      run(m, { setRule: { account: 'acme/gmail', conversation, acts: [] } }),
+      refused('USAGE', /domain/),
+      conversation,
+    );
+  }
   // A setting that is no list of rules at all cannot be changed from here: a change would drop it.
   const broken = machine({ rules: 'everything' });
   await assert.rejects(
