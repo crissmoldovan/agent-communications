@@ -1,0 +1,53 @@
+[
+  {
+    "id": "ap_7M2K9Q4R8T1V5W3X6Y0Z2A4B6C",
+    "approvalId": "ap_7M2K9Q4R8T1V5W3X6Y0Z2A4B6C",
+    "kind": "send",
+    "channel": "gmail",
+    "state": "pending",
+    "claimable": false,
+    "createdAt": "2026-10-19T09:12:00.000Z",
+    "expiresAt": "2026-10-19T09:42:00.000Z",
+    "inboxId": "in_01EXAMPLE0000000000000000",
+    "draftId": "r-1000000000000000001",
+    "expect": {
+      "to": [
+        "<untrusted-content boundary=\"Q1w2E3r4\" field=\"to\">\njo@example.com\n</untrusted-content boundary=\"Q1w2E3r4\">"
+      ],
+      "cc": [],
+      "bcc": [],
+      "subject": "<untrusted-content boundary=\"Q1w2E3r4\" field=\"subject\">\nThe figures you asked for\n</untrusted-content boundary=\"Q1w2E3r4\">"
+    }
+  },
+  {
+    "id": "ap_0123456789ABCDEFGHJKMNPQRS",
+    "approvalId": "ap_0123456789ABCDEFGHJKMNPQRS",
+    "kind": "change",
+    "channel": null,
+    "state": "pending",
+    "claimable": false,
+    "createdAt": "2026-10-19T09:20:00.000Z",
+    "expiresAt": "2026-10-19T09:50:00.000Z",
+    "expect": {
+      "to": [],
+      "cc": [],
+      "bcc": [],
+      "subject": "<untrusted-content boundary=\"T5y6U7i8\" field=\"summary\">\nupdates: every-14-days → never\n</untrusted-content boundary=\"T5y6U7i8\">"
+    }
+  },
+  {
+    "id": "ap_ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+    "approvalId": "ap_ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+    "kind": "download",
+    "channel": "slack",
+    "state": "pending",
+    "claimable": false,
+    "createdAt": "2026-10-19T09:30:00.000Z",
+    "expiresAt": "2026-10-19T09:40:00.000Z",
+    "files": {
+      "names": [
+        "<untrusted-content boundary=\"O9p0A1s2\" field=\"filename\">\nplan.pdf\n</untrusted-content boundary=\"O9p0A1s2\">"
+      ]
+    }
+  }
+]

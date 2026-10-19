@@ -23,3 +23,9 @@ tokens/
 # The released 0.13.0 packages the mixed-version tests run, as published (CUE-404 Task 24): their dist is the fixture.
 !packages/core/test/fixtures/released-0.13.0/core/dist/
 !packages/gmail/test/fixtures/released-0.13.0/gmail/dist/
+
+# The desktop app's Rust build and Tauri's generated schemas, and Playwright's output.
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/test-results/
+apps/desktop/playwright-report/

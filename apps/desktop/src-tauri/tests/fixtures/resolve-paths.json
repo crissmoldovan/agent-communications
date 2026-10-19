@@ -1,0 +1,207 @@
+{
+  "$comment": "Recorded from core's resolvePaths (packages/core/src/paths.ts); src/test/paths-parity.test.ts re-checks every case against it.",
+  "cases": [
+    {
+      "name": "linux defaults",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "macOS defaults",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "XDG_CONFIG_HOME moves the config, and state and secrets with it",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "XDG_CONFIG_HOME": "/example/xdg/config"
+      },
+      "expected": {
+        "configDir": "/example/xdg/config/agent-communications",
+        "stateDir": "/example/xdg/config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/xdg/config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "XDG_DATA_HOME moves the data",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "XDG_DATA_HOME": "/example/xdg/data"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/xdg/data/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR takes state and secrets with it",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/srv/comms/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_CONFIG_DIR wins over XDG_CONFIG_HOME",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms",
+        "XDG_CONFIG_HOME": "/example/xdg/config"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/srv/comms/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_STATE_DIR moves the state alone",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_STATE_DIR": "/var/example/state"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/var/example/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "AGENT_COMMS_DATA_DIR moves the data alone",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "/opt/example/data"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/opt/example/data",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "every variable at once",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv/comms",
+        "AGENT_COMMS_STATE_DIR": "/var/example/state",
+        "AGENT_COMMS_DATA_DIR": "/opt/example/data",
+        "XDG_CONFIG_HOME": "/example/xdg/config",
+        "XDG_DATA_HOME": "/example/xdg/data"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/var/example/state",
+        "dataDir": "/opt/example/data",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "empty variables count as unset",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "",
+        "AGENT_COMMS_STATE_DIR": "",
+        "AGENT_COMMS_DATA_DIR": "",
+        "XDG_CONFIG_HOME": "",
+        "XDG_DATA_HOME": ""
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "Windows variables mean nothing on POSIX",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "APPDATA": "/example/appdata",
+        "LOCALAPPDATA": "/example/localappdata"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "paths are normalised: trailing separators, dots and doubled separators",
+      "platform": "linux",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_CONFIG_DIR": "/srv//comms/./x/../",
+        "XDG_DATA_HOME": "/example/xdg/./data/",
+        "AGENT_COMMS_STATE_DIR": "/var/example/state//"
+      },
+      "expected": {
+        "configDir": "/srv/comms",
+        "stateDir": "/var/example/state",
+        "dataDir": "/example/xdg/data/agent-communications",
+        "secretsDir": "/srv/comms/secrets"
+      }
+    },
+    {
+      "name": "a path that climbs past the root stops there",
+      "platform": "darwin",
+      "home": "/example/home",
+      "env": {
+        "AGENT_COMMS_DATA_DIR": "/../../opt/example"
+      },
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/opt/example",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    },
+    {
+      "name": "a home with a trailing separator",
+      "platform": "linux",
+      "home": "/example/home/",
+      "env": {},
+      "expected": {
+        "configDir": "/example/home/.config/agent-communications",
+        "stateDir": "/example/home/.config/agent-communications/state",
+        "dataDir": "/example/home/.local/share/agent-communications",
+        "secretsDir": "/example/home/.config/agent-communications/secrets"
+      }
+    }
+  ]
+}

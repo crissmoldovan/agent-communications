@@ -1,0 +1,10 @@
+[
+  {
+    "id": "ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F",
+    "account": "example/slack",
+    "places": ["C0EXAMPLE1"],
+    "expiresAt": "2026-10-26T09:00:00.000Z",
+    "usesToday": 2,
+    "active": true
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "node",
+      "ok": true,
+      "detail": "Node 22.18.0"
+    },
+    {
+      "name": "folders",
+      "ok": true,
+      "detail": "each folder is private to its owner"
+    },
+    {
+      "name": "keychain",
+      "ok": true,
+      "detail": "the login keychain answers"
+    },
+    {
+      "name": "clients",
+      "ok": true,
+      "warn": true,
+      "detail": "Gmail has accounts that no client starts",
+      "fix": "connect one with the mcp install command"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+[
+  {
+    "alias": "example/slack",
+    "accountId": "acc_01EXAMPLE000000000000001",
+    "workspaceId": "T0EXAMPLE",
+    "workspaceName": "Example",
+    "userId": "U0EXAMPLE",
+    "mode": "send",
+    "grantedScopes": ["channels:history", "chat:write"],
+    "organisation": "example",
+    "profileApp": "send",
+    "createdAt": "2026-10-02T09:00:00.000Z",
+    "appUserId": "U0EXAMPLEAPP"
+  }
+]

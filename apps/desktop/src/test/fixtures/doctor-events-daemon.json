@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "doctor-v2",
+  "owner": {
+    "status": "running",
+    "protocolVersions": [1],
+    "installationId": "inst_example"
+  },
+  "switch": {
+    "status": "enabled",
+    "paused": false,
+    "generation": 3
+  },
+  "lineages": [
+    {
+      "ruleId": "rule_example",
+      "ruleVersion": 2,
+      "status": "active",
+      "approvalId": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3P",
+      "authorizationActivationId": "act_example",
+      "currentCutoverId": null,
+      "activatedAt": 1760860800000,
+      "retainedWork": 0,
+      "validation": {
+        "status": "valid"
+      },
+      "derivation": []
+    }
+  ],
+  "superseded": [],
+  "points": [],
+  "judge": {
+    "kinds": [],
+    "budget": {
+      "activeVersion": null
+    },
+    "reservations": []
+  }
+}

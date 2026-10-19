@@ -1,0 +1,27 @@
+{
+  "healthy": true,
+  "summary": {
+    "ok": 1,
+    "unknown": 1,
+    "warn": 0,
+    "fail": 0
+  },
+  "checks": [
+    {
+      "id": "config",
+      "title": "Configuration",
+      "status": "ok",
+      "detail": "one workspace",
+      "fix": null,
+      "workspace": null
+    },
+    {
+      "id": "auth-example/slack",
+      "title": "example/slack signs in",
+      "status": "unknown",
+      "detail": "not checked: --offline",
+      "fix": null,
+      "workspace": "example/slack"
+    }
+  ]
+}
