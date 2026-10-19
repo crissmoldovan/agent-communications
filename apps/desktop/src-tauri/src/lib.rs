@@ -31,12 +31,15 @@ pub struct AppState {
 /// Starts the app: its plugins, its state, its fourteen commands, the main window (`window::build_main`), the tray, the
 /// deep links and the updater.
 pub fn run() {
-    let builder = tauri::Builder::default()
-        // First: a second launch hands its arguments, and any agentcomms:// link in them, to this copy, and shows it.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            window::show(app)
-        }))
-        .plugin(tauri_plugin_deep_link::init());
+    let builder = tauri::Builder::default();
+    // First, on Windows and Linux: a second launch hands its arguments, and any agentcomms:// link in them, to this
+    // copy, and shows it. macOS keeps one copy itself and hands it later links through the deep-link plugin's
+    // open-url, so the plugin, whose socket another local user could reach, is not used there.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        window::show(app)
+    }));
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
     // Only in a copy built with the updater key (DA8).
     let builder = if updater::UPDATER_ON {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
@@ -88,4 +91,46 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Agent Comms could not start")
         .run(window::on_run_event);
+}
+
+#[cfg(test)]
+mod tests {
+    /// The table `name` heads in `manifest`, through the line before the next table.
+    fn table<'a>(manifest: &'a str, name: &str) -> &'a str {
+        let start = manifest
+            .find(&format!("\n{name}\n"))
+            .unwrap_or_else(|| panic!("Cargo.toml has {name}"));
+        let rest = &manifest[start + 1..];
+        let end = rest[1..].find("\n[").map_or(rest.len(), |at| at + 1);
+        &rest[..end]
+    }
+
+    /// macOS keeps one copy of the app itself, and hands it every later link (DA16, after review): the single-instance
+    /// plugin, whose socket another local user can reach in a shared temporary folder, is not built for it.
+    #[test]
+    fn single_instance_is_left_out_on_macos() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(table(manifest, "[dependencies]")
+            .find("tauri-plugin-single-instance")
+            .is_none());
+        assert!(table(
+            manifest,
+            "[target.'cfg(not(target_os = \"macos\"))'.dependencies]"
+        )
+        .contains(
+            "tauri-plugin-single-instance = { version = \"2.5\", features = [\"deep-link\"] }"
+        ));
+        assert_eq!(manifest.matches("tauri-plugin-single-instance").count(), 1);
+        let source = include_str!("lib.rs");
+        let registered = source
+            .find(".plugin(tauri_plugin_single_instance::init(")
+            .expect("registered");
+        let guard = source[..registered]
+            .rfind("#[cfg(not(target_os = \"macos\"))]")
+            .expect("a guard");
+        assert!(
+            !source[guard..registered].contains(';'),
+            "the guard is on the registration itself"
+        );
+    }
 }

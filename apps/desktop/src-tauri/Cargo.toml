@@ -29,11 +29,10 @@ semver = "1"
 tauri-plugin-opener = "2.7"
 tauri-plugin-clipboard-manager = "2.5"
 
-# Task 7: the updater, deep links and single-instance run from Rust too; ureq finds the release through GitHub's API.
+# Task 7: the updater and deep links run from Rust too; ureq finds the release through GitHub's API.
 tauri-plugin-updater = "2.14"
 tauri-plugin-deep-link = "2.6"
 ureq = "3"
-tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
 
 # Task 6: the login item is SMAppService's on macOS (13 and later), as Supbuddy's is.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -44,6 +43,10 @@ objc2-service-management = { version = "0.3", default-features = false, features
 # Task 6: and tauri-plugin-autostart's everywhere else.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tauri-plugin-autostart = "2.7"
+# Task 7: a second launch on Windows and Linux hands its link to the first. Not on macOS (DA16, after review): Launch
+# Services keeps one copy there and hands it later links itself, and the plugin's socket in a shared temporary folder
+# would let another local user stop the app.
+tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
 
 # R1 (after review): a launcher is run only when it is this user's, which needs the user's id.
 [target.'cfg(unix)'.dependencies]
