@@ -86,6 +86,77 @@ pub fn find_launcher(folders: &Folders, platform: Platform, product: Product) ->
     Some(Launcher { product, path })
 }
 
+/// Whether `path` is on a network share: it starts with two separators, of either kind — `\\server\share`,
+/// `//server/share`, and Windows' `\\?\UNC\…` and `\\.\UNC\…` all do.
+pub fn on_a_network_share(path: &str) -> bool {
+    let mut start = path.chars();
+    matches!(
+        (start.next(), start.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    )
+}
+
+/// Whether the app may run `launcher` (DA12, after review): never one on a network share, whose owner decides what it
+/// runs; and on macOS and Linux only one that is this user's, in a folder that is this user's, neither of which
+/// another user may change (core writes both owner-only). Refused with `APP_UNSAFE_LAUNCHER`, saying why and what to do.
+pub fn check_launcher(launcher: &Launcher, platform: Platform) -> Result<(), AppError> {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid takes nothing, cannot fail, and touches no memory of this process.
+        let uid = unsafe { libc::geteuid() };
+        check_launcher_as(launcher, platform, uid)
+    }
+    #[cfg(not(unix))]
+    {
+        check_launcher_as(launcher, platform, 0)
+    }
+}
+
+/// `check_launcher`, for the user `uid` (unused on Windows).
+pub(crate) fn check_launcher_as(
+    launcher: &Launcher,
+    platform: Platform,
+    uid: u32,
+) -> Result<(), AppError> {
+    let name = launcher.product.name();
+    let path = &launcher.path;
+    if on_a_network_share(path) {
+        return Err(AppError::unsafe_launcher(format!(
+            "the {name} launcher at {path} is on a network share, and the app runs launchers from this machine's own disks only: name a local data folder in Settings"
+        )));
+    }
+    #[cfg(unix)]
+    if platform != Platform::Windows {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let file = std::path::Path::new(path);
+        let folder = file.parent().unwrap_or(file);
+        for (what, at) in [("launcher", file), ("launcher's folder", folder)] {
+            let metadata = std::fs::metadata(at).map_err(|error| {
+                AppError::unsafe_launcher(format!(
+                    "the {name} {what} at {} could not be read: {error}",
+                    at.display()
+                ))
+            })?;
+            if metadata.uid() != uid {
+                return Err(AppError::unsafe_launcher(format!(
+                    "the {name} {what} at {} belongs to another user, so the app will not run it: it runs only launchers that are yours",
+                    at.display()
+                )));
+            }
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o022 != 0 {
+                return Err(AppError::unsafe_launcher(format!(
+                    "the {name} {what} at {} can be changed by other users (its mode is {mode:o}), so the app will not run it: run chmod go-w '{}'",
+                    at.display(),
+                    at.display()
+                )));
+            }
+        }
+    }
+    let _ = (platform, uid);
+    Ok(())
+}
+
 /// The products whose launchers are there, in `Product::ALL`'s order.
 pub fn present(folders: &Folders, platform: Platform) -> Vec<Product> {
     Product::ALL
@@ -187,6 +258,7 @@ pub fn discover(ctx: &RunContext) -> Installation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::allowlist::Call;
     use crate::paths::{Folders, Platform};
     use std::fs;
     use std::path::Path;
@@ -415,6 +487,112 @@ mod tests {
                     .into_owned()
             )
         );
+    }
+
+    #[test]
+    fn a_launcher_on_a_network_share_is_never_run() {
+        for (platform, path) in [
+            (
+                Platform::Windows,
+                r"\\server\share\agent-communications\launch\core",
+            ),
+            (Platform::Windows, r"\\?\UNC\server\share\launch\core"),
+            (Platform::Windows, "//server/share/launch/core"),
+            (Platform::Linux, "//server/share/launch/core"),
+            (Platform::MacOs, "//server/share/launch/core"),
+        ] {
+            let launcher = Launcher {
+                product: Product::Core,
+                path: path.into(),
+            };
+            let refused = check_launcher(&launcher, platform).expect_err(path);
+            assert_eq!(refused.code, "APP_UNSAFE_LAUNCHER", "{path}");
+            assert!(
+                refused.message.contains("network share"),
+                "{}",
+                refused.message
+            );
+        }
+        assert!(on_a_network_share(r"\\server\share"));
+        assert!(!on_a_network_share(r"C:\Users\example"));
+        assert!(!on_a_network_share("/Volumes/Share/agent-communications"));
+    }
+
+    /// POSIX: a launcher, or its folder, that another user owns or may change is not one the app runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_launcher_someone_else_may_change_is_never_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, folders) = temp_folders();
+        let mark = dir.path().join("ran");
+        write_launcher(
+            dir.path(),
+            "core",
+            &format!(
+                "#!/bin/sh\ntouch '{}'\nprintf '{{\"ok\":true,\"data\":[]}}\\n'\n",
+                mark.display()
+            ),
+        );
+        let launch = dir.path().join("launch");
+        let file = launch.join("core");
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o700)).expect("private");
+        let platform = Platform::current();
+        let core = find_launcher(&folders, platform, Product::Core).expect("there");
+        assert_eq!(check_launcher(&core, platform), Ok(()));
+        let ctx = RunContext {
+            folders: folders.clone(),
+            platform,
+            node: None,
+        };
+        let run_refused = |why: &str| {
+            let result = crate::runner::run(&Call::Label {}, &ctx);
+            assert!(
+                matches!(&result, CliResult::Failed { code, message, .. }
+                    if code == "APP_UNSAFE_LAUNCHER" && message.contains(why)),
+                "{result:?}"
+            );
+            assert!(!mark.exists(), "the launcher ran");
+        };
+        // Writable by its group, or by anyone: refused, saying how to make it the user's alone.
+        for mode in [0o775, 0o757, 0o777] {
+            fs::set_permissions(&file, fs::Permissions::from_mode(mode)).expect("mode");
+            let refused = check_launcher(&core, platform).expect_err("writable");
+            assert_eq!(refused.code, "APP_UNSAFE_LAUNCHER");
+            assert!(
+                refused.message.contains("chmod go-w"),
+                "{}",
+                refused.message
+            );
+            run_refused("other users");
+        }
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).expect("mode");
+        // Its folder too.
+        for mode in [0o770, 0o707, 0o777] {
+            fs::set_permissions(&launch, fs::Permissions::from_mode(mode)).expect("mode");
+            assert!(check_launcher(&core, platform).is_err(), "{mode:o}");
+            run_refused("other users");
+        }
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o755)).expect("mode");
+        assert_eq!(check_launcher(&core, platform), Ok(()));
+        // Owned by another user: refused (the user is stood in for, since a test cannot give a file away).
+        let mine = std::os::unix::fs::MetadataExt::uid(&fs::metadata(&file).expect("there"));
+        let refused = check_launcher_as(&core, platform, mine + 1).expect_err("not yours");
+        assert!(
+            refused.message.contains("another user"),
+            "{}",
+            refused.message
+        );
+        // And the terminal never builds a line for one either.
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o777)).expect("mode");
+        let line = crate::terminal::argv_for(
+            &crate::ipc::TerminalCommand::Approve {
+                product: Product::Core,
+                approval_id: crate::allowlist::ID.to_string().try_into().expect("an id"),
+            },
+            &ctx,
+        )
+        .expect_err("refused");
+        assert_eq!(line.code, "APP_UNSAFE_LAUNCHER");
     }
 
     #[test]

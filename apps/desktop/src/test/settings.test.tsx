@@ -18,6 +18,8 @@ const region = (name: string): HTMLElement => screen.getByRole('region', { name 
 const settings = (folders: FolderOverrides, resolved: Folders, more: Partial<AppSettings> = {}): AppSettings => ({
   folders,
   resolved,
+  launcher: `${resolved.dataDir}/launch/core`,
+  launcherProblem: null,
   loginItem: false,
   loginItemAvailable: true,
   ...more,
@@ -82,6 +84,38 @@ describe('Settings', () => {
         { configDir: null, stateDir: 'C:\\example\\home\\state', dataDir: null },
       ]),
     );
+  });
+
+  it('a network share is never taken as a folder, in any of its forms', async () => {
+    const bridge = createFakeBridge();
+    renderApp(bridge, { screen: 'settings' });
+    const folders = await screen.findByRole('region', { name: 'Folders' });
+    await within(folders).findByRole('region', { name: 'Folders in use' });
+    for (const share of [
+      '\\\\server\\share\\data',
+      '//server/share/data',
+      '\\\\?\\UNC\\server\\share',
+      'smb://server/x',
+    ]) {
+      fireEvent.change(within(folders).getByLabelText('Data folder'), { target: { value: share } });
+      fireEvent.click(within(folders).getByRole('button', { name: 'Save' }));
+      expect(await within(folders).findByText(/never a network share/), share).toBeTruthy();
+    }
+    expect(bridge.calls.filter((call) => call.command === 'setFolders')).toEqual([]);
+  });
+
+  it('shows the launcher every call starts, and why the app would not run it', async () => {
+    const bridge = createFakeBridge({
+      getSettings: async () =>
+        settings({}, EXAMPLE_FOLDERS, {
+          launcherProblem: `the core launcher at ${EXAMPLE_FOLDERS.dataDir}/launch/core can be changed by other users (its mode is 777), so the app will not run it`,
+        }),
+    });
+    renderApp(bridge, { screen: 'settings' });
+    const inUse = await screen.findByRole('region', { name: 'Folders in use' });
+    expect(within(inUse).getByText('Launcher')).toBeTruthy();
+    expect(within(inUse).getByText(`${EXAMPLE_FOLDERS.dataDir}/launch/core`)).toBeTruthy();
+    expect(within(inUse).getByRole('alert').textContent).toMatch(/can be changed by other users/);
   });
 
   it('Start at login switches through the app, and is disabled with a note where it is not offered', async () => {

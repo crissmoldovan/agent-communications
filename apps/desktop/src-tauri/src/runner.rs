@@ -7,7 +7,9 @@
 use crate::allowlist::{Call, Shape, Words};
 use crate::grammar;
 use crate::ipc::{AppError, CliResult};
-use crate::launchers::{find_launcher, launcher_path, program_for, windows_node, Product, Program};
+use crate::launchers::{
+    check_launcher, find_launcher, launcher_path, program_for, windows_node, Product, Program,
+};
 use crate::paths::{resolve_folders, FolderOverrides, Folders, PathEnv, Platform};
 use regex::Regex;
 use serde_json::Value;
@@ -200,6 +202,9 @@ pub(crate) fn run_with(words: &Words, ctx: &RunContext, cap: usize) -> CliResult
         let path = launcher_path(&ctx.folders, ctx.platform, words.product);
         return AppError::not_installed(format!("there is no {name} launcher at {path}")).into();
     };
+    if let Err(refused) = check_launcher(&launcher, ctx.platform) {
+        return refused.into();
+    }
     let program = match program_for(&launcher, ctx.platform, ctx.node.as_deref()) {
         Ok(program) => program,
         Err(error) => return error.into(),

@@ -82,7 +82,8 @@ export type AppErrorCode =
   | 'APP_NO_NODE'
   | 'APP_NOT_BUILT'
   | 'APP_IO'
-  | 'APP_TIMEOUT';
+  | 'APP_TIMEOUT'
+  | 'APP_UNSAFE_LAUNCHER';
 
 /** A failure of the app's own: what a command's promise rejects with. */
 export interface AppError {
@@ -111,6 +112,10 @@ export interface ProfileOpened {
 export interface AppSettings {
   folders: FolderOverrides;
   resolved: Folders;
+  /** `<data>/launch/core`, as the resolved data folder names it: the program every call starts. */
+  launcher: string;
+  /** Why the app would not run it — it is not there, or it is on a share or open to other users — or null. */
+  launcherProblem: string | null;
   loginItem: boolean;
   loginItemAvailable: boolean;
 }

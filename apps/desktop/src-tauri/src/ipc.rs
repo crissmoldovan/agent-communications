@@ -57,7 +57,7 @@ pub struct Installation {
 }
 
 /// A failure of the app's own, before or instead of a CLI call. The code is one of `APP_REFUSED`, `APP_NOT_INSTALLED`,
-/// `APP_NO_NODE`, `APP_NOT_BUILT`, `APP_IO` and `APP_TIMEOUT`.
+/// `APP_NO_NODE`, `APP_NOT_BUILT`, `APP_IO`, `APP_TIMEOUT` and `APP_UNSAFE_LAUNCHER`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AppError {
     pub code: String,
@@ -103,6 +103,11 @@ impl AppError {
     /// A call that did not answer in time.
     pub fn timeout(message: impl Into<String>) -> Self {
         Self::new("APP_TIMEOUT", message)
+    }
+
+    /// A launcher the app will not run: on a network share, or one another user owns or may change (`check_launcher`).
+    pub fn unsafe_launcher(message: impl Into<String>) -> Self {
+        Self::new("APP_UNSAFE_LAUNCHER", message)
     }
 }
 
@@ -189,12 +194,16 @@ pub struct ProfileOpened {
     pub created: bool,
 }
 
-/// The app's settings, and the folders they resolve to.
+/// The app's settings, the folders they resolve to, and core's launcher there.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub folders: FolderOverrides,
     pub resolved: Folders,
+    /// `<data>/launch/core`, as the resolved data folder names it: the program every call starts.
+    pub launcher: String,
+    /// Why the app would not run it — it is not there, or `check_launcher` refuses it — or none.
+    pub launcher_problem: Option<String>,
     pub login_item: bool,
     pub login_item_available: bool,
 }
@@ -338,6 +347,8 @@ mod tests {
                     data_dir: None
                 },
                 resolved: folders.clone(),
+                launcher: "/d/launch/core".into(),
+                launcher_problem: Some("there is no launcher here".into()),
                 login_item: false,
                 login_item_available: true,
             })
@@ -345,6 +356,8 @@ mod tests {
             json!({
                 "folders": { "configDir": "/c", "stateDir": null, "dataDir": null },
                 "resolved": { "configDir": "/c", "stateDir": "/s", "dataDir": "/d", "secretsDir": "/x" },
+                "launcher": "/d/launch/core",
+                "launcherProblem": "there is no launcher here",
                 "loginItem": false,
                 "loginItemAvailable": true
             })

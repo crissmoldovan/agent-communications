@@ -18,7 +18,7 @@
 
 use crate::allowlist::{ApprovalId, Call, Shape, Words};
 use crate::ipc::{AppError, CliResult, CopyReason, TerminalCommand, TerminalOutcome};
-use crate::launchers::{find_launcher, launcher_path, program_for, Product};
+use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for, Product};
 use crate::paths::Platform;
 use crate::runner::{argv, child_env, run, RunContext};
 use regex::Regex;
@@ -344,6 +344,7 @@ pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<Strin
             launcher_path(&ctx.folders, ctx.platform, product)
         ))
     })?;
+    check_launcher(&launcher, ctx.platform)?;
     let program = program_for(&launcher, ctx.platform, ctx.node.as_deref())?;
     let words = Words {
         product,

@@ -28,6 +28,9 @@ export const EXAMPLE_FOLDERS: Folders = {
   secretsDir: '/example/home/.config/agent-communications/secrets',
 };
 
+/** Core's launcher in the example folders, which the app would run. */
+export const LAUNCHER = { launcher: `${EXAMPLE_FOLDERS.dataDir}/launch/core`, launcherProblem: null };
+
 /** An installation with every product, at 0.24.0. */
 export const EXAMPLE_INSTALLATION: Installation = {
   installed: true,
@@ -115,13 +118,13 @@ export function createFakeBridge(
       return { path: `${EXAMPLE_FOLDERS.configDir}/compose/${account ?? 'user'}.md`, created: true };
     },
     async getSettings() {
-      return { folders: {}, resolved: EXAMPLE_FOLDERS, loginItem: false, loginItemAvailable: true };
+      return { folders: {}, resolved: EXAMPLE_FOLDERS, ...LAUNCHER, loginItem: false, loginItemAvailable: true };
     },
     async setFolders(folders) {
-      return { folders, resolved: EXAMPLE_FOLDERS, loginItem: false, loginItemAvailable: true };
+      return { folders, resolved: EXAMPLE_FOLDERS, ...LAUNCHER, loginItem: false, loginItemAvailable: true };
     },
     async setLoginItem(on) {
-      return { folders: {}, resolved: EXAMPLE_FOLDERS, loginItem: on, loginItemAvailable: true };
+      return { folders: {}, resolved: EXAMPLE_FOLDERS, ...LAUNCHER, loginItem: on, loginItemAvailable: true };
     },
     async updaterState() {
       return {

@@ -7,8 +7,9 @@
 //! it (`login_item`).
 
 use crate::ipc::{AppError, AppSettings};
+use crate::launchers::{check_launcher, find_launcher, launcher_path, on_a_network_share, Product};
 use crate::login_item;
-use crate::paths::{resolve_folders, FolderOverrides, PathEnv, Platform};
+use crate::paths::{resolve_folders, FolderOverrides, Folders, PathEnv, Platform};
 use crate::AppState;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -34,27 +35,22 @@ struct SettingsFile {
     folders: FolderOverrides,
 }
 
-/// Whether `path` is a full path on `platform`: from `/` on macOS and Linux; on Windows from a drive's root (`C:\`
-/// or `C:/`), or a share (`\\server\share`). A drive with no root (`C:x`), a root with no drive (`\x`) and Windows'
-/// device and verbatim forms (`\\.\`, `\\?\`) are not.
+/// Whether `path` is a full path on this machine's own disks, on `platform`: from `/` on macOS and Linux; on Windows
+/// from a drive's root (`C:\` or `C:/`). A network share is never one, in any form — `\\server\share`,
+/// `//server/share`, `\\?\UNC\…`, `smb://…` — since the data folder's launchers decide what runs (after review, R1);
+/// nor is a drive with no root (`C:x`), a root with no drive (`\x`), or Windows' device and verbatim forms.
 pub fn is_absolute(path: &str, platform: Platform) -> bool {
+    if on_a_network_share(path) {
+        return false;
+    }
     match platform {
         Platform::MacOs | Platform::Linux => path.starts_with('/'),
         Platform::Windows => {
             let bytes = path.as_bytes();
-            let drive = bytes.len() >= 3
+            bytes.len() >= 3
                 && bytes[0].is_ascii_alphabetic()
                 && bytes[1] == b':'
-                && matches!(bytes[2], b'\\' | b'/');
-            let share = path.strip_prefix("\\\\").is_some_and(|rest| {
-                let mut parts = rest.split(['\\', '/']);
-                matches!(
-                    (parts.next(), parts.next()),
-                    (Some(server), Some(share))
-                        if !server.is_empty() && !share.is_empty() && server != "?" && server != "."
-                )
-            });
-            drive || share
+                && matches!(bytes[2], b'\\' | b'/')
         }
     }
 }
@@ -77,13 +73,11 @@ fn folder(
         || !is_absolute(&value, platform)
     {
         let full = match platform {
-            Platform::Windows => {
-                "from a drive, such as C:\\, or a share, such as \\\\server\\share"
-            }
+            Platform::Windows => "from a drive, such as C:\\",
             Platform::MacOs | Platform::Linux => "from /",
         };
         return Err(AppError::refused(format!(
-            "the {name} folder must be a full path, {full}, with no hidden characters"
+            "the {name} folder must be a full path on this machine's own disks, {full}, with no hidden characters: never a network share"
         )));
     }
     Ok(Some(value))
@@ -162,12 +156,29 @@ pub fn load_into_state(app: &AppHandle) {
     }
 }
 
-/// The settings now: the folders Settings name, the four they resolve to with this process's environment, and the
-/// login item.
+/// Where core's launcher is for `folders` on `platform`, and why the app would not run it, if it would not: it is not
+/// there, or `check_launcher` refuses it.
+pub fn launcher_status(folders: &Folders, platform: Platform) -> (String, Option<String>) {
+    let path = launcher_path(folders, platform, Product::Core);
+    let problem = match find_launcher(folders, platform, Product::Core) {
+        None => Some("there is no launcher here".to_string()),
+        Some(launcher) => check_launcher(&launcher, platform)
+            .err()
+            .map(|refused| refused.message),
+    };
+    (path, problem)
+}
+
+/// The settings now: the folders Settings name, the four they resolve to with this process's environment, core's
+/// launcher there and whether the app runs it, and the login item.
 pub fn current(app: &AppHandle, state: &AppState) -> AppSettings {
     let folders = overrides(state).clone();
+    let resolved = resolve_folders(&PathEnv::from_process().with_overrides(&folders));
+    let (launcher, launcher_problem) = launcher_status(&resolved, Platform::current());
     AppSettings {
-        resolved: resolve_folders(&PathEnv::from_process().with_overrides(&folders)),
+        resolved,
+        launcher,
+        launcher_problem,
         folders,
         login_item: login_item::enabled(app),
         login_item_available: login_item::available(),
@@ -189,6 +200,7 @@ pub fn set_folders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::Folders;
     use std::fs;
 
     fn overrides(config: Option<&str>, state: Option<&str>, data: Option<&str>) -> FolderOverrides {
@@ -221,7 +233,7 @@ mod tests {
         );
         let windows = overrides(
             Some("C:\\example\\home\\config"),
-            Some("\\\\server\\share\\state"),
+            Some("E:\\example\\state"),
             Some("D:/example/data"),
         );
         assert_eq!(
@@ -245,6 +257,16 @@ mod tests {
             (Platform::Windows, "example\\home"),
             (Platform::Windows, "\\\\server"),
             (Platform::Windows, "C:\\example\\tab\there"),
+            // A network share decides what runs: the launchers are read from the data folder. Never one, in any form.
+            (Platform::Windows, "\\\\server\\share\\state"),
+            (Platform::Windows, "\\\\?\\UNC\\server\\share\\state"),
+            (Platform::Windows, "\\\\.\\UNC\\server\\share"),
+            (Platform::Windows, "//server/share/state"),
+            (Platform::Windows, "\\/server/share"),
+            (Platform::Linux, "//server/share/state"),
+            (Platform::MacOs, "//server/share"),
+            (Platform::MacOs, "smb://server/share"),
+            (Platform::Linux, "nfs://server/export"),
         ] {
             for field in 0..3 {
                 let mut given = FolderOverrides::default();
@@ -323,5 +345,41 @@ mod tests {
             load(empty.path(), Platform::Linux),
             overrides(None, None, Some("/example/data"))
         );
+    }
+
+    #[test]
+    fn settings_name_cores_launcher_and_whether_it_runs() {
+        let dir = tempfile::tempdir().expect("a folder");
+        let data = dir.path().to_string_lossy().into_owned();
+        let folders = Folders {
+            config_dir: format!("{data}-config"),
+            state_dir: format!("{data}-state"),
+            data_dir: data.clone(),
+            secrets_dir: format!("{data}-secrets"),
+        };
+        let platform = Platform::current();
+        let path = launcher_path(&folders, platform, Product::Core);
+        assert_eq!(
+            launcher_status(&folders, platform),
+            (path.clone(), Some("there is no launcher here".into()))
+        );
+        fs::create_dir_all(dir.path().join("launch")).expect("launch");
+        fs::write(&path, "#!/bin/sh\n").expect("a launcher");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path().join("launch"), fs::Permissions::from_mode(0o700))
+                .expect("private");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("runnable");
+        }
+        assert_eq!(launcher_status(&folders, platform), (path.clone(), None));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o777)).expect("open to all");
+            let (shown, problem) = launcher_status(&folders, platform);
+            assert_eq!(shown, path);
+            assert!(problem.expect("refused").contains("chmod go-w"));
+        }
     }
 }

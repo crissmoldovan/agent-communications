@@ -36,15 +36,23 @@ const RESOLVED: readonly { key: keyof Folders; label: string }[] = [
   { key: 'secretsDir', label: 'Secrets' },
 ];
 
-/** A whole path: from `/` on macOS and Linux, from a drive (`C:\`) or a share (`\\server`) on Windows. */
-const WHOLE_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\])/;
+/** A whole path on this machine's disks: from `/` on macOS and Linux, from a drive (`C:\`) on Windows. */
+const WHOLE_PATH = /^(?:\/|[A-Za-z]:[\\/])/;
+/**
+ * A network share, in any of its forms: two separators first (`\\server\share`, `//server/share`, `\\?\UNC\…`), or
+ * an address (`smb://…`). Its owner would decide what the app runs: the launchers are read from the data folder.
+ */
+const NETWORK_SHARE = /^(?:[\\/]{2}|[A-Za-z][A-Za-z0-9+.-]+:\/\/)/;
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** A folder override: empty leaves it to the environment and the defaults; otherwise a whole path. Rust checks again. */
 const folder = z
   .string()
   .trim()
-  .refine((value) => value === '' || WHOLE_PATH.test(value), {
+  .refine((value) => !NETWORK_SHARE.test(value), {
+    message: "Give a folder on this machine's own disks: never a network share.",
+  })
+  .refine((value) => value === '' || NETWORK_SHARE.test(value) || WHOLE_PATH.test(value), {
     message: 'Give the whole path, from the root: /… on macOS and Linux, C:\\… on Windows.',
   })
   .refine((value) => !CONTROL_OR_FORMAT.test(value), { message: "A folder's path cannot hold control characters." });
@@ -180,7 +188,7 @@ function FolderSettings({ settings, onChange }: { settings: AppSettings; onChang
         </p>
       )}
       <section aria-label="Folders in use" className="flex flex-col gap-(--cue-space-2)">
-        <p className="text-fg-muted">Every call pins these four folders:</p>
+        <p className="text-fg-muted">Every call pins these four folders, and starts the launcher in the data folder:</p>
         <DescriptionList.Root>
           {RESOLVED.map(({ key, label }) => (
             <Fragment key={key}>
@@ -190,7 +198,16 @@ function FolderSettings({ settings, onChange }: { settings: AppSettings; onChang
               </DescriptionList.Detail>
             </Fragment>
           ))}
+          <DescriptionList.Term>Launcher</DescriptionList.Term>
+          <DescriptionList.Detail className="font-mono">
+            <UntrustedText text={settings.launcher} />
+          </DescriptionList.Detail>
         </DescriptionList.Root>
+        {settings.launcherProblem === null ? null : (
+          <p role="alert" className="text-warn">
+            <UntrustedText text={settings.launcherProblem} />
+          </p>
+        )}
       </section>
     </>
   );
