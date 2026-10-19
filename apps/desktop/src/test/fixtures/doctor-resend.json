@@ -1,0 +1,26 @@
+{
+  "healthy": true,
+  "readOnly": "Read-only is enforced by this package’s own code, not by the key.",
+  "checks": [
+    {
+      "name": "config",
+      "ok": true,
+      "detail": "one account"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "example/resend",
+      "key": "full_access",
+      "mode": "read",
+      "guarantee": "Read-only is enforced by this package’s own code, not by the key.",
+      "checks": [
+        {
+          "name": "key stored",
+          "ok": true,
+          "detail": "the key is in the secret store"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "account": "example/slack",
+      "acts": ["reply", "reaction"],
+      "orphan": false
+    },
+    {
+      "account": "example/gmail",
+      "conversation": "@example.com",
+      "acts": [],
+      "orphan": false
+    }
+  ],
+  "unreadable": [],
+  "accounts": [
+    {
+      "account": "example/slack",
+      "allowed": ["reply", "reaction"],
+      "conversations": []
+    },
+    {
+      "account": "example/gmail",
+      "allowed": "all",
+      "conversations": [
+        {
+          "conversation": "@example.com",
+          "allowed": []
+        }
+      ]
+    }
+  ]
+}

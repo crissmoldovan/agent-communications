@@ -2,3 +2,15 @@
 @import "@cueplusplus/ui/styles.css";
 @import "@cueplusplus/theme-cue/theme.css";
 @import "@cueplusplus/theme-terminal/theme.css";
+
+/*
+ * macOS draws its traffic lights over the header (TitleBarStyle::Overlay with a hidden title): the header is at least
+ * the 28px of a macOS title bar, so the lights sit inside it, and the brand cell's leading edge leaves them their room.
+ */
+.app-macos .app-titlebar {
+  min-height: 28px;
+}
+
+.app-macos .app-titlebar-brand {
+  padding-inline-start: 80px;
+}

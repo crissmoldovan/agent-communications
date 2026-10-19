@@ -1,9 +1,12 @@
 import cue from '@cueplusplus/theme-cue';
 import terminal from '@cueplusplus/theme-terminal';
-import { prepaintScript } from '@cueplusplus/ui/system';
+import { prepaintScript, type ThemeName } from '@cueplusplus/ui/system';
 
 /** The two presets the appearance menu offers (plan, "Where the design is silent" 4). */
 export const THEMES = [cue, terminal] as const;
+
+/** Their names, as the provider takes them, in the same order. */
+export const THEME_NAMES = ['cue', 'terminal'] as const satisfies readonly ThemeName[];
 
 /** What the app opens on before the person picks anything (desktop design DA3). */
 export const THEME_DEFAULTS = { theme: 'cue', density: 'compact', mode: 'system' } as const;
