@@ -1,0 +1,672 @@
+{
+  "schemaVersion": 1,
+  "task": 10,
+  "owners": [
+    {
+      "id": "task-10"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-laya-release-refuses-offered-template-without-exact-evidence",
+      "owner": "task-10",
+      "test": "E2 release gate: a real lock without passing quality evidence is refused"
+    },
+    {
+      "id": "e2-laya-release-package-and-security-guard",
+      "owner": "task-10",
+      "test": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies"
+    },
+    {
+      "id": "e2-laya-protected-real-mac-boundary-proof",
+      "owner": "task-10",
+      "test": "E2 release gate: a real lock without passing real-Mac boundary evidence is refused"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d2-503-529-security-laya-wording",
+      "owner": "task-10",
+      "test": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each"
+    },
+    {
+      "id": "d11-2167-2204-macos-boundary-gate",
+      "owner": "task-10",
+      "test": "E2 macOS boundary gate: evidence bound to another candidate is refused"
+    },
+    {
+      "id": "d11-2321-2335-release-asset-guard",
+      "owner": "task-10",
+      "test": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform"
+    },
+    {
+      "id": "d11-2337-2350-release-rejects-stale-laya-evidence",
+      "owner": "task-10",
+      "test": "E2 release gate: a lock that does not rebuild byte for byte from its registry tarballs is refused"
+    },
+    {
+      "id": "d11-2337-2350-architecture-bound-release",
+      "owner": "task-10",
+      "test": "E2 release gate: every architecture the lock offers needs its own evidence"
+    },
+    {
+      "id": "d14-2677-2686-daemon-package-boundary",
+      "owner": "task-10",
+      "test": "E2 release gate: the private runtime declaration is never published"
+    },
+    {
+      "id": "s5-3326-3336-release-package-boundary",
+      "owner": "task-10",
+      "test": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential"
+    },
+    {
+      "id": "s7-3380-3385-protected-gate",
+      "owner": "task-10",
+      "test": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-10.json",
+      "owner": "task-10"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-t10-placeholder-exact-bytes",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: any lock but the exact placeholder bytes needs every gate",
+      "testPattern": "E2 release gate: any lock but the exact placeholder bytes needs every gate",
+      "before": "  if (texts.runtimeLock === PLACEHOLDER_LOCK) {",
+      "after": "  if (texts.runtimeLock.includes('E2_EXTERNAL_REFERENCE_BLOCKED')) {"
+    },
+    {
+      "id": "e2-t10-dormant-checked",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a placeholder the shipped definition does not refuse stops the release",
+      "testPattern": "E2 release gate: a placeholder the shipped definition does not refuse stops the release",
+      "before": "      if (answer.available || answer.code !== 'E2_EXTERNAL_REFERENCE_BLOCKED')",
+      "after": "      if (answer.available)"
+    },
+    {
+      "id": "e2-t10-dormant-every-platform",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "testPattern": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "before": "    for (const platform of DORMANT_PLATFORMS) {",
+      "after": "    for (const platform of DORMANT_PLATFORMS.slice(0, 1)) {"
+    },
+    {
+      "id": "e2-t10-offered-templates",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the release offers exactly laya-noul-v1",
+      "testPattern": "E2 release gate: the release offers exactly laya-noul-v1",
+      "before": "  if (\n    manifest.promptTemplates.length !== OFFERED_TEMPLATES.length ||",
+      "after": "  if (\n    false &&"
+    },
+    {
+      "id": "e2-t10-audit-leak",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "testPattern": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "before": "  if (leaked.length > 0) fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-t10-audit-follows-links",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "testPattern": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "before": "          visitImporter(target);",
+      "after": "          void target;"
+    },
+    {
+      "id": "e2-t10-private-runtime-unlisted",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the private runtime declaration is never published",
+      "testPattern": "E2 release gate: the private runtime declaration is never published",
+      "before": "  if (publishable.includes(directory) || packages.includes(directory))",
+      "after": "  if (publishable.includes(directory))"
+    },
+    {
+      "id": "e2-t10-private-runtime-private",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the private runtime declaration is never published",
+      "testPattern": "E2 release gate: the private runtime declaration is never published",
+      "before": "    assertPrivateRuntimePackage(JSON.parse(await readRootText(root, RUNTIME_PACKAGE)));",
+      "after": "    JSON.parse(await readRootText(root, RUNTIME_PACKAGE));"
+    },
+    {
+      "id": "e2-t10-lock-architectures",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: every architecture the lock offers needs its own evidence",
+      "testPattern": "E2 release gate: every architecture the lock offers needs its own evidence",
+      "before": "    .filter(([platform]) => lock.packages.some((pkg) => (pkg.files[platform] ?? []).length > 0))",
+      "after": "    .filter(([platform]) => platform === 'darwin-arm64')"
+    },
+    {
+      "id": "e2-t10-quality-required",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a real lock without passing quality evidence is refused",
+      "testPattern": "E2 release gate: a real lock without passing quality evidence is refused",
+      "before": "    verifyQuality({ root, architectures });",
+      "after": "    void verifyQuality;"
+    },
+    {
+      "id": "e2-t10-boundary-required",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a real lock without passing real-Mac boundary evidence is refused",
+      "testPattern": "E2 release gate: a real lock without passing real-Mac boundary evidence is refused",
+      "before": "    verifyBoundary({ root, architectures });",
+      "after": "    void verifyBoundary;"
+    },
+    {
+      "id": "e2-t10-rebuild-compared",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a lock that does not rebuild byte for byte from its registry tarballs is refused",
+      "testPattern": "E2 release gate: a lock that does not rebuild byte for byte from its registry tarballs is refused",
+      "before": "  if (rebuilt !== texts.runtimeLock)",
+      "after": "  if (rebuilt === undefined)"
+    },
+    {
+      "id": "e2-t10-rebuild-owner-acquirer",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the real rebuild needs the owner-only acquirer, and asks the registry nothing without it",
+      "testPattern": "E2 release gate: the real rebuild needs the owner-only acquirer, and asks the registry nothing without it",
+      "before": "  rebuildLock = (lockText) => rebuildRuntimeLock(lockText, { acquire: supplyChainGateAcquirer(env) }),",
+      "after": "  rebuildLock = (lockText) =>\n    rebuildRuntimeLock(lockText, { acquire: supplyChainGateAcquirer({ AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1' }) }),"
+    },
+    {
+      "id": "e2-t10-rebuild-input-paths",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the rebuild input read back from a lock rebuilds that lock byte for byte",
+      "testPattern": "E2 release gate: the rebuild input read back from a lock rebuilds that lock byte for byte",
+      "before": "pkg.files[platform].map((file) => file.path)",
+      "after": "pkg.files[platform].slice(1).map((file) => file.path)"
+    },
+    {
+      "id": "e2-t10-closure-binding-url-sri",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a lock whose tarball URL or SRI drifted is refused before any tarball is requested",
+      "testPattern": "E2 release gate: a lock whose tarball URL or SRI drifted is refused before any tarball is requested",
+      "before": "    if (suppliedEntry === undefined || suppliedEntry.url !== entry.url || suppliedEntry.integrity !== entry.integrity) {",
+      "after": "    if (suppliedEntry === undefined) {"
+    },
+    {
+      "id": "e2-t10-release-needs-laya",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/release.yml",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "testPattern": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "before": "    needs: [verify, old-node, browser, laya]\n",
+      "after": "    needs: [verify, old-node, browser]\n"
+    },
+    {
+      "id": "e2-t10-release-owner-acquirer-flag",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/release.yml",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "testPattern": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "before": "          AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1'\n",
+      "after": "          AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '0'\n"
+    },
+    {
+      "id": "e2-t10-release-gate-no-oidc",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/release.yml",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "testPattern": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "before": "    name: Laya release gate\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n",
+      "after": "    name: Laya release gate\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n"
+    },
+    {
+      "id": "e2-t10-local-release-runs-gate",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/release.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the local release runs the same gate before its verify and before anything is sent",
+      "testPattern": "E2 release gate: the local release runs the same gate before its verify and before anything is sent",
+      "before": "  const laya = await layaReleaseGate({ env: { ...process.env, AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1' } });",
+      "after": "  const laya = { mode: 'dormant' };"
+    },
+    {
+      "id": "e2-t10-daemon-onnx-dependency",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "testPattern": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "before": "    \"@agentcomms/whatsapp\": \"workspace:*\"\n  },",
+      "after": "    \"@agentcomms/whatsapp\": \"workspace:*\",\n    \"onnxruntime-node\": \"1.30.0\"\n  },"
+    },
+    {
+      "id": "e2-t10-manifest-canonical-one-line",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "testPattern": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "before": "  return source.replace(\n    multilineTemplates,\n",
+      "after": "  return source.replace(\n    'no manifest writes its template list like this',\n"
+    },
+    {
+      "id": "e2-t10-manifest-templates-implemented",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the manifest offers a sorted list of templates the worker implements, and nothing else",
+      "testPattern": "E2 contract: the manifest offers a sorted list of templates the worker implements, and nothing else",
+      "before": "    !candidate.promptTemplates.every((entry) => isLayaTemplateId(entry))",
+      "after": "    false"
+    },
+    {
+      "id": "e2-t10-manifest-templates-nonempty",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the manifest offers a sorted list of templates the worker implements, and nothing else",
+      "testPattern": "E2 contract: the manifest offers a sorted list of templates the worker implements, and nothing else",
+      "before": "    candidate.promptTemplates.length === 0 ||",
+      "after": "    false ||"
+    },
+    {
+      "id": "e2-t10-lock-manifest-templates",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "testPattern": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "before": "  if (!record.promptTemplates.every((id) => typeof id === 'string' && LAYA_TEMPLATE_IDS.includes(id))) {",
+      "after": "  if (false) {"
+    },
+    {
+      "id": "e2-t10-lock-manifest-template-order",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "testPattern": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "before": "  assertStrictOrder(record.promptTemplates, 'LAYA_MANIFEST_ORDER');",
+      "after": "  void record;"
+    },
+    {
+      "id": "e2-t10-lock-manifest-one-line",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "testPattern": "E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line",
+      "before": "  const compactTemplates = `  \"promptTemplates\": [${value.promptTemplates.map((id) => JSON.stringify(id)).join(', ')}]`;",
+      "after": "  const compactTemplates = multilineTemplates;"
+    },
+    {
+      "id": "e2-t10-boundary-binding",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "testPattern": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "before": "    if (!bound) fail(",
+      "after": "    if (false) fail("
+    },
+    {
+      "id": "e2-t10-boundary-subject",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "testPattern": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "before": "    if (entry.subjectDigest !== candidate.subjectDigest)",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t10-boundary-architecture-bound",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: arm64 evidence never authorises x64",
+      "testPattern": "E2 macOS boundary gate: arm64 evidence never authorises x64",
+      "before": "    if (entry === undefined) fail('BOUNDARY_GATE_ABSENT', `no boundary evidence exists for ${architecture}`);",
+      "after": "    if (entry === undefined) continue;"
+    },
+    {
+      "id": "e2-t10-boundary-verdict",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: a passing verdict its checks do not give is refused",
+      "testPattern": "E2 macOS boundary gate: a passing verdict its checks do not give is refused",
+      "before": "    if (entry.passed !== boundaryPassed(entry.checks))",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t10-boundary-every-check",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: one failed check fails the architecture",
+      "testPattern": "E2 macOS boundary gate: one failed check fails the architecture",
+      "before": "  return BOUNDARY_CHECKS.every((name) => checks[name] === 'pass');",
+      "after": "  return BOUNDARY_CHECKS.some((name) => checks[name] === 'pass');"
+    },
+    {
+      "id": "e2-t10-boundary-failed-refused",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: one failed check fails the architecture",
+      "testPattern": "E2 macOS boundary gate: one failed check fails the architecture",
+      "before": "    if (!entry.passed) fail('BOUNDARY_GATE_FAILED'",
+      "after": "    if (false) fail('BOUNDARY_GATE_FAILED'"
+    },
+    {
+      "id": "e2-t10-boundary-privacy-first",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: evidence holding a path, message or secret is refused before any shape check",
+      "testPattern": "E2 macOS boundary gate: evidence holding a path, message or secret is refused before any shape check",
+      "before": "    assertAggregateOnly(evidence);",
+      "after": "    void assertAggregateOnly;"
+    },
+    {
+      "id": "e2-t10-boundary-canonical",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: evidence is canonical JSON with exactly its reviewed fields",
+      "testPattern": "E2 macOS boundary gate: evidence is canonical JSON with exactly its reviewed fields",
+      "before": "  if (!canonicalEvidenceBytes(evidence).equals(Buffer.from(bytes)))",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t10-boundary-stale-merge",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate",
+      "testPattern": "E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate",
+      "before": "  if (shared(existing) !== shared(top))",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t10-run-validates-before-write",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate",
+      "testPattern": "E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate",
+      "before": "  validateBoundaryEvidence(evidence, { candidates });",
+      "after": "  void candidates;"
+    },
+    {
+      "id": "e2-t10-run-refuses-rosetta",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "testPattern": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "before": "  if (dependencies.translated()) fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-t10-run-macos-only",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "testPattern": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "before": "  if ((options.platform ?? process.platform) !== 'darwin') fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-t10-run-trees-first",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "testPattern": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "before": "    fail('BOUNDARY_TREES', \"the runtime and model trees are not exactly this candidate's\");",
+      "after": "    void 0;"
+    },
+    {
+      "id": "e2-t10-run-sandbox-required",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "testPattern": "E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees",
+      "before": "  if (!dependencies.sandboxAvailable(architecture))",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t10-run-checks-closed",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: a check that fails is recorded, and the run does not pass",
+      "testPattern": "E2 macOS boundary gate run: a check that fails is recorded, and the run does not pass",
+      "before": "[name, checks[name] === 'pass' ? 'pass' : 'fail']",
+      "after": "[name, checks[name]]"
+    },
+    {
+      "id": "e2-t10-run-egress-refused",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: the egress check refuses a host that reaches an outside address",
+      "testPattern": "E2 macOS boundary gate run: the egress check refuses a host that reaches an outside address",
+      "before": "  if (reached.length > 0)",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t10-gate-dispatch-only",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input",
+      "testPattern": "E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input",
+      "before": "on:\n  workflow_dispatch:\n",
+      "after": "on:\n  workflow_dispatch:\n  pull_request:\n"
+    },
+    {
+      "id": "e2-t10-gate-no-input",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input",
+      "testPattern": "E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input",
+      "before": "on:\n  workflow_dispatch:\n",
+      "after": "on:\n  workflow_dispatch:\n    inputs:\n      ref:\n        type: string\n"
+    },
+    {
+      "id": "e2-t10-gate-candidate-tag",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "testPattern": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "before": "    if: startsWith(github.ref, 'refs/tags/laya-candidate-')\n",
+      "after": "    if: startsWith(github.ref, 'refs/heads/')\n"
+    },
+    {
+      "id": "e2-t10-gate-environment",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "testPattern": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "before": "    environment: laya-quality-gate\n",
+      "after": "    # the environment, gone\n"
+    },
+    {
+      "id": "e2-t10-gate-protected-runner",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "testPattern": "E2 macOS boundary gate workflow: it runs on the owner's protected Mac, behind its environment, for a candidate tag",
+      "before": "    runs-on: [self-hosted, macOS, agentcomms-laya-gate]\n",
+      "after": "    runs-on: macos-latest\n"
+    },
+    {
+      "id": "e2-t10-gate-no-persisted-credential",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "testPattern": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "before": "          persist-credentials: false\n",
+      "after": "          persist-credentials: true\n"
+    },
+    {
+      "id": "e2-t10-gate-no-oidc",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "testPattern": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "before": "    permissions:\n      contents: read\n    steps:\n",
+      "after": "    permissions:\n      contents: read\n      id-token: write\n    steps:\n"
+    },
+    {
+      "id": "e2-t10-gate-corpus-last",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run",
+      "testPattern": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run",
+      "before": "          scripts/run-laya-macos-boundary-gate.mjs egress-check\n",
+      "after": "          scripts/run-laya-macos-boundary-gate.mjs egress-check \"$AGENTCOMMS_LAYA_GATE_CORPUS\"\n"
+    },
+    {
+      "id": "e2-t10-gate-egress-checked",
+      "kind": "production",
+      "owner": "task-10",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run",
+      "testPattern": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run",
+      "before": "      - name: this runner reaches nothing beyond its allow-list\n",
+      "after": "      - name: this runner reaches nothing beyond its allow-list\n        if: false\n"
+    },
+    {
+      "id": "e2-t10-verify-runs-no-gate",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "package.json",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: ordinary CI and pnpm verify run neither gate and read no corpus",
+      "testPattern": "E2 macOS boundary gate workflow: ordinary CI and pnpm verify run neither gate and read no corpus",
+      "before": "\"verify\": \"pnpm lint && ",
+      "after": "\"verify\": \"node scripts/run-laya-quality-gate.mjs run && pnpm lint && "
+    },
+    {
+      "id": "e2-t10-security-network-bullet",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "SECURITY.md",
+      "testFile": "test/laya-security-doc.test.mjs",
+      "testName": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "testPattern": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "before": "; or any runtime or model file being loaded that does not match the release's runtime lock and model manifest.",
+      "after": "."
+    },
+    {
+      "id": "e2-t10-security-boundary-limit",
+      "kind": "production",
+      "owner": "task-10",
+      "source": "SECURITY.md",
+      "testFile": "test/laya-security-doc.test.mjs",
+      "testName": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "testPattern": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "before": "Code inside the worker that refuses network calls is defence in depth, not the boundary. The boundary",
+      "after": "The boundary"
+    }
+  ],
+  "externalSources": []
+}

@@ -1705,7 +1705,8 @@ test('E2: every release-workflow install excludes the private Laya runtime befor
   const installPattern = ['pnpm', 'install', '--frozen-lockfile'].join('\\s+');
   const installs =
     workflow.match(new RegExp(`${installPattern}(?: --filter '!@agentcomms\\/events-laya-runtime')?`, 'g')) ?? [];
-  assert.equal(installs.length, 4, 'the four workflow installs are the complete ordinary/release install surface');
+  // The verify legs, the old-Node leg, the browser leg, the Laya release gate (E2 Task 10) and the publish.
+  assert.equal(installs.length, 5, 'the five workflow installs are the complete ordinary/release install surface');
   assert.ok(
     installs.every((command) => command === install),
     'no workflow job can acquire the private runtime closure',
@@ -1764,7 +1765,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
       .exec(publish)?.[1]
       .split(',')
       .map((need) => need.trim()) ?? [];
-  assert.deepEqual(needs.sort(), ['browser', 'old-node', 'verify']);
+  assert.deepEqual(needs.sort(), ['browser', 'laya', 'old-node', 'verify']);
   assert.match(jobBlock(workflow, 'verify'), /node: \[22\.18\.0, 24\]/, 'the matrix keeps its own Node versions');
   // The test is there, and the repository's own tooling floor stays where it is.
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
@@ -1788,7 +1789,7 @@ test('BRW-b: the release cannot publish without event vectors and loopback SSE C
     .exec(publish)?.[1]
     .split(',')
     .map((need) => need.trim());
-  assert.deepEqual(needs?.sort(), ['browser', 'old-node', 'verify']);
+  assert.deepEqual(needs?.sort(), ['browser', 'laya', 'old-node', 'verify']);
 
   const job = jobBlock(workflow, 'browser');
   assert.ok(job, 'there is a browser job');

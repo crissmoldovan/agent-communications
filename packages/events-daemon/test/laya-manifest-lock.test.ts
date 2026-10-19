@@ -107,7 +107,13 @@ test('E2 manifest: contains the reviewed single English ONNX entry', async () =>
   const manifest = JSON.parse(manifestText) as LayaManifest;
   assert.deepEqual(parseLayaManifest(manifestText), manifest);
   assert.doesNotThrow(() => assertLayaManifest(manifest));
-  assert.deepEqual(manifest, await json('manifest-tiny-v1.json'));
+  // The fixture keeps both of the worker's templates; the release offers `laya-noul-v1` alone (E2 Task 10), and every
+  // other reviewed fact is the fixture's.
+  const { promptTemplates, ...facts } = manifest;
+  const { promptTemplates: fixtureTemplates, ...fixtureFacts } = (await json('manifest-tiny-v1.json')) as LayaManifest;
+  assert.deepEqual(facts, fixtureFacts);
+  assert.deepEqual(promptTemplates, ['laya-noul-v1']);
+  assert.deepEqual(fixtureTemplates, ['laya-choice2-v1', 'laya-noul-v1']);
   assert.equal(manifest.manifestVersion, 1);
   assert.equal(manifest.manifestId, 'laya-en-onnx-68f27dfe');
   assert.deepEqual(manifest.source, {
@@ -174,6 +180,29 @@ test('E2 manifest: refuses noncanonical JSON text', async () => {
       ),
     /RUNTIME_LOCK_DUPLICATE/,
   );
+});
+
+test('E2 manifest: offers a sorted, duplicate-free list of the worker templates, written on one line', async () => {
+  const { assertLayaManifest, parseLayaManifest } = await runtimeLockModule();
+  const manifest = (await json('manifest-tiny-v1.json')) as LayaManifest;
+  // E2 Task 10: the release offers `laya-noul-v1` alone; the fixture keeps the worker's pair.
+  const text = await readFile(join(repositoryRoot, 'packages/events-daemon/laya-manifest.json'), 'utf8');
+  assert.match(text, /\n {2}"promptTemplates": \["laya-noul-v1"\]\n\}\n$/);
+  assert.deepEqual((parseLayaManifest(text) as LayaManifest).promptTemplates, ['laya-noul-v1']);
+  assert.throws(
+    () => parseLayaManifest(text.replace('["laya-noul-v1"]', '[\n    "laya-noul-v1"\n  ]')),
+    /LAYA_MANIFEST_CANONICAL/,
+  );
+  assert.doesNotThrow(() => assertLayaManifest({ ...manifest, promptTemplates: ['laya-noul-v1'] }));
+  for (const templates of [[], ['laya-noul-v2'], ['laya-noul-v1', 'laya-unreviewed-v1'], [7]]) {
+    assert.throws(() => assertLayaManifest({ ...manifest, promptTemplates: templates }), /LAYA_MANIFEST$/);
+  }
+  for (const templates of [
+    ['laya-noul-v1', 'laya-choice2-v1'],
+    ['laya-noul-v1', 'laya-noul-v1'],
+  ]) {
+    assert.throws(() => assertLayaManifest({ ...manifest, promptTemplates: templates }), /LAYA_MANIFEST_ORDER/);
+  }
 });
 
 test('E2 manifest: refuses duplicate, unsorted, and unsafe file paths', async () => {

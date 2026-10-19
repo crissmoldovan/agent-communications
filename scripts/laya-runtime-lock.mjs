@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { inspectPackageArchive } from '../packages/events-daemon/src/runtime/laya/tar.ts';
+import { LAYA_TEMPLATE_IDS } from '../packages/events-daemon/src/runtime/laya/templates.ts';
 
 const RUNTIME_ROOTS = Object.freeze({
   '@huggingface/tokenizers': '0.2.0',
@@ -546,8 +547,9 @@ function canonical(value) {
 
 function canonicalLayaManifest(value) {
   const source = canonical(value);
-  const multilineTemplates = '  "promptTemplates": [\n    "laya-choice2-v1",\n    "laya-noul-v1"\n  ]';
-  const compactTemplates = '  "promptTemplates": ["laya-choice2-v1", "laya-noul-v1"]';
+  // The template list is written on one line, whichever of the worker's templates the manifest offers.
+  const multilineTemplates = `  "promptTemplates": [\n${value.promptTemplates.map((id) => `    ${JSON.stringify(id)}`).join(',\n')}\n  ]`;
+  const compactTemplates = `  "promptTemplates": [${value.promptTemplates.map((id) => JSON.stringify(id)).join(', ')}]`;
   if (!source.includes(multilineTemplates)) throw new RuntimeLockError('LAYA_MANIFEST');
   return source.replace(multilineTemplates, compactTemplates);
 }
@@ -731,7 +733,7 @@ function layaManifestRecord(value) {
     !Array.isArray(record.files) ||
     record.files.length !== 5 ||
     !Array.isArray(record.promptTemplates) ||
-    record.promptTemplates.length !== 2
+    record.promptTemplates.length === 0
   ) {
     throw new RuntimeLockError('LAYA_MANIFEST');
   }
@@ -758,9 +760,12 @@ function layaManifestRecord(value) {
   }
   const context = exactKeys(record.context, ['maxTokens', 'language'], 'LAYA_MANIFEST');
   if (context.maxTokens !== 512 || context.language !== 'en') throw new RuntimeLockError('LAYA_MANIFEST');
-  if (record.promptTemplates[0] !== 'laya-choice2-v1' || record.promptTemplates[1] !== 'laya-noul-v1') {
+  // The templates a release offers, each one the worker source implements, in raw-byte order and without a duplicate
+  // (E2 Task 10: the first release offers `laya-noul-v1` alone).
+  if (!record.promptTemplates.every((id) => typeof id === 'string' && LAYA_TEMPLATE_IDS.includes(id))) {
     throw new RuntimeLockError('LAYA_MANIFEST');
   }
+  assertStrictOrder(record.promptTemplates, 'LAYA_MANIFEST_ORDER');
   const files = record.files.map((value) => {
     const file = exactKeys(value, ['path', 'size', 'sha256'], 'LAYA_MANIFEST');
     const parsed = fileRecord({ ...file, executable: false });

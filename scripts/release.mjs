@@ -130,6 +130,26 @@ if (publish && !process.stdin.isTTY) {
   );
 }
 
+// ── Laya ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// Laya's release rule (events E2 Task 10), as the workflow's `laya` job runs it, before the verify and before anything
+// is sent: the placeholder lock ships and Laya is checked to be unavailable, or the real lock is rebuilt from its
+// registry tarballs and every gate's evidence passes. This is the owner's own release, so it may use the owner-only
+// tarball acquirer the rebuild needs. Loaded only here, after both Phase-E gates have passed.
+try {
+  const { layaReleaseGate } = await import('./laya-release-gate.mjs');
+  const laya = await layaReleaseGate({ env: { ...process.env, AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1' } });
+  console.log(
+    laya.mode === 'dormant'
+      ? 'Laya: the placeholder lock ships, so Laya stays unavailable on every platform.'
+      : `Laya: the rebuilt lock, quality and boundary evidence all pass on ${laya.architectures.join(', ')}.`,
+  );
+} catch (error) {
+  refuse(
+    `the Laya release gate refused: ${error instanceof Error ? error.message : String(error)}`,
+    'Ship the placeholder lock, or the real lock with its passing quality and boundary evidence (docs/RELEASING.md, "Laya").',
+  );
+}
+
 if (failures.length > 0) {
   console.error('\nRefusing to release:\n');
   for (const { what, fix } of failures) console.error(`  ✗ ${what}\n    ${fix}\n`);

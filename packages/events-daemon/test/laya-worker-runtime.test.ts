@@ -242,9 +242,13 @@ test('E2 Laya worker runtime: laya-choice2-v1 is counted but refused until its r
   assert.equal(runtime.asked.length, 0, 'no choice question is ever built from an unrecorded wire');
 });
 
-test('E2 Laya worker runtime: the two immutable templates are the manifest list, with stable digests', async () => {
+test('E2 Laya worker runtime: the manifest offers only templates the worker implements, each with a stable digest', async () => {
   const manifest = JSON.parse(await readFile(shippedManifest, 'utf8')) as { promptTemplates: string[] };
-  assert.deepEqual([...LAYA_TEMPLATE_IDS], manifest.promptTemplates);
+  assert.deepEqual([...LAYA_TEMPLATE_IDS], [LAYA_CHOICE2_TEMPLATE_ID, LAYA_NOUL_TEMPLATE_ID]);
+  // E2 Task 10: this release offers `laya-noul-v1` alone; the choice template stays in the worker, refused, until its
+  // own task lifts that refusal.
+  assert.deepEqual(manifest.promptTemplates, [LAYA_NOUL_TEMPLATE_ID]);
+  assert.ok(manifest.promptTemplates.every((id) => (LAYA_TEMPLATE_IDS as readonly string[]).includes(id)));
   assert.deepEqual(layaLayout(LAYA_NOUL_TEMPLATE_ID, { instructions: 'q', state: 's' }).options, [
     ' false: no, the statement does not hold',
     ' true: yes, the statement holds',

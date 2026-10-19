@@ -3,6 +3,7 @@ import { canonicalJson, sha256Hex } from '@agentcomms/core';
 import { JUDGE_KINDS } from '../../domain/lifecycle.ts';
 import type { JudgeReservation } from '../judge-budget.ts';
 import type { JudgeAnswer, JudgeExecutionRequest } from '../judge-coordinator.ts';
+import { isLayaTemplateId } from './templates.ts';
 import { LAYA_SANDBOX_EXECUTABLE, LAYA_SANDBOX_PROFILE } from './worker-boundary-probe.ts';
 
 const LAYA_KIND: (typeof JUDGE_KINDS)[1] = JUDGE_KINDS[1];
@@ -379,8 +380,14 @@ function manifest(value: unknown): CanonicalLayaManifest {
   exactKeys(context, ['maxTokens', 'language'], 'the Laya context');
   if (context.maxTokens !== 512 || context.language !== 'en')
     fail('LAYA_ASSET_INVALID', 'the Laya context is English and bounded to 512 tokens');
-  if (!Array.isArray(candidate.promptTemplates) || candidate.promptTemplates.length !== 2)
-    fail('LAYA_ASSET_INVALID', 'the Laya prompt templates are the reviewed pair');
+  // The manifest lists which of the worker's immutable templates a release offers (E2 Task 10: the first release offers
+  // `laya-noul-v1` alone); a template the worker source does not implement is never offered.
+  if (
+    !Array.isArray(candidate.promptTemplates) ||
+    candidate.promptTemplates.length === 0 ||
+    !candidate.promptTemplates.every((entry) => isLayaTemplateId(entry))
+  )
+    fail('LAYA_ASSET_INVALID', 'the Laya prompt templates are reviewed templates the worker implements');
   const promptTemplates = ordered(
     candidate.promptTemplates.map((entry) => text(entry, 'a Laya prompt template')),
     (entry) => entry,
@@ -501,8 +508,12 @@ function canonicalManifestSource(value: CanonicalLayaManifest): string {
     null,
     2,
   )}\n`;
-  const multilineTemplates = '  "promptTemplates": [\n    "laya-choice2-v1",\n    "laya-noul-v1"\n  ]';
-  return source.replace(multilineTemplates, '  "promptTemplates": ["laya-choice2-v1", "laya-noul-v1"]');
+  // The template list is written on one line, whichever templates the manifest offers.
+  const multilineTemplates = `  "promptTemplates": [\n${value.promptTemplates.map((id) => `    ${JSON.stringify(id)}`).join(',\n')}\n  ]`;
+  return source.replace(
+    multilineTemplates,
+    `  "promptTemplates": [${value.promptTemplates.map((id) => JSON.stringify(id)).join(', ')}]`,
+  );
 }
 
 function canonicalRuntimeLockSource(
