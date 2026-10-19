@@ -15,6 +15,7 @@ import {
   loadLayaMutations,
   VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
@@ -892,7 +893,10 @@ test('E2 mutation: every registered mutation names a leg a runner executes', asy
   for (const mutation of await loadLayaMutations()) assert.ok(LAYA_MUTATION_LEGS.includes(mutation.leg), mutation.id);
 });
 
-test('E2 mutation: copied production checker fails only its named oracle', async (context) => {
+// The runner proves each named oracle green in its copied tree before it mutates anything, and Laya is macOS-only in v1:
+// several oracles skip on Windows (WINDOWS_SKIP), so there is no baseline to prove there, as for phase E's runners.
+// Every registered mutant is credited on macOS and Linux.
+test('E2 mutation: copied production checker fails only its named oracle', { skip: WINDOWS_SKIP }, async (context) => {
   for (const { mutation, changedLine } of await expectEveryLayaMutationToFail()) {
     context.diagnostic(`${mutation.id}: ${mutation.source}:${changedLine} -> ${mutation.testName}`);
   }
