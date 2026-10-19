@@ -8,7 +8,7 @@ import {
   withFileLock,
   writeFileAtomic,
 } from '@agentcomms/core';
-import { type OutboundMessage, PREPARED_ID_PATTERN } from './message.ts';
+import { type BehaviourCheck, type OutboundMessage, PREPARED_ID_PATTERN } from './message.ts';
 
 /**
  * Two small stores under core's state directory, both this package's own.
@@ -25,6 +25,11 @@ export interface PreparedMessage {
   preparedId: string;
   accountId: string;
   message: OutboundMessage;
+  /**
+   * What the behaviour rules were asked about it at prepare, which its digest binds and execute asks again (design
+   * 2026-10-19-agent-behaviour-rules, B4). Absent from a message an earlier release prepared.
+   */
+  behaviour?: BehaviourCheck | undefined;
   digest: string;
   links: string[];
   warnings: string[];
