@@ -342,6 +342,72 @@ test('the generic approval revoke ends a standing approval’s unused children t
 
 // ── Off ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** `core`'s configuration made unwritable, as a full disk or a locked file would: every write is refused. */
+function unwritable(core: Core): void {
+  core.config.update = async () => {
+    throw new CommsError('CONFIG', 'the configuration could not be written');
+  };
+}
+
+test('off with a configuration it cannot write still ends every one, and says what it could not do', async () => {
+  const { core } = machine();
+  const one = await standing(core);
+  const waiting = await standing(core, { pending: true });
+  const { child } = await mintStandingUse(core, use(one, '7.000001'));
+  const before = standingEpochOf(await core.config.load());
+  unwritable(core);
+
+  const result = await standingChange(core, { off: true }, { surface: 'cli' });
+  assert.equal(standingEpochOf(await core.config.load()), before, 'the epoch could not be raised');
+  assert.deepEqual(
+    result.approvals.map((view) => view.state),
+    ['ended', 'ended'],
+  );
+  for (const id of [one.approvalId, waiting.approvalId, child.approvalId]) {
+    assert.equal(await stateOf(core, id), 'revoked', `${id}: written down as ended`);
+  }
+  assert.equal(result.partial?.length, 1, JSON.stringify(result.partial));
+  assert.match(result.partial?.[0] ?? '', /standing epoch could not be raised .*written down as ended instead/);
+  await assert.rejects(mintStandingUse(core, use(one, '7.000002')), refusedWith('APPROVAL_VOID'));
+  assert.ok(
+    (await core.audit.tail({ limit: 50 })).some(
+      (entry) => entry.operation === 'standing.off' && entry.outcome === 'failed',
+    ),
+    'the epoch that could not be raised is in the audit',
+  );
+});
+
+test('off refuses, naming each, when one is still in force: not written down, and no epoch raised', async () => {
+  const { core } = machine();
+  const one = await standing(core);
+  const stuck = await standing(core);
+  const revoke = core.approvals.revoke.bind(core.approvals);
+  core.approvals.revoke = (async (
+    id: string,
+    ...rest: Parameters<typeof revoke> extends [string, ...infer R] ? R : never
+  ) => {
+    if (id === stuck.approvalId) throw new CommsError('UNEXPECTED', 'the approval store could not be written');
+    return revoke(id, ...rest);
+  }) as typeof revoke;
+  unwritable(core);
+
+  const error = await standingChange(core, { off: true }, { surface: 'cli' }).then(
+    () => assert.fail('off said every one ended'),
+    (failure: unknown) => failure as CommsError,
+  );
+  assert.ok(error instanceof CommsError, String(error));
+  assert.notEqual(error.exitCode, 0, 'the command exits non-zero');
+  assert.match(
+    error.message,
+    new RegExp(`not every standing approval has ended: ${stuck.approvalId} is still in force`),
+  );
+  assert.deepEqual(error.details?.inForce, [stuck.approvalId]);
+  assert.match(error.hint ?? '', /standing epoch could not be raised/);
+  // The one it could write down has ended; the other is in force, and said to be.
+  assert.equal(await stateOf(core, one.approvalId), 'revoked');
+  assert.equal(await stateOf(core, stuck.approvalId), 'approved');
+});
+
 test('off ends every one, and loosening the change policy revives none', async () => {
   const m = machine({ state: { ...STATE, changePolicy: 'confirm' } });
   const { core } = m;

@@ -451,3 +451,9 @@ word.
    body, and some its title, as markup, so a reply holding `<b>` or a link would be drawn as one, and a stray `<` could
    blank the notice. On Linux both are given with `&`, `<` and `>` as entities (`asMarkupText`); macOS and Windows are
    given the words as they are. **(lead's call, after review)**
+5. **`standing off` fails closed** (S8; core review C4). It revokes each standing record, and its unused children,
+   first (`endStanding`), then raises the standing epoch; either alone ends every one. What it could not do while
+   ending every one all the same is said in the result's `partial`, a sentence each, and in the audit. If any is still
+   in force once both have been tried — a record that could not be written down, under an epoch that could not be
+   raised — it is refused with the failure's code, naming each in `details.inForce`, so it exits non-zero and nobody
+   is told they have all ended when they have not. **(lead's call, after review)**

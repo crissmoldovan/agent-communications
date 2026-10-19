@@ -1496,6 +1496,13 @@ function renderStandingView(view: StandingView): string {
 
 /** Every standing approval, and how to end one or all of them while any is live. */
 function renderStanding(report: StandingReport, handoffs: CliHandoffs): string {
+  // What `off` could not do, though every one has ended: said first, so it is not missed below the list.
+  const partial = (report.partial ?? []).map((line) => `Note: ${line}`);
+  const body = renderStandingList(report, handoffs);
+  return partial.length === 0 ? body : [...partial, '', body].join('\n');
+}
+
+function renderStandingList(report: StandingReport, handoffs: CliHandoffs): string {
   if (report.approvals.length === 0) return 'No standing approvals.';
   const live = report.approvals.some((view) => view.state !== 'ended');
   const ending = handoffSentenceToFill(handoffs.core(['standing', 'revoke']), ['<id>'], (revoke) =>

@@ -29,8 +29,8 @@ import type { AckOutcome, AckUse } from '../standing-ledger.ts';
  *
  * Reading asks nobody. Every change here only takes away, so each applies at once and asks nobody either: a narrowing
  * keeps fewer contents or places, lowers a limit or ends it sooner, and refuses anything that would allow more; a
- * revoke ends one, its unused children with it; `off` ends every one, by raising the standing epoch every record and
- * every child is bound to. Creating or widening one reads Slack, so it is Slack's (`standing add`), approved only with
+ * revoke ends one, its unused children with it; `off` ends every one, each revoked and then the standing epoch every
+ * record and every child is bound to raised. Creating or widening one reads Slack, so it is Slack's (`standing add`), approved only with
  * the code typed at a terminal.
  */
 
@@ -70,6 +70,12 @@ export interface StandingView {
 
 export interface StandingReport {
   approvals: StandingView[];
+  /**
+   * What `off` could not do, each in a sentence, when it ended every one all the same: a record it could not write down
+   * as ended that the raised epoch ends anyway, or an epoch it could not raise once every record was written down.
+   * Absent when there is nothing to say.
+   */
+  partial?: string[];
 }
 
 /** One change at a time: narrow one, revoke one, or end every one. */
@@ -289,40 +295,89 @@ async function narrow(
 }
 
 /**
- * Ends every standing approval at once (S8): the standing epoch raised first — the one write that ends them all,
- * pending and approved, and every unused child, whatever any record says — and then each still live on disk revoked
- * there too, with its unused children (`endStanding`), so a configuration taken back by hand revives none of them.
+ * Ends every standing approval at once (S8, the lead's call after review): each still live on disk revoked first, with
+ * its unused children (`endStanding`) — the writes that hold whatever the configuration later says — and then the
+ * standing epoch raised, which ends any made meanwhile, and any a revoke could not write down. Either alone ends every
+ * one; what neither could do is returned, in a sentence each. If anything is still in force once both have been tried —
+ * a record that could not be written down, under an epoch that could not be raised — it is refused, naming each, so
+ * nobody is told they have all ended when they have not.
  */
-async function off(core: Core, options: StandingChangeOptions): Promise<void> {
-  const standingEpoch = await raiseStandingEpoch(core);
-  await core.audit.append({
-    inboxId: '',
-    operation: 'standing.off',
-    outcome: 'ok',
-    ...(options.surface === undefined ? {} : { surface: options.surface }),
-    ids: { standingEpoch: String(standingEpoch) },
-    reason: 'every standing approval ended at once',
-  });
+async function off(core: Core, options: StandingChangeOptions): Promise<string[]> {
+  const partial: string[] = [];
+  const unwritten: { id: string; error: CommsError }[] = [];
   for (const stored of await core.approvals.list({ states: ['pending', 'approved'] })) {
     const record = asV2(stored);
     if (record === null || record.kind !== 'standing') continue;
-    await endStanding(core, record.approvalId, 'ended with every standing approval (standing off)').catch(
-      // Ended already, by the epoch: one that could not be written down as well is said in the audit, not refused.
-      (error: unknown) =>
-        core.audit
-          .append({
-            inboxId: record.inboxId,
-            operation: 'standing.end',
-            outcome: 'failed',
-            approvalId: record.approvalId,
-            reason: truncateDisplay(
-              `ended by the standing epoch, but not written down: ${toCommsError(error).message}`,
-              300,
-            ),
-          })
-          .catch(() => undefined),
+    try {
+      await endStanding(core, record.approvalId, 'ended with every standing approval (standing off)');
+    } catch (error) {
+      const failure = toCommsError(error);
+      unwritten.push({ id: record.approvalId, error: failure });
+      await core.audit
+        .append({
+          inboxId: record.inboxId,
+          operation: 'standing.end',
+          outcome: 'failed',
+          approvalId: record.approvalId,
+          reason: truncateDisplay(`not written down as ended: ${failure.message}`, 300),
+        })
+        .catch(() => undefined);
+    }
+  }
+  let epochFailure: CommsError | undefined;
+  try {
+    const standingEpoch = await raiseStandingEpoch(core);
+    await core.audit.append({
+      inboxId: '',
+      operation: 'standing.off',
+      outcome: 'ok',
+      ...(options.surface === undefined ? {} : { surface: options.surface }),
+      ids: { standingEpoch: String(standingEpoch) },
+      reason: 'every standing approval ended at once',
+    });
+  } catch (error) {
+    epochFailure = toCommsError(error);
+    await core.audit
+      .append({
+        inboxId: '',
+        operation: 'standing.off',
+        outcome: 'failed',
+        ...(options.surface === undefined ? {} : { surface: options.surface }),
+        reason: truncateDisplay(`the standing epoch was not raised: ${epochFailure.message}`, 300),
+      })
+      .catch(() => undefined);
+  }
+  // What is in force now, as the records and the configuration read: never what this hoped it did.
+  let live: string[];
+  try {
+    live = (await standingReport(core)).approvals.filter((view) => view.state !== 'ended').map((view) => view.id);
+  } catch {
+    live = epochFailure === undefined ? [] : unwritten.map((entry) => entry.id);
+  }
+  if (live.length > 0) {
+    const cause = epochFailure ?? unwritten[0]?.error;
+    throw new CommsError(
+      cause?.code ?? 'UNEXPECTED',
+      `not every standing approval has ended: ${live.join(', ')} ${live.length === 1 ? 'is' : 'are'} still in force`,
+      {
+        hint: `${epochFailure === undefined ? '' : `The standing epoch could not be raised (${epochFailure.message}). `}${
+          unwritten.length === 0
+            ? ''
+            : `${unwritten.map((entry) => entry.id).join(', ')} could not be written down as ended (${unwritten[0]?.error.message}). `
+        }Run standing off again, or revoke each one; until then an agent may still use them.`,
+        details: { inForce: live },
+      },
     );
   }
+  for (const { id, error } of unwritten) {
+    partial.push(`${id} could not be written down as ended (${error.message}); the raised standing epoch ends it.`);
+  }
+  if (epochFailure !== undefined) {
+    partial.push(
+      `The standing epoch could not be raised (${epochFailure.message}); every standing approval was written down as ended instead.`,
+    );
+  }
+  return partial;
 }
 
 /**
@@ -332,7 +387,8 @@ async function off(core: Core, options: StandingChangeOptions): Promise<void> {
  *  - `narrow`: keep fewer contents (by digest) or exact places, lower a limit, or end it sooner. Anything that would
  *    allow more is USAGE, naming Slack's `standing add --replaces`, which prepares one for a code at a terminal.
  *  - `revoke`: end one at once, and every unused child of it (`endStanding`).
- *  - `off`: end every one at once (`raiseStandingEpoch`).
+ *  - `off`: end every one at once: each revoked, then the standing epoch raised (`raiseStandingEpoch`). What it could not
+ *    do while ending every one all the same is in `partial`; refused if any is still in force.
  */
 export async function standingChange(
   core: Core,
@@ -347,11 +403,13 @@ export async function standingChange(
       hint: 'Ask for one of them; each applies at once. With none, it only reports.',
     });
   }
+  let partial: string[] = [];
   if ('narrow' in request && request.narrow !== undefined) await narrow(core, request.narrow, options);
   // Only a standing approval: a child or another kind is the one NOT_FOUND, as one nobody prepared is.
   else if ('revoke' in request && request.revoke !== undefined) {
     await endStanding(core, request.revoke.id, 'revoked by the person');
-  } else if ('off' in request && request.off === true) await off(core, options);
+  } else if ('off' in request && request.off === true) partial = await off(core, options);
   else throw new CommsError('USAGE', '`off` is true, or left out');
-  return standingReport(core);
+  const report = await standingReport(core);
+  return partial.length === 0 ? report : { ...report, partial };
 }
