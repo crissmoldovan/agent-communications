@@ -207,6 +207,18 @@ export * from './standing.ts';
 export * from './standing-emoji.ts';
 // Preparing one, showing it in full, and approving it only with its code at a terminal; ending one at once.
 export * from './standing-flow.ts';
+// Every use counted once, under the account's ledger lock and then the standing record's, and never refunded.
+export * from './standing-ledger.ts';
+/*
+ * The module names a standing act's notification `Notice`, as the plan does; the root already has a `Notice` — the
+ * update notice (`update-gate.ts`) — so here it is `StandingNotice`. `Notifier` takes it either way.
+ */
+export {
+  mintStandingUse,
+  type Notice as StandingNotice,
+  type Notifier,
+  type StandingUseRequest,
+} from './standing-use.ts';
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';

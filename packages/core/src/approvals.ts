@@ -1887,6 +1887,11 @@ export class ApprovalStore {
    * and not ended, or nothing is written. A child never names anything but what its use was checked for.
    */
   async createStandingChild(input: {
+    /**
+     * The id the child is made under, when its use was counted under it first (`mintStandingUse`): an id this store
+     * would make, and one no record holds. A new one when left out.
+     */
+    approvalId?: string | undefined;
     standingId: string;
     standingEpoch: number;
     inboxId: string;
@@ -1906,6 +1911,14 @@ export class ApprovalStore {
     requireEpochs(input.sendEpoch, input.standingEpoch);
     requireKnownChannel('slack');
     const config = await this.#config();
+    if (input.approvalId !== undefined) {
+      // Never over another record: an id given here is a fresh one, and nothing may already be held under it.
+      if (!APPROVAL_ID_PATTERN.test(input.approvalId) || (await this.#read(input.approvalId, config)) !== null) {
+        throw new CommsError('UNEXPECTED', 'a standing use’s child is made under a fresh id, and this is not one', {
+          hint: 'This is a bug — please report it.',
+        });
+      }
+    }
     const found = await this.#read(input.standingId, config);
     if (found === null || !matchesExpectation(found, { kind: 'standing', owner: input.inboxId })) {
       throw approvalNotFound(input.standingId, 'standing');
@@ -1940,7 +1953,7 @@ export class ApprovalStore {
     const lifetime = APPROVAL_LIFETIMES.standingChild;
     const until = new Date(now.getTime() + lifetime).toISOString();
     const sealed = this.#bound({
-      approvalId: newApprovalId(),
+      approvalId: input.approvalId ?? newApprovalId(),
       kind: 'send',
       digestVersion: DIGEST_VERSION,
       channel: 'slack',
