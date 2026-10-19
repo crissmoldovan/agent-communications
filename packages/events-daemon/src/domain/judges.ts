@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { canonicalJson } from '@agentcomms/core';
 import { parsePointer } from '@agentcomms/events';
@@ -176,12 +177,20 @@ function fail(message: string, code: EventDomainError['code'] = 'VERSION_DOCUMEN
   throw new EventDomainError(code, message);
 }
 
+/**
+ * The daemon package's root, where its three reviewed Laya assets ship: two levels above this module in the source
+ * tree (`src/domain/`), one above the bundle that carries it (`dist/`), by the same rule as the worker entry.
+ */
+const SHIPPED_PACKAGE_ROOT: string = import.meta.dirname.endsWith(`${sep}dist`)
+  ? join(import.meta.dirname, '..')
+  : join(import.meta.dirname, '..', '..');
+
 /** The production assets remain blocked until Task 10's owner-only lock gate replaces the placeholder. */
 function shippedLayaAssetSource(): LayaReviewedAssetSource {
   return {
-    manifestBytes: readFileSync(new URL('../../laya-manifest.json', import.meta.url)),
-    runtimeLockBytes: readFileSync(new URL('../../laya-runtime.json', import.meta.url)),
-    disclosuresBytes: readFileSync(new URL('../../laya-enablement-disclosures.json', import.meta.url)),
+    manifestBytes: readFileSync(join(SHIPPED_PACKAGE_ROOT, 'laya-manifest.json')),
+    runtimeLockBytes: readFileSync(join(SHIPPED_PACKAGE_ROOT, 'laya-runtime.json')),
+    disclosuresBytes: readFileSync(join(SHIPPED_PACKAGE_ROOT, 'laya-enablement-disclosures.json')),
   };
 }
 
