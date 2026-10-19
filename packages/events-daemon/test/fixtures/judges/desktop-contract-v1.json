@@ -1,0 +1,285 @@
+{
+  "schemaVersion": "desktop-contract-v1",
+  "about": "The events daemon's half of the desktop app's Laya contract (E2 Task 11, desktop design DA16). `calls` are the words the app's allow-list builds; `statusVectors` are `judge model status` as the real owner answers it through its control peer, each with the Laya entry of `judge kinds list` at that moment. The app's src/test/fixtures/events-judge-model-status.<name>.json are copies of each vector's result.",
+  "calls": [
+    {
+      "call": "eventsJudgeModelStatus",
+      "operation": "judgeModelStatus",
+      "words": ["judge", "model", "status"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "eventsJudgeKindDisable",
+      "operation": "disableJudgeKind",
+      "words": ["judge", "kind", "disable", "laya"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "eventsJudgeKindEnable",
+      "operation": "enableJudgeKind",
+      "words": ["judge", "kind", "enable", "laya"],
+      "json": false,
+      "terminal": true
+    }
+  ],
+  "disable": {
+    "kind": "laya",
+    "disabled": true,
+    "pointer": "removed",
+    "pendingActivationsCancelled": 0
+  },
+  "statusVectors": [
+    {
+      "name": "disabled",
+      "contract": "laya-model-status-v1",
+      "pointer": "disabled",
+      "result": {
+        "state": "idle",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 0,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "approval-pending",
+      "contract": "laya-model-status-v1",
+      "pointer": "disabled",
+      "result": {
+        "state": "idle",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 0,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "installing",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "installing",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 0,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "downloading",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "downloading",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 81,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "verifying",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "verifying",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 154,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "ready",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "ready",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 154,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "disabled-kept",
+      "contract": "laya-model-status-v1",
+      "pointer": "disabled",
+      "result": {
+        "state": "idle",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 154,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "removed",
+      "contract": "laya-model-status-v1",
+      "pointer": "disabled",
+      "result": {
+        "state": "idle",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 0,
+        "totalBytes": 154,
+        "failureCode": null,
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "failed-integrity",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "failed",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 154,
+        "totalBytes": 154,
+        "failureCode": "integrity",
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "failed-download",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "failed",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 87,
+        "totalBytes": 154,
+        "failureCode": "download-failed",
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "failed-runtime",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "failed",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 0,
+        "totalBytes": 154,
+        "failureCode": "runtime-failed",
+        "reason": null,
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "failed-boundary",
+      "contract": "laya-model-status-v1",
+      "pointer": "enabled",
+      "result": {
+        "state": "failed",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+        "bytesVerified": 154,
+        "totalBytes": 154,
+        "failureCode": "boundary-failed",
+        "reason": "LAYA_SANDBOX_UNAVAILABLE",
+        "updatedAt": 1760000000000
+      }
+    },
+    {
+      "name": "unavailable-sandbox",
+      "contract": "laya-model-status-v1",
+      "pointer": "unavailable",
+      "result": {
+        "state": "unavailable",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": null,
+        "bytesVerified": 0,
+        "totalBytes": 75,
+        "failureCode": null,
+        "reason": "LAYA_SANDBOX_UNAVAILABLE",
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "unavailable-linux",
+      "contract": "laya-model-status-v1",
+      "pointer": "unavailable",
+      "result": {
+        "state": "unavailable",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": null,
+        "bytesVerified": 0,
+        "totalBytes": 75,
+        "failureCode": null,
+        "reason": "LAYA_PLATFORM_UNAVAILABLE",
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "unavailable-windows",
+      "contract": "laya-model-status-v1",
+      "pointer": "unavailable",
+      "result": {
+        "state": "unavailable",
+        "manifestId": "laya-en-onnx-tiny-v1",
+        "runtimeLockDigest": null,
+        "bytesVerified": 0,
+        "totalBytes": 75,
+        "failureCode": null,
+        "reason": "LAYA_PLATFORM_UNAVAILABLE",
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "unavailable-placeholder",
+      "contract": "laya-model-status-v1",
+      "pointer": "unavailable",
+      "result": {
+        "state": "unavailable",
+        "manifestId": "laya-en-onnx-68f27dfe",
+        "runtimeLockDigest": null,
+        "bytesVerified": 0,
+        "totalBytes": 1692649436,
+        "failureCode": null,
+        "reason": "E2_EXTERNAL_REFERENCE_BLOCKED",
+        "updatedAt": null
+      }
+    },
+    {
+      "name": "before-e2",
+      "contract": "b3-control-v1",
+      "pointer": "unavailable",
+      "result": {
+        "kind": "unavailable",
+        "code": "E2_REQUIRED",
+        "phase": "E2"
+      }
+    }
+  ]
+}

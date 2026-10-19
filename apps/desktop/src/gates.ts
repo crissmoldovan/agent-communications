@@ -3,8 +3,17 @@
  * to use this" and calls nothing.
  */
 
-/** The first version of each feature. */
-export const GATES = { behaviour: '0.22.0', profiles: '0.22.0', standing: '0.23.0', updateStatus: '0.24.0' } as const;
+/**
+ * The first version of each feature. `layaJudge` is the events service's own version (its `--version`), the first that
+ * ships phase E2's Laya status and disable (`allowlist.rs`, `LAYA_JUDGE_VERSION`); the rest are core's.
+ */
+export const GATES = {
+  behaviour: '0.22.0',
+  profiles: '0.22.0',
+  standing: '0.23.0',
+  updateStatus: '0.24.0',
+  layaJudge: '0.25.0',
+} as const;
 
 export type Feature = keyof typeof GATES;
 

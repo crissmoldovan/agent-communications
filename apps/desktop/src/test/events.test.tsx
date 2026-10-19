@@ -1,7 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import daemonContract from '../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json';
 import { COPY } from '../copy.ts';
-import type { Call, CliResult } from '../ipc.ts';
+import { POLL_MS } from '../data.tsx';
+import type { Call, CliResult, TerminalCommand } from '../ipc.ts';
 import {
   cliKinds,
   createFakeBridge,
@@ -9,6 +11,7 @@ import {
   type FakeBridge,
   type Fixture,
   failed,
+  ok,
 } from './fake-bridge.ts';
 import deliveries from './fixtures/events-deliveries.json';
 import rules from './fixtures/events-rules.json';
@@ -32,12 +35,33 @@ function bridgeWith(
   );
 }
 
-const EVENTS_CALLS: Call['kind'][] = ['eventsStatus', 'eventsPause', 'eventsResume', 'eventsRules', 'eventsDeliveries'];
+/** Tests that render the whole app many times: the slowest CI runner has taken more than Vitest's 5 s for one. */
+const RENDER_LOOP_MS = 30_000;
+
+const EVENTS_CALLS: Call['kind'][] = [
+  'eventsStatus',
+  'eventsPause',
+  'eventsResume',
+  'eventsRules',
+  'eventsDeliveries',
+  'eventsJudgeModelStatus',
+  'eventsJudgeKindDisable',
+];
+
+/** The first events service with phase E2's Laya calls (DA12), and the one before it. */
+const WITH_LAYA = '0.25.0';
+const BEFORE_LAYA = '0.24.0';
+
+/** Every product at 0.24.0, but the events service at `events`. */
+const versions =
+  (events: string) =>
+  (call: Call): string =>
+    call.kind === 'version' && call.product === 'events-daemon' ? events : BEFORE_LAYA;
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
 
 describe('Events', () => {
-  it('Events: absent, loading, error, populated; Pause and Resume run', async () => {
+  it('Events: absent, loading, error, populated; Pause and Resume run', { timeout: RENDER_LOOP_MS }, async () => {
     // Absent: no launcher, so the screen says so and nothing of the events service is asked.
     const absent = createFakeBridge({
       installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core', 'gmail'] }),
@@ -47,12 +71,17 @@ describe('Events', () => {
     expect(cliKinds(absent).filter((kind) => EVENTS_CALLS.includes(kind))).toEqual([]);
     first.unmount();
 
-    // Loading: nothing has come back yet.
+    // Loading: nothing has come back yet, Laya's status included.
     const never = new Promise<CliResult>(() => undefined);
-    const waiting = bridgeWith({ eventsStatus: never, eventsRules: never, eventsDeliveries: never });
+    const waiting = bridgeWith(
+      { eventsStatus: never, eventsRules: never, eventsDeliveries: never, eventsJudgeModelStatus: never },
+      { version: versions(WITH_LAYA) },
+    );
     const second = renderApp(waiting, { screen: 'events' });
     const main = await screen.findByRole('main');
-    expect(await within(main).findAllByRole('status', { name: COPY.loading })).toHaveLength(3);
+    await within(main).findAllByRole('status', { name: COPY.loading });
+    await waitFor(() => expect(cliKinds(waiting)).toContain('eventsJudgeModelStatus'));
+    expect(within(main).getAllByRole('status', { name: COPY.loading })).toHaveLength(4);
     second.unmount();
 
     // An error: each part says what went wrong, as text.
@@ -146,4 +175,369 @@ describe('Events', () => {
     expect(within(deliveryTable).getByText('</untrusted-content>')).toBeTruthy();
     expect(deliveryTable.querySelector('img')).toBeNull();
   });
+});
+
+/*
+ * Laya, the events service's local judge (E2 Task 11, desktop design DA16). Its status comes only from the daemon's
+ * `judge model status`: the app shows the state, byte progress and stable codes as plain text, offers Enable (in the
+ * terminal) for `idle` and Disable (at once) for an enabled kind, and never approves. The fixtures are copies of the
+ * events daemon's frozen vectors (`packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json`).
+ */
+
+/** The app's copies, each as the bundler reads it: `events-judge-model-status.<vector name>.json`. */
+const COPIES: Record<string, unknown> = import.meta.glob('./fixtures/events-judge-model-status.*.json', {
+  eager: true,
+  import: 'default',
+});
+const copyName = (path: string): string => path.slice('./fixtures/events-judge-model-status.'.length, -'.json'.length);
+
+interface StatusVector {
+  name: string;
+  contract: string;
+  pointer: string;
+  result: Record<string, unknown>;
+}
+
+const daemonVectors = (): StatusVector[] => (daemonContract as { statusVectors: StatusVector[] }).statusVectors;
+
+/** The app's copy of one daemon vector's result. */
+function copy(name: string): Record<string, unknown> {
+  const found = COPIES[`./fixtures/events-judge-model-status.${name}.json`];
+  if (found === undefined) throw new Error(`the app has no copy of ${name}`);
+  return structuredClone(found) as Record<string, unknown>;
+}
+
+/** What each vector must show: its state word, its progress line, and its failure and reason codes. */
+const SHOWN: Record<string, { state: string; progress: string | null; failure: string | null; reason: string | null }> =
+  {
+    disabled: { state: 'idle', progress: '0 of 154 bytes', failure: null, reason: null },
+    'approval-pending': { state: 'idle', progress: '0 of 154 bytes', failure: null, reason: null },
+    installing: { state: 'installing', progress: '0 of 154 bytes', failure: null, reason: null },
+    downloading: { state: 'downloading', progress: '81 of 154 bytes', failure: null, reason: null },
+    verifying: { state: 'verifying', progress: '154 of 154 bytes', failure: null, reason: null },
+    ready: { state: 'ready', progress: '154 of 154 bytes', failure: null, reason: null },
+    'disabled-kept': { state: 'idle', progress: '154 of 154 bytes', failure: null, reason: null },
+    removed: { state: 'idle', progress: '0 of 154 bytes', failure: null, reason: null },
+    'failed-integrity': { state: 'failed', progress: '154 of 154 bytes', failure: 'integrity', reason: null },
+    'failed-download': { state: 'failed', progress: '87 of 154 bytes', failure: 'download-failed', reason: null },
+    'failed-runtime': { state: 'failed', progress: '0 of 154 bytes', failure: 'runtime-failed', reason: null },
+    'failed-boundary': {
+      state: 'failed',
+      progress: '154 of 154 bytes',
+      failure: 'boundary-failed',
+      reason: 'LAYA_SANDBOX_UNAVAILABLE',
+    },
+    'unavailable-sandbox': {
+      state: 'unavailable',
+      progress: '0 of 75 bytes',
+      failure: null,
+      reason: 'LAYA_SANDBOX_UNAVAILABLE',
+    },
+    'unavailable-linux': {
+      state: 'unavailable',
+      progress: '0 of 75 bytes',
+      failure: null,
+      reason: 'LAYA_PLATFORM_UNAVAILABLE',
+    },
+    'unavailable-windows': {
+      state: 'unavailable',
+      progress: '0 of 75 bytes',
+      failure: null,
+      reason: 'LAYA_PLATFORM_UNAVAILABLE',
+    },
+    'unavailable-placeholder': {
+      state: 'unavailable',
+      progress: '0 of 1692649436 bytes',
+      failure: null,
+      reason: 'E2_EXTERNAL_REFERENCE_BLOCKED',
+    },
+  };
+
+/** The one button each state allows. */
+const BUTTON: Record<string, 'Enable in Terminal' | 'Disable' | null> = {
+  idle: 'Enable in Terminal',
+  installing: 'Disable',
+  downloading: 'Disable',
+  verifying: 'Disable',
+  ready: 'Disable',
+  failed: 'Disable',
+  unavailable: null,
+};
+
+const LAYA = 'Laya judge';
+
+/** The Events screen with the events service at `version`, Laya's status `status`, and the rest quiet. */
+function layaBridge(
+  status: unknown,
+  options: { version?: string; results?: Partial<Record<Call['kind'], CliResult | Promise<CliResult>>> } = {},
+): FakeBridge {
+  return bridgeWith(options.results ?? {}, {
+    version: versions(options.version ?? WITH_LAYA),
+    eventsRules: [],
+    eventsDeliveries: [],
+    eventsJudgeModelStatus: status,
+  });
+}
+
+async function layaRegion(): Promise<HTMLElement> {
+  return screen.findByRole('region', { name: LAYA });
+}
+
+/** The region once its status has been read and shown. */
+async function shownLaya(): Promise<HTMLElement> {
+  const region = await layaRegion();
+  await waitFor(() => expect(within(region).queryByRole('status', { name: COPY.loading })).toBeNull());
+  return region;
+}
+
+function buttons(region: HTMLElement): string[] {
+  return within(region)
+    .queryAllByRole('button')
+    .map((button) => button.textContent ?? '');
+}
+
+it('E2 desktop Laya contract: the app fixtures are copies of the daemon status vectors', () => {
+  const vectors = daemonVectors();
+  expect(vectors.length).toBeGreaterThan(10);
+  for (const vector of vectors) expect(copy(vector.name), vector.name).toEqual(vector.result);
+  const copies = Object.keys(COPIES).map(copyName).sort();
+  expect(copies).toEqual(vectors.map((vector) => vector.name).sort());
+  // Every vector the screen is checked against below is one of them, and every one of them is checked.
+  expect(Object.keys(SHOWN).sort()).toEqual(
+    vectors
+      .filter((vector) => vector.contract === 'laya-model-status-v1')
+      .map((vector) => vector.name)
+      .sort(),
+  );
+});
+
+it('E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress', {
+  timeout: RENDER_LOOP_MS,
+}, async () => {
+  for (const [name, shown] of Object.entries(SHOWN)) {
+    const view = renderApp(layaBridge(copy(name)), { screen: 'events' });
+    const region = await shownLaya();
+    expect(within(region).getByText(shown.state), name).toBeTruthy();
+    if (shown.progress !== null) expect(within(region).getByText(shown.progress), name).toBeTruthy();
+    // No state, percentage or estimate the daemon did not send.
+    for (const other of Object.keys(BUTTON)) {
+      if (other !== shown.state) expect(within(region).queryByText(other), `${name}: ${other}`).toBeNull();
+    }
+    expect(region.textContent, name).not.toMatch(/%/);
+    view.unmount();
+  }
+});
+
+it('E2 desktop Laya contract: every failure code and reason is shown as plain text', {
+  timeout: RENDER_LOOP_MS,
+}, async () => {
+  for (const [name, shown] of Object.entries(SHOWN)) {
+    const view = renderApp(layaBridge(copy(name)), { screen: 'events' });
+    const region = await shownLaya();
+    if (shown.failure !== null) expect(within(region).getByText(shown.failure), name).toBeTruthy();
+    if (shown.reason !== null) expect(within(region).getByText(shown.reason), name).toBeTruthy();
+    for (const code of ['integrity', 'download-failed', 'runtime-failed', 'boundary-failed']) {
+      if (code !== shown.failure) expect(within(region).queryByText(code), `${name}: ${code}`).toBeNull();
+    }
+    for (const code of ['E2_EXTERNAL_REFERENCE_BLOCKED', 'LAYA_PLATFORM_UNAVAILABLE', 'LAYA_SANDBOX_UNAVAILABLE']) {
+      if (code !== shown.reason) expect(within(region).queryByText(code), `${name}: ${code}`).toBeNull();
+    }
+    // The placeholder lock's reason reads as what it means for a person.
+    expect(
+      within(region).queryByText("Laya isn't offered in this release.") !== null,
+      `${name}: not offered in this release`,
+    ).toBe(shown.reason === 'E2_EXTERNAL_REFERENCE_BLOCKED');
+    view.unmount();
+  }
+});
+
+it('E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind', {
+  timeout: RENDER_LOOP_MS,
+}, async () => {
+  for (const [name, shown] of Object.entries(SHOWN)) {
+    const view = renderApp(layaBridge(copy(name)), { screen: 'events' });
+    const region = await shownLaya();
+    const button = BUTTON[shown.state];
+    expect(buttons(region), name).toEqual(button === null || button === undefined ? [] : [button]);
+    view.unmount();
+  }
+});
+
+it('E2 desktop Laya contract: an unknown state, field or code is refused, not guessed at', {
+  timeout: RENDER_LOOP_MS,
+}, async () => {
+  const ready = copy('ready');
+  for (const [name, value] of [
+    ['a path', { ...ready, modelPath: '/example/home/.local/share/agent-communications/events/laya' }],
+    ['an unknown field', { ...ready, progress: 0.5 }],
+    ['a missing field', Object.fromEntries(Object.entries(ready).filter(([key]) => key !== 'updatedAt'))],
+    ['an unknown state', { ...ready, state: 'paused' }],
+    ['an unknown failure code', { ...ready, state: 'failed', failureCode: 'disk-full' }],
+    ['an unknown reason', { ...ready, state: 'unavailable', reason: 'LAYA_GPU_UNAVAILABLE' }],
+    ['a failure without its code', { ...ready, state: 'failed' }],
+    ['an unavailable status without its reason', { ...ready, state: 'unavailable' }],
+    ['a working state with a reason', { ...ready, reason: 'LAYA_SANDBOX_UNAVAILABLE' }],
+    [
+      'a reason on an integrity failure',
+      { ...ready, state: 'failed', failureCode: 'integrity', reason: 'LAYA_PLATFORM_UNAVAILABLE' },
+    ],
+    ['bytes as text', { ...ready, bytesVerified: '154' }],
+    ['negative bytes', { ...ready, bytesVerified: -1 }],
+    ['a list', [ready]],
+    ['nothing', null],
+  ] as const) {
+    const view = renderApp(layaBridge(value), { screen: 'events' });
+    const region = await shownLaya();
+    expect(within(region).getByText("Laya's status could not be read."), name).toBeTruthy();
+    expect(buttons(region), name).toEqual([]);
+    expect(region.textContent, name).not.toMatch(/\/example\//);
+    view.unmount();
+  }
+});
+
+it('E2 desktop Laya contract: Enable opens the terminal with the terminal-only shape and approves nothing', async () => {
+  const bridge = layaBridge(copy('disabled'));
+  renderApp(bridge, { screen: 'events' });
+  const region = await shownLaya();
+  fireEvent.click(within(region).getByRole('button', { name: 'Enable in Terminal' }));
+  expect(await within(region).findByText('Opened in Terminal.')).toBeTruthy();
+  const opened = bridge.calls.filter((call) => call.command === 'openInTerminal').map((call) => call.args);
+  expect(opened).toEqual([{ kind: 'eventsJudgeKindEnable' } satisfies TerminalCommand]);
+  // The app prepared nothing, revoked nothing and ran no change: the enablement and its approval are the terminal's.
+  expect(cliKinds(bridge)).not.toContain('eventsJudgeKindDisable');
+  expect(cliKinds(bridge)).not.toContain('approvalRevoke');
+  expect(bridge.calls.filter((call) => call.command === 'revokePreview')).toEqual([]);
+  // Coming back to the window reads the status again.
+  const before = cliKinds(bridge).filter((kind) => kind === 'eventsJudgeModelStatus').length;
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  await waitFor(() =>
+    expect(cliKinds(bridge).filter((kind) => kind === 'eventsJudgeModelStatus').length).toBeGreaterThan(before),
+  );
+});
+
+it('E2 desktop Laya contract: Disable applies at once and the status is read again', async () => {
+  let state = copy('ready');
+  const bridge = bridgeWith(
+    {},
+    {
+      version: versions(WITH_LAYA),
+      eventsRules: [],
+      eventsDeliveries: [],
+      eventsJudgeModelStatus: () => state,
+      eventsJudgeKindDisable: () => {
+        state = copy('disabled-kept');
+        return { kind: 'laya', disabled: true, pointer: 'removed', pendingActivationsCancelled: 0 };
+      },
+    },
+  );
+  const first = renderApp(bridge, { screen: 'events' });
+  const region = await shownLaya();
+  expect(within(region).getByText('ready')).toBeTruthy();
+  fireEvent.click(within(region).getByRole('button', { name: 'Disable' }));
+  expect(await within(region).findByText('idle')).toBeTruthy();
+  expect(await within(region).findByRole('button', { name: 'Enable in Terminal' })).toBeTruthy();
+  const disabled = bridge.calls.filter(
+    (call) => call.command === 'cli' && (call.args as Call).kind === 'eventsJudgeKindDisable',
+  );
+  expect(disabled.map((call) => call.args)).toEqual([{ kind: 'eventsJudgeKindDisable' }]);
+  expect(bridge.calls.filter((call) => call.command === 'openInTerminal')).toEqual([]);
+  first.unmount();
+  // A disable the daemon refused says why, as text, and keeps the button.
+  const refusing = layaBridge(copy('ready'), {
+    results: { eventsJudgeKindDisable: failed('CLI_FAILED', 'the local event service is not running') },
+  });
+  renderApp(refusing, { screen: 'events' });
+  const second = await shownLaya();
+  fireEvent.click(within(second).getByRole('button', { name: 'Disable' }));
+  expect(await within(second).findByText('the local event service is not running')).toBeTruthy();
+  expect(within(second).getByRole('button', { name: 'Disable' })).toBeTruthy();
+});
+
+it('E2 desktop Laya contract: an events service older than E2 asks for an update and calls nothing', async () => {
+  const older = layaBridge(copy('ready'), { version: BEFORE_LAYA });
+  const first = renderApp(older, { screen: 'events' });
+  const region = await layaRegion();
+  expect(await within(region).findByText(COPY.updateToUse)).toBeTruthy();
+  expect(within(region).getByText(`Needs ${WITH_LAYA} or later; this machine has ${BEFORE_LAYA}.`)).toBeTruthy();
+  expect(buttons(region)).toEqual([]);
+  expect(cliKinds(older)).not.toContain('eventsJudgeModelStatus');
+  expect(older.calls.some((call) => call.command === 'cli' && (call.args as Call).kind === 'version')).toBe(true);
+  first.unmount();
+  // A pre-release of E2's own version has it; and a daemon that still answers B3's E2_REQUIRED placeholder is one
+  // from before E2 whatever it says its version is: it asks for an update too, with no button.
+  const placeholder = layaBridge(copy('before-e2'), { version: `${WITH_LAYA}-feat-e2` });
+  renderApp(placeholder, { screen: 'events' });
+  const shown = await shownLaya();
+  expect(within(shown).getByText(COPY.updateToUse)).toBeTruthy();
+  expect(buttons(shown)).toEqual([]);
+  expect(cliKinds(placeholder)).toContain('eventsJudgeModelStatus');
+});
+
+it('E2 desktop Laya contract: a download in progress follows the screen poll, and only the latest-started read is kept', async () => {
+  vi.useFakeTimers();
+  try {
+    let answers: ((result: CliResult) => void)[] = [];
+    const bridge = createFakeBridge(
+      {
+        cli: (call) => {
+          if (call.kind === 'version')
+            return Promise.resolve({ status: 'version', version: versions(WITH_LAYA)(call) });
+          if (call.kind === 'eventsJudgeModelStatus') {
+            return new Promise<CliResult>((resolve) => {
+              answers.push(resolve);
+            });
+          }
+          return inner.cli(call);
+        },
+      },
+      {},
+    );
+    const inner = createFakeBridge({}, { eventsRules: [], eventsDeliveries: [] });
+    renderApp(bridge, { screen: 'events' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const reads = () => cliKinds(bridge).filter((kind) => kind === 'eventsJudgeModelStatus').length;
+    expect(reads()).toBe(1);
+    await act(async () => {
+      answers.shift()?.(ok(copy('downloading')));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const region = screen.getByRole('region', { name: LAYA });
+    expect(within(region).getByText('81 of 154 bytes')).toBeTruthy();
+    // The screen's next poll reads it again, while the download goes on.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(reads()).toBe(2);
+    const slow = answers.shift();
+    // A later read, started on focus, answers first; the slow poll's answer, when it comes, is not put back.
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads()).toBeGreaterThanOrEqual(3);
+    await act(async () => {
+      for (const answer of answers.splice(0)) answer(ok(copy('ready')));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(within(region).getByText('ready')).toBeTruthy();
+    await act(async () => {
+      slow?.(ok(copy('downloading')));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(within(region).getByText('ready')).toBeTruthy();
+    expect(within(region).queryByText('downloading')).toBeNull();
+    // Ready is not in progress: the next polls do not read it again.
+    const settled = reads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+    });
+    expect(reads()).toBe(settled);
+    answers = [];
+  } finally {
+    vi.useRealTimers();
+  }
 });

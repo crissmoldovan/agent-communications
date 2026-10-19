@@ -1,0 +1,10 @@
+{
+  "state": "failed",
+  "manifestId": "laya-en-onnx-tiny-v1",
+  "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+  "bytesVerified": 87,
+  "totalBytes": 154,
+  "failureCode": "download-failed",
+  "reason": null,
+  "updatedAt": 1760000000000
+}

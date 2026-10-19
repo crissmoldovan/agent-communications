@@ -58,7 +58,9 @@ export type Call =
   | { kind: 'eventsPause' }
   | { kind: 'eventsResume' }
   | { kind: 'eventsRules' }
-  | { kind: 'eventsDeliveries' };
+  | { kind: 'eventsDeliveries' }
+  | { kind: 'eventsJudgeModelStatus' }
+  | { kind: 'eventsJudgeKindDisable' };
 
 /** What one CLI call came to (`runner::parse_output`). */
 export type CliResult =
@@ -95,7 +97,9 @@ export interface AppError {
 export type TerminalCommand =
   | { kind: 'approve'; product: Product; approvalId: string }
   | { kind: 'change'; call: Call; revoke: string }
-  | { kind: 'signIn'; product: Product; account: string; again: boolean };
+  | { kind: 'signIn'; product: Product; account: string; again: boolean }
+  /** Laya's enablement, in the terminal only: its preview and approval happen there, never in the app (E2 Task 11). */
+  | { kind: 'eventsJudgeKindEnable' };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 
