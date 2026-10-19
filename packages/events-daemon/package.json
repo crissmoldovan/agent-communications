@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events-daemon",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "The local event service for agent-communications: rules you approve deliver Gmail, Slack, Resend and WhatsApp events to a signed webhook, a local live stream or a dry-run log.",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "agent-communications",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "private": true,
   "description": "Agent Skills, CLIs and MCP servers that let coding agents work with Gmail and Slack safely, across many mailboxes and workspaces.",
   "type": "module",
@@ -15,9 +15,9 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
-    "build": "pnpm -r --filter \"./packages/**\" run build",
-    "typecheck": "pnpm -r --filter \"./packages/**\" run typecheck",
-    "test": "node --import ./test/helpers/loopback-seal-preload.mjs --test \"test/**/*.test.mjs\" && pnpm -r --filter \"./packages/**\" run test",
+    "build": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run build",
+    "typecheck": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run typecheck",
+    "test": "node --import ./test/helpers/loopback-seal-preload.mjs --test \"test/**/*.test.mjs\" && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run test",
     "lint": "biome ci .",
     "format": "biome format --write .",
     "verify:skills": "node scripts/sync-skills.mjs --check && node scripts/verify-skills.mjs",

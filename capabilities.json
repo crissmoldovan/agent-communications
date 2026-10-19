@@ -542,6 +542,17 @@
       "reason": "One background run, as the per-user job starts it once a day with no terminal and no agent: a verified release past its hold, installed, checked and switched to; --dry-run only says what it would do. It is the job's entry, not a tool: an agent in a conversation updates with comms_update, whose preview a person approves, and this run exists so that no conversation waits for an update (design 2026-10-16 U4, U5)."
     },
     {
+      "id": "core.update.status",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateStatus",
+      "argv": ["--status"],
+      "args": { "status": true },
+      "reason": "Where updates stand here, read from local files, asking npm nothing (desktop design DA13)."
+    },
+    {
       "id": "core.approve",
       "package": "core",
       "cli": "approve",

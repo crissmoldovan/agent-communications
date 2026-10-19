@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { rmSync, symlinkSync } from 'node:fs';
+import { realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { chmod, type FileHandle, mkdir, readdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { asV2, CommsError, openCore } from '@agentcomms/core';
@@ -843,10 +844,37 @@ function hostileMessage(id: string, at: string): FakeMessage {
  * The ids this package makes up are cut out too: a choice id is twenty-six random letters and digits, and one in six
  * thousand or so holds `PWN` — which read as a leak of the sender's words, and failed a run now and then. An id is cut
  * wherever no letter or digit runs on into it: a file name joins one with an underscore, which a word boundary misses.
+ *
+ * So is the folder this test made: `mkdtemp` draws six random letters too, and `agent-gmail-home-pwnrMJ` failed a
+ * release run that leaked nothing. The system's temporary folder (as `tmpdir()` names it, and as it really is) and the
+ * one folder this test made under it are cut out; everything below that — a file a sender named — is still read.
  */
+const TEMP_FOLDER = new RegExp(
+  [...new Set([tmpdir(), realpathSync.native(tmpdir())])]
+    .map((root) =>
+      root
+        .replace(/[\\/]+$/, '')
+        .split(/[\\/]/)
+        .map(escapeRegExp)
+        .join('[\\\\/]'),
+    )
+    .map((root) => `(?:${root})[\\\\/][^\\\\/]+`)
+    .join('|'),
+  'g',
+);
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function outsideEnvelopes(value: unknown): string[] {
   if (typeof value === 'string')
-    return [value.replace(ENVELOPE, '[wrapped]').replace(/(?<![0-9A-Za-z])ap_[0-9A-Z]{26}(?![0-9A-Za-z])/g, '[id]')];
+    return [
+      value
+        .replace(ENVELOPE, '[wrapped]')
+        .replace(TEMP_FOLDER, '[temp]')
+        .replace(/(?<![0-9A-Za-z])ap_[0-9A-Z]{26}(?![0-9A-Za-z])/g, '[id]'),
+    ];
   if (Array.isArray(value)) return value.flatMap(outsideEnvelopes);
   if (value !== null && typeof value === 'object') return Object.values(value).flatMap(outsideEnvelopes);
   return [];
@@ -870,6 +898,18 @@ test('an id this package made up is never read as a sender’s words, whatever l
   const manifestPath = '/state/downloads/2026-10-14T04-06-38-690Z_ap_SZBXPWN2D1THAWNYHZK0SFEH8Z.json';
   assert.doesNotThrow(() => assertSealed({ manifestPath }, 'a manifest named for its id'));
   assert.throws(() => assertSealed({ manifestPath: `${manifestPath}-pwn` }, 'a leak beside an id in a file name'));
+});
+
+test('a temporary folder this test made is never read as a sender’s words, whatever letters it happened to draw', () => {
+  // `mkdtemp` once drew `pwnrMJ` for the home of a release run (agent-gmail-home-pwnrMJ), which leaked nothing.
+  const drawn = join(tmpdir(), 'agent-gmail-cwd-xPwNq1');
+  assert.doesNotThrow(() => assertSealed({ cwd: drawn, saved: join(drawn, 'invoice.pdf') }, 'a folder of the test'));
+  assert.doesNotThrow(() =>
+    assertSealed({ cwd: join(realpathSync.native(tmpdir()), 'agent-gmail-cwd-xPwNq1') }, 'real'),
+  );
+  // A file a sender named, below the folder, is still caught.
+  assert.throws(() => assertSealed({ saved: join(tmpdir(), 'agent-gmail-cwd-x1', 'pwn copy.pdf') }, 'a sender’s name'));
+  assert.throws(() => assertSealed({ cwd: drawn, note: 'pwn' }, 'a leak beside the folder'));
 });
 
 /**

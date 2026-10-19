@@ -2,7 +2,7 @@
 name: comms-update
 description: "Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings."
 license: MIT
-compatibility: "@agentcomms/core@0.23.0"
+compatibility: "@agentcomms/core@0.24.0"
 metadata:
   group: communications
   lifecycle: release
@@ -66,7 +66,8 @@ A level that updates less is a change the person approves: show the preview, whi
 wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and
 `comms_approval_wait` to learn when they have), then call again with the `approvalId`. Moving back to one that updates
 more applies at once. Never choose a level or a pause for them. `comms_doctor` shows it on one line: the level, when it
-last checked, the latest release, the one running, and a pause with when it ends.
+last checked, the latest release, the one running, and a pause with when it ends. `comms_update` with `status: true`
+returns the same as fields, with what decided the level and where the background job stands, and asks npm nothing.
 
 ## Before anything: a core that can update
 
@@ -159,6 +160,7 @@ messages, in this order, skipping any that does not apply:
 | Step | Command |
 |---|---|
 | What is behind | `agentcomms update --check` |
+| Where updates stand | `agentcomms update --status` |
 | Update | `agentcomms update` — at a terminal it shows the plan and asks `yes`; anywhere else it exits `10` with the preview and an approval id, then `agentcomms update --approval <id>` |
 | Clear out old versions | `agentcomms mcp prune` — every managed server's, listed by server; `--server <name>` for one |
 | Not now | `agentcomms update --pause [1\|7\|14]` — no approval; `agentcomms update --resume` ends it |

@@ -114,7 +114,9 @@ verifies, three days after it is out — `comms_update` with `backgroundJob: "on
 `agentcomms update --background-job on`; it takes effect when each client restarts. Choose `every-14-days` or `never`
 with `agentcomms update --level`, pause the notices for 1, 7 or 14 days with `--pause`, or update by hand with
 `comms_update`. A server this machine does not register itself — the Claude Code plugin's, the Gemini extension's —
-is updated where it was installed. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
+is updated where it was installed. `agentcomms update --status` (`comms_update` with `status: true`) says where it all
+stands — the level, a pause, the last check, the latest and running releases, the background job — asking npm nothing.
+`CI`, `AGENT_COMMS_UPDATE_CHECK=off` and `AGENT_COMMS_UPDATES=never` skip it all.
 [Upgrading](docs/upgrading.md#the-daily-check) has the details.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
@@ -144,6 +146,49 @@ running itself — the one npx just fetched to run it — and says, in its previ
 verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the
 client fetches the package from npm each time it starts it, unverified, where the managed launcher's runtime was
 verified. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
+
+### The desktop app
+
+**Agent Comms is a tray app that shows what agent-communications is doing on this machine — and it never sends,
+posts or approves anything.** It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
+policies, label style and what agents may do there; the approvals waiting for you; the agent label, the behaviour
+rules and the standing approvals; updates; the local events service; and every doctor check, with its fix to copy.
+The tray shows how many approvals wait, and closing the window hides it there.
+
+- **What it changes itself:** only what takes something away, which applies at once from the CLI too — revoking an
+  approval, a rule that narrows what agents may do, ending a standing approval, pausing update notices.
+- **What it sends to Terminal:** everything that needs your approval. The app shows the full preview, and **Approve
+  in Terminal** opens your terminal with the command, through this installation's own launcher; you approve it there
+  with its code, as you would have anyway. Signing in to a mailbox or a workspace runs in Terminal too, so the app
+  never handles a token. On a Mac, the first time, macOS asks whether Agent Comms may control Terminal.
+- **What a sender wrote** shows as plain text in a block marked *From outside*, never as HTML or Markdown.
+
+**It needs agent-communications installed for your user** — the core server, above. Without it the app shows the
+install command and stops there; it installs nothing itself. What it offers follows the version you have: behaviour
+rules and writing profiles need 0.22.0 or later, standing approvals 0.23.0, and the update status 0.24.0, and a
+section that needs a newer release says so. If you keep its folders elsewhere with `AGENT_COMMS_CONFIG_DIR`,
+`AGENT_COMMS_STATE_DIR` or `AGENT_COMMS_DATA_DIR`, set the same folders in its Settings: an app started from the Dock
+or the Start menu does not see your shell's variables. They must be on this machine's own disks, never a network
+share, and Settings show the launcher every call starts: the app runs it only when it is yours and nobody else may
+change it, as the install leaves it.
+
+**Install it from a GitHub release.** Desktop releases are tagged `desktop-vX.Y.Z`, beside the `vX.Y.Z` release they
+ship with, on [the Releases page](https://github.com/crissmoldovan/agent-communications/releases). A desktop release is
+never marked Latest — that is always the CLI's — so look for the newest `desktop-v` one.
+
+- **macOS:** the `.dmg`. Open it and drag Agent Comms to Applications. The macOS build is signed with a Developer ID
+  and notarised only when the owner builds and publishes the release on their Mac. When that release carries the
+  updater, its copy looks for later signed releases itself, once a day and from Check for Updates… in the tray, and
+  installs one when you choose Install and restart in Settings, after checking its signature. A release published
+  before the updater key was set up says so, and its copy's Settings say its updater is off: install a newer release
+  over it.
+- **Windows:** the `.exe`, which installs for your user alone. It is unsigned, so SmartScreen warns before it runs.
+- **Linux:** the `.AppImage` (make it executable, then run it) or the `.deb` (`sudo apt install ./` followed by its
+  file name). Both are unsigned. The tray needs `libayatana-appindicator3-1`, which the `.deb` installs.
+
+The Windows and Linux files are built by CI and attached to the same release. A copy built without the owner's
+updater key, as these are, has its updater off and says so in Settings: install a newer release over it. Start at
+login is off until you switch it on there.
 
 ### Or package by package
 

@@ -49,6 +49,7 @@ import { type UpdateDeps, updateChange, updateCheck } from '../operations/update
 import { updateJobChange } from '../operations/update-job.ts';
 import { updateRollbackChange } from '../operations/update-rollback.ts';
 import { updateLevelChange, updatePause, updateResume } from '../operations/update-settings.ts';
+import { updateStatus } from '../operations/update-status.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { checkForUpdates } from '../update-check.ts';
@@ -135,7 +136,7 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
-    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check`.',
+    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check` or `status`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
@@ -220,6 +221,12 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       running: VERSION,
       // Each says what is behind in its own words already.
       exempt: ['comms_update', 'comms_doctor', 'comms_paths'],
+      // `status: true` reads where updates stand and promises to ask npm nothing (desktop design DA13).
+      quiet: (tool, args) =>
+        tool === 'comms_update' &&
+        typeof args === 'object' &&
+        args !== null &&
+        (args as { status?: unknown }).status === true,
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),
@@ -972,9 +979,15 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_update',
     {
       title: 'Update to the latest release',
-      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, moves, unreadable }\`, \`moves\` being the registrations the next update moves onto the stable launcher — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. \`rollback: true\` switches every stable launcher back to the release before, also a change the person approves.`,
+      description: `Bring this machine to the latest published release. \`check: true\` reads the npm registry and this machine and returns what is behind — \`{ latest, behind, upToDate, unpinned, moves, unreadable }\`, \`moves\` being the registrations the next update moves onto the stable launcher — asking nobody. \`status: true\` reads only this machine's files and returns where updates stand — \`{ level, set, by, cap, pausedUntil, lastChecked, latest, running, security, lastError, job }\`, \`job\` being the background job's \`{ state, where, installedAt, lastRun, working }\` — asking npm nothing. Without either, a change: the first call returns a preview listing every step and an approvalId — each client registration of ${listed(['core', ...CHANNEL_LABELS_LISTED], 'or')} registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. A registration that starts a stable launcher is not registered again: its launcher is switched to the new release, and no client configuration is edited. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune. \`rollback: true\` switches every stable launcher back to the release before, also a change the person approves.`,
       inputSchema: {
         check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
+        status: z
+          .literal(true)
+          .optional()
+          .describe(
+            'only say where updates stand here — the level and what decided it, any pause, the last check, the latest and running versions, a security fix waiting, and the background job — read from local files, asking npm nothing',
+          ),
         noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
         level: z
           .enum(UPDATE_LEVELS)
@@ -1014,15 +1027,26 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         args.rollback === true,
         args.backgroundJob !== undefined,
       ];
-      const modes = [args.check === true, ...settings];
+      const modes = [args.check === true, args.status === true, ...settings];
       if (modes.filter(Boolean).length > 1 || (args.noVerify !== undefined && settings.some(Boolean))) {
         return fail(
           new CommsError(
             'USAGE',
-            '`check`, `level`, `pause`, `resume`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
+            '`check`, `status`, `level`, `pause`, `resume`, `rollback` and `backgroundJob` are one at a time, and `noVerify` is for the update',
             { hint: 'Call comms_update with one of them — or none, to update.' },
           ),
         );
+      }
+      if (args.status === true) {
+        return read(() => {
+          // A read from local files: no change, so nothing for an approval to be for (desktop design DA13).
+          if (args.approvalId !== undefined) {
+            throw new CommsError('USAGE', '`status` only reads, so it takes no approvalId', {
+              hint: 'Call comms_update with `status` alone.',
+            });
+          }
+          return updateStatus(core, env, { platform, job: options.updateJob, now: updateDeps.now });
+        });
       }
       if (args.rollback === true) {
         return change(() => updateRollbackChange(core), args.approvalId);

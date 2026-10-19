@@ -3,6 +3,101 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.24.0
+
+**There is a desktop app: Agent Comms, a tray app that shows what your agents are doing and waiting for, and lets you
+take things away, but never sends or approves anything itself.** The owner asked for a desktop app on the CUE++
+design system, built the way Supbuddy and QuotaMate are. It shows:
+- your accounts and what agents may do on each;
+- the approvals waiting for you;
+- the agent label, the behaviour rules and the standing approvals;
+- updates, the events service, and the doctor.
+
+What only tightens, it applies at once: revoking an approval, ending standing approvals, narrowing a rule, pausing
+update notices. Anything else it opens in your terminal, with the exact command, for you to confirm there. It drives
+the agentcomms you already have installed, through its stable launchers, and bundles nothing.
+
+Nothing changes for the CLIs and MCP servers when you update. Two core changes come with the app:
+- `agentcomms update --status` (and `comms_update` with `status: true`) says where updates stand without asking npm;
+- `doctor --json` prints one result when a check fails, as the channels' doctors already do.
+
+**The app's installers are on the `desktop-v0.24.0` GitHub release:**
+- **Windows and Linux** builds come from CI, unsigned.
+- **macOS** builds are signed and notarised by the owner's release from their Mac, and appear when the owner publishes
+  that release.
+- **The app's own updater** stays off until a release ships its signing key; Settings says so.
+
+**Agent Comms, a desktop app, shows what agent-communications is doing on this machine — and never sends, posts or
+approves anything.** It is a tray app for macOS, Windows and Linux, in `apps/desktop`, and it drives what you already
+installed: nothing about the packages on npm changes. It shows:
+
+- **Overview:** the version, where updates stand, each doctor's result, how many approvals wait, the standing
+  approvals that are active, and the events service;
+- **Accounts:** each mailbox, workspace, Resend account and WhatsApp, with its policies, label style, what agents may
+  do there, and its writing profile, which opens in your editor;
+- **Approvals:** each one waiting, with Revoke and Approve in Terminal;
+- **Agent:** the label, the behaviour rules — a rule that narrows applies at once, one that widens goes to Terminal —
+  and the standing approvals, each of which you can end;
+- **Updates, Events and Doctor:** the level, a pause and the background job; the events service's status, rules and
+  deliveries; and every check, with its fix to copy. Gmail's doctor runs only when you ask, because it calls Google.
+
+What only takes something away it applies itself, as the CLI would at once. Everything that needs your approval goes
+to Terminal: the app shows the full preview, revokes the approval it prepared to get it, and opens your terminal with
+the change itself, built from a fixed list of commands, never from the CLI's output; you approve it there with its
+code. An approval an agent prepared opens as that channel's `approve`. Sign-ins run in Terminal too, so the app never
+handles a token. What a sender wrote shows as plain text in a block marked *From outside*.
+
+It runs this installation's own launchers, with no shell, every argument checked against the product's grammar, and
+all the folder pins on every call, so it and the CLI always agree on the folders; Settings takes the folders
+`AGENT_COMMS_*` would set, for an app started from the Dock or the Start menu. A launcher runs only from this machine's
+own disks — Settings refuse a network share for any folder — and, on macOS and Linux, only when it and its folder are
+yours and nobody else may change them, as the install leaves them; Settings show which launcher every call starts, and
+why the app would not run it. What it starts gets only the environment it needs: never an agent's markers, `CI`,
+`NODE_OPTIONS`, a loader variable or another `AGENT_COMMS_*` folder. A preview left without Approve or Cancel — the
+screen changed, or the next change replaced it — has its approval revoked as it goes, so the tray never counts it;
+Cancel says it cancelled only once the revoke worked. Open link takes only the three pages doctor fixes name
+(`api.slack.com`, `myaccount.google.com`, `console.cloud.google.com`), and never Google's `/url` redirect. With nothing installed it shows the
+install command, and installs nothing. A section that needs a newer release than yours says so: behaviour rules and
+profiles need 0.22.0, standing approvals 0.23.0, and the update status this release.
+
+It is released on its own tag, `desktop-vX.Y.Z`, on the commit of the release it ships with, and never as Latest.
+macOS gets a DMG signed with a Developer ID and notarised, built on the owner's Mac, that installs a later signed
+release when you choose to, after checking its signature — once a release carries the updater: one published before
+the updater key is set up says, in its release and in Settings, that its updater is off, and that copy is replaced by
+hand. Windows and Linux get an unsigned `.exe`, `.AppImage` and `.deb` from CI, whose updater is off. [The desktop app](README.md#the-desktop-app) says how to install it, and
+[Releasing](docs/RELEASING.md#the-desktop-app) how the owner releases it.
+
+**`agentcomms update --status` says where updates stand on this machine, and asks npm nothing.** Until now the level,
+a pause, the last check and the background job were each in a different place: `doctor` gave one line, `update --check`
+asked the registry, and the job had no read of its own. `update --status`, and `comms_update` with `status: true`, read
+this machine's own files and say all of it at once:
+
+- the level in force, the level set, and what decided it — the setting with any organisation's cap, or `CI`,
+  `AGENT_COMMS_UPDATE_CHECK=off` or `AGENT_COMMS_UPDATES=never` in the command's own environment;
+- a pause and when it ends, when npm was last asked, the latest release it named, and why it got no answer when it got
+  none;
+- the release running, and a security fix waiting;
+- the background job: where it is, when it was set up, when it last ran and whether it works.
+
+It runs no check, however due, and prints no notice — and over MCP, `status: true` does not start the server's own
+background check either, so the app's poll every 15 seconds never reaches npm. On Windows the scheduler is asked about
+the job only when this installation recorded one, as `doctor` asks it. A job whose files or record cannot be read is
+`unreadable`, with a `reason`, and the rest is read all the same. `--status` takes no `--approval` and no
+`--no-verify`: it only reads. With `--json` the fields are `level`, `set`, `by`, `cap`, `pausedUntil`, `lastChecked`,
+`latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known of it;
+[Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
+
+**`agentcomms doctor --json` prints one envelope when a check fails, as Gmail's and Slack's doctors do.** It printed
+the report and then an error envelope after it — two documents on stdout, where `--json` promises one — so a script
+that read the last line lost the report. Now the report is the one envelope, `ok`, with `data.ok` false and each
+failing check in `data.checks`, and the exit status is still `78`. A script that read the error envelope's `CONFIG`
+should read `data.ok` instead. At a terminal nothing changes: the report, then `doctor found problems`. `comms_doctor`
+already returned the report alone.
+
+**A command printed for a POSIX shell quotes a word that starts with `=`.** zsh, the macOS default, reads a bare
+`=ls` as the path of `ls`, so such a word reached the program as something else. It is now in single quotes, as a word
+that starts with `~` already was; an `=` further in, as in `--name=x`, is left as it is.
+
 ## 0.23.0
 
 **An agent can acknowledge a Slack message without asking you, in your words, where and as often as you allowed —

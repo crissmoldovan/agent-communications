@@ -175,7 +175,9 @@ jobs:
           echo "::error::This repository is private, so npm will reject the provenance attestation." >&2
           exit 1
 
-      - run: pnpm build
+      # The packages alone: this job holds the publish's OIDC identity, and the desktop app, which is never published,
+      # is not built where it could reach it.
+      - run: pnpm -r --filter "./packages/**" run build
       - run: pnpm verify:packages
 
       # **The tag must still name the commit this run started from.** A run builds the commit its tag named when it

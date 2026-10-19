@@ -1,0 +1,20 @@
+[
+  {
+    "alias": "example/gmail",
+    "id": "in_01EXAMPLE0000000000000000",
+    "email": "jo@example.com",
+    "tier": "send",
+    "capabilities": ["read", "send"],
+    "contacts": false,
+    "sendPolicy": "confirm",
+    "sendPolicyInherited": false,
+    "changePolicy": "chat",
+    "changePolicyInherited": true,
+    "client": "example",
+    "organisation": "example",
+    "identity": "oidc",
+    "createdAt": "2026-10-01T09:00:00.000Z",
+    "lastRefreshOkAt": "2026-10-19T08:00:00.000Z",
+    "health": "ok"
+  }
+]

@@ -29,6 +29,7 @@ npx @agentcomms/core channels      # which servers exist, which are installed, a
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
+npx @agentcomms/core update --status  # where updates stand here: level, pause, last check, versions, background job; asks npm nothing
 npx @agentcomms/core update --pause 7  # hold update notices for 1, 7 or 14 days (no approval); --resume ends it
 npx @agentcomms/core update --level every-14-days  # auto, every-14-days or never; updating less is approved first
 ```
@@ -42,7 +43,9 @@ cannot be reached changes nothing. The check is skipped when `CI` is set, `AGENT
 `AGENT_COMMS_UPDATES=never`; `doctor` shows it on one line.
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
-`{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`.
+`{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`. `doctor --json` prints its report as that
+one `ok` envelope even when a check fails, as the channels' doctors do: read `data.ok`, which is false then, and the
+exit status, `78`.
 
 A command that loosens something or cannot be undone — `policy chat`, `attach roots add`, `attach deny remove`,
 `label word`, `label name`, `label icon`, `label rule add --as me`, `label rule remove --as agent`,

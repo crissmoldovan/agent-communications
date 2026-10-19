@@ -112,7 +112,7 @@ export function strictToolArguments(
         const parsed = await schema.safeParseAsync(input ?? {});
         if (!parsed.success) return refuse(refusal(name, published, input, parsed.error.issues, retired[name] ?? {}));
         const result = await (declared ? handler(parsed.data, context) : handler(context));
-        const line = notice ? await notice(name).catch(() => null) : null;
+        const line = notice ? await notice(name, parsed.data).catch(() => null) : null;
         return line === null ? result : withUpdateNotice(result, line, room);
       },
     );

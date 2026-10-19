@@ -1,0 +1,56 @@
+[package]
+name = "agentcomms-desktop"
+# Never published, and not the app's version: Tauri reads that from tauri.conf.json, which sync-versions keeps.
+version = "0.0.0"
+description = "Agent Comms: the tray app that shows this machine's agent-communications"
+license = "MIT"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "agentcomms_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agentcomms-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+semver = "1"
+# Task 6: links and profile files open from Rust (the capability file grants no plugin), and Copy writes the clipboard.
+tauri-plugin-opener = "2.7"
+tauri-plugin-clipboard-manager = "2.5"
+
+# Task 7: the updater and deep links run from Rust too; ureq finds the release through GitHub's API.
+tauri-plugin-updater = "2.14"
+tauri-plugin-deep-link = "2.6"
+ureq = "3"
+
+# Task 6: the login item is SMAppService's on macOS (13 and later), as Supbuddy's is.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
+
+# Task 6: and tauri-plugin-autostart's everywhere else.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-autostart = "2.7"
+# Task 7: a second launch on Windows and Linux hands its link to the first. Not on macOS (DA16, after review): Launch
+# Services keeps one copy there and hands it later links itself, and the plugin's socket in a shared temporary folder
+# would let another local user stop the app.
+tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
+
+# R1 (after review): a launcher is run only when it is this user's, which needs the user's id.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

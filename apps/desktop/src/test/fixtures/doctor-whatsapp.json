@@ -1,0 +1,24 @@
+{
+  "accounts": [
+    {
+      "account": "example/whatsapp",
+      "id": "acc_01EXAMPLE000000000000000",
+      "store": {
+        "path": "/example/home/Library/Group Containers/example/ChatStorage.sqlite",
+        "default": true
+      },
+      "chatLists": {
+        "allow": 0,
+        "deny": 2
+      },
+      "access": {
+        "state": "readable"
+      },
+      "index": {
+        "synced": false
+      }
+    }
+  ],
+  "reads": "reads come from the local store",
+  "sends": "sends are drafted, never sent"
+}

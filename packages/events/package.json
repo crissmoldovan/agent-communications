@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "The event catalogue, conditions and mapping templates of agent-communications' local event emission: isomorphic, with no I/O and no Node imports.",
   "type": "module",
   "license": "MIT",

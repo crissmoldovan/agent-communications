@@ -164,6 +164,8 @@ export {
   updatePause,
   updateResume,
 } from './operations/update-settings.ts';
+// Where updates stand here, as `agentcomms update --status` and `comms_update` with `status` report it.
+export { type UpdateStatus, updateStatus } from './operations/update-status.ts';
 /*
  * Organisation profiles (design 2026-10-02): what a channel needs to read the record — whether a client row is an
  * organisation's, and the generations of its client. The core writes the record; nothing else does.

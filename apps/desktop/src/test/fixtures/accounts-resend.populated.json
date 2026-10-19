@@ -1,0 +1,18 @@
+{
+  "accounts": [
+    {
+      "name": "example/resend",
+      "id": "acc_01EXAMPLE000000000000002",
+      "key": "full_access",
+      "mode": "read",
+      "sendPolicy": "never",
+      "sendPolicyFrom": "default",
+      "changePolicy": "confirm",
+      "changePolicyFrom": "account",
+      "canRead": true,
+      "canSend": false,
+      "createdAt": "2026-10-03T09:00:00.000Z",
+      "guarantee": "Read-only is enforced by this package’s own code, not by the key."
+    }
+  ]
+}
