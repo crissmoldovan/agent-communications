@@ -12,7 +12,9 @@ import {
   pendingMsOf,
   requireKnownChannel,
   SENDING_LEASE_MS,
+  type StandingUseBinding,
   sameDisclosureBinding,
+  standingUseProblem,
 } from './approval-binding.ts';
 import { changePendingHint } from './approval-handoffs.ts';
 import { registerStoreInternals } from './approval-internals.ts';
@@ -70,6 +72,7 @@ import { withFileLock } from './lock.ts';
 import type { RenameReason } from './saved-files.ts';
 import {
   canonicalStandingBinding,
+  effectiveStanding,
   narrowedFurther,
   STANDING_DAY_MS,
   type StandingBinding,
@@ -459,6 +462,11 @@ export interface ApprovalRecord {
   standingEpoch?: number | undefined;
   /** On a standing approval's child: the standing approval it is one use of. Bound. */
   standingId?: string | undefined;
+  /**
+   * On a standing approval's child: where its act goes and which of its standing approval's contents it sends, by
+   * digest — what its claim checks the standing approval still covers. Bound.
+   */
+  standingUse?: StandingUseBinding | undefined;
   /**
    * On an approved standing approval: the change policy that governed its account when the person approved it — its
    * own, else the default. Written with the approval, beside `approvedAt`. A live change policy stricter than this has
@@ -1118,7 +1126,15 @@ export class ApprovalStore {
     expect: ApprovalExpectation,
     action: OutcomeAction,
     decide: (current: ApprovalRecord, outcome: ApprovalOutcome, live: LiveGate | null) => ApprovalRecord,
-    options: { claimToken?: string | undefined; usedSaid?: UsedSaid | undefined } = {},
+    options: {
+      claimToken?: string | undefined;
+      usedSaid?: UsedSaid | undefined;
+      /**
+       * Read under the record's lock, after its own classification is written and before `decide`: what `decide` needs
+       * that only another read can say — a standing child's standing approval, read under that one's own lock.
+       */
+      before?: ((current: ApprovalRecord, outcome: ApprovalOutcome) => Promise<void>) | undefined;
+    } = {},
   ): Promise<Transitioned> {
     const path = this.#path(approvalId);
     return withFileLock(`${path}.lock`, async () => {
@@ -1142,6 +1158,7 @@ export class ApprovalStore {
       const objectOf = (record: ApprovalRecord) => approvalObjectOf(record, live, this.#now());
       let next: ApprovalRecord;
       try {
+        await options.before?.(current, outcome);
         next = decide(current, outcome, live);
       } catch (error) {
         throw withApproval(error, objectOf(current));
@@ -1547,6 +1564,8 @@ export class ApprovalStore {
     options: ClaimOptions = {},
   ): Promise<SendClaim> {
     let failure: Failure | null = null;
+    // A standing child's standing approval, as it reads now: ended or narrowed since the mint, the child is void.
+    let parentProblem: string | null = null;
     const done = await this.#transition(
       approvalId,
       { kind: 'send', owner: live.inboxId },
@@ -1566,6 +1585,7 @@ export class ApprovalStore {
           failure = { code, reason };
           return { ...current, state: 'revoked', reason, revokedAt: at, challengeHash: undefined };
         };
+        if (parentProblem !== null) return voidWith('APPROVAL_VOID', parentProblem);
         // Fail closed: an approval prepared against a known account may only be claimed by a caller that names the same
         // account. A caller that passes none is refused rather than trusted, whatever the reason it has none.
         if (current.inboxSub && current.inboxSub !== live.inboxSub) {
@@ -1600,7 +1620,15 @@ export class ApprovalStore {
         }
         return { ...current, state: 'sending', sendingAt: at };
       },
-      { usedSaid: options.usedSaid },
+      {
+        usedSaid: options.usedSaid,
+        // Every channel's: a standing child is claimed only while its standing approval still covers what it sends.
+        before: async (current, outcome) => {
+          if (outcome.error === undefined && current.route === 'standing' && current.state === 'approved') {
+            parentProblem = await this.#standingParentProblem(current);
+          }
+        },
+      },
     );
     const failed = failure as Failure | null;
     if (failed) throw refusedAfter(refuse(failed.code, failed.reason, done.record), done);
@@ -1609,6 +1637,40 @@ export class ApprovalStore {
     // Claimed to be sent: the person's yes, at a terminal before or in the chat now. Its preview's question is answered.
     await this.answered?.(approvalId);
     return { record: done.record, claimToken, approval: done.approval };
+  }
+
+  /**
+   * Why a standing child may not be claimed now, or null (design 2026-10-19-standing-approvals, S9, the lead's call after
+   * review): its standing approval read again, under that one's own lock — ended by any of the store's rules, an epoch
+   * or a tightened change policy among them, or narrowed so that it no longer holds the child's content or covers its
+   * place. Called with the child's lock held: no lock is ever taken the other way round.
+   */
+  async #standingParentProblem(child: ApprovalRecord): Promise<string | null> {
+    const use = child.standingUse;
+    if (child.standingId === undefined || use === undefined) return 'it names no standing approval it is a use of';
+    let seen: { stored: StoredApproval; outcome: ApprovalOutcome };
+    try {
+      seen = await this.inspect(child.standingId, { kind: 'standing', owner: child.inboxId }, { action: 'claim' });
+    } catch {
+      return 'its standing approval could not be read';
+    }
+    const parent = seen.outcome.record;
+    if (
+      seen.outcome.error !== undefined ||
+      parent === null ||
+      parent.state !== 'approved' ||
+      parent.standing === undefined
+    ) {
+      return `its standing approval has ended${seen.outcome.reason === undefined ? '' : ` (${seen.outcome.reason})`}`;
+    }
+    const inForce = effectiveStanding(parent.standing, parent.narrowed);
+    if (!inForce.contents.some((content) => content.digest === use.content)) {
+      return 'its standing approval no longer holds what it sends';
+    }
+    if (inForce.places.kind === 'exact' && !inForce.places.places.some((place) => place.id === use.channel)) {
+      return 'its standing approval no longer covers where it goes';
+    }
+    return null;
   }
 
   /**
@@ -1919,9 +1981,16 @@ export class ApprovalStore {
     sendEpoch: number;
     riskFlags: string[];
     expect: Expectation;
+    /** Where the act goes, and which of the standing approval's contents it sends: what its claim checks again. */
+    use: StandingUseBinding;
   }): Promise<ApprovalRecord> {
     if (!/^[0-9a-f]{64}$/.test(input.contentDigest)) {
       throw new CommsError('UNEXPECTED', 'an approval is bound to a SHA-256 of what it permits, and this is not one', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+    if (standingUseProblem(input.use) !== null) {
+      throw new CommsError('UNEXPECTED', 'a standing use’s child names where it acts and what it sends, or nothing', {
         hint: 'This is a bug — please report it.',
       });
     }
@@ -1986,6 +2055,7 @@ export class ApprovalStore {
       sendEpoch: input.sendEpoch,
       standingEpoch: input.standingEpoch,
       standingId: input.standingId,
+      standingUse: { channel: input.use.channel, thread: input.use.thread, content: input.use.content },
       // The send policy as it stands, for display and audit; approved in advance, outside the chat.
       policy: live?.sendPolicy === 'chat' ? 'chat' : 'confirm',
       requiredPolicy: 'confirm',

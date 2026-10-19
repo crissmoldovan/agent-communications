@@ -237,6 +237,7 @@ function disclosureShape(raw: Record<string, unknown>): UnreadableReason | null 
     'riskFlags',
     'approvedBindingDigest',
     'approvedChangePolicy',
+    'standingUse',
     'sendingAt',
     'sendingHeartbeatAt',
     'sentAt',
@@ -260,6 +261,7 @@ function v2Shape(raw: Record<string, unknown>): UnreadableReason | null {
     if (!optional(raw[field], (value) => typeof value === 'number')) return 'wrong-shape';
   }
   if (!optional(raw.standingId, isString)) return 'wrong-shape';
+  if (!optional(raw.standingUse, isObject)) return 'wrong-shape';
   for (const field of [
     'route',
     'bindingDigest',

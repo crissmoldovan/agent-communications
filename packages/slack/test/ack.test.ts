@@ -865,6 +865,27 @@ test('a rule tightened after the mint refuses at the claim, and the count stays 
   }
 });
 
+test('a standing approval ended or narrowed after the mint refuses at the claim, and the count stays spent', async (t) => {
+  for (const change of ['revoked', 'narrowed'] as const) {
+    const w = await world(t);
+    const s = await inEng(w);
+    const ts = say(w, { channel: ENG });
+    betweenMintAndClaim(w, async () => {
+      const id = await accountId(w);
+      // The record alone: its children are left as they are, so the claim is what must notice.
+      if (change === 'revoked') await w.core.approvals.revoke(s.id, 'ended by the person', { disposition: 'person' });
+      else await w.core.approvals.narrowStanding(s.id, id, { keep: [s.digest('reply', REPLY)] });
+    });
+    const error = await refused(acknowledge(w, withEyes(s, ENG, ts)), change);
+    assert.equal(error.code, 'APPROVAL_VOID', `${change}: ${error.message}`);
+    assert.match(error.message, change === 'revoked' ? /has ended/ : /no longer holds what it sends/);
+    nothingSent(w, `${change} after the mint`);
+    assert.equal((await ledger(w)).uses.length, 1, `${change}: the count was refunded`);
+    const [child] = await children(w);
+    assert.equal(child?.state, 'revoked', `${change}: the child is still usable`);
+  }
+});
+
 test('a message no longer the newest when it is read again after the mint is refused, and the count stays spent', async (t) => {
   for (const where of ['thread', 'channel'] as const) {
     const w = await world(t);

@@ -235,6 +235,8 @@ export interface BindingFields {
   standingEpoch?: number | undefined;
   /** On a standing approval's child: the standing record it is one use of. Absent on every other. */
   standingId?: string | undefined;
+  /** On a standing approval's child: its channel, its thread and its content's digest. Absent on every other. */
+  standingUse?: StandingUseBinding | undefined;
   policy: SendPolicy;
   requiredPolicy: SendPolicy;
   download?:
@@ -265,6 +267,32 @@ export interface ApprovalIdentity {
   sendEpoch?: number;
   standingEpoch?: number;
   standingId?: string;
+  standingUse?: StandingUseBinding;
+}
+
+/**
+ * One use of a standing approval, as its child is bound to it (design 2026-10-19-standing-approvals, S9): the channel
+ * its act goes to, the thread it is in, and the digest of the content it sends — what a claim checks its standing
+ * approval still covers.
+ */
+export interface StandingUseBinding {
+  channel: string;
+  thread: string;
+  content: string;
+}
+
+/** Why `use` is not a child's use of its standing approval, or null: three strings, its content a SHA-256. */
+export function standingUseProblem(use: unknown): string | null {
+  if (typeof use !== 'object' || use === null || Array.isArray(use)) return 'it names no use';
+  const fields = use as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => key !== 'channel' && key !== 'thread' && key !== 'content')) {
+    return 'it names more than its use';
+  }
+  for (const field of ['channel', 'thread'] as const) {
+    if (typeof fields[field] !== 'string' || fields[field] === '') return `its use has no ${field}`;
+  }
+  if (typeof fields.content !== 'string' || !/^[0-9a-f]{64}$/.test(fields.content)) return 'its use names no content';
+  return null;
 }
 
 /**
@@ -291,6 +319,15 @@ export function identityOf(record: BindingFields): ApprovalIdentity {
     ...(record.kind === 'send' || record.kind === 'standing' ? { sendEpoch: record.sendEpoch as number } : {}),
     ...(record.standingEpoch === undefined ? {} : { standingEpoch: record.standingEpoch }),
     ...(record.standingId === undefined ? {} : { standingId: record.standingId }),
+    ...(record.standingUse === undefined
+      ? {}
+      : {
+          standingUse: {
+            channel: record.standingUse.channel,
+            thread: record.standingUse.thread,
+            content: record.standingUse.content,
+          },
+        }),
   };
 }
 

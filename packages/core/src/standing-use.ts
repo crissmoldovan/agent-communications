@@ -234,6 +234,7 @@ export async function mintStandingUse(
         sendEpoch: record.sendEpoch as number,
         riskFlags: [...request.child.riskFlags],
         expect: request.child.expect,
+        use: { channel, thread, content: content.digest },
       });
       return { child, standing: record, content };
     }),

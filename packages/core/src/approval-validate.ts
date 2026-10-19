@@ -5,6 +5,7 @@ import {
   type DisclosureBinding,
   isKnownChannel,
   pendingMsOf,
+  standingUseProblem,
 } from './approval-binding.ts';
 import { type ApprovalRecord, type ApprovalState, changeDigest, DIGEST_VERSION, downloadDigest } from './approvals.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
@@ -300,7 +301,9 @@ function checkIdentity(record: ApprovalRecord, raw: Record<string, unknown>, kin
       return fail('identity-contradiction');
     }
     if (raw.standingId === raw.approvalId) return fail('identity-contradiction');
-  } else if (raw.standingId !== undefined) {
+    // Where it acts and what it sends, which its claim checks its standing approval still covers.
+    if (standingUseProblem(raw.standingUse) !== null) return fail('identity-contradiction');
+  } else if (raw.standingId !== undefined || raw.standingUse !== undefined) {
     return fail('identity-contradiction');
   }
   if (kind === 'standing' && (record.standing as StandingBinding).target.id !== raw.inboxId) {

@@ -441,3 +441,9 @@ word.
    covered by what is in force there: an exact place by its id, and `threads-i-am-in` only while the record is still
    `threads-i-am-in`. Otherwise `STANDING_REFUSED`, `place-not-covered`, before anything is counted. **(lead's call,
    after review)**
+3. **A child is claimed only while its standing approval still covers it** (S9; core review C6). Each child now binds
+   its use, `standingUse`: the channel, the thread and the digest of the content it sends. At the claim of any
+   `route: 'standing'` child — in core's `claimForSend`, so every channel gets it — the standing record is read again,
+   under its own lock while the child's is held (never the other way round), and the child is voided, APPROVAL_VOID,
+   when the record has ended by any rule (revoked, expired, an epoch, a tightened change policy, `never`) or no longer
+   holds the content or covers the place. The count stays spent. **(lead's call, after review)**

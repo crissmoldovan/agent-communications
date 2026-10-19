@@ -18,6 +18,7 @@ import {
   type ExactPlace,
   raiseStandingEpoch,
   type StandingBinding,
+  standingContentDigest,
   standingDigest,
 } from '../src/standing.ts';
 import { liveConfig } from './helpers/live-config.ts';
@@ -86,10 +87,16 @@ async function approvedAtTerminal(core: Core, record: ApprovalRecord): Promise<A
   return core.approvals.approve(record.approvalId, 'terminal', live, code, 'standing');
 }
 
+/** The digest of the `eyes` reaction each standing approval here holds. */
+const EYES = standingContentDigest('reaction', 'eyes');
 const EXPECT: Expectation = { to: ['C0ROOM'], cc: [], bcc: [], subject: ':eyes: on 1760000000.000100' };
 
 /** One use's child, minted directly from an approved standing record. */
-async function child(core: Core, standing: ApprovalRecord, over: { standingEpoch?: number } = {}) {
+async function child(
+  core: Core,
+  standing: ApprovalRecord,
+  over: { standingEpoch?: number; use?: { channel: string; thread: string; content: string } } = {},
+) {
   const config = await core.config.load();
   return core.approvals.createStandingChild({
     standingId: standing.approvalId,
@@ -102,6 +109,7 @@ async function child(core: Core, standing: ApprovalRecord, over: { standingEpoch
     sendEpoch: sendEpochOf(config, ACME),
     riskFlags: ['AS_AGENT', 'REACTS_AS_APP'],
     expect: EXPECT,
+    use: over.use ?? { channel: 'C0ROOM', thread: '1760000000.000100', content: EYES },
   });
 }
 
@@ -343,6 +351,7 @@ test("a child's lifetime is its own, and it is never pending", async () => {
       raw.route = 'chat';
       delete raw.standingId;
       delete raw.standingEpoch;
+      delete raw.standingUse;
       raw.approvedVia = 'terminal';
     }),
     lifetime,
@@ -382,6 +391,20 @@ test("a child's lifetime is its own, and it is never pending", async () => {
     { ok: false, reason: 'identity-contradiction', attribution: 'verified' },
     'a child names its standing approval',
   );
+  for (const [what, use] of [
+    ['no use', undefined],
+    ['no channel', { thread: '1.000100', content: 'e'.repeat(64) }],
+    ['a content that is no digest', { channel: 'C0ROOM', thread: '1.000100', content: 'eyes' }],
+    ['more than its use', { channel: 'C0ROOM', thread: '1.000100', content: 'e'.repeat(64), extra: 'x' }],
+  ] as const) {
+    assert.deepEqual(
+      resealed(core.approvals, minted, (raw) => {
+        raw.standingUse = use;
+      }),
+      { ok: false, reason: 'identity-contradiction', attribution: 'verified' },
+      `a child with ${what}`,
+    );
+  }
   // And `standing` evidence, or a standing id, on an ordinary send is a forgery.
   const ordinary = await core.approvals.create({
     channel: 'slack',
@@ -401,6 +424,13 @@ test("a child's lifetime is its own, and it is never pending", async () => {
       raw.standingId = standing.approvalId;
     }),
     { ok: false, reason: 'identity-contradiction', attribution: 'verified' },
+  );
+  assert.deepEqual(
+    resealed(core.approvals, ordinary, (raw) => {
+      raw.standingUse = { channel: 'C0ROOM', thread: '1.000100', content: 'e'.repeat(64) };
+    }),
+    { ok: false, reason: 'identity-contradiction', attribution: 'verified' },
+    'an ordinary send naming a use',
   );
   assert.deepEqual(
     resealed(core.approvals, ordinary, (raw) => {
@@ -510,6 +540,7 @@ test('a child is minted only for an approved standing record, bound to its epoch
       sendEpoch: 0,
       riskFlags: [],
       expect: EXPECT,
+      use: { channel: 'C0ROOM', thread: '1760000000.000100', content: EYES },
     }),
     refusedWith('NOT_FOUND'),
   );
@@ -583,6 +614,56 @@ test('a change policy tightened by a release that knows no standing epoch ends t
   const strict = await approvedAtTerminal(core, await prepared(core));
   assert.equal(strict.approvedChangePolicy, 'confirm');
   assert.equal((await core.approvals.inspect(strict.approvalId)).outcome.state, 'approved');
+});
+
+test('a child minted before its standing approval ended or narrowed is refused at its claim', async () => {
+  const LOBBY: ExactPlace = { ...ROOM, id: 'C0LOBBY', name: 'lobby' };
+  const claimed = async (core: Core, minted: ApprovalRecord, reason: RegExp, what: string) => {
+    await assert.rejects(
+      core.approvals.claimForSend(minted.approvalId, liveOf(minted)),
+      refusedWith('APPROVAL_VOID', reason),
+      what,
+    );
+    assert.equal(asV2(await core.approvals.get(minted.approvalId))?.state, 'revoked', `${what}: still usable`);
+  };
+
+  // Ended — the record alone, not its children, as a store that ends nothing else would.
+  const ended = machine();
+  const first = await approvedAtTerminal(ended.core, await prepared(ended.core));
+  const orphan = await child(ended.core, first);
+  await ended.core.approvals.revoke(first.approvalId, 'ended by the person', { disposition: 'person' });
+  await claimed(ended.core, orphan, /its standing approval has ended/, 'ended');
+
+  // Narrowed to drop the content the child sends, or the place it goes.
+  const narrowed = machine();
+  const standing = await approvedAtTerminal(
+    narrowed.core,
+    await prepared(narrowed.core, { places: { kind: 'exact', places: [ROOM, LOBBY] } }),
+  );
+  const eyes = await child(narrowed.core, standing);
+  const memo = standing.standing?.contents.find((content) => content.text === 'memo')?.digest as string;
+  const inLobby = await child(narrowed.core, standing, {
+    use: { channel: 'C0LOBBY', thread: '1760000000.000200', content: memo },
+  });
+  const inRoom = await child(narrowed.core, standing, {
+    use: { channel: 'C0ROOM', thread: '1760000000.000300', content: memo },
+  });
+  await narrowed.core.approvals.narrowStanding(standing.approvalId, ACME, { keep: [memo] });
+  await claimed(narrowed.core, eyes, /no longer holds what it sends/, 'a content narrowed away');
+  await narrowed.core.approvals.narrowStanding(standing.approvalId, ACME, { places: ['C0LOBBY'] });
+  await claimed(narrowed.core, inRoom, /no longer covers where it goes/, 'a place narrowed away');
+  // What it still covers is claimed as ever.
+  assert.equal(
+    (await narrowed.core.approvals.claimForSend(inLobby.approvalId, liveOf(inLobby))).record.state,
+    'sending',
+  );
+
+  // Ended by a change policy an older release tightened: the epoch never moved, and the child's own did not.
+  const older = machine();
+  const tightened = await approvedAtTerminal(older.core, await prepared(older.core));
+  const minted = await child(older.core, tightened);
+  older.config.write({ accounts: { 'acme/slack': { id: ACME, sendPolicy: 'chat', changePolicy: 'confirm' } } });
+  await claimed(older.core, minted, new RegExp(CHANGE_POLICY_TIGHTENED_REASON), 'a tightened change policy');
 });
 
 test('the change policy it was approved under is an approved standing record’s evidence, and nothing else’s', async () => {

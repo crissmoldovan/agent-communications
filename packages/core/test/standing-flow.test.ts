@@ -12,7 +12,7 @@ import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { waitForApproval } from '../src/operations/approval-wait.ts';
 import { sendEpochOf } from '../src/send-epoch.ts';
-import type { ExactPlace } from '../src/standing.ts';
+import { type ExactPlace, standingContentDigest } from '../src/standing.ts';
 import {
   approveStandingAtTerminal,
   endStanding,
@@ -36,6 +36,8 @@ const ROOM: ExactPlace = {
   members: 12,
   shared: { extShared: false, pendingExtShared: false, externalMembers: false },
 };
+/** The digest of the `eyes` reaction every standing approval here holds. */
+const EYES = standingContentDigest('reaction', 'eyes');
 const BIG: ExactPlace = {
   id: 'C0BIG',
   name: 'all-hands',
@@ -338,6 +340,7 @@ test('approving a replacement ends the one it replaces', async () => {
     sendEpoch: sendEpochOf(config, ACME),
     riskFlags: [],
     expect: { to: ['C0ROOM'], cc: [], bcc: [], subject: ':eyes: on 1760000000.000100' },
+    use: { channel: 'C0ROOM', thread: '1760000000.000100', content: EYES },
   });
   const wider = await prepareStanding(core, request({ limits: { perHour: 6 }, replaces: first.approvalId }), {
     surface: 'mcp',
@@ -373,6 +376,7 @@ test('endStanding revokes the record and every approved child, and audits it', a
       sendEpoch: 0,
       riskFlags: [],
       expect: { to: ['C0ROOM'], cc: [], bcc: [], subject: ':eyes: on 1760000000.000100' },
+      use: { channel: 'C0ROOM', thread: '1760000000.000100', content: EYES },
     });
   const unused = await mint();
   const claimed = await mint();
