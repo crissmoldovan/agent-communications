@@ -1,0 +1,116 @@
+[
+  {
+    "name": "kinds-disabled",
+    "request": {
+      "operation": "judgeKindsList",
+      "args": {}
+    },
+    "result": [
+      {
+        "kind": "typesafe",
+        "state": "disabled",
+        "version": null
+      },
+      {
+        "kind": "laya",
+        "state": "disabled",
+        "version": null
+      },
+      {
+        "kind": "local-endpoint",
+        "state": "disabled",
+        "version": null
+      }
+    ]
+  },
+  {
+    "name": "status-idle",
+    "request": {
+      "operation": "judgeModelStatus",
+      "args": {}
+    },
+    "result": {
+      "state": "idle",
+      "manifestId": "laya-en-onnx-tiny-v1",
+      "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+      "bytesVerified": 0,
+      "totalBytes": 154,
+      "failureCode": null,
+      "reason": null,
+      "updatedAt": null
+    }
+  },
+  {
+    "name": "kinds-enabled",
+    "request": {
+      "operation": "judgeKindsList",
+      "args": {}
+    },
+    "result": [
+      {
+        "kind": "typesafe",
+        "state": "disabled",
+        "version": null
+      },
+      {
+        "kind": "laya",
+        "state": "enabled",
+        "version": 1
+      },
+      {
+        "kind": "local-endpoint",
+        "state": "disabled",
+        "version": null
+      }
+    ]
+  },
+  {
+    "name": "status-ready",
+    "request": {
+      "operation": "judgeModelStatus",
+      "args": {}
+    },
+    "result": {
+      "state": "ready",
+      "manifestId": "laya-en-onnx-tiny-v1",
+      "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+      "bytesVerified": 154,
+      "totalBytes": 154,
+      "failureCode": null,
+      "reason": null,
+      "updatedAt": 1800000000000
+    }
+  },
+  {
+    "name": "disable",
+    "request": {
+      "operation": "disableJudgeKind",
+      "args": {
+        "kind": "laya"
+      }
+    },
+    "result": {
+      "kind": "laya",
+      "disabled": true,
+      "pointer": "removed",
+      "pendingActivationsCancelled": 0
+    }
+  },
+  {
+    "name": "remove",
+    "request": {
+      "operation": "removeJudgeModel",
+      "args": {}
+    },
+    "result": {
+      "state": "idle",
+      "manifestId": "laya-en-onnx-tiny-v1",
+      "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+      "bytesVerified": 0,
+      "totalBytes": 154,
+      "failureCode": null,
+      "reason": null,
+      "updatedAt": 1800000000000
+    }
+  }
+]

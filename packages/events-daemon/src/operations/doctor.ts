@@ -1,18 +1,18 @@
 import { EventControlClient } from '../control/client.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import type {
+import {
   JUDGE_KIND_LAYA,
-  JUDGE_KIND_LOCAL_ENDPOINT,
-  JUDGE_KIND_TYPESAFE,
-  JudgeKind,
+  type JUDGE_KIND_LOCAL_ENDPOINT,
+  type JUDGE_KIND_TYPESAFE,
+  type JudgeKind,
 } from '../domain/lifecycle.ts';
-import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
+import type { LayaArtifactDoctor, LayaUnavailableCode } from '../runtime/laya/contracts.ts';
 
 /**
- * Reserved content-free doctor projection for the later Laya-specific doctor schema. It deliberately does not amend
- * pinned doctor-v1; Task 6 supplies its lifecycle-backed value and Task 11 owns presentation wiring.
+ * doctor-v3's content-free Laya entry (`judge.laya`). It leaves doctor-v1 and doctor-v2 as they were: the owner serves
+ * doctor-v3, which keeps every v2 property and reports Laya's real artifact state.
  */
-export type LayaDoctorStatus = LayaModelStatus;
+export type LayaDoctorStatus = LayaArtifactDoctor;
 
 /** The checked binding for contracts/doctor-v1.schema.json. No free-form values cross this operation boundary. */
 export type DoctorSource = 'gmail' | 'slack' | 'resend' | 'whatsapp';
@@ -236,6 +236,63 @@ export function assertDoctorReportV2(report: DoctorReportV2): DoctorReportV2 {
   return report;
 }
 
-export async function doctor(options: { readonly stateDir?: string | undefined } = {}): Promise<DoctorReportV2> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('doctor')) as DoctorReportV2;
+/** doctor-v3's Laya kind entry: the real pointer state while Laya is offered, its closed reason while it is not. */
+export type DoctorLayaKindV3 =
+  | {
+      readonly kind: typeof JUDGE_KIND_LAYA;
+      readonly state: 'disabled' | 'enabled';
+      readonly version: number | null;
+    }
+  | { readonly kind: typeof JUDGE_KIND_LAYA; readonly state: 'unavailable'; readonly code: LayaUnavailableCode };
+
+/**
+ * E2's successor (`contracts/doctor-v3.schema.json`). It keeps every doctor-v2 property: `judgeBoundary` is now
+ * empty, because every judge kind has its implementation, and `judge` names Laya's real kind state and adds
+ * `judge.laya`, the content-free artifact entry. doctor-v1 and doctor-v2 stay frozen for their readers.
+ */
+export interface DoctorReportV3 extends Omit<DoctorReportV2, 'schemaVersion' | 'judgeBoundary' | 'judge'> {
+  readonly schemaVersion: 'doctor-v3';
+  readonly judgeBoundary: readonly [];
+  readonly judge: Omit<DoctorReportV2['judge'], 'kinds'> & {
+    readonly kinds: readonly (
+      | {
+          readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
+          readonly state: 'disabled' | 'enabled';
+          readonly version: number | null;
+        }
+      | DoctorLayaKindV3
+    )[];
+    readonly laya: LayaDoctorStatus;
+  };
+}
+
+const DOCTOR_REPORT_V3_JUDGE_KEYS = ['kinds', 'budget', 'reservations', 'holds', JUDGE_KIND_LAYA] as const;
+const DOCTOR_REPORT_V3_LAYA_KEYS = [
+  'state',
+  'manifestId',
+  'runtimeLockDigest',
+  'runtime',
+  'model',
+  'boundary',
+  'failureCode',
+  'bytesVerified',
+  'totalBytes',
+] as const;
+
+function exactlyKeys(value: object, keys: readonly string[]): boolean {
+  const found = Object.keys(value);
+  return found.length === keys.length && keys.every((key) => found.includes(key));
+}
+
+/** The projection boundary: a v3 report, its judge entry and its Laya entry each have exactly their fields. */
+export function assertDoctorReportV3(report: DoctorReportV3): DoctorReportV3 {
+  if (Object.keys(report).some((key) => !DOCTOR_REPORT_V2_KEYS.includes(key as (typeof DOCTOR_REPORT_V2_KEYS)[number])))
+    throw new Error('doctor-v3 report is closed');
+  if (!exactlyKeys(report.judge, DOCTOR_REPORT_V3_JUDGE_KEYS)) throw new Error('doctor-v3 judge entry is closed');
+  if (!exactlyKeys(report.judge.laya, DOCTOR_REPORT_V3_LAYA_KEYS)) throw new Error('doctor-v3 Laya entry is closed');
+  return report;
+}
+
+export async function doctor(options: { readonly stateDir?: string | undefined } = {}): Promise<DoctorReportV3> {
+  return (await new EventControlClient({ stateDir: options.stateDir }).request('doctor')) as DoctorReportV3;
 }

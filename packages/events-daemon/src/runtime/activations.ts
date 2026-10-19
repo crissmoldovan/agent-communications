@@ -191,6 +191,11 @@ export interface ActivationRuntimeOptions {
   readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
   /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
   readonly layaPlatformProbe?: LayaEnablementInputs['layaPlatformProbe'];
+  /**
+   * Told after a judge-kind pointer commits — the claim's last step, never a preparation. It only starts work its
+   * owner fences against the live pointer itself; a failure there never reaches the approval, which already completed.
+   */
+  readonly onJudgeKindEnabled?: ((input: { readonly kind: string; readonly version: number }) => void) | undefined;
 }
 
 export type ActivationDeadlineFailpoint = (
@@ -218,6 +223,7 @@ export class ActivationRuntime {
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
   readonly #layaInputs: LayaEnablementInputs;
+  readonly #onJudgeKindEnabled: ActivationRuntimeOptions['onJudgeKindEnabled'];
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
   readonly #approvalOperations = new Map<string, Promise<void>>();
   constructor(options: ActivationRuntimeOptions) {
@@ -251,6 +257,7 @@ export class ActivationRuntime {
       ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
       ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
     };
+    this.#onJudgeKindEnabled = options.onJudgeKindEnabled;
   }
 
   async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
@@ -1157,6 +1164,13 @@ export class ActivationRuntime {
     if (document.kind === 'rule') await this.#assertDocumentSecretsReady(document.rule);
     this.#finalise(current, document, preparedPoints, usedAt);
     this.#failpoint?.('after-move');
+    if (document.kind === 'judge-kind') {
+      try {
+        this.#onJudgeKindEnabled?.({ kind: document.enablement.kind, version: document.enablement.version });
+      } catch {
+        // The pointer committed above. Its owner rechecks that pointer before any work, and the approval stays done.
+      }
+    }
     return { intentId: current.id, status: 'completed', usedAt };
   }
 

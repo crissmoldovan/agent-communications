@@ -584,7 +584,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     const parsed = jsonArgument(document, 'budget document');
     print(await humanB3('updateBudget', { document: parsed }, () => updateBudget(parsed, controlOptions(program))));
   });
-  const judgeKinds = judge.command('kinds').description('list disabled/enabled kinds and the typed Laya E2 seam');
+  const judgeKinds = judge
+    .command('kinds')
+    .description('list each judge kind as disabled or enabled, or Laya as unavailable here with its reason');
   judgeKinds.command('list').action(async () => {
     ran = true;
     print(await judgeKindsList(controlOptions(program)));
@@ -600,7 +602,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   const judgeModel = judge
     .command('model')
-    .description('local Laya model controls, which answer that Laya is not available yet');
+    .description('report the local Laya runtime and model state, or remove its files while Laya is disabled');
   judgeModel.command('status').action(async () => {
     ran = true;
     print(await judgeModelStatus(controlOptions(program)));

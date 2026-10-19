@@ -149,6 +149,14 @@ function shippedLayaDefinition(inputs: LayaEnablementInputs = {}): LayaJudgeKind
   });
 }
 
+/**
+ * The one reviewed Laya definition for exactly the inputs E's activation path validates against: the shipped asset
+ * bytes and this process's platform in production, the same strict-parsed fixture bytes in tests.
+ */
+export function layaJudgeKindDefinitionFor(inputs: LayaEnablementInputs = {}): LayaJudgeKindDefinition {
+  return shippedLayaDefinition(inputs);
+}
+
 function layaEnablement(value: unknown, inputs: LayaEnablementInputs = {}): CanonicalLayaEnablement {
   try {
     const implementation =

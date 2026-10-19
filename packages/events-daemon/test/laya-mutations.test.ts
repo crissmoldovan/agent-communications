@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { expectEveryLayaMutationToFail, loadLayaMutations } from './support/laya-mutants.ts';
+import {
+  expectEveryLayaMutationToFail,
+  expectLayaMutationToFail,
+  type LayaMutation,
+  loadLayaMutations,
+} from './support/laya-mutants.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
@@ -594,6 +599,47 @@ test('E2 mutation: a registered production mutant cannot be skipped', async () =
     () => mutants.assertEveryLayaMutationExecuted(mutations, new Set()),
     /registered production mutant was never executed/,
   );
+});
+
+/** A synthetic runner input over files every copied tree of this file carries; it is never registered. */
+function runnerProbe(overrides: Partial<LayaMutation>): LayaMutation {
+  const testName = overrides.testName ?? 'E2 mutation: loads production mutants from every task fragment';
+  return {
+    id: 'runner-self-test',
+    kind: 'production',
+    owner: 'task-6',
+    source: 'packages/events-daemon/test/support/laya-mutants.ts',
+    testFile: 'packages/events-daemon/test/laya-mutations.test.ts',
+    before: "const packageRoot = join(import.meta.dirname, '..', '..');",
+    after: "const packageRoot = join(import.meta.dirname, '..', '..'); // an inert edit",
+    ...overrides,
+    testName,
+    testPattern: testName,
+  };
+}
+
+test('E2 mutation: a copy whose named oracle fails to load is not a kill', async () => {
+  // node:test reports a file that cannot load as one failed test under the file's name: `# tests 1` and `# fail 1`.
+  await assert.rejects(
+    expectLayaMutationToFail(
+      runnerProbe({
+        after:
+          "throw new Error('mutation runner self-test: the oracle cannot load');\nconst packageRoot = join(import.meta.dirname, '..', '..');",
+      }),
+    ),
+    /its named test, not the file, failed/u,
+  );
+});
+
+test('E2 mutation: an oracle that does not pass unmutated is not a kill', async () => {
+  await assert.rejects(
+    expectLayaMutationToFail(runnerProbe({ testName: 'E2 mutation: an oracle this file does not have' })),
+    /the unmutated copy did not/u,
+  );
+});
+
+test('E2 mutation: a mutant its oracle accepts is not a kill', async () => {
+  await assert.rejects(expectLayaMutationToFail(runnerProbe({})), /unexpectedly accepted mutant/u);
 });
 
 test('E2 mutation: copied production checker fails only its named oracle', async (context) => {

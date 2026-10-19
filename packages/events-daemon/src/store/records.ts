@@ -238,6 +238,37 @@ export class LayaModelRepository {
     return record;
   }
 
+  /**
+   * `judge model remove` is the one model-state change made while Laya is disabled, so it carries the opposite fence:
+   * the same transaction re-reads the pointer and refuses if a later enablement claimed it. It records only the
+   * reviewed manifest id and the closed `removed` state.
+   */
+  markRemovedWhileDisabled(input: { readonly manifestId: string; readonly now: number }): LayaModelRecord {
+    const pointer = this.#database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+      .get(JUDGE_KINDS[1]) as { version: number } | undefined;
+    if (pointer !== undefined) throw new Error('a Laya model is removed only while its judge kind is disabled');
+    const record: LayaModelRecord = {
+      manifestId: layaModelText(input.manifestId, 'the model manifest id'),
+      state: 'removed',
+      bytesVerified: 0,
+      verifiedAt: null,
+      failureCode: null,
+      updatedAt: layaModelInteger(input.now, 'the model update time'),
+    };
+    this.#database
+      .prepare(
+        `INSERT INTO laya_models
+          (manifest_id, state, bytes_verified, verified_at, failure_code, updated_at)
+         VALUES (?, 'removed', 0, NULL, NULL, ?)
+         ON CONFLICT(manifest_id) DO UPDATE SET
+           state = 'removed', bytes_verified = 0, verified_at = NULL, failure_code = NULL,
+           updated_at = excluded.updated_at`,
+      )
+      .run(record.manifestId, record.updatedAt);
+    return record;
+  }
+
   get(manifestId: string): LayaModelRecord | null {
     const row = this.#database
       .prepare(

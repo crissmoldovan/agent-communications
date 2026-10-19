@@ -310,7 +310,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_kinds_list',
     'List judge kinds',
-    'Lists disabled/enabled judge kinds and the typed Laya E2 seam.',
+    'Lists each judge kind as disabled or enabled, or Laya as unavailable here with its reason.',
     {},
     () => judgeKindsList(options),
   );
@@ -325,7 +325,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_kind_disable',
     'Disable judge kind',
-    'Immediately disables one available judge kind; Laya remains typed E2-unavailable.',
+    'Immediately disables one judge kind; for Laya it also cancels a download and keeps verified files.',
     { kind: z.string().min(1) },
     (args) => {
       const kind = args.kind as string;
@@ -336,14 +336,14 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   strictControlTool(
     'events_judge_model_status',
     'Judge model status',
-    'Returns the typed Phase-E2 unavailable result.',
+    'Reports the local Laya runtime and model state, byte progress and any failure or unavailable reason.',
     {},
     () => judgeModelStatus(options),
   );
   strictControlTool(
     'events_judge_model_remove',
     'Remove judge model',
-    'Returns the typed Phase-E2 unavailable result.',
+    'Deletes the verified Laya model and runtime files, only while Laya is disabled.',
     {},
     () => removeJudgeModel(options),
     true,

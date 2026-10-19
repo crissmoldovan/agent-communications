@@ -29,16 +29,21 @@ function availablePlatform() {
   };
 }
 
+/**
+ * Writes the changed disclosure in the reviewed asset's own canonical layout (its licence list on one line), so the
+ * parser refuses it for the field the test removed and not because the bytes stopped being canonical.
+ */
 function assetWithDisclosureChange(
   assets: LayaReviewedAssets,
   change: (value: Record<string, unknown>) => Record<string, unknown>,
 ): LayaReviewedAssets {
-  return {
-    ...assets,
-    disclosuresBytes: Buffer.from(
-      `${JSON.stringify(change(JSON.parse(Buffer.from(assets.disclosuresBytes).toString('utf8'))), null, 2)}\n`,
-    ),
-  };
+  const changed = change(JSON.parse(Buffer.from(assets.disclosuresBytes).toString('utf8')));
+  const licences = JSON.stringify(changed.runtimeLicences);
+  const source = `${JSON.stringify(changed, null, 2)}\n`.replace(
+    `  "runtimeLicences": ${JSON.stringify(changed.runtimeLicences, null, 2).split('\n').join('\n  ')},`,
+    `  "runtimeLicences": ${licences},`,
+  );
+  return { ...assets, disclosuresBytes: Buffer.from(source) };
 }
 
 test('E2 contract: canonical Laya enablement binds every reviewed asset and digest input', async () => {
@@ -337,7 +342,11 @@ test('E2 contract: preview refuses a reviewed asset missing either D11 limitatio
           }),
           platform: availablePlatform(),
         }),
-      (error: unknown) => error instanceof LayaContractError && error.code === 'LAYA_ASSET_INVALID',
+      (error: unknown) =>
+        error instanceof LayaContractError &&
+        error.code === 'LAYA_ASSET_INVALID' &&
+        error.message === 'the Laya disclosure limitations are complete',
+      limitation,
     );
   }
 });

@@ -33,11 +33,11 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_judge_test`](#events_judge_test) | Tests one active exact judge version with the daemon-fixed synthetic event. |
 | [`events_budget_show`](#events_budget_show) | Lists immutable judge budgets and the active singleton. |
 | [`events_budget_update`](#events_budget_update) | Creates a pending immutable global budget and prepares its approval. |
-| [`events_judge_kinds_list`](#events_judge_kinds_list) | Lists disabled/enabled judge kinds and the typed Laya E2 seam. |
+| [`events_judge_kinds_list`](#events_judge_kinds_list) | Lists each judge kind as disabled or enabled, or Laya as unavailable here with its reason. |
 | [`events_judge_kind_enable`](#events_judge_kind_enable) | Prepares, but never approves or claims, judge-kind enablement. |
-| [`events_judge_kind_disable`](#events_judge_kind_disable) | Immediately disables one available judge kind; Laya remains typed E2-unavailable. |
-| [`events_judge_model_status`](#events_judge_model_status) | Returns the typed Phase-E2 unavailable result. |
-| [`events_judge_model_remove`](#events_judge_model_remove) | Returns the typed Phase-E2 unavailable result. |
+| [`events_judge_kind_disable`](#events_judge_kind_disable) | Immediately disables one judge kind; for Laya it also cancels a download and keeps verified files. |
+| [`events_judge_model_status`](#events_judge_model_status) | Reports the local Laya runtime and model state, byte progress and any failure or unavailable reason. |
+| [`events_judge_model_remove`](#events_judge_model_remove) | Deletes the verified Laya model and runtime files, only while Laya is disabled. |
 | [`events_deliveries_list`](#events_deliveries_list) | Lists content-free delivery metadata. |
 | [`events_delivery_retry`](#events_delivery_retry) | Retries one exact retryable delivery. |
 | [`events_delivery_drop`](#events_delivery_drop) | Drops one exact dead-letter delivery and its retained payload. |
@@ -261,7 +261,7 @@ Creates a pending immutable global budget and prepares its approval.
 
 ### `events_judge_kinds_list`
 
-Lists disabled/enabled judge kinds and the typed Laya E2 seam.
+Lists each judge kind as disabled or enabled, or Laya as unavailable here with its reason.
 
 *read-only · idempotent*
 
@@ -279,7 +279,7 @@ Prepares, but never approves or claims, judge-kind enablement.
 
 ### `events_judge_kind_disable`
 
-Immediately disables one available judge kind; Laya remains typed E2-unavailable.
+Immediately disables one judge kind; for Laya it also cancels a download and keeps verified files.
 
 *writes · destructive*
 
@@ -289,7 +289,7 @@ Immediately disables one available judge kind; Laya remains typed E2-unavailable
 
 ### `events_judge_model_status`
 
-Returns the typed Phase-E2 unavailable result.
+Reports the local Laya runtime and model state, byte progress and any failure or unavailable reason.
 
 *read-only · idempotent*
 
@@ -297,7 +297,7 @@ Takes no arguments.
 
 ### `events_judge_model_remove`
 
-Returns the typed Phase-E2 unavailable result.
+Deletes the verified Laya model and runtime files, only while Laya is disabled.
 
 *writes · destructive*
 
