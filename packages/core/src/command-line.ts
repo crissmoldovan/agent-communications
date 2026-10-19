@@ -117,8 +117,12 @@ function programNeedsQuotes(command: QuotedCommand): boolean {
   return command.platform === 'win32' && program !== undefined && windowsShellWord(program) !== program;
 }
 
+/**
+ * One word for a POSIX shell: as it is when nothing in it is special, otherwise in single quotes. A word that starts
+ * with `=` or `~` is quoted too: zsh reads `=ls` as the path of `ls`, and `~` as a home.
+ */
 function posixShellWord(word: string): string {
-  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
+  return /^(?![=~])[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
