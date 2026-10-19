@@ -110,12 +110,13 @@ pub fn windows_node_from_launcher(text: &str) -> Option<String> {
         .filter(|node| !node.is_empty())
 }
 
-/// `node.exe` in the first folder of a Windows `PATH` that has one.
+/// `node.exe` in the first folder of a Windows `PATH` that has one. A folder that is not a full path is skipped, so no
+/// Node is ever started from the app's working folder, or one named from it.
 pub fn node_on_path(path_var: &str) -> Option<String> {
     path_var
         .split(';')
         .map(|folder| folder.trim().trim_matches('"'))
-        .filter(|folder| !folder.is_empty())
+        .filter(|folder| !folder.is_empty() && std::path::Path::new(folder).is_absolute())
         .map(|folder| std::path::Path::new(folder).join("node.exe"))
         .find(|candidate| candidate.is_file())
         .map(|candidate| candidate.to_string_lossy().into_owned())
@@ -374,6 +375,46 @@ mod tests {
         );
         assert_eq!(windows_node(None, &path_var), Some(found));
         assert_eq!(windows_node(None, ""), None);
+    }
+
+    #[test]
+    fn a_relative_path_folder_is_never_searched_for_node() {
+        // A folder named relative to the working folder, which really holds a node.exe from where the test runs: on
+        // Windows a launch from Explorer or the Start menu can have such a PATH entry, and it is never searched.
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        fs::create_dir_all(&target).expect("target");
+        let planted = tempfile::Builder::new()
+            .prefix("relative-node-")
+            .tempdir_in(&target)
+            .expect("a folder");
+        fs::write(planted.path().join("node.exe"), "").expect("a planted node");
+        let name = planted
+            .path()
+            .file_name()
+            .expect("a name")
+            .to_string_lossy()
+            .into_owned();
+        let relative = format!("target{}{name}", std::path::MAIN_SEPARATOR);
+        let cwd = std::env::current_dir().expect("a working folder");
+        assert!(
+            cwd.join(&relative).join("node.exe").is_file(),
+            "the planted node is found from {cwd:?} as {relative}"
+        );
+        assert_eq!(node_on_path(&relative), None);
+        assert_eq!(node_on_path(&format!(".;{relative};\"{relative}\"")), None);
+        // An absolute folder after it is still found.
+        let absolute = tempfile::tempdir().expect("a folder");
+        fs::write(absolute.path().join("node.exe"), "").expect("a node");
+        assert_eq!(
+            node_on_path(&format!("{relative};{}", absolute.path().display())),
+            Some(
+                absolute
+                    .path()
+                    .join("node.exe")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
     }
 
     #[test]
