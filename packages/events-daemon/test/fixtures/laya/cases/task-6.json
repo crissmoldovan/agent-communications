@@ -1,0 +1,469 @@
+{
+  "schemaVersion": 1,
+  "task": 6,
+  "owners": [
+    {
+      "id": "task-6"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-complete-lock-update-tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: a URL-only lock change keeps the platform digest yet disables at start-up as runtime-changed"
+    },
+    {
+      "id": "e2-model-update-and-downgrade-tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: a downgraded package version disables at start-up as runtime-changed"
+    },
+    {
+      "id": "e2-code-only-release-no-op",
+      "owner": "task-6",
+      "test": "E2 laya update: a release that changes only daemon code keeps Laya enabled and ready"
+    },
+    {
+      "id": "e2-required-doctor-fields",
+      "owner": "task-6",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content"
+    },
+    {
+      "id": "e2-verified-tree-retention-and-removal",
+      "owner": "task-6",
+      "test": "E2 manager: removal while disabled deletes only this release’s trees and reports idle"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d2-146-157-install-only-after-claim",
+      "owner": "task-6",
+      "test": "E2 manager: no artifact is fetched or recorded before the enablement claim"
+    },
+    {
+      "id": "d8-1402-1418-legal-model-transitions",
+      "owner": "task-6",
+      "test": "E2 manager: a claimed enable moves through installing, downloading and verifying to ready with byte progress"
+    },
+    {
+      "id": "d10-2071-2085-model-status-remove-doctor",
+      "owner": "task-6",
+      "test": "E2 laya status contract: the B3 control v2 Laya vectors are the live operator-control answers"
+    },
+    {
+      "id": "d11-2096-2128-disable-closure",
+      "owner": "task-6",
+      "test": "E2 manager: disable cancels an in-flight download and keeps the verified runtime"
+    },
+    {
+      "id": "d11-2279-2299-claim-fence",
+      "owner": "task-6",
+      "test": "E2 manager: an enablement claim that a disable overtakes starts no stale install"
+    },
+    {
+      "id": "d11-2301-2311-verified-artifact-lifecycle",
+      "owner": "task-6",
+      "test": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed"
+    },
+    {
+      "id": "d11-2313-2319-complete-lock-update",
+      "owner": "task-6",
+      "test": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed"
+    },
+    {
+      "id": "e2-status-dto-v1",
+      "owner": "task-6",
+      "test": "E2 laya status contract: every presentation state is a valid laya-model-status-v1 answer"
+    },
+    {
+      "id": "e2-dormant-placeholder-release",
+      "owner": "task-6",
+      "test": "E2 laya status contract: the shipped placeholder lock says Laya is not offered yet and refuses enablement first"
+    },
+    {
+      "id": "e2-start-up-update-through-owner",
+      "owner": "task-6",
+      "test": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees"
+    },
+    {
+      "id": "e2-runner-refuses-load-crash-kill",
+      "owner": "task-6",
+      "test": "E2 mutation: a copy whose named oracle fails to load is not a kill"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-enablement-claim-job-start",
+      "owner": "task-6",
+      "test": "E2 manager: an enablement claim that a disable overtakes starts no stale install"
+    },
+    {
+      "id": "e2-runtime-promotion-after-disable",
+      "owner": "task-6",
+      "test": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime"
+    },
+    {
+      "id": "e2-model-promotion-final-fence-disable",
+      "owner": "task-6",
+      "test": "E2 manager: a disable during the final model promotion fence is prompt and the model is not promoted"
+    },
+    {
+      "id": "e2-integrity-repair-selection",
+      "owner": "task-6",
+      "test": "E2 manager: an integrity repair cannot replace a selection a disable changed"
+    },
+    {
+      "id": "e2-update-compare-reenabled-version",
+      "owner": "task-6",
+      "test": "E2 laya update: the start-up comparison does not disable a version re-enabled meanwhile"
+    },
+    {
+      "id": "e2-model-remove-versus-reenable",
+      "owner": "task-6",
+      "test": "E2 manager: a removal that races a re-enable stops, and the enablement keeps its verified model"
+    },
+    {
+      "id": "e2-purge-kills-only-its-work",
+      "owner": "task-6",
+      "test": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-6.json",
+      "owner": "task-6"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-manager-claimed-pointer-only",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: no artifact is fetched or recorded before the enablement claim",
+      "testPattern": "E2 manager: no artifact is fetched or recorded before the enablement claim",
+      "before": "        `SELECT active.version AS version, versions.document AS document, versions.digest AS digest\n           FROM active_versions AS active\n           JOIN judge_kind_versions AS versions\n             ON versions.kind = active.object_id AND versions.version = active.version\n          WHERE active.kind = 'judge-kind' AND active.object_id = ?`,",
+      "after": "        `SELECT version, document, digest FROM judge_kind_versions\n          WHERE kind = ? AND revoked_at IS NULL ORDER BY version DESC LIMIT 1`,"
+    },
+    {
+      "id": "e2-manager-job-start-recheck",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: an enablement claim that a disable overtakes starts no stale install",
+      "testPattern": "E2 manager: an enablement claim that a disable overtakes starts no stale install",
+      "before": "      this.#assertCurrent(job);\n      this.#models.write({",
+      "after": "      this.#models.write({"
+    },
+    {
+      "id": "e2-manager-runtime-promotion-recheck",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "testPattern": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "before": "        this.#assertCurrent(job);\n        if (options.replace) await rm(runtimeRoot",
+      "after": "        if (options.replace) await rm(runtimeRoot"
+    },
+    {
+      "id": "e2-manager-disable-takes-artifact-lock",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "testPattern": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "before": "    const result = await this.#mutex.run(async () => {\n      const disabled = disable();\n      await this.#removeUnverified();\n      return disabled;\n    });",
+      "after": "    const result = await (async () => {\n      const disabled = disable();\n      await this.#removeUnverified();\n      return disabled;\n    })();"
+    },
+    {
+      "id": "e2-manager-disable-aborts-work",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: a disable during the final model promotion fence is prompt and the model is not promoted",
+      "testPattern": "E2 manager: a disable during the final model promotion fence is prompt and the model is not promoted",
+      "before": "    job?.controller.abort(new ArtifactWorkStale());",
+      "after": "    void job;"
+    },
+    {
+      "id": "e2-manager-disable-deletes-unverified",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: disable deletes an interrupted partial and staging tree but keeps verified trees",
+      "testPattern": "E2 manager: disable deletes an interrupted partial and staging tree but keeps verified trees",
+      "before": "      const disabled = disable();\n      await this.#removeUnverified();\n",
+      "after": "      const disabled = disable();\n"
+    },
+    {
+      "id": "e2-manager-transition-downloading",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: a claimed enable moves through installing, downloading and verifying to ready with byte progress",
+      "testPattern": "E2 manager: a claimed enable moves through installing, downloading and verifying to ready with byte progress",
+      "before": "      this.#write(job, 'downloading', job.runtimeBytes);",
+      "after": "      void 0;"
+    },
+    {
+      "id": "e2-manager-reuse-verified-runtime",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "testPattern": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "before": "      if (!(await verifyRuntimeTree({ root: runtimeRoot, files: runtimeFiles(selection) })).ok) {\n        this.#assertCurrent(job);\n        await this.#installRuntime(job, { replace: await isDirectory(runtimeRoot) });",
+      "after": "      if (true) {\n        this.#assertCurrent(job);\n        await this.#installRuntime(job, { replace: await isDirectory(runtimeRoot) });"
+    },
+    {
+      "id": "e2-manager-remove-refuses-enabled",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: removal refuses while Laya is enabled and touches no tree",
+      "testPattern": "E2 manager: removal refuses while Laya is enabled and touches no tree",
+      "before": "      if (this.#activeEnablement() !== null)\n        throw layaRefusal('LAYA_ENABLED'",
+      "after": "      if (false)\n        throw layaRefusal('LAYA_ENABLED'"
+    },
+    {
+      "id": "e2-manager-remove-only-own-trees",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "testPattern": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "before": "        await rm(runtimeRoot, { recursive: true, force: true });\n        await rm(`${runtimeRoot}.staging`",
+      "after": "        await rm(join(this.#root, 'runtime'), { recursive: true, force: true });\n        await rm(`${runtimeRoot}.staging`"
+    },
+    {
+      "id": "e2-manager-remove-stops-on-claim",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: a removal that races a re-enable stops, and the enablement keeps its verified model",
+      "testPattern": "E2 manager: a removal that races a re-enable stops, and the enablement keeps its verified model",
+      "before": "const claimedDuringRuntimeRemoval = this.#activeEnablement() !== null;",
+      "after": "const claimedDuringRuntimeRemoval = false;"
+    },
+    {
+      "id": "e2-manager-repair-fails-closed",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "testPattern": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "before": "        // A newer pointer or epoch owns the record.\n      }\n      return false;",
+      "after": "        // A newer pointer or epoch owns the record.\n      }\n      return true;"
+    },
+    {
+      "id": "e2-manager-repair-once",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "testPattern": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "before": "    if (selection === null || row?.state !== 'ready' || this.#job !== undefined)",
+      "after": "    if (selection === null || this.#job !== undefined)"
+    },
+    {
+      "id": "e2-manager-repair-selection-recheck",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: an integrity repair cannot replace a selection a disable changed",
+      "testPattern": "E2 manager: an integrity repair cannot replace a selection a disable changed",
+      "before": "        // The walk above was an await: only the selection it compared, still enabled, may lose its failing tree.\n        this.#assertCurrent(job);\n",
+      "after": "        // The walk above was an await: only the selection it compared, still enabled, may lose its failing tree.\n"
+    },
+    {
+      "id": "e2-update-platform-digest-is-not-a-fence",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: a URL-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "testPattern": "E2 laya update: a URL-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "before": "  if (canonicalJson(stored) === canonicalJson(release)) return null;",
+      "after": "  if (\n    (stored as CanonicalLayaEnablement)?.runtimeLock?.platform?.digest === release.runtimeLock.platform.digest &&\n    canonicalJson((stored as CanonicalLayaEnablement)?.manifest) === canonicalJson(release.manifest)\n  )\n    return null;"
+    },
+    {
+      "id": "e2-update-url-and-sri-are-compared",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "testPattern": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "before": "  if (canonicalJson(stored) === canonicalJson(release)) return null;",
+      "after": "  const withoutSources = (value: unknown) =>\n    JSON.parse(canonicalJson(value), (key, child) =>\n      key === 'url' || key === 'integrity' || key === 'digest' ? undefined : child,\n    );\n  if (canonicalJson(withoutSources(stored)) === canonicalJson(withoutSources(release))) return null;"
+    },
+    {
+      "id": "e2-update-runtime-lock-is-compared",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: a downgraded package version disables at start-up as runtime-changed",
+      "testPattern": "E2 laya update: a downgraded package version disables at start-up as runtime-changed",
+      "before": "  if (canonicalJson(stored) === canonicalJson(release)) return null;",
+      "after": "  if (canonicalJson(record(stored)?.manifest ?? null) === canonicalJson(release.manifest)) return null;"
+    },
+    {
+      "id": "e2-update-code-only-is-no-change",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: a release that changes only daemon code keeps Laya enabled and ready",
+      "testPattern": "E2 laya update: a release that changes only daemon code keeps Laya enabled and ready",
+      "before": "  if (canonicalJson(stored) === canonicalJson(release)) return null;",
+      "after": "  if (false) return null;"
+    },
+    {
+      "id": "e2-update-model-changed-reason",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: a changed model manifest disables at start-up as model-changed",
+      "testPattern": "E2 laya update: a changed model manifest disables at start-up as model-changed",
+      "before": "    ? 'model-changed'\n    : 'runtime-changed';",
+      "after": "    ? 'runtime-changed'\n    : 'model-changed';"
+    },
+    {
+      "id": "e2-update-rechecks-compared-pointer",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: the start-up comparison does not disable a version re-enabled meanwhile",
+      "testPattern": "E2 laya update: the start-up comparison does not disable a version re-enabled meanwhile",
+      "before": "      if (live === null || live.version !== compared.version || live.digest !== compared.digest) return false;",
+      "after": "      if (live === null) return false;"
+    },
+    {
+      "id": "e2-doctor-runtime-state-field",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      runtime,\n      model: row?.state ?? 'absent',",
+      "after": "      model: row?.state ?? 'absent',"
+    },
+    {
+      "id": "e2-doctor-publishes-no-path",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      totalBytes: status.totalBytes,\n    };",
+      "after": "      totalBytes: status.totalBytes,\n      root: this.#root,\n    };"
+    },
+    {
+      "id": "e2-purge-stops-only-terminalised-work",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised",
+      "testPattern": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised",
+      "before": "      if (row !== undefined && (row.state === 'reserved' || row.state === 'in-flight')) continue;",
+      "after": "      if (false) continue;"
+    },
+    {
+      "id": "e2-purge-keeps-verified-trees",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised",
+      "testPattern": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised",
+      "before": "  onWorkPurged(): void {\n",
+      "after": "  onWorkPurged(): void {\n    process.getBuiltinModule('node:fs').rmSync(this.#root, { recursive: true, force: true });\n"
+    },
+    {
+      "id": "e2-purge-participant-tells-listener",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/judge-purge.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge: every JudgePurgeParticipant purge tells the database’s work listener",
+      "testPattern": "E2 laya purge: every JudgePurgeParticipant purge tells the database’s work listener",
+      "before": "    purgeListeners.get(this.#database)?.onWorkPurged();",
+      "after": "    void purgeListeners;"
+    },
+    {
+      "id": "e2-dormant-enable-refuses-first",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-status-contract.test.ts",
+      "testName": "E2 laya status contract: the shipped placeholder lock says Laya is not offered yet and refuses enablement first",
+      "testPattern": "E2 laya status contract: the shipped placeholder lock says Laya is not offered yet and refuses enablement first",
+      "before": "    if (!availability.available) return unavailableResult(availability.code);\n    return this.#store.immediate(() => {",
+      "after": "    return this.#store.immediate(() => {"
+    },
+    {
+      "id": "e2-activation-hook-after-claim",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/activations.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees",
+      "testPattern": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees",
+      "before": "        this.#onJudgeKindEnabled?.({ kind: document.enablement.kind, version: document.enablement.version });",
+      "after": "        void this.#onJudgeKindEnabled;"
+    },
+    {
+      "id": "e2-owner-startup-update-rule",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees",
+      "testPattern": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees",
+      "before": "      layaArtifacts.reconcileRelease(() =>\n        new JudgeKinds({ store: database, now, activations }).disable(JUDGE_KIND_LAYA),\n      ),",
+      "after": "      Promise.resolve(null),"
+    },
+    {
+      "id": "e2-runner-named-oracle-kill",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a copy whose named oracle fails to load is not a kill",
+      "testPattern": "E2 mutation: a copy whose named oracle fails to load is not a kill",
+      "before": "      namedTapResult(result.output, 'not ok', mutation.testName),",
+      "after": "      true,"
+    },
+    {
+      "id": "e2-runner-baseline-must-pass",
+      "kind": "production",
+      "owner": "task-6",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: an oracle that does not pass unmutated is not a kill",
+      "testPattern": "E2 mutation: an oracle that does not pass unmutated is not a kill",
+      "before": "    assertNamedBaselinePasses(mutation, await runStrictMutationChild(child));",
+      "after": "    await runStrictMutationChild(child);"
+    }
+  ]
+}

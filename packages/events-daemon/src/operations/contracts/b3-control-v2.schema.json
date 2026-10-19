@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/b3-control-v2.schema.json",
+  "title": "B3 control contract v2",
+  "description": "B3 control v1 with E2's real Laya answers. Every operation keeps its v1 request; v2 replaces exactly the six results that carried v1's typed E2_REQUIRED placeholder. An owner without E2's artifact manager still answers v1.",
+  "$defs": {
+    "layaUnavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "phase"],
+      "properties": {
+        "kind": {
+          "const": "unavailable"
+        },
+        "code": {
+          "$ref": "https://agentcomms.local/laya-model-status-v1.schema.json#/$defs/unavailableCode"
+        },
+        "phase": {
+          "const": "E2"
+        }
+      }
+    },
+    "judgeKindEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "state", "version"],
+          "properties": {
+            "kind": {
+              "enum": ["typesafe", "local-endpoint"]
+            },
+            "state": {
+              "enum": ["disabled", "enabled"]
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "state": {
+                  "const": "disabled"
+                },
+                "version": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "state": {
+                  "const": "enabled"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "state", "version"],
+          "properties": {
+            "kind": {
+              "const": "laya"
+            },
+            "state": {
+              "enum": ["disabled", "enabled"]
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "state": {
+                  "const": "disabled"
+                },
+                "version": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "state": {
+                  "const": "enabled"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "state", "code"],
+          "properties": {
+            "kind": {
+              "const": "laya"
+            },
+            "state": {
+              "const": "unavailable"
+            },
+            "code": {
+              "$ref": "https://agentcomms.local/laya-model-status-v1.schema.json#/$defs/unavailableCode"
+            }
+          }
+        }
+      ]
+    },
+    "judgeKindDisabled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "disabled", "pointer", "pendingActivationsCancelled"],
+      "properties": {
+        "kind": {
+          "enum": ["typesafe", "laya", "local-endpoint"]
+        },
+        "disabled": {
+          "const": true
+        },
+        "pointer": {
+          "enum": ["absent", "removed"]
+        },
+        "pendingActivationsCancelled": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "resultsByOperation": {
+      "judgeKindsList": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 3,
+        "items": {
+          "$ref": "#/$defs/judgeKindEntry"
+        },
+        "allOf": [
+          {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "typesafe"
+                }
+              }
+            },
+            "minContains": 1,
+            "maxContains": 1
+          },
+          {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "laya"
+                }
+              }
+            },
+            "minContains": 1,
+            "maxContains": 1
+          },
+          {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "local-endpoint"
+                }
+              }
+            },
+            "minContains": 1,
+            "maxContains": 1
+          }
+        ]
+      },
+      "enableJudgeKind": {
+        "oneOf": [
+          {
+            "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/preparedActivation"
+          },
+          {
+            "$ref": "#/$defs/layaUnavailable"
+          }
+        ]
+      },
+      "disableJudgeKind": {
+        "$ref": "#/$defs/judgeKindDisabled"
+      },
+      "judgeModelStatus": {
+        "$ref": "https://agentcomms.local/laya-model-status-v1.schema.json"
+      },
+      "removeJudgeModel": {
+        "$ref": "https://agentcomms.local/laya-model-status-v1.schema.json"
+      },
+      "doctor": {
+        "$ref": "https://agentcomms.local/events-doctor-v3.schema.json"
+      }
+    },
+    "layaResultVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request", "result"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/request"
+        },
+        "result": true
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "judgeKindsList"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/judgeKindsList"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "enableJudgeKind"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/enableJudgeKind"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "disableJudgeKind"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/disableJudgeKind"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "judgeModelStatus"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/judgeModelStatus"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "removeJudgeModel"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/removeJudgeModel"
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "const": "doctor"
+                }
+              }
+            },
+            "result": {
+              "$ref": "#/$defs/resultsByOperation/doctor"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

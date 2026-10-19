@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
+import { runStrictMutationChild, type StrictMutationChildResult } from './strict-mutation-child.ts';
 
 export interface LayaMutation {
   readonly id: string;
@@ -17,6 +17,8 @@ export interface LayaMutation {
   readonly after: string;
 }
 
+/** A hung child is a runner failure, never mutant evidence; the bound only has to outlast one named oracle. */
+const MUTATION_CHILD_TIMEOUT_MS = 120_000;
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const casesRoot = join(repositoryRoot, 'packages/events-daemon/test/fixtures/laya/cases');
@@ -157,6 +159,50 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     await copyFile(root, `packages/events-daemon/test/fixtures/laya/cases/${name}`);
   await copyDependencyClosure(root, mutation.source);
   await copyDependencyClosure(root, mutation.testFile);
+  await linkInstalledModules(root);
+}
+
+/**
+ * A copied tree has no install of its own. Without these links every workspace or third-party import fails to load,
+ * and node:test reports a file that fails to load as one failed test: a crash would then "kill" every mutant.
+ */
+async function linkInstalledModules(root: string): Promise<void> {
+  for (const directory of ['', 'packages/events-daemon']) {
+    const installed = join(repositoryRoot, directory, 'node_modules');
+    // A nested runner's own source tree links these too, so follow a link to the installed directory.
+    const modules = await stat(installed).catch(() => undefined);
+    if (!modules?.isDirectory())
+      throw new Error(`the mutation runner needs the installed ${directory || 'root'} modules`);
+    const destination = join(root, directory, 'node_modules');
+    await mkdir(dirname(destination), { recursive: true });
+    // Directory links on every platform, as the other mutation trees here: pnpm's workspace links resolve through them.
+    await symlink(installed, destination, 'dir');
+  }
+}
+
+/** Only the declared test, by its exact name, may produce the TAP result; a load failure is reported under the file. */
+function namedTapResult(output: string, state: 'ok' | 'not ok', name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${state} \\d+ - ${escaped}(?:\\s|$)`, 'mu').test(output);
+}
+
+function tapCount(output: string, label: 'tests' | 'pass' | 'fail'): number | undefined {
+  const values = [...output.matchAll(new RegExp(`^# ${label} (\\d+)\\s*$`, 'gmu'))].map((match) => Number(match[1]));
+  return values.length === 1 ? values[0] : undefined;
+}
+
+/** The unmutated copy must pass exactly its named test, or a later failure would not be evidence about the mutant. */
+function assertNamedBaselinePasses(mutation: LayaMutation, result: StrictMutationChildResult): void {
+  const tail = result.output.slice(-2000);
+  assert.equal(result.code, 0, `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail}`);
+  assert.equal(
+    namedTapResult(result.output, 'ok', mutation.testName),
+    true,
+    `${mutation.id}: the unmutated copy did not report its named test as passing\n${tail}`,
+  );
+  assert.equal(tapCount(result.output, 'tests'), 1, `${mutation.id}: the baseline ran exactly its named test\n${tail}`);
+  assert.equal(tapCount(result.output, 'pass'), 1, `${mutation.id}: the baseline passed exactly once\n${tail}`);
+  assert.equal(tapCount(result.output, 'fail'), 0, `${mutation.id}: the baseline reported no failure\n${tail}`);
 }
 
 /** Refuses a runner that loads a registered production mutation but does not run its exact oracle. */
@@ -182,47 +228,50 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
       `${mutation.id}: guarded production text must match exactly once in ${relative(repositoryRoot, target)}`,
     );
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
-    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await new Promise<{ readonly code: number | null; readonly output: string }>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [
-          '--import',
-          join(root, 'test/helpers/loopback-seal-preload.mjs'),
-          '--experimental-strip-types',
-          '--disable-warning=ExperimentalWarning',
-          '--test',
-          // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
-          '--test-reporter=tap',
-          '--test-name-pattern',
-          exactTestName(mutation.testName),
-          join(root, mutation.testFile),
-        ],
-        { cwd: root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      let output = '';
-      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.once('error', reject);
-      child.once('close', (code) => resolve({ code, output }));
-    });
+    const child = {
+      command: process.execPath,
+      args: [
+        '--import',
+        join(root, 'test/helpers/loopback-seal-preload.mjs'),
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
+        '--test',
+        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+        '--test-reporter=tap',
+        '--test-name-pattern',
+        exactTestName(mutation.testName),
+        join(root, mutation.testFile),
+      ],
+      cwd: root,
+      env: environment,
+      timeoutMs: MUTATION_CHILD_TIMEOUT_MS,
+    };
+    assertNamedBaselinePasses(mutation, await runStrictMutationChild(child));
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const result = await runStrictMutationChild(child);
     assert.notEqual(
       result.code,
       0,
       `${mutation.id}: ${mutation.testName} unexpectedly accepted mutant ${mutation.source}:${changedLine}\n${result.output}`,
     );
-    // A copy that crashes before its oracle runs also exits non-zero; only the named test, run and failed, kills it.
-    assert.match(
-      result.output,
-      /^# tests 1$/m,
+    // A copy that crashes before its oracle runs also exits non-zero, and node:test reports that under the file's
+    // name: only the named test, run and failed, kills a mutant.
+    assert.equal(
+      namedTapResult(result.output, 'not ok', mutation.testName),
+      true,
+      `${mutation.id}: its named test, not the file, failed\n${result.output.slice(-2000)}`,
+    );
+    assert.equal(
+      tapCount(result.output, 'tests'),
+      1,
       `${mutation.id}: exactly its named test ran\n${result.output.slice(-2000)}`,
     );
-    assert.match(result.output, /^# fail 1$/m, `${mutation.id}: its named test failed\n${result.output.slice(-2000)}`);
+    assert.equal(
+      tapCount(result.output, 'fail'),
+      1,
+      `${mutation.id}: its named test failed\n${result.output.slice(-2000)}`,
+    );
     return changedLine;
   } finally {
     await rm(root, { recursive: true, force: true });

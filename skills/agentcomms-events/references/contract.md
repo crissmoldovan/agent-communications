@@ -28,8 +28,8 @@ kind's enablement, but only a person approves them. It may test an active judge 
 event, and may turn a kind off at once. Turning a kind off cancels any pending global enablement that captured one of
 its rules; removing a judge cancels its pending rule activations, and a rule embedding that revoked judge cannot later
 become active. It never invents an endpoint or key, and never treats a prepared kind, budget or rule as active. Laya
-is not available in this release: its controls return their typed
-unavailable result. Report that boundary plainly. Do not try to work around it with a target test, a local endpoint, a
+is not offered in this release: its controls report it unavailable with a closed reason. Report that boundary
+plainly. Do not try to work around it with a target test, a local endpoint, a
 pending document or another tool.
 
 ## 4. Human-only operations stay with a person.

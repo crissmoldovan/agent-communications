@@ -159,6 +159,28 @@ export interface CanonicalLayaEnablementDisclosures {
   }>;
 }
 
+/**
+ * The stable Laya status answer, version 1: what `judge model status --json` prints, what `judge model remove`
+ * returns, `doctor`'s `judge.laya` builds on and the desktop app reads (schema:
+ * `src/operations/contracts/laya-model-status-v1.schema.json`). Exactly these eight fields, always present:
+ *
+ * - `state`: `idle` — disabled and offered here (a removed model is `idle` too); `installing` — the runtime is
+ *   being installed after an approved enablement's claim; `downloading` — the model is being downloaded;
+ *   `verifying` — both trees are being compared with the lock and manifest; `ready`; `failed` — see `failureCode`;
+ *   `unavailable` — disabled and not offered on this machine or in this release, see `reason`. An enabled kind is
+ *   never `idle` or `unavailable`.
+ * - `manifestId`, `runtimeLockDigest`: the reviewed entry's identity; the digest is null when this platform has no
+ *   reviewed runtime lock (the placeholder lock, Linux, Windows).
+ * - `bytesVerified` of `totalBytes`: byte progress over this platform's reviewed runtime and model files (model only
+ *   while no runtime lock applies); an idle installation that kept a verified copy keeps its byte count.
+ * - `failureCode` (only with `failed`): `integrity`, `download-failed`, `runtime-failed` or `boundary-failed`.
+ * - `reason` (with `unavailable`, and with `failed`/`boundary-failed`): `E2_EXTERNAL_REFERENCE_BLOCKED` — this
+ *   release ships the placeholder lock, so Laya is not offered yet; `LAYA_PLATFORM_UNAVAILABLE`;
+ *   `LAYA_SANDBOX_UNAVAILABLE`.
+ * - `updatedAt`: the content-free D8 row's last change, or null.
+ *
+ * It carries no path, input, request, response, key or token. A new field or code is a new version.
+ */
 export interface LayaModelStatus {
   readonly state: LayaPresentationState;
   readonly manifestId: string | null;
@@ -168,6 +190,24 @@ export interface LayaModelStatus {
   readonly failureCode: LayaModelFailureCode | null;
   readonly reason: LayaUnavailableCode | null;
   readonly updatedAt: number | null;
+}
+
+/**
+ * `doctor`'s Laya entry (doctor-v3 `judge.laya`): the status answer's state, identity, failure and progress, plus the
+ * installed runtime's state, the D8 model row's state and the boundary's availability. Never a path or content.
+ */
+export interface LayaArtifactDoctor {
+  readonly state: LayaPresentationState;
+  readonly manifestId: string | null;
+  readonly runtimeLockDigest: string | null;
+  readonly runtime: 'absent' | 'installing' | 'installed';
+  readonly model: 'absent' | LayaModelState;
+  readonly boundary:
+    | { readonly status: 'active'; readonly reason: null }
+    | { readonly status: 'unavailable'; readonly reason: LayaUnavailableCode };
+  readonly failureCode: LayaModelFailureCode | null;
+  readonly bytesVerified: number;
+  readonly totalBytes: number;
 }
 
 /** The worker-facing result stays narrower than a transport result and never carries a request, response or path. */

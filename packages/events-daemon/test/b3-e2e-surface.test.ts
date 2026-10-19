@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -123,14 +124,34 @@ function assertProductionResponse(
   );
 }
 
-const FROZEN_E2_RESULT = { kind: 'unavailable', code: 'E2_REQUIRED', phase: 'E2' } as const;
+/**
+ * E2's dormant release: with the shipped placeholder runtime lock, `judge model status` and `remove` answer the
+ * laya-model-status-v1 `unavailable` state, derived from the daemon's own shipped manifest. It is read only when a
+ * judge-model row is checked, so a copied tree that runs another test of this file needs no package-root asset.
+ */
+function dormantLayaStatus(): unknown {
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '../laya-manifest.json'), 'utf8')) as {
+    readonly manifestId: string;
+    readonly files: readonly { readonly size: number }[];
+  };
+  return {
+    state: 'unavailable',
+    manifestId: manifest.manifestId,
+    runtimeLockDigest: null,
+    bytesVerified: 0,
+    totalBytes: manifest.files.reduce((sum, file) => sum + file.size, 0),
+    failureCode: null,
+    reason: 'E2_EXTERNAL_REFERENCE_BLOCKED',
+    updatedAt: null,
+  };
+}
 
 const JUDGE_SURFACE_RESULTS: Readonly<Record<string, unknown>> = {
   'events-daemon.judges.list': [],
   'events-daemon.budget.show': { activeVersion: null, versions: [] },
   'events-daemon.judge-kinds.list': [
     { kind: 'typesafe', state: 'disabled', version: null },
-    { kind: 'laya', state: 'unavailable', code: 'E2_REQUIRED' },
+    { kind: 'laya', state: 'unavailable', code: 'E2_EXTERNAL_REFERENCE_BLOCKED' },
     { kind: 'local-endpoint', state: 'disabled', version: null },
   ],
   // capabilities.json drives this row with `--version 2`, so a subcommand's own version reaching the operation is
@@ -141,8 +162,12 @@ const JUDGE_SURFACE_RESULTS: Readonly<Record<string, unknown>> = {
     version: 2,
     code: 'JUDGE_AUTHORITY_CHANGED',
   },
-  'events-daemon.judge-model.status': FROZEN_E2_RESULT,
-  'events-daemon.judge-model.remove': FROZEN_E2_RESULT,
+  get 'events-daemon.judge-model.status'() {
+    return dormantLayaStatus();
+  },
+  get 'events-daemon.judge-model.remove'() {
+    return dormantLayaStatus();
+  },
 };
 
 const JUDGE_SURFACE_FAILURES: Readonly<Record<string, { readonly exit: number; readonly message: string }>> = {

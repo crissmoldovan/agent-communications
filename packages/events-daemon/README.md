@@ -154,8 +154,13 @@ Two kinds of judge are available:
   as Jev. A server that answers in its own JSON says where its number is, with `"protocol": "json-score"` and a
   `scorePointer`, and that number is labelled an uncalibrated score. Nothing leaves this machine.
 
-The third kind, **`laya`**, runs the Laya model inside the daemon. It is not available yet: `agent-events judge kinds
-list` shows it as unavailable, and a judge naming it is refused.
+The third kind, **`laya`**, will run the Laya model on this machine, in an isolated worker. This release does not offer
+it yet: it ships no reviewed runtime lock, so `agent-events judge kinds list` and `agent-events judge model status` show
+Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`, `agent-events judge kind enable laya` refuses before
+anything is prepared, and a judge naming it is refused. On a release that offers it, `judge model status` reports the
+runtime and model installation (`idle`, `installing`, `downloading`, `verifying`, `ready`, `failed` or `unavailable`),
+its byte progress and any failure or unavailable reason; `judge kind disable laya` cancels a download and keeps the
+verified files; and `judge model remove` deletes them, only while Laya is disabled.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing
@@ -266,7 +271,8 @@ name its judges stay, but cannot call them; turning the kind back on needs a new
 along with everything else.
 
 `doctor` shows each kind's state, the active budget version and its reservations, how many decisions are held and
-when the next one expires, any hosted judge whose key is missing, and Laya as not available yet, all without content.
+when the next one expires, any hosted judge whose key is missing, and Laya's runtime, model and sandbox-boundary state
+with its reason, all without content.
 
 ## For desktop and tool builders
 
@@ -275,8 +281,19 @@ The data-only control contract is
 request, result and error vectors are in [`test/fixtures/b3-control-contract-v1`](test/fixtures/b3-control-contract-v1),
 and the terminal approval-preview vectors are in [`test/fixtures/b3-approval-preview-v1`](test/fixtures/b3-approval-preview-v1).
 It covers every B3 capability a desktop app may call, and never contains a secret value. Its frozen doctor result is
-the closed [`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json); the released daemon reports the
-additive Phase-E [`doctor-v2.schema.json`](src/operations/contracts/doctor-v2.schema.json).
+the closed [`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json), and Phase E's
+[`doctor-v2.schema.json`](src/operations/contracts/doctor-v2.schema.json) stays as it was. The released daemon reports
+[`doctor-v3.schema.json`](src/operations/contracts/doctor-v3.schema.json), which keeps every v2 property, has no judge
+kind left behind a phase boundary, and adds Laya's content-free `judge.laya` entry.
+
+[`b3-control-v2.schema.json`](src/operations/contracts/b3-control-v2.schema.json) is v1 with the real Laya answers: it
+replaces exactly the six results that carried v1's typed `E2_REQUIRED` placeholder (`judgeKindsList`,
+`enableJudgeKind`, `disableJudgeKind`, `judgeModelStatus`, `removeJudgeModel` and `doctor`); its vectors are in
+[`test/fixtures/b3-control-contract-v2`](test/fixtures/b3-control-contract-v2). `judge model status` and
+`judge model remove` answer the stable
+[`laya-model-status-v1.schema.json`](src/operations/contracts/laya-model-status-v1.schema.json): eight closed fields —
+the state, the reviewed manifest id and runtime-lock digest, `bytesVerified` of `totalBytes`, a failure code, an
+unavailable reason and the last update time — and never a path, input, request, response, key or token.
 
 ## Licence
 

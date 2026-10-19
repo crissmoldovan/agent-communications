@@ -79,7 +79,10 @@ test('the local event service README states its boundaries for the person using 
   assert.match(prose, /never sends mail or messages through them/i);
   assert.match(prose, /An agent can never/i);
   assert.match(prose, /Every judge kind is off until you enable it, at your terminal/i);
-  assert.match(prose, /runs the Laya model inside the daemon\. It is not available yet/i);
+  assert.match(
+    prose,
+    /will run the Laya model on this machine, in an isolated worker\. This release does not offer it yet/i,
+  );
 });
 
 test('the Phase-D channel README notes keep event operations internal and read-only', async () => {

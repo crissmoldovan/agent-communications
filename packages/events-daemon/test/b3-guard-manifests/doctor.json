@@ -237,8 +237,8 @@
         "packages/events-daemon/src/operations/contracts/doctor-v2.schema.json"
       ],
       "mutation": {
-        "from": "    return projectE9Doctor({",
-        "to": "    await core.audit.append({ inboxId: '', operation: 'doctor-secret-marker', outcome: 'ok' });\n    return projectE9Doctor({"
+        "from": "    return projectE2Doctor({",
+        "to": "    await core.audit.append({ inboxId: '', operation: 'doctor-secret-marker', outcome: 'ok' });\n    return projectE2Doctor({"
       },
       "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
       "loadedMarker": "doctor-scans-audit-for-content"

@@ -44,8 +44,9 @@ another tool, and do not describe a rule as active.
 ## Judge boundary
 
 Every judge kind is off until a person enables it. `events_judge_kinds_list` shows which kinds are on. Laya is not
-available in this release: its kind, `events_judge_model_status` and `events_judge_model_remove` return a typed
-unavailable result (`E2_REQUIRED`). Report that state.
+offered in this release: its kind is listed as unavailable, `events_judge_model_status` answers the state `unavailable`
+with its reason, and `events_judge_kind_enable` for Laya refuses with that same reason (`E2_EXTERNAL_REFERENCE_BLOCKED`)
+before anything is prepared. Report that state.
 
 - **Propose, never activate.** `events_judge_add` and `events_judge_update` create an immutable judge version, used
   only once a rule naming it is approved. `events_budget_update` creates a pending judge budget, and

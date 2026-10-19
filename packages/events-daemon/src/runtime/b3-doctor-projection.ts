@@ -5,17 +5,20 @@ import { JUDGE_KIND_LAYA, JUDGE_KINDS, type JudgeKind } from '../domain/lifecycl
 import {
   assertDoctorReportV1,
   assertDoctorReportV2,
+  assertDoctorReportV3,
   type DoctorActivationFailureCode,
   type DoctorActivationKind,
   type DoctorDerivationEditKind,
   type DoctorLineageFailureCode,
   type DoctorReportV1,
   type DoctorReportV2,
+  type DoctorReportV3,
   type DoctorSource,
 } from '../operations/doctor.ts';
 import { phaseDSourceRegistry } from '../sources/registry.ts';
 import type { B3ControlPorts } from './b3-control-ports.ts';
 import { type LineageFailureCode, type RuleLineageRow, validateRuleLineage } from './disclosure-fence.ts';
+import type { LayaArtifactManager } from './laya/manager.ts';
 
 export const DOCTOR_REPORT_V1_SCHEMA_VERSION = 'doctor-v1' as const;
 
@@ -670,6 +673,26 @@ export async function projectE9Doctor(input: DoctorProjectionInput): Promise<Doc
         oldestCreatedAt: holdClocks.oldest_created_at,
         nextExpiresAt: holdClocks.next_expires_at,
       },
+    },
+  });
+}
+
+/**
+ * E2's successor beside the frozen doctor-v1 and doctor-v2 projections: the same v2 report, with no remaining judge
+ * boundary, Laya's real kind state, and its content-free artifact entry from the one artifact manager.
+ */
+export async function projectE2Doctor(
+  input: DoctorProjectionInput & { readonly laya: Pick<LayaArtifactManager, 'kindEntry' | 'doctor'> },
+): Promise<DoctorReportV3> {
+  const report = await projectE9Doctor(input);
+  return assertDoctorReportV3({
+    ...report,
+    schemaVersion: 'doctor-v3',
+    judgeBoundary: [],
+    judge: {
+      ...report.judge,
+      kinds: report.judge.kinds.map((entry) => (entry.kind === JUDGE_KIND_LAYA ? input.laya.kindEntry() : entry)),
+      laya: await input.laya.doctor(),
     },
   });
 }

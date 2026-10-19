@@ -126,7 +126,8 @@ test('E2 laya model state: has only D8 content-free fields and needs the active 
           failureCode: null,
           now: 1,
         }),
-      /pointer/i,
+      // The pointer guard itself refuses, not the later manifest lookup that also names the pointer.
+      /^Error: the active Laya judge-kind pointer is required before model state changes$/,
     );
     assert.equal(
       (store.database.prepare('SELECT count(*) AS count FROM laya_models').get() as { count: number }).count,
