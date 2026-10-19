@@ -50,9 +50,17 @@ ends it at once. A pause never holds a security fix: its notice is said at once,
 - `never`: nothing asks npm; they update by hand.
 
 An organisation's profile can cap this: `<profile>.updates.json`, beside the `.agentcomms.json` file, may say every 14
-days at most, or never, and may turn background updates off. It is read and approved with the profile (`comms_org_add`,
-`comms_org_update`), only ever tightens, and a level set above it waits until the cap is lifted; `comms_doctor` names
-the cap and the profile it comes from. Say so when a person asks for a level the cap holds back.
+days at most, or never, and may turn background updates off. It is read and approved with the profile (`comms_org_add`),
+and only ever tightens: a level set above it waits until the cap is lifted. `comms_org_update` applies a tighter cap at
+once, even beside a change that waits, and asks before a looser one. `comms_doctor` names the cap and the profile it
+comes from. Say so when a person asks for a level the cap holds back.
+
+**An organisation's profile that needs a later release** is a reason to update. `comms_org_add` or `comms_org_update`
+refuses with `NEEDS_NEWER_RELEASE` — `rgc's profile needs agent-communications 0.23.0 or later for "<name>": nothing
+was changed` — and nothing else stops. Offer the update (steps 1 to 3 below); once it is done and the client
+restarted, call `comms_org_update` again. An entry the profile marks optional is only skipped: `org show` names it as
+`not applied here`, and the update that understands it applies it at the next `comms_org_update`, asking first unless
+it only tightens.
 
 A level that updates less is a change the person approves: show the preview, which says what stops happening, and
 wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and

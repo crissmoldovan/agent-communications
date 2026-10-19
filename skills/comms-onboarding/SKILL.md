@@ -86,7 +86,14 @@ walk instead of borrowing a profile client. Existing mailboxes stay on the clien
 token. Slack automatically selects the profile's read app for `rgc/slack`, or its send app when
 `mode: "send"` is requested. No Client ID or port is needed. When the organisation
 changes its file, `comms_org_update` reads it again — a changed profile is approved first, a repair
-applies at once — and `comms_org_remove` stops using it.
+or a tighter update cap applies at once — and `comms_org_remove` stops using it.
+
+A profile can carry `extensions`, where later releases add fields. The result's `extensions.ignored`, and
+`comms_org_show`, name any entry this release skipped (`not applied here: <name> (needs <since> or later)`): say so
+in one line; the rest of the profile is in force and there is nothing to do. If `comms_org_add` or
+`comms_org_update` refuses with `NEEDS_NEWER_RELEASE`, the profile needs a later release: nothing was changed, and
+nothing else stops. Tell the person, update first (the comms-update skill), then call it again. Never edit the
+profile to get past it.
 
 ## 3. Connect each account
 
@@ -169,8 +176,10 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | Check | `agentcomms doctor`, `agent-gmail doctor`, `agent-slack doctor`, `agent-resend doctor`, `agent-whatsapp status` |
 
 A change stops with exit `10`, its preview and an approval id, and changes nothing — with one
-exception: `agentcomms org update <organisation> --for-other-addresses off` turns that off at once,
-because narrowing never waits, and the preview and the final result both say it was done. Show the
+exception: `agentcomms org update <organisation>` applies what only tightens at once — `--for-other-addresses
+off`, and a tighter update cap from the organisation — because tightening never waits, and the preview and the final
+result both say it was done. A profile this release is too old for stops `org add` or `org update` with exit `1`
+and `NEEDS_NEWER_RELEASE`, changing nothing: update first, then run it again. Show the
 preview; after their yes, run the command its hint gives, which carries the approval id. Under `confirm` they
 first run the approve command the hint gives, in their own terminal, exactly as given, and
 `agentcomms approval wait <id>` tells you when they have. If they say no, `agentcomms approvals revoke <id>`, at

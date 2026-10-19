@@ -5,6 +5,35 @@ together under one version.
 
 ## Unreleased
 
+**An organisation can add new fields to its profile without breaking `org update` for members on 0.21.0 or later.**
+Until now every release refused a whole profile carrying any key it did not know, so one new field stopped
+`agentcomms org update` for every member who had not updated yet. From 0.21.0 a profile may carry an `extensions`
+section, the one place later releases add fields; everything else in the profile stays as strict as before. Each
+entry says whether it is `required` and the release that first understands it (`since`). On your release:
+
+- An optional entry it does not know is skipped, and the rest of the profile applies. `org add`, `org update` and
+  `org show` (and `comms_org_*`, under `extensions`) say `not applied here: <name> (needs <since> or later)`, and
+  `doctor` lists it as information. When you update to a release that understands it, `org update` applies it then:
+  at once if it only tightens something, and otherwise only after your yes, though the profile's file did not change.
+- A required entry it does not know stops `org add` or `org update` with a new code, `NEEDS_NEWER_RELEASE` (exit 1):
+  "acme's profile needs agent-communications 0.23.0 or later for "<name>": nothing was changed". Your last approved
+  settings stay exactly as they were, and nothing else stops. The hint names the update command and the
+  `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1".
+
+For admins nothing changes today: profiles stay valid as they are, and a release that adds the first extension says
+so in its notes. Members on 0.20.0 or older refuse any profile with `extensions` (they keep their last approved
+settings), so add one only once your members run 0.21.0 or later. The two files beside a profile,
+`<profile>.agent-app.json` and `<profile>.updates.json`, stay exactly as they are, and new fields go in `extensions`
+rather than in a new file. [Upgrading](docs/upgrading.md#0210-organisation-profiles-gain-extensions) has the rules.
+
+**A tighter update cap from your organisation applies at once.** `agentcomms org update` (and `comms_org_update`)
+asked for approval before applying any change to `<profile>.updates.json`, even one that only made updates less
+frequent. A cap that only tightens — `never` where it said `every-14-days`, `background: false` added, or caps added
+where there were none — now applies at once with no approval, even beside a change to the profile that waits. The
+preview lists it under "Done already, at once", and the result lists it first. A looser cap in any part, a caps file
+removed, or a mix of tighter and looser still asks first, as does a cap read from a new `--source`. `org add` still
+asks before anything, as it adds the whole profile.
+
 **A label change's preview names your Slack workspace as you know it.** `agentcomms label style <workspace> labelled`
 (or `comms_label` with `style`) showed the workspace's internal id where its name belongs: "how the agent’s Slack
 messages look: acc_… app → acc_… labelled". It now reads "how the agent’s Slack messages look in cue/slack: app →

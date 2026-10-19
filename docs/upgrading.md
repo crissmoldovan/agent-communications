@@ -176,8 +176,12 @@ named through a symbolic link has its files read beside the file the link names,
 never beside the link. It is not in the
 profile itself: every release from 0.13.0 to 0.19.0 refuses a profile with a key it does not know, at every level, and a
 member not yet on 0.20.0 would lose `org update` for the whole profile. Those releases never open the file beside it.
-`org add` and `org update` read it with the profile and bind its SHA-256 in the same approval: a new, changed or removed
-file is approved first even when the profile's bytes are unchanged, and a record edited by hand is put back at once. A
+`org add` reads it with the profile and binds its SHA-256 in the same approval. From 0.21.0, `org update` applies a file
+that only tightens at once, with no approval: a lower `max` (`never` is tighter than `every-14-days`, which is tighter
+than no cap), `background: false` added, or a new file that only adds caps. It does so even beside a change that waits
+for an approval, before the preview, which marks it done. A file that is looser in any part — a higher `max`,
+`background: false` taken out, the file removed, or a mix of tighter and looser — is approved first even when the
+profile's bytes are unchanged, as is a caps file read from a new `--source`. A record edited by hand is put back at once. A
 member's level is capped at `max`, whatever they set; `background: false` keeps `auto` a daily check with a notice. A
 `max` other than those two words is refused. `doctor` names the cap and the profile it comes from. A `config.json`
 that cannot be read lifts no cap: the strictest cap that can still be read in its place holds — what the file still
@@ -291,6 +295,42 @@ A background run and a person's update or rollback never overlap: each holds one
 `.update.lock` in the state directory, while it installs, switches or prunes. A run that finds it held does nothing
 that day; `agentcomms update` and `comms_update` that find it held are refused at once — before any approval is
 prepared — saying a background run is under way, to try again in a few minutes.
+
+## 0.21.0: organisation profiles gain `extensions`
+
+Every release from 0.13.0 to 0.20.0 refuses an organisation profile that carries any key it does not know, at any
+level. From 0.21.0 a version-1 profile has one place for what later releases add: a top-level `extensions` object.
+
+```json
+"extensions": {
+  "some-feature": { "required": true, "since": "0.23.0", "…": "the feature's own fields" }
+}
+```
+
+Each entry has a name (a lower-case letter, then 1–39 lower-case letters, digits or hyphens), and at most 16 are
+allowed. Each says `required` (true or false) and `since`, the first release that understands it, as `MAJOR.MINOR.PATCH`.
+Every other part of the profile stays as strict as before.
+
+**For members.** On 0.21.0 or later:
+
+- An entry your release does not know, marked `required: false`, is skipped. The rest of the profile applies.
+  `org add`, `org update` and `org show` say `not applied here: <name> (needs <since> or later)`, and `doctor` lists
+  it on the organisation's row as information. When a later release understands it, `org update` applies it then. If
+  the entry only tightens something it applies at once; otherwise it is shown before → after and waits for your yes,
+  even though the profile's bytes did not change.
+- An entry your release does not know, marked `required: true`, stops `org add` or `org update` with
+  `NEEDS_NEWER_RELEASE` (exit 1): `<organisation>'s profile needs agent-communications <since> or later for "<name>":
+  nothing was changed`. Your last approved settings stay as they were, and nothing else stops. Update first, then run
+  `org update` again. A profile of a later `version` than 1 is refused the same way.
+
+**For admins.** Nothing to do now: today's profiles are unchanged and stay valid, and when a feature first needs an
+extension its release notes say so. Members on 0.20.0 or older refuse **any** profile that carries `extensions`. They
+keep their last approved settings and nothing stops for them, but they can't take the new profile until they update,
+so add an extension only once your members run 0.21.0 or later. On the default `auto` level with background updates
+set up, a member installs a release about three days after it is published. Mark an extension `required: true` when a
+member must have it to use the profile at all. The two files beside the profile, `<profile>.agent-app.json` and
+`<profile>.updates.json`, stay exactly as they are, and no new file of that kind is added: new fields go in
+`extensions`.
 
 ## 0.14.0: the configuration moves to version 3
 
