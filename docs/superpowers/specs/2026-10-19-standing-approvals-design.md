@@ -481,3 +481,9 @@ word.
    what the person is shown. `comms_standing` is annotated `destructiveHint: true`: it only takes away, but nothing
    puts back what it took. The tests now type a `yes` as long as the code, and follow a tightened change policy to a
    mint and a claim. **(lead's call, after review)**
+10. **A reply may not say "approve" by the back door** (S3; Slack review S6). A reply holding an emoji or a pictograph
+    — any `Extended_Pictographic` character, and the plain check mark ✓, which Unicode does not count as one — is
+    refused, `pictograph`, checked before invisible characters so an emoji's variation selector is said as the emoji.
+    A ✅ or 👍 in the words reads as a yes as surely as the reaction. A reply holding any of `yes`, `approved`,
+    `approve`, `go ahead`, `lgtm`, `ok`, `done` or `confirmed`, as whole words in any case, gets S3's reads-as-approval
+    warning, shown under that reply in the preview. **(lead's call, after review)**

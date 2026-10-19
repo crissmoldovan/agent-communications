@@ -83,7 +83,7 @@ they set ([design](docs/superpowers/specs/2026-10-19-standing-approvals-design.m
 - **No loops, no floods, no false yes.** Only messages from people, by an allow-list that refuses bots, apps,
   workflows, Slackbot and this account's own posts; nothing with buttons or menus; once a thread across every standing
   approval, with hourly and daily caps spent at the moment of use and never refunded; `eyes` by default, and a warning
-  for an emoji that reads as approval.
+  for an emoji, or a reply's words, that read as approval; no emoji in a reply's words.
 - **It never looks like the person.** A reply goes as the app or labelled; a reaction only as the app, where the app
   is a member.
 - **Nothing creates or widens one but a person at a terminal.** It is a change approval forced to `confirm` whatever

@@ -21,8 +21,8 @@ import {
   standingDays,
 } from '../standing.ts';
 import { endStanding } from '../standing-flow.ts';
-import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import type { AckOutcome, AckUse } from '../standing-ledger.ts';
+import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 
 /**
  * Reporting, narrowing and ending standing approvals (design 2026-10-19-standing-approvals, S8, S10, and §8.1–8.2):

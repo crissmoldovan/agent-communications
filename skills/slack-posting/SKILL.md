@@ -347,11 +347,11 @@ agent-slack standing add --workspace acme/slack --reactions eyes --places C024BE
 ```
 
 Its preview opens `An agent proposed these contents and places. Check each one.`, then shows each content in full
-with its digest and any warning — `:white_check_mark:` and its like can read as approval — each place with its member
-count and whether another organisation shares it, the limits and the expiry. Show it in full, and tell the person
-they approve it at their own terminal, with the approve command the result gives and the code it shows; a yes in this
-chat never approves it, under any change policy. Learn when they have with the wait the result's `next` names. If they
-say no, revoke it at once with `comms_approval_revoke`.
+with its digest and any warning — `:white_check_mark:` and its like, or a reply that says "OK" or "Done", can read as
+approval — each place with its member count and whether another organisation shares it, the limits and the expiry.
+Show it in full, and tell the person they approve it at their own terminal, with the approve command the result gives
+and the code it shows; a yes in this chat never approves it, under any change policy. Learn when they have with the
+wait the result's `next` names. If they say no, revoke it at once with `comms_approval_revoke`.
 
 **Ending one** applies at once and asks nobody: `comms_standing` with `revoke`, `narrow`, or `off` for every one (CLI:
 `agentcomms standing revoke <id>`, `agentcomms standing off`). Do it whenever the person asks.

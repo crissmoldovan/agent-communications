@@ -21,14 +21,14 @@ of your contents; it never writes the words, and it cannot pick an old message, 
   `eyes` alone. The limits are once a thread, 10 an hour and 30 a day by default (3, 30 and 100 at most), and it ends
   7 days after you approve it, 30 at most.
 - **Its preview shows everything you are agreeing to:** each content in full with its digest, and a warning for an
-  emoji that can read as approval, such as ✅; each place with its member count and whether another organisation
+  emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another organisation
   shares it; the limits; and the expiry. One an agent prepared over MCP, with `slack_standing_add`, opens "An agent
   proposed these contents and places. Check each one."
 - **Only the code typed at a terminal approves it,** with `approve` as the result gives it, from either CLI — never a
   typed `yes`, a client's form or a yes in chat, whatever your change policy. `--replaces <id>` widens one, and asks
   again; a replacement that only narrows applies at once.
 - Only standard emoji, from a list shipped with the release, and replies of at most 200 characters on one line, with no
-  links, mentions or formatting.
+  links, mentions, formatting or emoji: a ✅ or a 👍 in the words reads as a yes as surely as the reaction does.
 
 **Using one: `agent-slack ack`, and `slack_ack`.** One call names the standing approval, the message and the content by
 its digest, and nothing else. It is refused, with `STANDING_REFUSED` and its reason, unless the message:

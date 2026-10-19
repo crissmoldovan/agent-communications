@@ -209,6 +209,21 @@ test('an agent is refused approve, with its marker set', async () => {
   assert.equal(person.shown(), '', 'no preview, and no code, was shown to an agent');
 });
 
+test('a reply that reads as approval is warned for under that reply in the preview', async () => {
+  const { core } = machine();
+  const text = 'Done, I will look at this now.';
+  const { preview, warnings } = await prepared(core, { contents: { replies: [text, 'Got it, back soon.'] } });
+  assert.equal(warnings.length, 1);
+  const lines = preview.split('\n');
+  const at = lines.indexOf(`  Reply "${text}"`);
+  assert.ok(at >= 0, preview);
+  assert.match(lines[at + 1] ?? '', /^ {4}digest [0-9a-f]{64}$/);
+  assert.equal(lines[at + 2], `    Warning: ${warnings[0]}`);
+  assert.match(warnings[0] ?? '', /it says "done"/);
+  // Shown once, under its reply, and not again below the contents.
+  assert.equal(preview.split(warnings[0] ?? '').length, 2);
+});
+
 test('a preview proposed by an agent opens with the agent line; one a person proposed does not', async () => {
   const { core } = machine();
   const byAgent = await prepared(core, {}, 'agent');

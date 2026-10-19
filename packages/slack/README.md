@@ -482,7 +482,7 @@ cannot be undone.
 
 A standing approval is your yes given in advance to a few acknowledgements: standard emoji reactions (`eyes` when you
 name none; custom workspace emoji never), or short fixed replies you write, one a line, at most 200 characters, with
-no links, mentions or formatting. With one, an agent may acknowledge a message that has just arrived from another
+no links, mentions, formatting or emoji. With one, an agent may acknowledge a message that has just arrived from another
 person without asking — and only that: the newest message from someone else in its thread or channel, within 15
 minutes, in a place the approval names, and not one already acknowledged. It never writes the words, and it cannot
 pick an old message, one among many, or a new place.
@@ -495,7 +495,7 @@ agent-slack ack --workspace acme/slack --standing <id> --channel C024BE7LR --ts 
 
 `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in yourself in the last 14 days,
 where a message this product sent for you does not count. The preview shows each content in full with its digest,
-warning for an emoji that can read as approval, such as ✅; each place with its member count and whether another
+warning for an emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another
 organisation shares it; the limits (`--per-thread`, `--per-hour`, `--per-day`); and the expiry. A place of 50 members
 or more, or one with someone from another organisation in it, is allowed only when named exactly, and one that has
 grown to 50 or changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and

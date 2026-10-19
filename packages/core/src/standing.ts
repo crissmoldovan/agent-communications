@@ -141,6 +141,7 @@ export type ContentRefusal =
   | 'placeholder'
   | 'markup'
   | 'emoji-code'
+  | 'pictograph'
   | 'duplicate';
 
 const CONTENT_WORDS: Readonly<Record<ContentRefusal, string>> = Object.freeze({
@@ -156,6 +157,7 @@ const CONTENT_WORDS: Readonly<Record<ContentRefusal, string>> = Object.freeze({
   placeholder: 'a standing reply is sent exactly as written: it holds no placeholder',
   markup: 'a standing reply is plain text: no formatting characters',
   'emoji-code': 'a standing reply holds no :emoji: code; a reaction is its own content',
+  pictograph: 'a standing reply holds no emoji or pictograph, such as ✅, ✔ or 👍; a reaction is its own content',
   duplicate: 'a standing approval holds each content once',
 });
 
@@ -165,7 +167,7 @@ function contentRefused(reason: ContentRefusal, where?: { kind: StandingAct; pos
     hint:
       reason === 'custom-emoji'
         ? `Choose from the standard emoji: ${Object.keys(STANDARD_EMOJI).join(', ')}.`
-        : 'Write each reply as plain words on one line, at most 200 characters: no links, mentions, markup, placeholders or emoji codes. A reply is sent exactly as written.',
+        : 'Write each reply as plain words on one line, at most 200 characters: no links, mentions, markup, placeholders, emoji or emoji codes. A reply is sent exactly as written.',
     details: { reason, ...(where === undefined ? {} : { kind: where.kind, position: where.position }) },
   });
 }
@@ -186,6 +188,10 @@ function reactionName(written: string, position: number): string {
 /** Each reason a reply's text is refused for, in the order checked: the first that applies is the one given. */
 const REPLY_RULES: readonly (readonly [ContentRefusal, (text: string) => boolean])[] = Object.freeze([
   ['multi-line', (text: string) => /[\r\n\u2028\u2029]/.test(text)],
+  // A ✅ or a 👍 in the words reads as a yes as surely as the reaction does (the lead's call, after review): an
+  // Extended_Pictographic character, or the plain check mark ✓, which Unicode does not count as one. Before
+  // the invisible characters, so an emoji's own variation selector is said as the emoji it is part of.
+  ['pictograph', (text: string) => /[\p{Extended_Pictographic}\u2713]/u.test(text)],
   [
     'control-character',
     (text: string) => [...text].some((char) => char === '\t' || isDangerous(char.codePointAt(0) ?? 0)),
@@ -197,6 +203,33 @@ const REPLY_RULES: readonly (readonly [ContentRefusal, (text: string) => boolean
   ['markup', (text: string) => /[<>*_~`|]/.test(text)],
   ['emoji-code', (text: string) => /:[A-Za-z0-9_+-]+:/.test(text)],
 ]);
+
+/**
+ * Words that read as a yes in a reply (the lead's call, after review): "OK" or "Done" on "can I deploy?" is taken for
+ * approval as surely as ✅ is. Matched whole, in any case. Allowed, with a warning in the preview.
+ */
+const APPROVAL_WORDS: readonly (readonly [string, RegExp])[] = Object.freeze([
+  ['yes', /\byes\b/i],
+  ['approved', /\bapproved\b/i],
+  ['approve', /\bapprove\b/i],
+  ['go ahead', /\bgo\s+ahead\b/i],
+  ['lgtm', /\blgtm\b/i],
+  ['ok', /\bok\b/i],
+  ['done', /\bdone\b/i],
+  ['confirmed', /\bconfirmed\b/i],
+]);
+
+/** What a reply's reads-as-approval warning begins with: the preview shows it under that reply. */
+export function replyWarningPrefix(text: string): string {
+  return `The reply "${text}" can read as approval:`;
+}
+
+/** S3's warning for a reply holding words that read as a yes, or null. */
+function replyReadsAsApproval(text: string): string | null {
+  const said = APPROVAL_WORDS.filter(([, pattern]) => pattern.test(text)).map(([word]) => `"${word}"`);
+  if (said.length === 0) return null;
+  return `${replyWarningPrefix(text)} it says ${said.join(', ')}. People read "OK" or "Done" on "can I deploy?" as a yes.`;
+}
 
 /** A reply's text, trimmed and checked (S3), or the refusal of the first rule it breaks. */
 function replyText(written: string, position: number): string {
@@ -236,7 +269,10 @@ export function checkedContents(input: { reactions?: string[]; replies?: string[
     ...texts.map((text) => ({ kind: 'reply' as const, text, digest: standingContentDigest('reply', text) })),
   ];
   if (new Set(contents.map((content) => content.digest)).size !== contents.length) throw contentRefused('duplicate');
-  const warnings = names.filter((name) => READS_AS_APPROVAL.includes(name)).map(readsAsApprovalWarning);
+  const warnings = [
+    ...names.filter((name) => READS_AS_APPROVAL.includes(name)).map(readsAsApprovalWarning),
+    ...texts.map(replyReadsAsApproval).filter((warning): warning is string => warning !== null),
+  ];
   return { contents, warnings };
 }
 

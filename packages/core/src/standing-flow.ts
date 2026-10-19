@@ -22,6 +22,7 @@ import {
   type StandingLimits,
   type StandingNarrowing,
   type StandingPlaces,
+  replyWarningPrefix,
   standingBindingProblem,
   standingDigest,
 } from './standing.ts';
@@ -309,12 +310,15 @@ export function renderStandingPreview(record: ApprovalRecord): string {
   const contentLines = standing.contents.flatMap((content) => {
     const head =
       content.kind === 'reaction' ? `  Reaction :${content.text}:` : `  Reply "${escapeForDisplay(content.text)}"`;
-    const own =
-      content.kind === 'reaction'
-        ? standing.warnings.filter((warning) => warning.startsWith(`:${content.text}: `))
-        : [];
+    const own = standing.warnings.filter((warning) =>
+      warning.startsWith(content.kind === 'reaction' ? `:${content.text}: ` : replyWarningPrefix(content.text)),
+    );
     for (const warning of own) warned.add(warning);
-    return [head, `    digest ${content.digest}`, ...own.map((warning) => `    Warning: ${warning}`)];
+    return [
+      head,
+      `    digest ${content.digest}`,
+      ...own.map((warning) => `    Warning: ${content.kind === 'reply' ? escapeForDisplay(warning) : warning}`),
+    ];
   });
   const others = standing.warnings.filter((warning) => !warned.has(warning));
   const places =

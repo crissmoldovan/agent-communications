@@ -120,6 +120,50 @@ test('an emoji that reads as approval is warned for', () => {
   ]);
 });
 
+test('a reply holding an emoji or pictograph is refused: ✅, ✔ and 👍 among them', () => {
+  for (const reply of ['✅ on it', 'On it ✔', 'On it ✔️', '👍', 'Got it 👀', 'Noted ✓', 'Seen ☑', 'Thanks ❤']) {
+    assert.equal(refusedFor({ replies: [reply] }), 'pictograph', reply);
+  }
+  // Plain words and plain punctuation are what a reply is.
+  for (const reply of ['Got it, I will look at this.', 'On it, back soon', 'Thanks!']) {
+    assert.equal(checkedContents({ replies: [reply] }).contents[0]?.text, reply, reply);
+  }
+});
+
+test('a reply whose words read as approval is warned for, word by word, in any case', () => {
+  const warned = (reply: string) => checkedContents({ replies: [reply] }).warnings;
+  for (const [reply, words] of [
+    ['Yes, looking now', '"yes"'],
+    ['Approved, thanks', '"approved"'],
+    ['I will approve it shortly', '"approve"'],
+    ['Go  ahead, I am watching', '"go ahead"'],
+    ['LGTM so far', '"lgtm"'],
+    ['OK, on it', '"ok"'],
+    ['Done.', '"done"'],
+    ['Confirmed, I will look', '"confirmed"'],
+    ['OK, done', '"ok", "done"'],
+  ] as const) {
+    assert.deepEqual(
+      warned(reply),
+      [
+        `The reply "${reply}" can read as approval: it says ${words}. People read "OK" or "Done" on "can I deploy?" as a yes.`,
+      ],
+      reply,
+    );
+  }
+  // Whole words only: these say none of them.
+  for (const reply of ['Okay, looking', 'Bookkeeping noted', 'Not undone yet', 'Going ahead later? Checking', 'Got it']) {
+    assert.deepEqual(warned(reply), [], reply);
+  }
+  // A reaction's warnings first, then each reply's, in the order written.
+  assert.deepEqual(
+    checkedContents({ reactions: ['white_check_mark'], replies: ['Got it', 'Done'] }).warnings.map((warning) =>
+      warning.slice(0, 24),
+    ),
+    [':white_check_mark: can r', 'The reply "Done" can rea'],
+  );
+});
+
 test('a digest covers kind and text, and reordering contents keeps each digest', () => {
   const reaction = checkedContents({ reactions: ['eyes'], replies: ['eyes'] });
   const [asReaction, asReply] = reaction.contents;
