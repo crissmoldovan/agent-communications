@@ -221,9 +221,23 @@ export interface LayaJudgeUnavailable {
   readonly code: LayaUnavailableCode;
 }
 
+/**
+ * What a Laya judge document is checked against when it is created, and what a preview of it discloses: the reviewed
+ * manifest entry's id and template list and the reviewed D11 texts, parsed from the same asset bytes as the
+ * enablement. It needs no runtime lock, so it is there whatever Laya's state on this machine or in this release.
+ */
+export interface LayaJudgeTerms {
+  readonly manifestId: string;
+  readonly promptTemplates: readonly string[];
+  readonly facts: CanonicalLayaEnablementDisclosures['facts'];
+  readonly limitations: CanonicalLayaEnablementDisclosures['limitations'];
+}
+
 export interface LayaJudgeKindDefinition {
   readonly kind: typeof LAYA_KIND;
   availability(): LayaJudgeAvailability | LayaJudgeUnavailable;
+  /** The reviewed terms a Laya judge document is created under; configuration, never an enablement. */
+  judgeTerms(): LayaJudgeTerms;
   prepareEnablement(input: { readonly version: number }): CanonicalLayaEnablement;
   canonicalEnablement(value: unknown): CanonicalLayaEnablement;
   /** The approval view is the exact immutable enablement document, not a detached rendering. */
@@ -829,6 +843,12 @@ export function createLayaJudgeKindDefinition(input: {
   return {
     kind: LAYA_KIND,
     availability: status,
+    judgeTerms: () => ({
+      manifestId: parsedManifest.manifestId,
+      promptTemplates: parsedManifest.promptTemplates,
+      facts: assets.disclosures.facts,
+      limitations: assets.disclosures.limitations,
+    }),
     prepareEnablement,
     canonicalEnablement(value: unknown): CanonicalLayaEnablement {
       const candidate = object(value, 'the Laya enablement');

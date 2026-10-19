@@ -51,8 +51,9 @@ export class B3OperatorControl implements B3OwnerService {
   readonly #judgeTest: Pick<JudgeTestControl, 'test'> | undefined;
   readonly #holdResolver: Pick<HoldResolver, 'resolve'> | undefined;
   /**
-   * E2's artifact manager. When the owner composes it, every Laya operation answers with the real model state
-   * (B3 control v2); without it this control keeps B3 v1's frozen typed `E2_REQUIRED` answers.
+   * E2's artifact manager. When the owner composes it, every Laya operation answers with the real model state and a
+   * Laya judge is created and listed like any other (B3 control v3, which keeps v2's answers); without it this control
+   * keeps B3 v1's frozen typed `E2_REQUIRED` answers and v1's judge documents, which have no Laya variant.
    */
   readonly #laya: LayaArtifactManager | undefined;
 
@@ -123,7 +124,7 @@ export class B3OperatorControl implements B3OwnerService {
       case 'addJudge':
       case 'updateJudge':
         return this.#ports.quiescer.withShared(async () =>
-          this.#store.immediate(() => new ImmutableVersions(this.#store.database).createJudge(request.args.document)),
+          this.#store.immediate(() => this.#judgeVersions().createJudge(request.args.document)),
         );
       case 'removeJudge':
         return this.removeJudge(requiredText(request.args.judgeId, 'judge id'));
@@ -160,6 +161,13 @@ export class B3OperatorControl implements B3OwnerService {
       default:
         throw new CommsError('USAGE', `the local B3 operator control does not implement ${request.operation}`);
     }
+  }
+
+  /** The judge documents this control answers: B3 v3's with E2's artifact manager, B3 v1's without it. */
+  #judgeVersions(): ImmutableVersions {
+    return this.#laya === undefined
+      ? new ImmutableVersions(this.#store.database)
+      : ImmutableVersions.forJudgeContract(this.#store.database, 'b3-control-v3');
   }
 
   private requireLaya(): LayaArtifactManager {
@@ -373,7 +381,7 @@ export class B3OperatorControl implements B3OwnerService {
   judgesList(): readonly {
     readonly judgeId: string;
     readonly version: number;
-    readonly kind: typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
+    readonly kind: JudgeKind;
     readonly provider: string;
     readonly model: string;
     readonly revokedAt: number | null;
@@ -385,18 +393,20 @@ export class B3OperatorControl implements B3OwnerService {
     ).flatMap((row) => {
       try {
         const judge = canonicalJudge(JSON.parse(row.document));
+        const entry = {
+          judgeId: row.judge_id,
+          version: row.version,
+          kind: judge.kind,
+          provider: judge.provider,
+          model: judge.model,
+          revokedAt: row.revoked_at,
+        };
+        // B3 v3, answered with E2's artifact manager, lists a Laya judge as it lists every other: its model is the
+        // reviewed manifest id.
+        if (this.#laya !== undefined) return [entry];
         // B3 v1's inventory has no Laya variant; a Laya judge is listed only by the contract version that adds one.
         if (judge.kind === JUDGE_KIND_LAYA) return [];
-        return [
-          {
-            judgeId: row.judge_id,
-            version: row.version,
-            kind: judge.kind,
-            provider: judge.provider,
-            model: judge.model,
-            revokedAt: row.revoked_at,
-          },
-        ];
+        return [entry];
       } catch {
         // A damaged immutable row must not become a permissive/free-form control result.
         return [];

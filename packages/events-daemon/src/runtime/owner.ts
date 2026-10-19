@@ -39,6 +39,8 @@ import { HumanSecret } from '../domain/human-secret.ts';
 import {
   type LayaPlatformProbe,
   type LayaReviewedAssetSource,
+  layaEnablementInputsFor,
+  layaJudgeTermsFor,
   registerLayaEnablementInputs,
 } from '../domain/judges.ts';
 import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
@@ -54,6 +56,7 @@ import {
   isB3ControlOperation,
   isB3SecretOperation,
 } from '../operations/b3-contract.ts';
+import { type B3LayaRuleApprovalReadyV3, layaJudgePreviewFor } from '../operations/b3-control-v3.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
@@ -503,7 +506,13 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
       }
       switch (request.operation) {
         case 'approvalView':
-          return approvalViewFromOwner(options.store, options.activations, now, request.args);
+          return approvalViewFromOwner(
+            options.store,
+            options.activations,
+            now,
+            request.args,
+            options.laya !== undefined,
+          );
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
         case 'ruleTestRetained':
@@ -761,12 +770,17 @@ function terminalSecretResult(receipt: SecretReceipt): unknown {
   return reveal === null ? receipt : { receipt, terminalReveal: reveal };
 }
 
+/**
+ * The authoritative approval view. With E2's artifact manager composed the owner answers B3 control v3, whose view of
+ * a rule naming a Laya judge also carries D11's Laya limits, from the same reviewed assets as the enablement.
+ */
 async function approvalViewFromOwner(
   store: Awaited<ReturnType<typeof openEventDatabase>>,
   activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>,
   now: () => number,
   args: Readonly<Record<string, unknown>>,
-): Promise<B3ApprovalViewResultV1> {
+  layaJudges = false,
+): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3> {
   const approvalId = requiredText(args.approvalId, 'approval id');
   const digest = requiredText(args.digest, 'approval digest');
   const row = store.database
@@ -774,10 +788,13 @@ async function approvalViewFromOwner(
     .get(approvalId) as { id: string; document: string; digest: string; status: string } | undefined;
   if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
   if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
+  const preview = normaliseActivationDocument(JSON.parse(row.document));
+  const layaJudge = layaJudges
+    ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
+    : undefined;
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
   if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
-  const preview = normaliseActivationDocument(JSON.parse(row.document));
   return {
     kind: 'READY',
     approvalId,
@@ -791,6 +808,7 @@ async function approvalViewFromOwner(
       preview,
     }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
+    ...(layaJudge === undefined ? {} : { layaJudge }),
   };
 }
 
@@ -1653,10 +1671,14 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);
     case OWNER_CONTROL_WIRES.enableRule:
-      return activations.prepareRule({
-        ruleId: requiredText(request.args.ruleId, 'rule id'),
-        version: requiredVersion(request.args.version, 'rule version'),
-      });
+      // A rule the domain refuses to activate — its judge's kind disabled, or its Laya judge not offered here — is
+      // refused with that fixed reason, as rule create's documents are.
+      return domainAwaited(() =>
+        activations.prepareRule({
+          ruleId: requiredText(request.args.ruleId, 'rule id'),
+          version: requiredVersion(request.args.version, 'rule version'),
+        }),
+      );
     case OWNER_CONTROL_WIRES.disableRule:
     case OWNER_CONTROL_WIRES.removeRule:
       return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
@@ -1719,6 +1741,17 @@ function domain<T>(work: () => T): T {
   }
 }
 
+/** `domain` for an operation that awaits: a refusal is the caller's input, with the same fixed reason. */
+async function domainAwaited<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof EventDomainError)
+      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+    throw error;
+  }
+}
+
 function ruleRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
   return database.database
     .prepare(
@@ -1743,8 +1776,9 @@ function ruleShow(database: Awaited<ReturnType<typeof openEventDatabase>>, ruleI
   return rows.map((row) => ({ ...row, document: JSON.parse(row.document) }));
 }
 
+/** The owner composes E2's artifact manager, so the rules it keeps carry B3 control v3's judge documents. */
 function createRule(database: Awaited<ReturnType<typeof openEventDatabase>>, document: unknown): unknown {
-  return domain(() => new ImmutableVersions(database.database).createRule(document));
+  return domain(() => ImmutableVersions.forJudgeContract(database.database, 'b3-control-v3').createRule(document));
 }
 
 function targetRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
