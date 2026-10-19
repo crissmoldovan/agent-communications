@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { asV2, CommsError, inlineCommand, isCommand } from '@agentcomms/core';
+import { asV2, CommsError, inlineCommand, isCommand, sendPacing } from '@agentcomms/core';
 import type { ResendAccount } from '../src/accounts.ts';
 import type { SendInput } from '../src/compose/message.ts';
+import { ResendContext } from '../src/context.ts';
 import { beginSendApproval, executeSend, finishSendApproval, prepareSend } from '../src/operations/send.ts';
 import { setBehaviourRules } from './support/behaviour.ts';
 import { resendHandoffs } from './support/handoffs.ts';
@@ -120,19 +121,19 @@ test('a send no rule allows is refused at prepare, from both surfaces, before an
 test('one recipient in a forbidden @domain refuses the whole send, naming it, whatever the case of either', async () => {
   const account = await ready();
   await setBehaviourRules(harness, [
-    { account: 'acme/resend', accountId: account.id, conversation: '@Client.COM', acts: [] },
+    { account: 'acme/resend', accountId: account.id, conversation: '@Client.TEST', acts: [] },
   ]);
   const context = harness.context('mcp');
   for (const over of [
-    { cc: ['Bob@Client.COM'] },
-    { bcc: ['bob@CLIENT.com'] },
-    { to: ['sam@partner.test', 'BOB@client.com'] },
+    { cc: ['Bob@Client.TEST'] },
+    { bcc: ['bob@CLIENT.test'] },
+    { to: ['sam@partner.test', 'BOB@client.test'] },
   ]) {
     await assert.rejects(
       prepareSend(context, 'acme/resend', email(over)),
-      notAllowed('this agent may do nothing in bob@client.com (acme/resend)', 'bob@client.com', {
+      notAllowed('this agent may do nothing in bob@client.test (acme/resend)', 'bob@client.test', {
         account: 'acme/resend',
-        conversation: '@client.com',
+        conversation: '@client.test',
       }),
       JSON.stringify(over),
     );
@@ -149,7 +150,7 @@ for (const policy of ['chat', 'confirm'] as const) {
   test(`tightened after the yes refuses at send, and Resend receives nothing (${policy})`, async () => {
     const account = await ready(policy);
     const context = harness.context(policy === 'chat' ? 'mcp' : 'cli');
-    const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['bob@client.com'] }));
+    const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['bob@client.test'] }));
     assert.equal(prepared.effectivePolicy, policy);
     if (policy === 'confirm') {
       // The person's yes, at their own terminal.
@@ -158,15 +159,15 @@ for (const policy of ['chat', 'confirm'] as const) {
     }
     const stateBefore = asV2(await harness.core.approvals.get(prepared.approvalId))?.state;
 
-    // A rule that tightens applies at once: from here, only replies to anyone at client.com.
+    // A rule that tightens applies at once: from here, only replies to anyone at client.test.
     await setBehaviourRules(harness, [
-      { account: 'acme/resend', accountId: account.id, conversation: '@client.com', acts: ['reply'] },
+      { account: 'acme/resend', accountId: account.id, conversation: '@client.test', acts: ['reply'] },
     ]);
     await assert.rejects(
       executeSend(context, 'acme/resend', { approvalId: prepared.approvalId }),
-      notAllowed('this agent may only reply in bob@client.com (acme/resend)', 'bob@client.com', {
+      notAllowed('this agent may only reply in bob@client.test (acme/resend)', 'bob@client.test', {
         account: 'acme/resend',
-        conversation: '@client.com',
+        conversation: '@client.test',
       }),
     );
     if (policy === 'chat') {
@@ -206,14 +207,14 @@ test('the approval binds the act and every recipient: a stored check changed aft
     },
   };
   for (const [what, edit] of Object.entries(edits)) {
-    const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['Bob@Client.COM'] }));
+    const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['Bob@Client.TEST'] }));
     const record = asV2(await harness.core.approvals.get(prepared.approvalId));
     assert.ok(record);
     const file = join(harness.core.paths.stateDir, 'resend', 'prepared', `${record.draftId}.json`);
     const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     assert.deepEqual(
       stored.behaviour,
-      { acts: ['send'], places: [['sam@partner.test'], ['bob@client.com']] },
+      { acts: ['send'], places: [['sam@partner.test'], ['bob@client.test']] },
       'what is checked is stored with the message: the act, and each recipient lower-cased',
     );
     edit(stored);
@@ -246,4 +247,87 @@ test('every preview says what is allowed where the send lands: the one prepared,
   const prompt = await beginSendApproval(context, narrowed.approvalId);
   assert.equal(allowedLine(prompt.preview), 'Allowed here: send (rule: acme/resend, sam@partner.test)');
   assert.equal(harness.fake.sends().length, 0);
+});
+
+/*
+ * The terminal's approval screen showed the line as the rules stood now, and asked for the code anyway: a person typed
+ * a yes to a send a tightened rule would refuse. It refuses now, as Gmail's does, and the approval is as it was.
+ */
+test('the approval screen refuses a send a rule tightened since the prepare forbids, and asks for no code', async () => {
+  const account = await ready('confirm');
+  const context = harness.context('cli');
+  const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['bob@client.test'] }));
+  const stateBefore = asV2(await harness.core.approvals.get(prepared.approvalId))?.state;
+  await setBehaviourRules(harness, [
+    { account: 'acme/resend', accountId: account.id, conversation: '@client.test', acts: ['reply'] },
+  ]);
+  await assert.rejects(
+    beginSendApproval(context, prepared.approvalId),
+    notAllowed('this agent may only reply in bob@client.test (acme/resend)', 'bob@client.test', {
+      account: 'acme/resend',
+      conversation: '@client.test',
+    }),
+  );
+  const record = asV2(await harness.core.approvals.get(prepared.approvalId));
+  assert.equal(record?.state, stateBefore, 'the approval is as it was');
+  assert.equal(record?.challengeHash, undefined, 'no code was issued');
+
+  // Loosened again, the screen asks, and the yes sends.
+  await setBehaviourRules(harness, [], { loosening: true });
+  const prompt = await beginSendApproval(context, prepared.approvalId);
+  await finishSendApproval(context, prepared.approvalId, prompt.challenge);
+  await executeSend(context, 'acme/resend', { approvalId: prepared.approvalId });
+  assert.equal(harness.fake.sends().length, 1);
+});
+
+/*
+ * A send Resend throttled waits and tries again (design 2026-10-08), and the rules were asked only once, before the
+ * claim: a rule tightened while the throttle was waited out did not stop the retry. They are asked before every attempt.
+ */
+test('a rule tightened while a throttle is waited out stops the retry, and nothing is sent', async () => {
+  const account = await ready();
+  let now = Date.now();
+  const context = new ResendContext({
+    core: harness.core,
+    env: harness.env,
+    fetch: harness.fake.fetch,
+    throttle: {
+      intervalMs: 0,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    },
+    sendPacing: () =>
+      sendPacing({
+        now: () => now,
+        sleep: async (ms) => {
+          // While the send waits, the person narrows the rule: no new message to anyone at client.test.
+          await setBehaviourRules(harness, [
+            { account: 'acme/resend', accountId: account.id, conversation: '@client.test', acts: [] },
+          ]);
+          now += ms;
+        },
+      }),
+  });
+  const prepared = await prepareSend(context, 'acme/resend', email({ cc: ['bob@client.test'] }));
+  let refusals = 1;
+  harness.fake.intercept = (request) =>
+    request.method === 'POST' && request.path === '/emails' && refusals-- > 0
+      ? {
+          status: 429,
+          body: { name: 'rate_limit_exceeded', message: 'refused before sending' },
+          headers: { 'retry-after': '2' },
+        }
+      : undefined;
+  await assert.rejects(
+    executeSend(context, 'acme/resend', { approvalId: prepared.approvalId }),
+    notAllowed('this agent may do nothing in bob@client.test (acme/resend)', 'bob@client.test', {
+      account: 'acme/resend',
+      conversation: '@client.test',
+    }),
+  );
+  assert.equal(harness.fake.sends().length, 1, 'the throttled attempt, and no retry');
+  assert.equal(harness.fake.sent.length, 0, 'nothing was accepted');
+  assert.notEqual(asV2(await harness.core.approvals.get(prepared.approvalId))?.state, 'used');
 });

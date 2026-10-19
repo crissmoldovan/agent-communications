@@ -1013,11 +1013,21 @@ async function claimAndSend(
     /*
      * A refusal Resend gave before acting that says "later" waits and tries again, within core's pacing (design
      * 2026-10-08 §R1, §R2). The message cannot change underneath: it was reloaded and held to its digest before the
-     * claim. So each attempt repeats the fence, and nothing else (§R3).
+     * claim. So each attempt repeats the rules and the fence, and nothing else (§R3).
      */
     const pacing = context.sendPacing();
     let resendId: string | undefined;
     for (;;) {
+      /*
+       * The rules as they are now, read afresh before every attempt, as Gmail's are (design
+       * 2026-10-19-agent-behaviour-rules, B4): a rule tightened while a throttle was waited out stops the send before
+       * Resend is asked again. Nothing has been sent before any attempt — a retry follows only a refusal that proves it.
+       */
+      try {
+        requireAllowed(context, await context.config(), named, boundCheckOf(prepared));
+      } catch (error) {
+        throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
+      }
       /*
        * The fence (design 2026-10-05 §D1), the last thing before the one request that sends: while this claim still
        * holds a `sending` record its lease is renewed and the request may leave. Once another caller has found the lease
@@ -1500,6 +1510,14 @@ export async function beginSendApproval(context: ResendContext, approvalId: stri
     });
   }
   const config = await context.config();
+  // The rules as they are now, as Gmail's approval screen asks them (B4): a person is never asked to approve what a
+  // rule tightened since the prepare would refuse to send. Refused, the approval is as it was.
+  let allowed: Extract<ActDecision, { allowed: true }>;
+  try {
+    allowed = requireAllowed(context, config, named, boundCheckOf(prepared));
+  } catch (error) {
+    throw withApproval(error, await context.core.approvals.approvalOf(record));
+  }
   const study = await studyRecipients(context, named, prepared.message, config.defaults.riskEscalation);
   const live = named.account.sendPolicy ?? config.defaults.sendPolicy;
   const effective = stricterPolicy(live, record.requiredPolicy);
@@ -1518,8 +1536,8 @@ export async function beginSendApproval(context: ResendContext, approvalId: stri
       effective,
       flags: record.riskFlags,
       handoffs: context.handoffs,
-      // As the rules stand now: one tightened since prepare shows here, and execute refuses the send.
-      allowedHere: allowedHere(decideSend(config, named, boundCheckOf(prepared)), named),
+      // As the rules stand now: what they allow where this send lands.
+      allowedHere: allowedHere(allowed, named),
     }),
     challenge,
   };
