@@ -365,75 +365,81 @@ test('readBehaviourSettings never throws, and returns copies', () => {
 
 test('addresses and domains match regardless of case', () => {
   const settings = withRules([
-    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@Client.COM', acts: ['reply'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@Client.TEST', acts: ['reply'] },
     { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'Ann@Partner.TEST', acts: ['reply'] },
   ]);
   // Stored lower-cased, as the label's are.
   assert.deepEqual(
     readBehaviourSettings(settings).rules.map((rule) => rule.conversation),
-    ['@client.com', 'ann@partner.test'],
+    ['@client.test', 'ann@partner.test'],
   );
-  for (const recipient of ['Bob@Client.COM', 'bob@client.com', 'BOB@CLIENT.COM']) {
+  for (const recipient of ['Bob@Client.TEST', 'bob@client.test', 'BOB@CLIENT.TEST']) {
     const decision = allowedAct(settings, mail([recipient], ['send']));
     assert.equal(decision.allowed, false, recipient);
-    assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail', conversation: '@client.com' });
+    assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail', conversation: '@client.test' });
   }
   assert.equal(allowedAct(settings, mail(['ANN@partner.test'], ['send'])).allowed, false);
   // The domain is what follows the last @: a quoted local part cannot hide it.
-  assert.equal(allowedAct(settings, mail(['"x@y"@client.com'], ['send'])).allowed, false);
+  assert.equal(allowedAct(settings, mail(['"x@y"@client.test'], ['send'])).allowed, false);
 });
 
 /*
  * One domain has more than one spelling: Unicode and its ASCII (punycode) form, and with or without the trailing dot of
- * a fully qualified name. Resend keeps a recipient's domain in ASCII, so a rule written `@bücher.de` compared as written
- * would never meet `kunde@xn--bcher-kva.de`, and the restriction would silently not hold. Both sides are compared in one
+ * a fully qualified name. Resend keeps a recipient's domain in ASCII, so a rule written `@bücher.example` compared as written
+ * would never meet `kunde@xn--bcher-kva.example`, and the restriction would silently not hold. Both sides are compared in one
  * form — lower-cased, one trailing dot off, the domain in ASCII — so every spelling meets every other.
  */
 test('a Unicode rule holds a recipient whose domain is in ASCII (punycode)', () => {
-  const settings = withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@Bücher.DE', acts: [] }]);
+  const settings = withRules([
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@Bücher.EXAMPLE', acts: [] },
+  ]);
   assert.deepEqual(
     readBehaviourSettings(settings).rules.map((rule) => rule.conversation),
-    ['@xn--bcher-kva.de'],
+    ['@xn--bcher-kva.example'],
     'kept in the one form it is compared in',
   );
-  for (const recipient of ['kunde@xn--bcher-kva.de', 'Kunde@XN--BCHER-KVA.DE', 'kunde@bücher.de']) {
+  for (const recipient of ['kunde@xn--bcher-kva.example', 'Kunde@XN--BCHER-KVA.EXAMPLE', 'kunde@bücher.example']) {
     const decision = allowedAct(settings, mail([recipient], ['send']));
     assert.equal(decision.allowed, false, recipient);
     assert.equal(!decision.allowed && decision.place, recipient, 'the refusal names the recipient as it was given');
   }
-  assert.equal(allowedAct(settings, mail(['kunde@buecher.de'], ['send'])).allowed, true, 'another domain is not it');
+  assert.equal(
+    allowedAct(settings, mail(['kunde@buecher.example'], ['send'])).allowed,
+    true,
+    'another domain is not it',
+  );
 });
 
 test('a punycode rule holds a recipient whose domain is in Unicode, an address rule as well as a domain rule', () => {
   const settings = withRules([
-    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@xn--mnchen-3ya.de', acts: [] },
-    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'Ann@XN--BCHER-KVA.de', acts: ['reply'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@xn--mnchen-3ya.example', acts: [] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'Ann@XN--BCHER-KVA.example', acts: ['reply'] },
   ]);
-  assert.equal(allowedAct(settings, mail(['amt@münchen.de'], ['send'])).allowed, false);
-  assert.equal(allowedAct(settings, mail(['amt@MÜNCHEN.de'], ['send'])).allowed, false);
-  assert.equal(allowedAct(settings, mail(['ann@bücher.de'], ['send'])).allowed, false);
-  assert.equal(allowedAct(settings, mail(['ann@bücher.de'], ['reply'])).allowed, true);
+  assert.equal(allowedAct(settings, mail(['amt@münchen.example'], ['send'])).allowed, false);
+  assert.equal(allowedAct(settings, mail(['amt@MÜNCHEN.example'], ['send'])).allowed, false);
+  assert.equal(allowedAct(settings, mail(['ann@bücher.example'], ['send'])).allowed, false);
+  assert.equal(allowedAct(settings, mail(['ann@bücher.example'], ['reply'])).allowed, true);
 });
 
 test('a trailing dot names the same domain, on the rule and on the recipient', () => {
-  const dotted = withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.com.', acts: [] }]);
+  const dotted = withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test.', acts: [] }]);
   assert.deepEqual(
     readBehaviourSettings(dotted).rules.map((rule) => rule.conversation),
-    ['@client.com'],
+    ['@client.test'],
   );
-  assert.equal(allowedAct(dotted, mail(['bob@client.com'], ['send'])).allowed, false);
-  const plain = withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.com', acts: [] }]);
-  for (const recipient of ['bob@client.com.', 'Bob@Client.COM.']) {
+  assert.equal(allowedAct(dotted, mail(['bob@client.test'], ['send'])).allowed, false);
+  const plain = withRules([{ account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@client.test', acts: [] }]);
+  for (const recipient of ['bob@client.test.', 'Bob@Client.TEST.']) {
     assert.equal(allowedAct(plain, mail([recipient], ['send'])).allowed, false, recipient);
   }
   const address = withRules([
-    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'bob@client.com.', acts: [] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: 'bob@client.test.', acts: [] },
   ]);
-  assert.equal(allowedAct(address, mail(['bob@client.com'], ['send'])).allowed, false);
+  assert.equal(allowedAct(address, mail(['bob@client.test'], ['send'])).allowed, false);
 });
 
 test('a rule whose domain is not one is unreadable, so its account allows nothing', () => {
-  for (const conversation of ['@exa|mple.com', 'bob@xn--a.com', '@client.com..', '@.', 'bob@a%b.test']) {
+  for (const conversation of ['@exa|mple.com', 'bob@xn--a.test', '@client.test..', '@.', 'bob@a%b.test']) {
     const settings = withRules([
       { account: 'acme/gmail', accountId: GMAIL_ID, conversation, acts: ['send'] },
       { account: 'acme/slack', accountId: SLACK_ID, acts: ['reply'] },
@@ -449,7 +455,7 @@ test('a rule whose domain is not one is unreadable, so its account allows nothin
     assert.match(read.unreadable[0]?.reason ?? '', /domain/, conversation);
     assert.ok(!(read.unreadable[0]?.reason ?? '').includes(conversation), 'nothing from the file is repeated');
     // Fail closed: the mailbox allows nothing, anywhere; the workspace keeps its own rule.
-    for (const recipient of ['bob@client.com', 'ann@elsewhere.test']) {
+    for (const recipient of ['bob@client.test', 'ann@elsewhere.test']) {
       const decision = allowedAct(settings, mail([recipient], ['send']));
       assert.equal(decision.allowed, false, `${conversation} → ${recipient}`);
       assert.deepEqual(!decision.allowed && decision.allowedActs, []);
