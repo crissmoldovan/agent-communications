@@ -308,6 +308,88 @@ they import from `src/`.
   out from that commit, publishes nothing, proves nothing, confirms and makes the release. On any other commit it
   refuses.
 
+## The desktop app
+
+Agent Comms, the tray app in `apps/desktop`, is released on its own tag, `desktop-vX.Y.Z`, put on the commit of the
+`vX.Y.Z` release it ships with. Its version is the repository's (`pnpm sync:versions` writes its `tauri.conf.json`),
+and none of it goes to npm. A release of it holds:
+
+- **macOS:** a universal DMG, signed with the Developer ID in the owner's login keychain and notarised, and the
+  updater's signed archive with its `latest.json`. They are built on the owner's Mac by
+  `apps/desktop/scripts/release-desktop.sh` and published by `apps/desktop/scripts/publish-desktop.sh`. The signing
+  identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate.
+- **Windows and Linux:** an NSIS `.exe`, an AppImage and a `.deb`, unsigned. `.github/workflows/desktop-release.yml`
+  builds them when the tag is pushed, once the four legs of `desktop.yml` have passed, and attaches them to the tag's
+  draft release. The release notes say they are unsigned.
+- **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
+  `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
+
+**No agent runs these scripts.** They need the owner's keychain, the updater key, and the version typed back in a
+terminal; without a terminal they refuse.
+
+**A desktop release never takes Latest.** GitHub's Latest release is the CLI's, made by `release.yml`. Every desktop
+release command passes `--latest=false`, so a `desktop-v*` tag cannot move it. The app does not look for Latest: it
+finds its updates through the GitHub API, as the highest `desktop-v*` release that is neither a draft nor a
+prerelease and carries a `latest.json`. That is also why neither the workflow nor the scripts make a prerelease.
+
+**Updater artefacts come only from the signed build.** `createUpdaterArtifacts` is false in `tauri.conf.json`, so CI's
+unsigned builds need no key; `release-desktop.sh` turns it on with `--config`. An app built without the key, which is
+every CI build, has its updater off and says so in Settings. No token is baked into the app, because this repository
+is public.
+
+### The owner's steps
+
+Once:
+
+1. Generate the updater key, and keep it readable by you alone:
+
+   ```bash
+   pnpm --filter @agentcomms/desktop tauri signer generate -w ~/.agentcomms/tauri-updater.key
+   chmod 600 ~/.agentcomms/tauri-updater.key
+   ```
+
+   It writes `tauri-updater.key.pub` beside the key. Back the key and its password up somewhere safe: every installed
+   copy accepts only updates signed with it, so without it each one has to be replaced by hand.
+2. Paste the contents of `tauri-updater.key.pub` into `plugins.updater.pubkey` in
+   `apps/desktop/src-tauri/tauri.conf.json`, and commit it. `release-desktop.sh` refuses a key whose `.pub` is not
+   that value.
+3. Create `.env.desktop-release.local` at the repository root, with mode 600 (`chmod 600 .env.desktop-release.local`);
+   git ignores it. It holds `APPLE_SIGNING_IDENTITY` (`Developer ID Application: …`), `APPLE_ID`, `APPLE_TEAM_ID`,
+   `APPLE_PASSWORD` (an app-specific password) and, if the updater key has one, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+   `AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE` and `AGENTCOMMS_UPDATER_KEY_FILE` point the scripts elsewhere. Neither script
+   prints any of these values.
+
+Each release, after `vX.Y.Z` is out:
+
+4. Tag `desktop-vX.Y.Z` on the `vX.Y.Z` commit, and push the tag:
+
+   ```bash
+   git tag desktop-vX.Y.Z vX.Y.Z && git push origin desktop-vX.Y.Z
+   ```
+
+   The Desktop release workflow checks that the tag is `desktop-v` plus the version in `tauri.conf.json`, runs the
+   four desktop legs, makes the draft release and attaches the Windows and Linux files. The release stays a draft.
+   If a leg fails for a reason outside the repository, re-run it: the draft is found again and uploads replace what
+   is there.
+5. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
+
+   ```bash
+   git checkout desktop-vX.Y.Z
+   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z
+   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
+   ```
+
+   Both refuse a dirty tree, a tag that is not the app's version, a HEAD that is not the tag's commit and a missing
+   terminal, and ask for the version to be typed back. `release-desktop.sh` builds the universal app, signs,
+   notarises and staples the app and the DMG, and stages them in
+   `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they were built from. `publish-desktop.sh`
+   refuses a release already published with its DMG, attaches the signed files and `THIRD_PARTY_LICENSES` to the
+   draft, and stops if the workflow's Windows and Linux files are not attached yet; run it again once they are. Then
+   it uploads `latest.json` and publishes the release, still not Latest.
+6. Update between two signed versions. The first signed release has nothing to update from, so from the second on:
+   with the previous signed version installed, choose Check for Updates… in the tray. It should find the new
+   release, check its signature against the key in the app, install it and restart.
+
 ## Do not run agents in this checkout during a release
 
 Subagents share the working tree. One reading history with `git checkout` will move the branch under you, and a
