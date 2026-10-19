@@ -147,8 +147,8 @@ store unavailable, `75` temporary, `77` sign-in or permission needed, `78` confi
   `post` or `reply`; an edit that adds files needs `edit` and `file`. Name where an act lands by its conversation
   id — `C…`, `G…` or `D…`, exactly as `slack_channels` lists it — never by a channel's name: anything else is
   refused with `USAGE`. A reply is a reply only under a message Slack has in that conversation: give the thread as
-  its first message's `ts`, exactly as a read returned it; a thread Slack does not have there would be posted as a
-  new message, so it is checked as a `post`. Every preview carries what holds: `Allowed here: reply, reaction
+  its first message's `ts`, exactly as a read returned it; a thread Slack does not have there — or a reply's own
+  `ts` given for its thread — would be posted as a new message, so it is checked as a `post`. Every preview carries what holds: `Allowed here: reply, reaction
   (rule: acme/slack, #general)`, or `Allowed here: everything (no rule)`.
 - **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this act here,** and nothing was prepared or
   posted: refused before any preview, or at send when the rule was narrowed after the person's yes. Tell the person
