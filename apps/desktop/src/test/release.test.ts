@@ -385,51 +385,56 @@ describe("the owner's release scripts", () => {
     expect(script).toMatch(/is already published: bump the version/);
   });
 
-  it('updater-key.mjs: an empty pubkey is off, said loudly; a set one needs its key, mode 600 and matching', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'agentcomms-updater-key-'));
-    try {
-      const config = (pubkey: string) => {
-        const path = join(folder, 'tauri.conf.json');
-        writeFileSync(path, JSON.stringify({ plugins: { updater: { pubkey, endpoints: [] } } }));
-        return path;
-      };
-      const key = join(folder, 'tauri-updater.key');
-      const run = (configFile: string) =>
-        spawnSync(process.execPath, [join(APP, 'scripts', 'updater-key.mjs'), key, configFile], { encoding: 'utf8' });
+  // The release scripts run only on the owner's signing Mac. On Windows a file's mode reads 666 whatever chmod set, so
+  // the mode-600 rule this test walks through cannot be shown there.
+  it.skipIf(process.platform === 'win32')(
+    'updater-key.mjs: an empty pubkey is off, said loudly; a set one needs its key, mode 600 and matching',
+    () => {
+      const folder = mkdtempSync(join(tmpdir(), 'agentcomms-updater-key-'));
+      try {
+        const config = (pubkey: string) => {
+          const path = join(folder, 'tauri.conf.json');
+          writeFileSync(path, JSON.stringify({ plugins: { updater: { pubkey, endpoints: [] } } }));
+          return path;
+        };
+        const key = join(folder, 'tauri-updater.key');
+        const run = (configFile: string) =>
+          spawnSync(process.execPath, [join(APP, 'scripts', 'updater-key.mjs'), key, configFile], { encoding: 'utf8' });
 
-      // No pubkey committed: off, with what to do, and no key needed.
-      const off = run(config(''));
-      expect(off.status).toBe(0);
-      expect(off.stdout).toBe('off\n');
-      expect(off.stderr).toMatch(/THE UPDATER IS OFF FOR THIS RELEASE/);
-      expect(off.stderr).toMatch(/tauri signer generate -w ~\/\.agentcomms\/tauri-updater\.key/);
-      expect(off.stderr).toMatch(/release the next version/);
+        // No pubkey committed: off, with what to do, and no key needed.
+        const off = run(config(''));
+        expect(off.status).toBe(0);
+        expect(off.stdout).toBe('off\n');
+        expect(off.stderr).toMatch(/THE UPDATER IS OFF FOR THIS RELEASE/);
+        expect(off.stderr).toMatch(/tauri signer generate -w ~\/\.agentcomms\/tauri-updater\.key/);
+        expect(off.stderr).toMatch(/release the next version/);
 
-      // A pubkey committed: the key must be there, its own, and the pubkey's.
-      const pub = config('UFVCTElDIEtFWQ==');
-      expect(run(pub).status).toBe(1);
-      expect(run(pub).stderr).toMatch(/the updater key pair is missing/);
-      writeFileSync(key, 'SECRET-KEY-TEXT', { mode: 0o600 });
-      writeFileSync(`${key}.pub`, 'ANOTHER KEY\n');
-      chmodSync(key, 0o600);
-      expect(run(pub).stderr).toMatch(/is not plugins\.updater\.pubkey/);
-      writeFileSync(`${key}.pub`, 'UFVCTElDIEtFWQ==\n');
-      const on = run(pub);
-      expect(on.status).toBe(0);
-      expect(on.stdout).toBe('on\n');
-      expect(on.stderr).toBe('');
-      if (process.platform !== 'win32') {
-        chmodSync(key, 0o644);
-        const loose = run(pub);
-        expect(loose.status).toBe(1);
-        expect(loose.stderr).toMatch(/must have mode 600, not 644/);
+        // A pubkey committed: the key must be there, its own, and the pubkey's.
+        const pub = config('UFVCTElDIEtFWQ==');
+        expect(run(pub).status).toBe(1);
+        expect(run(pub).stderr).toMatch(/the updater key pair is missing/);
+        writeFileSync(key, 'SECRET-KEY-TEXT', { mode: 0o600 });
+        writeFileSync(`${key}.pub`, 'ANOTHER KEY\n');
+        chmodSync(key, 0o600);
+        expect(run(pub).stderr).toMatch(/is not plugins\.updater\.pubkey/);
+        writeFileSync(`${key}.pub`, 'UFVCTElDIEtFWQ==\n');
+        const on = run(pub);
+        expect(on.status).toBe(0);
+        expect(on.stdout).toBe('on\n');
+        expect(on.stderr).toBe('');
+        if (process.platform !== 'win32') {
+          chmodSync(key, 0o644);
+          const loose = run(pub);
+          expect(loose.status).toBe(1);
+          expect(loose.stderr).toMatch(/must have mode 600, not 644/);
+        }
+        // Whatever it says, it never says the key.
+        for (const each of [off, on, run(pub)]) expect(`${each.stdout}${each.stderr}`).not.toContain('SECRET-KEY-TEXT');
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
       }
-      // Whatever it says, it never says the key.
-      for (const each of [off, on, run(pub)]) expect(`${each.stdout}${each.stderr}`).not.toContain('SECRET-KEY-TEXT');
-    } finally {
-      rmSync(folder, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it('publish-desktop.sh writes latest.json for both Mac architectures and never takes Latest', () => {
     const script = read(PUBLISH_SH);
