@@ -3,7 +3,29 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.24.0
+
+**There is a desktop app: Agent Comms, a tray app that shows what your agents are doing and waiting for, and lets you
+take things away, but never sends or approves anything itself.** The owner asked for a desktop app on the CUE++
+design system, built the way Supbuddy and QuotaMate are. It shows:
+- your accounts and what agents may do on each;
+- the approvals waiting for you;
+- the agent label, the behaviour rules and the standing approvals;
+- updates, the events service, and the doctor.
+
+What only tightens, it applies at once: revoking an approval, ending standing approvals, narrowing a rule, pausing
+update notices. Anything else it opens in your terminal, with the exact command, for you to confirm there. It drives
+the agentcomms you already have installed, through its stable launchers, and bundles nothing.
+
+Nothing changes for the CLIs and MCP servers when you update. Two core changes come with the app:
+- `agentcomms update --status` (and `comms_update` with `status: true`) says where updates stand without asking npm;
+- `doctor --json` prints one result when a check fails, as the channels' doctors already do.
+
+**The app's installers are on the `desktop-v0.24.0` GitHub release:**
+- **Windows and Linux** builds come from CI, unsigned.
+- **macOS** builds are signed and notarised by the owner's release from their Mac, and appear when the owner publishes
+  that release.
+- **The app's own updater** stays off until a release ships its signing key; Settings says so.
 
 **Agent Comms, a desktop app, shows what agent-communications is doing on this machine — and never sends, posts or
 approves anything.** It is a tray app for macOS, Windows and Linux, in `apps/desktop`, and it drives what you already
