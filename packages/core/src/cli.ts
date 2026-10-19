@@ -1337,7 +1337,8 @@ function allowedText(allowed: readonly string[] | 'all'): string {
 
 /**
  * What an agent may do, as a person reads it: each account and what it allows, then what holds by name or not at all.
- * A rule's account there is the file's own words, which a hand edit may have made anything: shown made safe.
+ * A rule's account and conversation there are the file's own words, which a hand edit may have made anything — an
+ * address may hold an escape sequence the conversation grammar lets through — so every one is shown made safe.
  */
 function renderBehaviour(report: BehaviourReport): string {
   const lines: string[] = [];
@@ -1345,9 +1346,9 @@ function renderBehaviour(report: BehaviourReport): string {
     lines.push('No rules: an agent may start any act, and each one still waits for your yes.');
   }
   for (const account of report.accounts) {
-    lines.push('', account.account, `  ${allowedText(account.allowed)}`);
+    lines.push('', shownText(account.account, 64), `  ${allowedText(account.allowed)}`);
     for (const { conversation, allowed } of account.conversations) {
-      lines.push(`  in ${conversation}: ${allowedText(allowed)}`);
+      lines.push(`  in ${shownText(conversation, 120)}: ${allowedText(allowed)}`);
     }
   }
   const orphans = report.rules.filter((rule) => rule.orphan);
@@ -1355,7 +1356,7 @@ function renderBehaviour(report: BehaviourReport): string {
     lines.push('', 'Rules whose account is not connected now — each still holds, by name:');
     for (const rule of orphans) {
       const account = shownText(rule.account, 64);
-      const place = rule.conversation === undefined ? account : `${account} in ${rule.conversation}`;
+      const place = rule.conversation === undefined ? account : `${account} in ${shownText(rule.conversation, 120)}`;
       lines.push(`  ${place}: ${allowedText(rule.acts)}`);
     }
   }
@@ -1369,7 +1370,9 @@ function renderBehaviour(report: BehaviourReport): string {
 }
 
 function renderBehaviourChange(result: BehaviourChangeResult): string {
-  return [result.note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
+  // A note names the rules it replaced, in the file's own words: made safe as the report is.
+  const note = result.note === null ? undefined : shownText(result.note, 400);
+  return [note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
 }
 
 /** `attach roots add` and the rest, by their words. */

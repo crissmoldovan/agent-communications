@@ -558,6 +558,56 @@ test("doctor's three rows: unreadable rules, orphaned rules, and servers below 0
   assert.match(enforcement.fix ?? '', /restart/);
 });
 
+/*
+ * A registration that names no release — `npx @agentcomms/gmail-mcp`, `@latest`, a hand-written command — may start
+ * any release, an older one too. Counted as enforcing, it hid exactly the server that may not: so it is named, in
+ * words of its own (lead's call, after review).
+ */
+test('doctor names a server whose release cannot be read as one that may enforce no rule', async () => {
+  const m = machine({ rules: [{ account: 'acme/gmail', accountId: inbox.id, acts: ['reply'] }] });
+  const claude = knownClientConfigs(m.env).find((file) => file.client === 'claude-code')?.path;
+  assert.ok(claude);
+  mkdirSync(dirname(claude), { recursive: true });
+  const servers = {
+    gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp', '--inbox', 'acme/gmail'] },
+    slack: { command: 'npx', args: ['-y', '@agentcomms/slack@latest', 'mcp', '--workspace', 'acme/slack'] },
+  };
+  writeFileSync(claude, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
+  const report = await doctor(m.core, m.env, { keyring: null });
+  const enforcement = report.checks.find((check) => check.name === 'behaviour enforcement');
+  assert.ok(enforcement, JSON.stringify(report.checks));
+  assert.equal(enforcement.warn, true);
+  assert.match(
+    enforcement.detail,
+    /Gmail server[^;]*names no release that can be read, so it may enforce no behaviour rule/,
+  );
+  assert.match(enforcement.detail, /Slack server[^;]*names no release that can be read/);
+});
+
+/*
+ * A rule's conversation is the file's own words, and the conversation grammar lets an escape sequence through in an
+ * address's local part: the report printed it raw, at the terminal of the person reading what an agent may do.
+ */
+test('the behaviour report shows a hand-edited rule made safe: no escape sequence reaches the terminal', () => {
+  const m = machine({
+    rules: [
+      { account: 'acme/gmail', accountId: inbox.id, conversation: '\u001b[2J\u001b[31mx@client.test', acts: [] },
+      {
+        account: 'acme/gmail',
+        accountId: 'ibx_GONEGONEGONEGONE',
+        conversation: '\u001b]0pwned\u0007@a.test',
+        acts: [],
+      },
+    ],
+  });
+  const shown = cli(m, ['behaviour']);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.ok(!shown.stdout.includes('\u001b'), JSON.stringify(shown.stdout));
+  assert.ok(!shown.stdout.includes('\u0007'), JSON.stringify(shown.stdout));
+  assert.match(shown.stdout, /in [^\n]*x@client\.test: nothing/);
+  assert.match(shown.stdout, /not connected now[\s\S]*acme\/gmail in [^\n]*pwned[^\n]*@a\.test: nothing/);
+});
+
 // ── A person at a terminal ────────────────────────────────────────────────────────────────────────────────────────
 
 /** Streams that are a terminal, whose person answers `answer` when asked to apply a change. */
