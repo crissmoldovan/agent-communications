@@ -1335,7 +1335,8 @@ function profileChange(
       (narrowedEarlier || (await approvalRecordsNarrowing(core, spec.approvalId)));
     narrowedEarlier ||= narrowedNow;
     const narrowed = narrowedNow || narrowedBefore;
-    const file = spec.file ?? (await readOrRefuse(spec.path(config), spec.mode, commands.handoffs, spec.organisation));
+    const file =
+      spec.file ?? (await readProfileOrRefuse(spec.path(config), spec.mode, commands.handoffs, spec.organisation));
     /*
      * What this release cannot take at all is refused before anything of the profile is applied, the tightenings
      * below included (design 2026-10-19, X3): an entry it does not know and must not skip, or one it knows marked in
@@ -1577,9 +1578,10 @@ function tightenings(
 
 /**
  * The profile read, a later version refused in words that name core's own commands, located (design 2026-10-19, X3):
- * the profile's own refusal knows no commands, so the update and the command to run after it are said here.
+ * the profile's own refusal knows no commands, so the update and the command to run after it are said here. Exported
+ * for every surface that reads a profile to add it — Gmail's `setup --profile` too — so none says less than `org add`.
  */
-async function readOrRefuse(
+export async function readProfileOrRefuse(
   path: string,
   mode: 'add' | 'update',
   handoffs: CliHandoffs,

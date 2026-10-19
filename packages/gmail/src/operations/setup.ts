@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   activeGeneration,
+  type CliHandoffs,
   CommsError,
   type Config,
   isProductServer,
@@ -10,7 +11,7 @@ import {
   nameAvailable,
   organisationsOf,
   type ProfileFile,
-  readProfileFile,
+  readProfileOrRefuse,
   shownText,
 } from '@agentcomms/core';
 import { parseClientJson } from '../auth/oauth.ts';
@@ -352,9 +353,13 @@ export function setupClientChoiceNeedsMailbox(config: Config): boolean {
   return Object.values(organisationsOf(config)).some((organisation) => activeGeneration(organisation) !== undefined);
 }
 
-/** The exact profile setup classifies and hands to core, so a path swap cannot change what the approval applies. */
-export async function loadSetupProfile(path: string): Promise<ProfileFile> {
-  return readProfileFile(path);
+/**
+ * The exact profile setup classifies and hands to core, so a path swap cannot change what the approval applies. Read as
+ * `org add` reads it: a profile this release is too old for is refused naming the located update (design 2026-10-19,
+ * X3), never with the bare words of core's parser.
+ */
+export async function loadSetupProfile(path: string, handoffs: CliHandoffs): Promise<ProfileFile> {
+  return readProfileOrRefuse(path, 'add', handoffs, undefined);
 }
 
 /**

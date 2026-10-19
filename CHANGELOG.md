@@ -18,7 +18,9 @@ entry says whether it is `required` and the release that first understands it (`
 - A required entry it does not know stops `org add` or `org update` with a new code, `NEEDS_NEWER_RELEASE` (exit 1):
   "acme's profile needs agent-communications 0.23.0 or later for "<name>": nothing was changed". Your last approved
   settings stay exactly as they were, and nothing else stops. The hint names the update command and the
-  `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1".
+  `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1",
+  and so is one given to `agent-gmail setup --profile` (and `gmail_setup` with `profile`), whose hint names the update
+  command too.
   When the same command also turned `--for-other-addresses off`, which applies before the profile is read, or applied a
   tighter cap at once, the refusal says so: "…: for other addresses was turned off; nothing else was changed".
 
