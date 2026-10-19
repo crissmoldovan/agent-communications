@@ -318,8 +318,16 @@ test('what a rule names is checked against the account it is for, and every othe
     rules: [unreadable, { account: 'acme/slack', accountId: slack.id, acts: ['reaction'] }],
     note: 'kept',
   });
-  // A domain that is not one is refused before anything is written: as a rule it could only allow nothing.
-  for (const conversation of ['@exa|mple.com', 'bob@xn--a.test', '@client.test..']) {
+  // A domain that is not one is refused before anything is written: as a rule it could only allow nothing. Core decides
+  // that (`domain-name.ts`), the same on every Node: Node's own URL parser accepts `xn--a.test` on a later Node 24.
+  for (const conversation of [
+    '@exa|mple.com',
+    'bob@xn--a.test',
+    '@xn--.test',
+    '@client.test..',
+    '@-x.test',
+    'bob@a_b.test',
+  ]) {
     await assert.rejects(
       run(m, { setRule: { account: 'acme/gmail', conversation, acts: [] } }),
       refused('USAGE', /domain/),

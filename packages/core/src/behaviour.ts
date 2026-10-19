@@ -11,9 +11,9 @@
  *
  * `config.ts` imports this module to judge a change, so this one imports from it only types.
  */
-import { domainToASCII } from 'node:url';
 import { MAIL_CONVERSATION_PATTERN, SLACK_CONVERSATION_PATTERN } from './agent-label.ts';
 import type { Config, FormerNames } from './config.ts';
+import { asciiDomainName } from './domain-name.ts';
 import { CommsError } from './errors.ts';
 import { type CliHandoffs, handoffSentence } from './handoff-text.ts';
 import { NAME_PATTERN, PLAIN_NAME_PATTERN } from './name-grammar.ts';
@@ -105,13 +105,13 @@ type ReadRule = { rule: BehaviourRule } | { unreadable: BehaviourSettings['unrea
 
 /**
  * A mail conversation — an address or `@domain` — in the one form rules and places are compared in: lower-cased, one
- * trailing dot off its domain (a fully qualified name is the same domain), and the domain in its ASCII (punycode) form,
- * as `domainToASCII` gives it, so `@bücher.example` and `kunde@xn--bcher-kva.example` meet. The local part stays as
- * written, lower-cased; the domain is what follows the last `@`. Null when there is no domain, or it is not one —
- * `domainToASCII` refuses it, or a label in it is empty — so a rule naming it is unreadable (fail closed) and a place
- * naming it meets only its account's rule. Without this a rule written in one spelling silently never held a recipient
- * in the other. (An address rule then compares as the mailbox it reaches — `mailboxKey` — and a domain rule covers its
- * subdomains — `levelOf`.)
+ * trailing dot off its domain (a fully qualified name is the same domain), and the domain in its ASCII (punycode) form
+ * (`asciiDomainName`), so `@bücher.example` and `kunde@xn--bcher-kva.example` meet. The local part stays as written,
+ * lower-cased; the domain is what follows the last `@`. Null when there is no domain, or it is not one by
+ * `isAsciiDomainName`'s checks — the same on every Node, where Node's own URL parser is not — so a rule naming it is
+ * unreadable (fail closed) and a place naming it meets only its account's rule. Without this a rule written in one
+ * spelling silently never held a recipient in the other. (An address rule then compares as the mailbox it reaches —
+ * `mailboxKey` — and a domain rule covers its subdomains — `levelOf`.)
  */
 export function normaliseMailConversation(value: string): string | null {
   const at = value.lastIndexOf('@');
@@ -119,10 +119,8 @@ export function normaliseMailConversation(value: string): string | null {
   const local = value.slice(0, at).toLowerCase();
   const written = value.slice(at + 1).toLowerCase();
   const domain = written.endsWith('.') ? written.slice(0, -1) : written;
-  if (domain === '') return null;
-  const ascii = domainToASCII(domain).toLowerCase();
-  if (ascii === '' || ascii.startsWith('.') || ascii.endsWith('.') || ascii.includes('..')) return null;
-  return `${local}@${ascii}`;
+  const ascii = asciiDomainName(domain);
+  return ascii === null ? null : `${local}@${ascii}`;
 }
 
 /**
