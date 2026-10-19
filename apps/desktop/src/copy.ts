@@ -49,6 +49,7 @@ export const COPY = {
   noTerminal: 'No terminal app was found. The command is copied: paste it into a terminal.',
   noSafeLine: 'This command cannot be written as one safe line. Its words are copied as JSON.',
   unreadableVersion: 'a version the app could not read',
+  fromOutside: 'From outside',
 } as const;
 
 /** `Needs <version> or later; this machine has <installed>.` */

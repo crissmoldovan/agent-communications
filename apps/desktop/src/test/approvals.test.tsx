@@ -38,6 +38,12 @@ async function cardOf(approvalId: string): Promise<HTMLElement> {
 const untrusted = (card: HTMLElement): (string | null)[] =>
   Array.from(card.querySelectorAll('span.whitespace-pre-wrap')).map((span) => span.textContent);
 
+/** What each "From outside" block on a card holds, in order: the CLI's envelopes, with none of their tags. */
+const fromOutside = (card: HTMLElement): (string | null)[] =>
+  Array.from(card.querySelectorAll('[data-slot="from-outside"] span.whitespace-pre-wrap')).map(
+    (span) => span.textContent,
+  );
+
 const main = (): HTMLElement => screen.getByRole('main');
 
 /** The page, once the shell is up: the installation is read before anything else shows. */
@@ -85,20 +91,26 @@ describe('Approvals', () => {
     expect(within(send).getByText('Expires')).toBeTruthy();
     expect(within(send).getByText('To')).toBeTruthy();
     expect(within(send).getByText('Subject')).toBeTruthy();
-    expect(untrusted(send)).toEqual([populated[0]?.expect?.to[0], populated[0]?.expect?.subject]);
+    // Each string the CLI enveloped shows as a block from outside, its content as text, none of its tag.
+    expect(untrusted(send)).toEqual(['jo@example.com', 'The figures you asked for']);
+    expect(fromOutside(send)).toEqual(['jo@example.com', 'The figures you asked for']);
+    expect(within(send).getAllByText(COPY.fromOutside)).toHaveLength(2);
 
     const change = await cardOf(CHANGE);
     expect(within(change).getByText('Change · agent-communications')).toBeTruthy();
     expect(within(change).getByText('Summary')).toBeTruthy();
-    expect(untrusted(change)).toEqual([populated[1]?.expect?.subject]);
+    expect(fromOutside(change)).toEqual(['updates: every-14-days → never']);
 
     const download = await cardOf(SLACK);
     expect(within(download).getByText('Download · Slack')).toBeTruthy();
     expect(within(download).getByText('Files')).toBeTruthy();
-    expect(untrusted(download)).toEqual(populated[2]?.files?.names);
+    expect(fromOutside(download)).toEqual(['plan.pdf']);
 
-    // Nothing in any card is markup.
+    // Nothing in any card is markup, and no envelope's tag or boundary shows.
     expect(main().querySelector('img,a,script,iframe')).toBeNull();
+    for (const hidden of ['untrusted-content', 'boundary', 'Q1w2E3r4', 'T5y6U7i8', 'O9p0A1s2']) {
+      expect(main().textContent).not.toContain(hidden);
+    }
   });
 
   it('Revoke runs approvalRevoke with that id and refreshes', async () => {
