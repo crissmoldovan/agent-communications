@@ -5,9 +5,41 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { WINDOWS_SKIP_REASON } from './short-temp.ts';
 import { runStrictMutationChild, type StrictMutationChildResult } from './strict-mutation-child.ts';
 
+/**
+ * Where a registered mutation's named oracle runs, each under the same strict rule (only the named test, run and
+ * failed, kills; its unmutated copy must pass it alone):
+ * - `node`: a `node:test` file, by `--test-name-pattern`, with TAP read back. The default, and every fragment before
+ *   Task 11's.
+ * - `vitest`: one of the desktop app's Vitest files (E2 Task 11), by `vitest run -t`, with its JSON report read back.
+ *   Its name is the test's path as Vitest matches `-t` against it: each `describe` title, then the test's, joined by
+ *   ` > `.
+ * - `cargo`: one of the desktop app's Rust unit tests (E2 Task 11), by `cargo test --lib <path> -- --exact`, with its
+ *   summary read back. `pnpm verify` builds no Rust, so `desktop.yml` runs this leg (`run-laya-mutants.ts --leg cargo`).
+ */
+export const LAYA_MUTATION_LEGS: readonly ['node', 'vitest', 'cargo'] = Object.freeze([
+  'node',
+  'vitest',
+  'cargo',
+] as const);
+export type LayaMutationLeg = (typeof LAYA_MUTATION_LEGS)[number];
+/** The legs the daemon suite's runner executes, inside `pnpm verify`; `desktop.yml` executes the rest. */
+export const VERIFY_MUTATION_LEGS: readonly LayaMutationLeg[] = Object.freeze(['node', 'vitest'] as const);
+/** The only command that executes the legs `pnpm verify` does not: `desktop.yml` must run it as written. */
+export const CARGO_LEG_COMMAND =
+  'node --experimental-strip-types --disable-warning=ExperimentalWarning packages/events-daemon/test/support/run-laya-mutants.ts --leg cargo';
+
+/** A fragment's `leg`, or `node` when it names none; anything else is refused, so no registered mutation is unrun. */
+export function layaMutationLeg(value: unknown, what: string): LayaMutationLeg {
+  if (value === undefined) return 'node';
+  if (typeof value === 'string' && (LAYA_MUTATION_LEGS as readonly string[]).includes(value))
+    return value as LayaMutationLeg;
+  throw new Error(`${what} must be one of ${LAYA_MUTATION_LEGS.join(', ')}`);
+}
+
 export interface LayaMutation {
   readonly id: string;
   readonly kind: 'production';
+  readonly leg: LayaMutationLeg;
   readonly owner: string;
   /** A repository-relative production source path. */
   readonly source: string;
@@ -20,9 +52,9 @@ export interface LayaMutation {
 
 export interface LayaMutationExecution {
   readonly changedLine: number | null;
-  /** The exact named oracle's TAP output before the source mutation. */
+  /** The exact named oracle's output before the source mutation: TAP on the node leg, the child's own on the others. */
   readonly baselineOutput: string;
-  /** The exact named oracle's TAP output after the source mutation. */
+  /** The exact named oracle's output after the source mutation, in the same form. */
   readonly mutantOutput: string | null;
   readonly platformSkipped: boolean;
 }
@@ -34,6 +66,8 @@ export interface LayaMutationPlatformSkip {
 
 /** A hung child is a runner failure, never mutant evidence; the bound only has to outlast one named oracle. */
 const MUTATION_CHILD_TIMEOUT_MS = 120_000;
+/** A cargo child first builds the copied crate (its dependencies are shared, already built): a slower bound. */
+const CARGO_CHILD_TIMEOUT_MS = 1_200_000;
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const casesRoot = join(repositoryRoot, 'packages/events-daemon/test/fixtures/laya/cases');
@@ -80,6 +114,7 @@ export async function loadLayaMutations(): Promise<readonly LayaMutation[]> {
           {
             id: requiredString(mutation.id, `task-${task}.json mutation ${index}.id`),
             kind: 'production' as const,
+            leg: layaMutationLeg(mutation.leg, `task-${task}.json mutation ${index}.leg`),
             owner: requiredString(mutation.owner, `task-${task}.json mutation ${index}.owner`),
             source: requiredString(mutation.source, `task-${task}.json mutation ${index}.source`),
             testFile: requiredString(mutation.testFile, `task-${task}.json mutation ${index}.testFile`),
@@ -303,8 +338,20 @@ export function assertEveryLayaMutationExecuted(
   );
 }
 
-/** Copies one production module, proves its oracle first, then makes one exact destructive edit. */
+/** Copies one production module, proves its named oracle first, then makes one exact destructive edit, in its leg. */
 export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
+  switch (mutation.leg) {
+    case 'node':
+      return expectNodeMutationToFail(mutation);
+    case 'vitest':
+      return expectVitestMutationToFail(mutation);
+    case 'cargo':
+      return expectCargoMutationToFail(mutation);
+  }
+}
+
+/** Copies one production module, proves its named sealed oracle first, then makes one exact destructive edit. */
+async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
   const root = await mkdtemp(join(tmpdir(), `events-e2-mutant-${mutation.id}-`));
   try {
     await copyFixtureTree(root, mutation);
@@ -372,11 +419,230 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
   }
 }
 
-/** Runs every task fragment's production mutations and confirms none was skipped. */
-export async function expectEveryLayaMutationToFail(): Promise<
-  readonly ({ readonly mutation: LayaMutation } & LayaMutationExecution)[]
-> {
-  const mutations = await loadLayaMutations();
+/** The desktop app's folders a copy never takes: what its tools install, build or write. */
+const DESKTOP_SKIPPED = new Set(['node_modules', 'dist', 'target', 'gen', 'test-results', 'playwright-report']);
+
+/**
+ * The desktop app, without what its tools install or write, and the events daemon's contract it reads, below `root`.
+ * `dist/` is the one exception the cargo leg asks for: Tauri's context embeds the built UI, so a crate without it does
+ * not build. Its installed modules are linked, as the node leg's are.
+ */
+async function copyDesktopTree(root: string, options: { readonly dist: boolean }): Promise<string> {
+  const app = join(repositoryRoot, 'apps/desktop');
+  const copied = join(root, 'apps/desktop');
+  await cp(app, copied, {
+    recursive: true,
+    filter: (source) =>
+      relative(app, source)
+        .split(/[\\/]/u)
+        .every((part) => !DESKTOP_SKIPPED.has(part)),
+  });
+  if (options.dist) await cp(join(app, 'dist'), join(copied, 'dist'), { recursive: true });
+  await copyFile(root, 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json');
+  return copied;
+}
+
+async function linkDesktopModules(root: string): Promise<void> {
+  for (const directory of ['', 'apps/desktop']) {
+    const installed = join(repositoryRoot, directory, 'node_modules');
+    const modules = await stat(installed).catch(() => undefined);
+    if (!modules?.isDirectory()) throw new Error(`the Vitest leg needs the installed ${directory || 'root'} modules`);
+    await symlink(installed, join(root, directory, 'node_modules'), 'dir');
+  }
+}
+
+/** One assertion of Vitest's JSON report. */
+interface VitestAssertion {
+  readonly ancestorTitles: readonly string[];
+  readonly title: string;
+  readonly status: string;
+}
+
+/** A test's path as Vitest matches `-t` against it (its report's `fullName` joins the same titles with spaces). */
+const vitestPath = (assertion: VitestAssertion): string => [...assertion.ancestorTitles, assertion.title].join(' > ');
+
+/** What one Vitest run reported: every test that ran (passed or failed), and how many files failed to run. */
+async function vitestReport(
+  mutation: LayaMutation,
+  path: string,
+): Promise<{ readonly ran: readonly VitestAssertion[]; readonly failedFiles: number }> {
+  const text = await readFile(path, 'utf8').catch(() => undefined);
+  if (text === undefined) throw new Error(`${mutation.id}: Vitest wrote no report, so nothing is evidence`);
+  const report = JSON.parse(text) as {
+    readonly testResults?: readonly {
+      readonly status?: string;
+      readonly assertionResults?: readonly VitestAssertion[];
+    }[];
+  };
+  const files = report.testResults ?? [];
+  return {
+    ran: files
+      .flatMap((file) => file.assertionResults ?? [])
+      .filter((assertion) => assertion.status === 'passed' || assertion.status === 'failed'),
+    failedFiles: files.filter((file) => file.status === 'failed' && (file.assertionResults ?? []).length === 0).length,
+  };
+}
+
+/**
+ * The Vitest leg: the desktop app copied, one exact edit, and only the named test run (`-t` anchored to its full name).
+ * Its JSON report, not the exit code, decides: the unmutated copy ran exactly that test and it passed; the mutant ran
+ * exactly that test and it failed. A file that fails to load reports no test at all, so it is never a kill.
+ */
+async function expectVitestMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
+  const root = await mkdtemp(join(tmpdir(), `events-e2-vitest-${mutation.id}-`));
+  try {
+    const app = await copyDesktopTree(root, { dist: false });
+    await linkDesktopModules(root);
+    const target = join(root, mutation.source);
+    const original = await readFile(target, 'utf8');
+    assert.equal(
+      occurrences(original, mutation.before),
+      1,
+      `${mutation.id}: guarded production text must match exactly once in ${mutation.source}`,
+    );
+    const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
+    const report = join(root, 'vitest-report.json');
+    const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
+    const run = async () => {
+      await rm(report, { force: true });
+      const result = await runStrictMutationChild({
+        command: process.execPath,
+        args: [
+          join(app, 'node_modules', 'vitest', 'vitest.mjs'),
+          'run',
+          relative(join(repositoryRoot, 'apps/desktop'), join(repositoryRoot, mutation.testFile)),
+          '-t',
+          exactTestName(mutation.testName),
+          '--reporter=json',
+          `--outputFile=${report}`,
+        ],
+        cwd: app,
+        env: environment,
+        timeoutMs: MUTATION_CHILD_TIMEOUT_MS,
+      });
+      return { result, ...(await vitestReport(mutation, report)) };
+    };
+    const baseline = await run();
+    const tail = (output: string) => output.slice(-2000);
+    assert.equal(
+      baseline.result.code,
+      0,
+      `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail(baseline.result.output)}`,
+    );
+    assert.deepEqual(
+      baseline.ran.map((assertion) => [vitestPath(assertion), assertion.status]),
+      [[mutation.testName, 'passed']],
+      `${mutation.id}: the unmutated copy did not run exactly its named test, and pass it\n${tail(baseline.result.output)}`,
+    );
+    assert.equal(baseline.failedFiles, 0, `${mutation.id}: the baseline reported no file failure`);
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const mutant = await run();
+    assert.notEqual(
+      mutant.result.code,
+      0,
+      `${mutation.id}: ${mutation.testName} unexpectedly accepted mutant ${mutation.source}:${changedLine}\n${tail(mutant.result.output)}`,
+    );
+    assert.deepEqual(
+      mutant.ran.map((assertion) => [vitestPath(assertion), assertion.status]),
+      [[mutation.testName, 'failed']],
+      `${mutation.id}: its named test, not the file, failed\n${tail(mutant.result.output)}`,
+    );
+    return {
+      changedLine,
+      baselineOutput: baseline.result.output,
+      mutantOutput: mutant.result.output,
+      platformSkipped: false,
+    };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+/** What `cargo test` printed for the lib's unit tests: the named test's result line and the summary. */
+function cargoResult(
+  output: string,
+  name: string,
+): { readonly verdict: string | null; readonly summary: string | null } {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const verdicts = [...output.matchAll(new RegExp(`^test ${escaped} \\.\\.\\. (ok|FAILED)$`, 'gmu'))].map(
+    (match) => match[1],
+  );
+  const summaries = [...output.matchAll(/^test result: (?:ok|FAILED)\. (\d+ passed; \d+ failed); /gmu)].map(
+    (match) => match[1],
+  );
+  const running = [...output.matchAll(/^running (\d+) tests?$/gmu)].map((match) => match[1]);
+  return {
+    verdict: verdicts.length === 1 && running.length === 1 && running[0] === '1' ? (verdicts[0] ?? null) : null,
+    summary: summaries.length === 1 ? (summaries[0] ?? null) : null,
+  };
+}
+
+/**
+ * The cargo leg: the desktop app's crate copied (its built UI with it, which Tauri's context embeds), one exact edit,
+ * and only the named unit test run (`cargo test --lib <module path> -- --exact`), its dependencies taken from the
+ * checkout's own target folder. The unmutated copy must run exactly that test and pass it; the mutant must build, run
+ * exactly that test and fail it. A copy that does not build runs no test, so it is never a kill.
+ */
+async function expectCargoMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
+  const root = await mkdtemp(join(tmpdir(), `events-e2-cargo-${mutation.id}-`));
+  try {
+    const app = await copyDesktopTree(root, { dist: true });
+    const crate = join(app, 'src-tauri');
+    const target = join(root, mutation.source);
+    const original = await readFile(target, 'utf8');
+    assert.equal(
+      occurrences(original, mutation.before),
+      1,
+      `${mutation.id}: guarded production text must match exactly once in ${mutation.source}`,
+    );
+    const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
+    const run = () =>
+      runStrictMutationChild({
+        command: 'cargo',
+        args: ['test', '--locked', '--offline', '--lib', mutation.testName, '--', '--exact'],
+        cwd: crate,
+        env: { ...process.env, CARGO_TARGET_DIR: join(repositoryRoot, 'apps/desktop/src-tauri/target') },
+        timeoutMs: CARGO_CHILD_TIMEOUT_MS,
+      });
+    const tail = (output: string) => output.slice(-3000);
+    const baseline = await run();
+    assert.equal(
+      baseline.code,
+      0,
+      `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail(baseline.output)}`,
+    );
+    assert.deepEqual(
+      cargoResult(baseline.output, mutation.testName),
+      { verdict: 'ok', summary: '1 passed; 0 failed' },
+      `${mutation.id}: the unmutated copy did not run exactly its named test, and pass it\n${tail(baseline.output)}`,
+    );
+    await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    const mutant = await run();
+    assert.notEqual(
+      mutant.code,
+      0,
+      `${mutation.id}: ${mutation.testName} unexpectedly accepted mutant ${mutation.source}:${changedLine}\n${tail(mutant.output)}`,
+    );
+    assert.deepEqual(
+      cargoResult(mutant.output, mutation.testName),
+      { verdict: 'FAILED', summary: '0 passed; 1 failed' },
+      `${mutation.id}: its named test, not the build, failed\n${tail(mutant.output)}`,
+    );
+    return { changedLine, baselineOutput: baseline.output, mutantOutput: mutant.output, platformSkipped: false };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Runs every task fragment's production mutations in `legs` (by default the legs `pnpm verify` runs) and confirms
+ * none was skipped there; every registered mutation names a leg, and the other legs' runner confirms its own.
+ */
+export async function expectEveryLayaMutationToFail(
+  options: { readonly legs?: readonly LayaMutationLeg[] } = {},
+): Promise<readonly ({ readonly mutation: LayaMutation } & LayaMutationExecution)[]> {
+  const legs = options.legs ?? VERIFY_MUTATION_LEGS;
+  const mutations = (await loadLayaMutations()).filter((mutation) => legs.includes(mutation.leg));
   const executed = new Set<string>();
   const platformSkipped = new Map<string, LayaMutationPlatformSkip>();
   const results: ({ readonly mutation: LayaMutation } & LayaMutationExecution)[] = [];

@@ -1,0 +1,528 @@
+{
+  "schemaVersion": 1,
+  "task": 11,
+  "owners": [
+    {
+      "id": "task-11"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-desktop-presentation-only-status-dto",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer"
+    },
+    {
+      "id": "e2-desktop-terminal-only-enable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing"
+    },
+    {
+      "id": "e2-desktop-immediate-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them"
+    },
+    {
+      "id": "e2-desktop-artifact-free-bundle",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file"
+    },
+    {
+      "id": "e2-desktop-existing-b3-prepare-only-join",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d1-132-138-app-presentation-only",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer"
+    },
+    {
+      "id": "d10-2071-2085-desktop-status-and-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them"
+    },
+    {
+      "id": "d11-2321-2335-no-app-artifact",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file"
+    },
+    {
+      "id": "d11-2321-2335-no-app-runtime-chunk-or-dependency",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker"
+    },
+    {
+      "id": "d11-2321-2335-app-status-progress-reason",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress"
+    },
+    {
+      "id": "d13-2608-2613-da16-events-screen-buttons",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind"
+    },
+    {
+      "id": "d13-2608-2613-da16-terminal-only-enable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Enable opens the terminal with the terminal-only shape and approves nothing"
+    },
+    {
+      "id": "d13-2608-2613-da16-immediate-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Disable applies at once and the status is read again"
+    },
+    {
+      "id": "s8-3393-3432-desktop-reason",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every failure code and reason is shown as plain text"
+    },
+    {
+      "id": "e2-desktop-closed-dto-refusal",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: an unknown state, field or code is refused, not guessed at"
+    },
+    {
+      "id": "e2-desktop-fixtures-are-daemon-vectors",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app fixtures are copies of the daemon status vectors"
+    },
+    {
+      "id": "da12-desktop-laya-version-gate",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: an events service older than E2 asks for an update and calls nothing"
+    },
+    {
+      "id": "da12-allow-list-needs-e2",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_need_the_release_that_ships_e2"
+    },
+    {
+      "id": "da4-allow-list-laya-words",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins"
+    },
+    {
+      "id": "da4-allow-list-laya-refusals",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_take_no_argument_and_refuse_any_other_kind_or_word"
+    },
+    {
+      "id": "da10-da16-laya-disable-is-no-change",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_prepare_no_change"
+    },
+    {
+      "id": "da6-laya-enable-line-each-platform",
+      "owner": "task-11",
+      "test": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows"
+    },
+    {
+      "id": "da6-laya-enable-revokes-nothing",
+      "owner": "task-11",
+      "test": "terminal::tests::laya_enable_opens_the_events_launcher_with_the_pins_and_revokes_nothing"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-desktop-latest-started-status-read",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: a download in progress follows the screen poll, and only the latest-started read is kept"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-11.json",
+      "owner": "task-11"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t11-daemon-ready-before-verification",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "testPattern": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "before": "        await this.#downloadModel(job, { replace: await isDirectory(modelRoot) });\n      }\n      job.phase = 'verifying';",
+      "after": "        await this.#downloadModel(job, { replace: await isDirectory(modelRoot) });\n      }\n      job.phase = 'ready';"
+    },
+    {
+      "id": "e2-t11-daemon-omits-boundary-reason",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "testPattern": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "before": "    if (!availability.available) return answer('failed', row?.bytesVerified ?? 0, 'boundary-failed', availability.code);",
+      "after": "    if (!availability.available) return answer('failed', row?.bytesVerified ?? 0, 'boundary-failed', null);"
+    },
+    {
+      "id": "e2-t11-daemon-omits-unavailable-reason",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "testPattern": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "before": "          reason: availability.code,",
+      "after": "          reason: null,"
+    },
+    {
+      "id": "e2-t11-daemon-omits-failure-code",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "testPattern": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "before": "    return answer(row.state, row.bytesVerified, row.state === 'failed' ? row.failureCode : null, null);",
+      "after": "    return answer(row.state, row.bytesVerified, null, null);"
+    },
+    {
+      "id": "e2-t11-daemon-status-exposes-a-path",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "testPattern": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "before": "      reason,\n      updatedAt: row?.updatedAt ?? null,\n    });",
+      "after": "      reason,\n      updatedAt: row?.updatedAt ?? null,\n      artifactRoot: this.#root,\n    });"
+    },
+    {
+      "id": "e2-t11-daemon-disable-needs-a-terminal",
+      "kind": "production",
+      "leg": "node",
+      "owner": "task-11",
+      "source": "packages/events-daemon/src/cli/program.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them",
+      "testPattern": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them",
+      "before": "  judgeKind.command('disable <kind>').action(async (kind: string) => {\n    ran = true;\n",
+      "after": "  judgeKind.command('disable <kind>').action(async (kind: string) => {\n    ran = true;\n    assertHuman();\n"
+    },
+    {
+      "id": "e2-t11-app-disable-for-idle",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "testPattern": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "before": "    case 'idle':\n      return 'enable';",
+      "after": "    case 'idle':\n      return 'disable';"
+    },
+    {
+      "id": "e2-t11-app-enable-for-an-enabled-kind",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "testPattern": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "before": "      return 'disable';\n    case 'unavailable':",
+      "after": "      return 'enable';\n    case 'unavailable':"
+    },
+    {
+      "id": "e2-t11-app-button-for-unavailable",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "testPattern": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "before": "    case 'unavailable':\n      return null;",
+      "after": "    case 'unavailable':\n      return 'disable';"
+    },
+    {
+      "id": "e2-t11-app-derives-progress",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress",
+      "testPattern": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress",
+      "before": "{`${status.bytesVerified} of ${status.totalBytes} bytes`}",
+      "after": "{`${status.totalBytes} of ${status.totalBytes} bytes`}"
+    },
+    {
+      "id": "e2-t11-app-derives-a-state",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress",
+      "testPattern": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress",
+      "before": "<DescriptionList.Detail>{status.state}</DescriptionList.Detail>",
+      "after": "<DescriptionList.Detail>{status.bytesVerified === status.totalBytes ? 'ready' : status.state}</DescriptionList.Detail>"
+    },
+    {
+      "id": "e2-t11-app-omits-the-reason",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "testPattern": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "before": "      {status.reason === null ? null : (",
+      "after": "      {true ? null : ("
+    },
+    {
+      "id": "e2-t11-app-omits-the-failure-code",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "testPattern": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "before": "      {status.failureCode === null ? null : (",
+      "after": "      {true ? null : ("
+    },
+    {
+      "id": "e2-t11-app-placeholder-not-said",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "testPattern": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "before": "  E2_EXTERNAL_REFERENCE_BLOCKED: \"Laya isn't offered in this release.\",",
+      "after": "  E2_EXTERNAL_REFERENCE_BLOCKED: 'Laya is not ready yet.',"
+    },
+    {
+      "id": "e2-t11-app-takes-an-unknown-field",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: an unknown state, field or code is refused, not guessed at",
+      "testPattern": "E2 desktop Laya contract: an unknown state, field or code is refused, not guessed at",
+      "before": "  if (keys.length !== LAYA_FIELDS.length || !LAYA_FIELDS.every((key) => Object.hasOwn(value, key))) return UNREADABLE;",
+      "after": "  if (!LAYA_FIELDS.every((key) => Object.hasOwn(value, key))) return UNREADABLE;"
+    },
+    {
+      "id": "e2-t11-app-enable-approves",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: Enable opens the terminal with the terminal-only shape and approves nothing",
+      "testPattern": "E2 desktop Laya contract: Enable opens the terminal with the terminal-only shape and approves nothing",
+      "before": "      setOpened(await bridge.openInTerminal({ kind: 'eventsJudgeKindEnable' }));",
+      "after": "      setOpened(await bridge.openInTerminal({ kind: 'approve', product: 'events-daemon', approvalId: 'ap_0123456789ABCDEFGHJKMNPQRS' }));"
+    },
+    {
+      "id": "e2-t11-app-ungated",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: an events service older than E2 asks for an update and calls nothing",
+      "testPattern": "E2 desktop Laya contract: an events service older than E2 asks for an update and calls nothing",
+      "before": "  const supported = version.state === 'ready' && supports(version.value, 'layaJudge');",
+      "after": "  const supported = version.state === 'ready';"
+    },
+    {
+      "id": "e2-t11-bundle-takes-a-model",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "before": "  [/\\.onnx(?:\\.data)?$/i, 'a model file'],",
+      "after": "  [/\\.onnx\\.never$/i, 'a model file'],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-a-native-library",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "before": "  [/\\.(?:node|dylib|dll)$|\\.so(?:\\.\\d+)*$/i, 'a native library'],",
+      "after": "  [/\\.(?:node)$/i, 'a native library'],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-a-reviewed-asset",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "before": "  [/(?:^|\\/)laya-(?:manifest|runtime|enablement-disclosures)\\.json$/i, \"one of the events daemon's reviewed assets\"],",
+      "after": "  [/(?:^|\\/)laya-never\\.json$/i, \"one of the events daemon's reviewed assets\"],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-the-worker",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "before": "  [/(?:^|\\/)(?:laya-worker|worker-main|worker-boundary-probe|worker-runtime)\\.[cm]?[jt]s$/i, 'the worker'],",
+      "after": "  [/(?:^|\\/)never-a-worker\\.mjs$/i, 'the worker'],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-a-runtime-chunk",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker",
+      "before": "  ['onnxruntime', /onnxruntime/i],",
+      "after": "  ['onnxruntime', /onnxruntime-never/i],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-the-worker-profile",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker",
+      "before": "  [\"the worker's sandbox profile\", /\\(deny network\\*\\)/],",
+      "after": "  [\"the worker's sandbox profile\", /never-a-profile/],"
+    },
+    {
+      "id": "e2-t11-bundle-takes-a-laya-dependency",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-11",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the app may not depend on the Laya runtime, the events daemon or their packages",
+      "testPattern": "E2 desktop Laya contract: the app may not depend on the Laya runtime, the events daemon or their packages",
+      "before": "      if (LAYA_PACKAGES.some((pattern) => pattern.test(name)))",
+      "after": "      if (false)"
+    },
+    {
+      "id": "e2-t11-rust-disable-takes-a-kind",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_take_no_argument_and_refuse_any_other_kind_or_word",
+      "testPattern": "allowlist::tests::laya_calls_take_no_argument_and_refuse_any_other_kind_or_word",
+      "before": "    EventsJudgeKindDisable {},\n",
+      "after": "    EventsJudgeKindDisable {\n        #[serde(default)]\n        judge: Option<String>,\n    },\n"
+    },
+    {
+      "id": "e2-t11-rust-disable-takes-an-extra-word",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins",
+      "testPattern": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins",
+      "before": "            Call::EventsJudgeKindDisable { .. } => events(&[\"judge\", \"kind\", \"disable\", \"laya\"]),",
+      "after": "            Call::EventsJudgeKindDisable { .. } => events(&[\"judge\", \"kind\", \"disable\", \"laya\", \"--yes\"]),"
+    },
+    {
+      "id": "e2-t11-rust-status-takes-a-kind",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins",
+      "testPattern": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins",
+      "before": "            Call::EventsJudgeModelStatus { .. } => events(&[\"judge\", \"model\", \"status\"]),",
+      "after": "            Call::EventsJudgeModelStatus { .. } => events(&[\"judge\", \"model\", \"status\", \"laya\"]),"
+    },
+    {
+      "id": "e2-t11-rust-disable-prepares-a-change",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_prepare_no_change",
+      "testPattern": "allowlist::tests::laya_calls_prepare_no_change",
+      "before": "                | Call::BehaviourClear { .. }\n        )",
+      "after": "                | Call::BehaviourClear { .. }\n                | Call::EventsJudgeKindDisable { .. }\n        )"
+    },
+    {
+      "id": "e2-t11-rust-ungated",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_need_the_release_that_ships_e2",
+      "testPattern": "allowlist::tests::laya_calls_need_the_release_that_ships_e2",
+      "before": "pub const LAYA_JUDGE_VERSION: &str = \"0.25.0\";",
+      "after": "pub const LAYA_JUDGE_VERSION: &str = \"0.24.0\";"
+    },
+    {
+      "id": "e2-t11-rust-enable-line-json",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/terminal.rs",
+      "testFile": "apps/desktop/src-tauri/src/terminal.rs",
+      "testName": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows",
+      "testPattern": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows",
+      "before": "            [\"judge\", \"kind\", \"enable\", \"laya\"]\n                .iter()",
+      "after": "            [\"judge\", \"kind\", \"enable\", \"laya\", \"--json\"]\n                .iter()"
+    },
+    {
+      "id": "e2-t11-rust-enable-line-approval",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/terminal.rs",
+      "testFile": "apps/desktop/src-tauri/src/terminal.rs",
+      "testName": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows",
+      "testPattern": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows",
+      "before": "            [\"judge\", \"kind\", \"enable\", \"laya\"]\n                .iter()",
+      "after": "            [\"judge\", \"kind\", \"enable\", \"laya\", \"--approval\"]\n                .iter()"
+    },
+    {
+      "id": "e2-t11-rust-enable-revokes-first",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-11",
+      "source": "apps/desktop/src-tauri/src/terminal.rs",
+      "testFile": "apps/desktop/src-tauri/src/terminal.rs",
+      "testName": "terminal::tests::laya_enable_opens_the_events_launcher_with_the_pins_and_revokes_nothing",
+      "testPattern": "terminal::tests::laya_enable_opens_the_events_launcher_with_the_pins_and_revokes_nothing",
+      "before": "        | TerminalCommand::EventsJudgeKindEnable { .. } => None,",
+      "after": "        | TerminalCommand::EventsJudgeKindEnable { .. } => Some(effects.revoke(&crate::allowlist::ApprovalId::try_from(\"ap_0123456789ABCDEFGHJKMNPQRS\".to_string())?, ctx)),"
+    }
+  ]
+}

@@ -199,7 +199,17 @@ pub enum Call {
     EventsRules {},
     /// The events service's `deliveries list`.
     EventsDeliveries {},
+    /// The events service's `judge model status` (E2): the Laya judge's state, bytes and reason codes, read-only. It
+    /// takes no argument.
+    EventsJudgeModelStatus {},
+    /// The events service's `judge kind disable laya` (E2): a tightening, applied at once. It takes no argument: the
+    /// kind is Laya's, and no other kind is disabled from the app.
+    EventsJudgeKindDisable {},
 }
+
+/// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
+/// agent-communications to use this".
+pub const LAYA_JUDGE_VERSION: &str = "0.25.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,6 +377,8 @@ impl Call {
             Call::EventsResume {} => events(&["resume"]),
             Call::EventsRules {} => events(&["rules", "list"]),
             Call::EventsDeliveries {} => events(&["deliveries", "list"]),
+            Call::EventsJudgeModelStatus { .. } => events(&["judge", "model", "status"]),
+            Call::EventsJudgeKindDisable { .. } => events(&["judge", "kind", "disable", "laya"]),
         })
     }
 
@@ -395,6 +407,9 @@ impl Call {
                 Some("0.23.0")
             }
             Call::UpdateStatus {} => Some("0.24.0"),
+            Call::EventsJudgeModelStatus { .. } | Call::EventsJudgeKindDisable { .. } => {
+                Some(LAYA_JUDGE_VERSION)
+            }
             _ => None,
         }
     }
@@ -446,6 +461,8 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsResume" }),
         json!({ "kind": "eventsRules" }),
         json!({ "kind": "eventsDeliveries" }),
+        json!({ "kind": "eventsJudgeModelStatus" }),
+        json!({ "kind": "eventsJudgeKindDisable" }),
     ];
     values
         .into_iter()
@@ -455,6 +472,34 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
             (call, value)
         })
         .collect()
+}
+
+/// The events daemon's half of the Laya contract (E2 Task 11): `judge-desktop-contract.test.ts` runs each of these
+/// words through the events CLI against the real owner.
+#[cfg(test)]
+const DESKTOP_CONTRACT: &str = include_str!(
+    "../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json"
+);
+
+/// The words the daemon's contract names for `call` (`eventsJudgeModelStatus`, `eventsJudgeKindDisable`, or the
+/// terminal's `eventsJudgeKindEnable`), and whether it gives them `--json`.
+#[cfg(test)]
+pub(crate) fn desktop_contract_words(call: &str) -> (Vec<String>, bool) {
+    let contract: serde_json::Value =
+        serde_json::from_str(DESKTOP_CONTRACT).expect("the daemon's contract");
+    let entry = contract["calls"]
+        .as_array()
+        .expect("its calls")
+        .iter()
+        .find(|entry| entry["call"] == call)
+        .unwrap_or_else(|| panic!("the daemon's contract names {call}"));
+    let words = entry["words"]
+        .as_array()
+        .expect("its words")
+        .iter()
+        .map(|word| word.as_str().expect("a word").to_string())
+        .collect();
+    (words, entry["json"] == serde_json::Value::Bool(true))
 }
 
 /// A well-formed approval id, for the tests: `ap_` and 26 of Crockford's letters.
@@ -877,6 +922,24 @@ mod tests {
                 true,
                 thirty,
             ),
+            (
+                json!({"kind":"eventsJudgeModelStatus"}),
+                EventsDaemon,
+                &["judge", "model", "status"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsJudgeKindDisable"}),
+                EventsDaemon,
+                &["judge", "kind", "disable", "laya"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
         ];
         for (value, product, expected, shape, pins, quiet, timeout) in rows {
             let words = call(value.clone())
@@ -1071,6 +1134,97 @@ mod tests {
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
             ]
         );
+    }
+
+    #[test]
+    fn laya_calls_build_exactly_the_launcher_words_json_and_pins() {
+        let folders = crate::paths::Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let launcher = "/home/example/.local/share/agent-communications/launch/events-daemon";
+        let program = crate::launchers::Program {
+            program: launcher.into(),
+            leading: vec![],
+        };
+        for (value, name, words) in [
+            (
+                json!({ "kind": "eventsJudgeModelStatus" }),
+                "eventsJudgeModelStatus",
+                &["judge", "model", "status"][..],
+            ),
+            (
+                json!({ "kind": "eventsJudgeKindDisable" }),
+                "eventsJudgeKindDisable",
+                &["judge", "kind", "disable", "laya"][..],
+            ),
+        ] {
+            let built = call(value.clone()).words().expect("words");
+            assert_eq!(built.product, Product::EventsDaemon, "{value}");
+            assert_eq!(built.words, words, "{value}");
+            assert_eq!(built.shape, Shape::Bare, "{value}");
+            assert!(built.pins, "{value}");
+            assert_eq!(built.timeout, Duration::from_secs(30), "{value}");
+            // The whole line: the launcher, the words, `--json`, then the four pins, and nothing else.
+            let mut expected = vec![launcher.to_string()];
+            expected.extend(words.iter().map(|word| word.to_string()));
+            expected.push("--json".into());
+            expected.extend(folders.pins());
+            assert_eq!(
+                crate::runner::argv(&built, &program, &folders, true),
+                expected
+            );
+            // The words are the ones the events daemon's contract runs through its CLI.
+            assert_eq!(
+                desktop_contract_words(name),
+                (built.words.clone(), true),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn laya_calls_take_no_argument_and_refuse_any_other_kind_or_word() {
+        for bad in [
+            json!({ "kind": "eventsJudgeKindDisable", "judge": "typesafe" }),
+            json!({ "kind": "eventsJudgeKindDisable", "judgeKind": "laya" }),
+            json!({ "kind": "eventsJudgeKindDisable", "kindName": "local-endpoint" }),
+            json!({ "kind": "eventsJudgeKindDisable", "args": ["laya"] }),
+            json!({ "kind": "eventsJudgeKindDisable", "words": ["--force"] }),
+            json!({ "kind": "eventsJudgeKindDisable", "approval": ID }),
+            json!({ "kind": "eventsJudgeModelStatus", "product": "core" }),
+            json!({ "kind": "eventsJudgeModelStatus", "manifestId": "laya-en-onnx-v1" }),
+            json!({ "kind": "eventsJudgeModelStatus", "json": false }),
+            // Enabling is the terminal's, and removing the model files the CLI's and MCP's: neither is a call.
+            json!({ "kind": "eventsJudgeKindEnable" }),
+            json!({ "kind": "eventsJudgeModelRemove" }),
+        ] {
+            refused(bad);
+        }
+    }
+
+    #[test]
+    fn laya_calls_prepare_no_change() {
+        for value in [
+            json!({ "kind": "eventsJudgeModelStatus" }),
+            json!({ "kind": "eventsJudgeKindDisable" }),
+        ] {
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+    }
+
+    #[test]
+    fn laya_calls_need_the_release_that_ships_e2() {
+        for value in [
+            json!({ "kind": "eventsJudgeModelStatus" }),
+            json!({ "kind": "eventsJudgeKindDisable" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.25.0"), "{value}");
+        }
+        assert!(!crate::version::at_least("0.24.0", LAYA_JUDGE_VERSION));
+        assert!(crate::version::at_least("0.25.0", LAYA_JUDGE_VERSION));
     }
 
     #[test]

@@ -32,6 +32,13 @@ on:
       - 'README.md'
       - '.gitignore'
       - '.github/workflows/release.yml'
+      # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
+      # runner, fragments and child of E2's Rust mutants, which the Laya Rust mutants step runs.
+      - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
+      - 'packages/events-daemon/test/fixtures/laya/cases/**'
+      - 'packages/events-daemon/test/support/laya-mutants.ts'
+      - 'packages/events-daemon/test/support/run-laya-mutants.ts'
+      - 'packages/events-daemon/test/support/strict-mutation-child.ts'
   push:
     branches: [main]
     paths:
@@ -53,6 +60,13 @@ on:
       - 'README.md'
       - '.gitignore'
       - '.github/workflows/release.yml'
+      # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
+      # runner, fragments and child of E2's Rust mutants, which the Laya Rust mutants step runs.
+      - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
+      - 'packages/events-daemon/test/fixtures/laya/cases/**'
+      - 'packages/events-daemon/test/support/laya-mutants.ts'
+      - 'packages/events-daemon/test/support/run-laya-mutants.ts'
+      - 'packages/events-daemon/test/support/strict-mutation-child.ts'
   workflow_call: {}
 
 permissions:
@@ -111,6 +125,11 @@ jobs:
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo test
+      # E2's paired Rust mutants (E2 Task 11): each is one exact edit to a copy of the app's crate, and its one named unit
+      # test, run alone, must build, run and fail. The runner first proves it refuses a copy that does not build, an
+      # oracle that does not pass unmutated and a surviving mutant. `pnpm verify` builds no Rust, so they run here.
+      - name: Laya Rust mutants
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning packages/events-daemon/test/support/run-laya-mutants.ts --leg cargo
       # THIRD_PARTY_LICENSES must name what this commit's build is made of: every package the web bundle includes and
       # every crate cargo resolves for the four targets. It fails, naming each one, when the file is out of step.
       - name: Licence notices

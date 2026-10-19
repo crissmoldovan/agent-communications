@@ -6,10 +6,14 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  CARGO_LEG_COMMAND,
   expectEveryLayaMutationToFail,
   expectLayaMutationToFail,
+  LAYA_MUTATION_LEGS,
   type LayaMutation,
+  layaMutationLeg,
   loadLayaMutations,
+  VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -671,6 +675,7 @@ function runnerProbe(overrides: Partial<LayaMutation>): LayaMutation {
   return {
     id: 'runner-self-test',
     kind: 'production',
+    leg: 'node',
     owner: 'task-6',
     source: 'packages/events-daemon/test/support/laya-mutants.ts',
     testFile: 'packages/events-daemon/test/laya-mutations.test.ts',
@@ -713,6 +718,7 @@ function mutationAccountingFixture(
   return {
     id,
     kind: 'production' as const,
+    leg: 'node' as const,
     owner: 'task-5',
     source: 'packages/events-daemon/src/runtime/laya/tar.ts',
     testFile: 'packages/events-daemon/test/laya-runtime-installer.test.ts',
@@ -824,6 +830,66 @@ test('E2 mutation: the copied boundary-source oracle passes its unmutated baseli
   assert.match(execution.baselineOutput, /^# pass 1$/m);
   assert.match(execution.baselineOutput, /^# fail 0$/m);
   assert.ok(execution.changedLine !== null && execution.changedLine > 0);
+});
+
+/** The same synthetic runner input for the desktop app's Vitest leg (E2 Task 11): gates.ts and its first test. */
+function vitestProbe(overrides: Partial<LayaMutation>): LayaMutation {
+  const testName =
+    overrides.testName ?? 'what each CLI version supports > a feature is there from the version that brings it';
+  return {
+    id: 'vitest-runner-self-test',
+    kind: 'production',
+    leg: 'vitest',
+    owner: 'task-11',
+    source: 'apps/desktop/src/gates.ts',
+    testFile: 'apps/desktop/src/test/gates.test.tsx',
+    before: 'export type Feature = keyof typeof GATES;',
+    after: 'export type Feature = keyof typeof GATES; // an inert edit',
+    ...overrides,
+    testName,
+    testPattern: testName,
+  };
+}
+
+test('E2 mutation: a Vitest copy whose named test fails to load is not a kill', async () => {
+  // Vitest reports a file that cannot load with no test in it: no named test ran, so nothing failed it.
+  await assert.rejects(
+    expectLayaMutationToFail(
+      vitestProbe({
+        after:
+          "throw new Error('mutation runner self-test: the oracle cannot load');\nexport type Feature = keyof typeof GATES;",
+      }),
+    ),
+    /its named test, not the file, failed/u,
+  );
+});
+
+test('E2 mutation: a Vitest oracle that does not pass unmutated is not a kill', async () => {
+  await assert.rejects(
+    expectLayaMutationToFail(vitestProbe({ testName: 'an oracle the desktop app does not have' })),
+    /the unmutated copy did not/u,
+  );
+});
+
+test('E2 mutation: a Vitest mutant its oracle accepts is not a kill', async () => {
+  await assert.rejects(expectLayaMutationToFail(vitestProbe({})), /unexpectedly accepted mutant/u);
+});
+
+test('E2 mutation: every registered mutation names a leg a runner executes', async () => {
+  assert.deepEqual(LAYA_MUTATION_LEGS, ['node', 'vitest', 'cargo']);
+  // pnpm verify runs node and Vitest; desktop.yml runs cargo, with the one command the checker requires there.
+  assert.deepEqual(VERIFY_MUTATION_LEGS, ['node', 'vitest']);
+  const workflow = await readFile(join(repositoryRoot, '.github/workflows/desktop.yml'), 'utf8');
+  assert.ok(workflow.split(/\r?\n/u).some((line) => line.trim() === `run: ${CARGO_LEG_COMMAND}`));
+  assert.match(
+    await readFile(checker, 'utf8'),
+    new RegExp(CARGO_LEG_COMMAND.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')),
+  );
+  assert.equal(layaMutationLeg(undefined, 'a fragment row'), 'node');
+  for (const leg of ['jest', 'Vitest', 'rust', '', 7, null]) {
+    assert.throws(() => layaMutationLeg(leg, 'a fragment row'), /must be one of node, vitest, cargo/u);
+  }
+  for (const mutation of await loadLayaMutations()) assert.ok(LAYA_MUTATION_LEGS.includes(mutation.leg), mutation.id);
 });
 
 test('E2 mutation: copied production checker fails only its named oracle', async (context) => {

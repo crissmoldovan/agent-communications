@@ -10,38 +10,119 @@
  * - **No `http(s)://` in the HTML or the CSS:** nothing remote is loaded. Two kinds of text are not loads and are
  *   left out first: comments (Tailwind's licence banner names its home page) and an XML namespace inside a `data:`
  *   URI (`xmlns='http://www.w3.org/2000/svg'`), which is an identifier the image declares, never fetched.
+ * - **Nothing of Laya, the events service's local judge** (E2 Task 11, DA16): no model, tokenizer or model
+ *   configuration, no native library, none of the events daemon's reviewed Laya assets, no worker, no file that names
+ *   its runtime's packages or holds its worker, and no dependency on the Laya runtime, the events daemon or their
+ *   packages. The daemon owns Laya, its downloads and its worker; the app only shows its status.
  *
  * Prints `desktop bundle check: OK`, or every problem and exits 1.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const APP = fileURLToPath(new URL('..', import.meta.url));
-const DIST = join(APP, 'dist');
-const problems = [];
 
-const config = JSON.parse(readFileSync(join(APP, 'src-tauri', 'tauri.conf.json'), 'utf8'));
-const bundle = config.bundle ?? {};
-if (bundle.externalBin !== undefined)
-  problems.push('tauri.conf.json: bundle.externalBin is set; the app bundles no binary');
-if (bundle.resources !== undefined)
-  problems.push('tauri.conf.json: bundle.resources is set; the app bundles no resources');
+/** A file only Laya is made of, by its name: what it is, for the problem that names it. */
+const LAYA_FILES = [
+  [/\.onnx(?:\.data)?$/i, 'a model file'],
+  [/(?:^|\/)tokenizer(?:_config)?\.json$/i, "a model's tokenizer"],
+  [/(?:^|\/)laya_config\.json$/i, "a model's configuration"],
+  [/\.(?:node|dylib|dll)$|\.so(?:\.\d+)*$/i, 'a native library'],
+  [/(?:^|\/)laya-(?:manifest|runtime|enablement-disclosures)\.json$/i, "one of the events daemon's reviewed assets"],
+  [/(?:^|\/)(?:laya-worker|worker-main|worker-boundary-probe|worker-runtime)\.[cm]?[jt]s$/i, 'the worker'],
+];
 
-if (!existsSync(join(DIST, 'index.html'))) {
-  problems.push('dist/index.html is missing: run the build first');
-} else {
-  for (const entry of readdirSync(DIST)) {
+/** What a file that names Laya's runtime, or holds its worker, has in it. */
+const LAYA_TEXT = [
+  ['@receptron/laya', /@receptron\/laya/],
+  ['onnxruntime', /onnxruntime/i],
+  ['@huggingface/tokenizers', /@huggingface\/tokenizers/],
+  ["the worker's entry", /laya-worker|worker-boundary-probe/],
+  ["the worker's protocol", /LayaWorkerProtocolError/],
+  ["the worker's sandbox profile", /\(deny network\*\)/],
+];
+
+/** What the app may never depend on: the Laya runtime's workspace, the events daemon, and the runtime's packages. */
+const LAYA_PACKAGES = [
+  /^@agentcomms\/events-laya-runtime$/,
+  /^@agentcomms\/events-daemon$/,
+  /^@receptron\/laya$/,
+  /^onnxruntime(?:-|$)/,
+  /^@huggingface\/tokenizers$/,
+];
+const DEPENDENCY_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'bundleDependencies',
+  'bundledDependencies',
+];
+
+/** Every file below `directory`, as paths relative to `root` with `/`. */
+function filesBelow(root, directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { recursive: true })
+    .map((entry) => join(directory, String(entry)))
+    .filter((path) => statSync(path).isFile())
+    .map((path) => relative(root, path).split(sep).join('/'))
+    .sort();
+}
+
+/** The names `field` of a package manifest lists, whether it is a map of versions or a list. */
+function dependencyNames(value) {
+  if (Array.isArray(value)) return value.filter((name) => typeof name === 'string');
+  if (value !== null && typeof value === 'object') return Object.keys(value);
+  return [];
+}
+
+/** Everything the built app at `app` (its `dist/`, `package.json` and `src-tauri/tauri.conf.json`) may not hold. */
+export function bundleProblems({ app = APP } = {}) {
+  const dist = join(app, 'dist');
+  const problems = [];
+
+  const config = JSON.parse(readFileSync(join(app, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  const bundle = config.bundle ?? {};
+  if (bundle.externalBin !== undefined)
+    problems.push('tauri.conf.json: bundle.externalBin is set; the app bundles no binary');
+  if (bundle.resources !== undefined)
+    problems.push('tauri.conf.json: bundle.resources is set; the app bundles no resources');
+
+  const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const name of dependencyNames(manifest[field])) {
+      if (LAYA_PACKAGES.some((pattern) => pattern.test(name)))
+        problems.push(
+          `package.json: ${field} names ${name}; the app depends on nothing of Laya's or the events daemon's`,
+        );
+    }
+  }
+
+  if (!existsSync(join(dist, 'index.html'))) {
+    problems.push('dist/index.html is missing: run the build first');
+    return problems;
+  }
+  for (const entry of readdirSync(dist)) {
     if (entry !== 'index.html' && entry !== 'assets') problems.push(`dist/${entry} is neither index.html nor assets/`);
   }
-  const assets = join(DIST, 'assets');
+  const assets = join(dist, 'assets');
   const files = existsSync(assets) ? readdirSync(assets) : [];
   for (const file of files) {
     if (!statSync(join(assets, file)).isFile()) problems.push(`dist/assets/${file} is a folder: assets/ holds files`);
   }
 
-  const html = readFileSync(join(DIST, 'index.html'), 'utf8');
+  for (const path of filesBelow(app, dist)) {
+    const file = LAYA_FILES.find(([pattern]) => pattern.test(path));
+    if (file !== undefined) problems.push(`${path}: ${file[1]}, for Laya; the app never holds one`);
+    const text = readFileSync(join(app, path)).toString('latin1');
+    const names = LAYA_TEXT.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);
+    if (names.length > 0)
+      problems.push(`${path} names ${names.join(', ')}: nothing of Laya's runtime or worker is the app's`);
+  }
+
+  const html = readFileSync(join(dist, 'index.html'), 'utf8');
   const inline = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)].filter(
     ([, attributes]) => !/\bsrc=/.test(attributes),
   );
@@ -70,10 +151,14 @@ if (!existsSync(join(DIST, 'index.html'))) {
       problems.push(`${name} names a remote address: ${match[0]}`);
     }
   }
+  return problems;
 }
 
-if (problems.length > 0) {
-  for (const problem of problems) console.error(`- ${problem}`);
-  process.exit(1);
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const problems = bundleProblems();
+  if (problems.length > 0) {
+    for (const problem of problems) console.error(`- ${problem}`);
+    process.exit(1);
+  }
+  process.stdout.write('desktop bundle check: OK\n');
 }
-process.stdout.write('desktop bundle check: OK\n');

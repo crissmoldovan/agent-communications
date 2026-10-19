@@ -14,6 +14,13 @@ const casesRelative = 'packages/events-daemon/test/fixtures/laya/cases';
 const runtimeName = '@agentcomms/events-laya-runtime';
 const runtimePackages = ['@receptron/laya', 'onnxruntime-node', '@huggingface/tokenizers'];
 const installCommand = ['pnpm', 'install'].join(' ');
+/**
+ * Where a registered mutation's oracle runs (`test/support/laya-mutants.ts`): node:test and the desktop app's Vitest in
+ * `pnpm verify`, the desktop app's Rust unit tests in desktop.yml, which must run this exact command.
+ */
+const mutationLegs = ['node', 'vitest', 'cargo'];
+const cargoLegCommand =
+  'node --experimental-strip-types --disable-warning=ExperimentalWarning packages/events-daemon/test/support/run-laya-mutants.ts --leg cargo';
 const normalInstall = `${installCommand} --frozen-lockfile --filter '!${runtimeName}'`;
 
 function fail(message) {
@@ -69,6 +76,14 @@ function ownerOf(row, owners, what) {
 function testContainsName(root, testFile, testName) {
   const source = readText(root, testFile);
   return source.includes(`'${testName}'`) || source.includes(`\`${testName}\``) || source.includes(`"${testName}"`);
+}
+
+/** A Rust unit test's path, `<module>::tests::<name>`, is a `#[test] fn <name>(` in that module's own file. */
+function cargoTestNamed(testFile, source, testName) {
+  const path = /^([a-z_][a-z0-9_]*)::tests::([a-z_][a-z0-9_]*)$/.exec(testName);
+  if (path === null) return false;
+  if (testFile !== `apps/desktop/src-tauri/src/${path[1]}.rs`) return false;
+  return new RegExp(`#\\[test\\]\\s*(?:#\\[[^\\]]*\\]\\s*)*fn ${path[2]}\\(`).test(source);
 }
 
 function externalSourceBlocked(message) {
@@ -194,7 +209,23 @@ function verifyFragment(root, fragment, schema) {
     if (row.testPattern !== testName) {
       fail(`${fragment.file} mutation ${JSON.stringify(id)} testPattern must equal its exact test name`);
     }
-    if (!testContainsName(root, testFile, testName)) {
+    const leg = row.leg ?? 'node';
+    if (!mutationLegs.includes(leg)) {
+      fail(
+        `${fragment.file} mutation ${JSON.stringify(id)} names leg ${JSON.stringify(leg)}, which no runner executes`,
+      );
+    }
+    if (leg !== 'node' && !(source.startsWith('apps/desktop/') && testFile.startsWith('apps/desktop/'))) {
+      fail(`${fragment.file} mutation ${JSON.stringify(id)}: a ${leg} mutation edits and tests only the desktop app`);
+    }
+    // A Vitest test is named by its path, each describe title then its own joined by ` > `: each is in the file.
+    const named =
+      leg === 'cargo'
+        ? cargoTestNamed(testFile, readText(root, testFile), testName)
+        : leg === 'vitest'
+          ? testName.split(' > ').every((title) => testContainsName(root, testFile, title))
+          : testContainsName(root, testFile, testName);
+    if (!named) {
       fail(`${fragment.file} has orphan mutation ${JSON.stringify(id)}: ${testFile} does not name its oracle`);
     }
     const sourceText = readText(root, source);
@@ -209,6 +240,18 @@ function verifyFragment(root, fragment, schema) {
   }
 
   if (fragment.externalSources.length > 0) verifyExternalSources(root, fragment);
+}
+
+/** `pnpm verify` builds no Rust: a registered cargo mutation is executed only if desktop.yml runs the cargo leg. */
+function verifyMutationLegsRun(root, fragments) {
+  const cargo = fragments.some((fragment) =>
+    (fragment.value.mutations ?? []).some((mutation) => mutation?.leg === 'cargo'),
+  );
+  if (!cargo) return;
+  const workflow = readText(root, '.github/workflows/desktop.yml');
+  if (!workflow.split(/\r?\n/).some((line) => line.trim() === `run: ${cargoLegCommand}`)) {
+    fail(`a cargo-leg mutation is registered, so .github/workflows/desktop.yml must run: ${cargoLegCommand}`);
+  }
 }
 
 function containsForbiddenCaseKey(value) {
@@ -528,6 +571,7 @@ export function verifyEventsPhaseE2({ root = repositoryRoot } = {}) {
   fragments.push(...verifyCaseFiles(resolvedRoot));
   if (fragments.length === 0) fail('no task-owned E2 proof fragment exists');
   for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema);
+  verifyMutationLegsRun(resolvedRoot, fragments);
   verifyDaemonBoundary(resolvedRoot);
   verifyWorkerTestSeams(resolvedRoot);
   verifyTestsAreSealed(resolvedRoot);
