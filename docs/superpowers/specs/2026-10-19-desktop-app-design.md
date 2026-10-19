@@ -223,3 +223,76 @@ The command is built in Rust from the allow-list. It is never text taken from th
 - Managing the events service beyond what is listed.
 - A bundled runtime.
 - Auto-installing agent-communications.
+
+## 5. Settled after the builder check (2026-10-19)
+
+A fresh reader checked this design against the code at v0.21.0. Its findings are settled here. Where this section
+and DA1 to DA9 differ, this section is the later word. All of it is **(lead's call)**.
+
+### DA10. Approving and applying
+
+`agentcomms approve <id>` only approves: the change applies when something runs it again with `--approval <id>`. So
+the app works in two ways.
+
+- **A change the app prepares** (the Agent form, update level, rollback, background job on, …):
+  1. The app first gets the preview with `--json`, which exits 10 with `APPROVAL_PENDING`.
+  2. It shows that preview with its own header, "Approve this in Terminal", in place of the CLI's.
+  3. On the button, the app **revokes its own pending approval**, so the tray count is not inflated.
+  4. It opens the terminal with **the change command itself**, without `--json`, built by the allow-list. The person
+     confirms there, and the change applies there.
+- **An approval an agent prepared** (a send, or a change): the button opens the terminal with that channel's
+  `approve <id>`, through its own launcher. The agent that is waiting on it (`approval wait`) applies it, as today.
+- **The app never runs a change with `--approval`.**
+
+### DA11. What a preview shows
+
+- **Each waiting approval:** the summary `approvals list` gives (its kind, the enveloped recipients, subject and
+  files), shown as plain text.
+- **Changes the app prepared itself:** the full preview.
+- **A command that reads back a stored preview** is future work: no release keeps the preview today, and keeping
+  sender text at rest needs its own design.
+
+### DA12. Launchers, folders, versions
+
+- **Launchers:** all six, `<data>/launch/{core,gmail,slack,resend,whatsapp,events-daemon}`.
+  - The app counts as having agent-communications when `launch/core` exists. Each channel's section appears when its
+    launcher exists.
+  - **On Windows** a launcher is a Node script. The app starts it with the Node path that this installation's managed
+    receipt records, falling back to `node` on PATH.
+- **Folders:** a Rust port of `resolvePaths`'s defaults from `packages/core/src/paths.ts`.
+  - An app started from the Dock or Start menu sees no shell variables, so Settings offers overrides for the data,
+    config and state folders.
+  - **Every** CLI call passes all four folder pins, so the app and the CLI always agree.
+- **Versions:** the app reads the installed version with `--version`. A section that needs a later CLI says "Update
+  agent-communications to use this", rather than failing:
+  - behaviour rules and profiles need 0.22.0 or later;
+  - standing approvals need 0.23.0 or later;
+  - the update status needs 0.24.0 or later.
+
+  The app is built after 0.23.0 ships.
+
+### DA13. Commands this release adds, and fixes
+
+- **`agentcomms update --status`,** read-only, with `comms_update` `status: true` beside it. It returns as JSON:
+  - the level and pause, and the last check, latest and running versions;
+  - the background job's state and its last run.
+
+  It asks npm nothing. It gets a `capabilities.json` row and tests.
+- **`doctor --json`** prints exactly one envelope when a check fails. Today it prints a success envelope and then an
+  error envelope.
+- **The events CLI** keeps its bare JSON. The app reads both shapes.
+
+### DA14. Doctor fixes and polling
+
+- **A doctor fix** is shown with Copy. Running it from the app needs structured fixes, which are future work. This
+  replaces "Run in Terminal" in DA5.
+- **Polling:**
+  - every 15 seconds, while the window is visible, only local reads:
+    - `approvals list --state pending` for core and each channel;
+    - `update --status`;
+    - `agent-events status`;
+  - every 60 seconds, for the tray badge: the approvals lists.
+- **Doctors** run once when the app starts and whenever the Doctor screen is opened or refreshed. Slack's and Resend's
+  run `--offline`. Gmail's only runs when the person asks, because it calls Google. Core's doctor never runs on a
+  timer, because each run writes to the keychain.
+- **The pre-paint script** is pinned in the content policy by its hash. That is new work: phase C had no inline script.
