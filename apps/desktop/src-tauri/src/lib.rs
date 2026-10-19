@@ -2,11 +2,14 @@
 
 pub mod allowlist;
 pub mod commands;
+pub mod deeplink;
 pub mod grammar;
 pub mod ipc;
 pub mod launchers;
 pub mod paths;
 pub mod runner;
+pub mod tray;
+pub mod updater;
 pub mod version;
 pub mod window;
 
@@ -19,10 +22,27 @@ pub struct AppState {
     pub overrides: Mutex<FolderOverrides>,
 }
 
-/// Starts the app: its state, its thirteen commands, and the main window, built by `window::build_main`.
+/// Starts the app: its plugins, its state, its thirteen commands, the main window (`window::build_main`), the tray, the
+/// deep links and the updater.
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        // First: a second launch hands its arguments, and any agentcomms:// link in them, to this copy, and shows it.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            window::show(app)
+        }))
+        .plugin(tauri_plugin_deep_link::init());
+    // Only in a copy built with the updater key (DA8).
+    let builder = if updater::UPDATER_ON {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(window::app_menu);
+    builder
         .manage(AppState::default())
+        .manage(updater::Updates::default())
+        .manage(deeplink::DeepLinks::default())
         .invoke_handler(tauri::generate_handler![
             commands::installation,
             commands::cli,
@@ -38,10 +58,15 @@ pub fn run() {
             commands::install_update,
             commands::take_deep_link,
         ])
+        .on_window_event(window::on_window_event)
         .setup(|app| {
             window::build_main(app.handle())?;
+            tray::build(app.handle())?;
+            deeplink::listen(app.handle());
+            updater::start(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Agent Comms could not start");
+        .build(tauri::generate_context!())
+        .expect("Agent Comms could not start")
+        .run(window::on_run_event);
 }
