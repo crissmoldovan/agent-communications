@@ -193,7 +193,10 @@ background?: false }`.
 - `background: false` keeps `auto` from setting up the job, and makes an existing job stop at its next run, with a
   notice. `auto` then behaves as a daily check with a notice.
 - A member can never loosen past the profile. `doctor` shows the cap and where it comes from.
-- Profile version 1 says "no defaults, no policies". This adds an optional field that older releases ignore.
+- Profile version 1 says "no defaults, no policies". The caps are in the companion file `<profile>.updates.json`,
+  which releases before 0.20.0 never open. A tighter cap applies at once, and a looser one is approved
+  ([extensions design](2026-10-19-organisation-profile-extensions-design.md), X6; amended 2026-10-19 — the earlier
+  wording, "an optional field that older releases ignore", was never true).
 
 ### U9 — What does not change
 

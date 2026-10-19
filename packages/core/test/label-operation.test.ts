@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { AGENT_LABEL_WORDS, agentLabelOf } from '../src/agent-label.ts';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
+import type { Config } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -365,6 +366,81 @@ test('icon: an emoji name between colons is recorded for a Slack account through
   assert.equal((await labelOf(m)).slackIcons, undefined);
 });
 
+test('every label change that waits names each account as the person knows it, never by its id', async () => {
+  const m = machine({
+    name: 'Jo Example',
+    rules: [{ account: 'acme/slack', accountId: slack.id, conversation: 'C0ACME', as: 'agent' }],
+    slackIcons: { [slack.id]: ':jo-agent:' },
+  });
+  const requests: LabelChangeRequest[] = [
+    { word: 'twin' },
+    { name: 'Jo' },
+    { name: null },
+    { addRule: { account: 'acme/slack', as: 'me' } },
+    { addRule: { account: 'acme/gmail', conversation: '@acme.test', as: 'me' } },
+    { removeRule: { account: 'acme/slack', conversation: 'C0ACME', as: 'agent' } },
+    { icon: { account: 'acme/slack', emoji: ':jo-bot:' } },
+    { icon: { account: 'acme/slack', emoji: null } },
+    { style: { account: 'acme/slack', style: 'labelled' } },
+  ];
+  for (const request of requests) {
+    const prepared = waiting(await run(m, request));
+    assert.doesNotMatch(prepared.preview, /\b(?:acc|ibx)_[A-Za-z0-9]/, JSON.stringify(request));
+    assert.doesNotMatch(prepared.preview, /\[object Object\]/, JSON.stringify(request));
+  }
+  const style = waiting(await run(m, { style: { account: 'acme/slack', style: 'labelled' } }));
+  assert.match(style.preview, /how the agent’s Slack messages look in acme\/slack: app → labelled — /);
+  const icon = waiting(await run(m, { icon: { account: 'acme/slack', emoji: ':jo-bot:' } }));
+  assert.match(icon.preview, /the icon of the agent’s Slack posts in acme\/slack: :jo-agent: → :jo-bot: — /);
+  const cleared = waiting(await run(m, { icon: { account: 'acme/slack', emoji: null } }));
+  assert.match(cleared.preview, /the icon of the agent’s Slack posts in acme\/slack: :jo-agent: → your Slack photo/);
+});
+
+test('a label change approved for one workspace never lands on another that took its name between claim and write', async () => {
+  // The values the store compares under its lock name a workspace as the person knows it, and the write looked the
+  // workspace up by that name again. If the name came to denote another account meanwhile — the approved one removed,
+  // another renamed to its name — the style, icon or rule landed on that other account, unasked. It is refused instead.
+  const other = {
+    ...slack,
+    id: 'acc_CCCCCCCCCCCCCCCC',
+    workspace: 'T_OTHER',
+    secretRef: 'slack:token:acc_CCCCCCCCCCCCCCCC',
+  };
+  const requests: LabelChangeRequest[] = [
+    { style: { account: 'acme/slack', style: 'labelled' } },
+    { icon: { account: 'acme/slack', emoji: ':jo-agent:' } },
+    { addRule: { account: 'acme/slack', as: 'me' } },
+  ];
+  for (const request of requests) {
+    const m = machine({ name: 'Jo Example' }, { accounts: { 'acme/slack': slack, 'other/slack': other } });
+    const prepared = waiting(await run(m, request));
+    const store = m.core.config as unknown as { update: (...args: unknown[]) => Promise<unknown> };
+    const update = store.update.bind(store);
+    let swapped = false;
+    store.update = async (...args: unknown[]) => {
+      if (!swapped) {
+        swapped = true;
+        // After the claim, before the write: the approved workspace goes, and the other takes its name.
+        await update((config: Config) => {
+          const next = structuredClone(config) as Config & { accounts: Record<string, unknown> };
+          delete next.accounts['acme/slack'];
+          return renameEntry(next, 'account', 'other/slack', 'acme/slack');
+        });
+      }
+      return update(...args);
+    };
+    await assert.rejects(
+      run(m, request, prepared.approvalId),
+      usage('LOOSENING_REFUSED', /not the change that was approved.*acme\/slack/),
+      JSON.stringify(request),
+    );
+    const label = await labelOf(m);
+    assert.equal(label.slackStyles, undefined, `${JSON.stringify(request)}: a style landed on another workspace`);
+    assert.equal(label.slackIcons, undefined, `${JSON.stringify(request)}: an icon landed on another workspace`);
+    assert.equal(label.rules, undefined, `${JSON.stringify(request)}: a rule landed on another workspace`);
+  }
+});
+
 // ── A Slack workspace's style (the owner's decision, 2026-10-17) ─────────────────────────────────────────────────
 
 const LABELLED = { style: { account: 'acme/slack', style: 'labelled' } } as const;
@@ -377,6 +453,109 @@ test('style: every Slack workspace is app until the person chooses otherwise, an
   // A mailbox, or an account that sends nothing through these tools, has no Slack style.
   assert.equal(report.accounts.find((account) => account.account === 'acme/gmail')?.style, undefined);
   assert.equal(report.accounts.find((account) => account.account === 'acme/whatsapp')?.style, undefined);
+});
+
+/** The Slack workspace with its agent app's bot user recorded, as a send sign-in with the agent app leaves it. */
+const withApp = { ...slack, botUserId: 'U0AGENTAPP' };
+
+/** Who each kind of message on acme/slack appears to come from, for these settings and this account record. */
+async function slackKinds(agentLabel: unknown, account: Record<string, unknown> = withApp) {
+  const report = await labelReport(machine(agentLabel, { accounts: { 'acme/slack': account } }).core);
+  const workspace = report.accounts.find((each) => each.account === 'acme/slack');
+  return { workspace, said: new Map(workspace?.kinds.map((kind) => [kind.kind, kind.appearsAs])) };
+}
+
+test('style: the report says what each kind of message looks like under the workspace’s style, as Slack’s route sends it', async () => {
+  const kinds = async (agentLabel: unknown) => (await slackKinds(agentLabel)).said;
+  // labelled: every post, reply and file goes out as the person, its words beginning with the label; a reaction is made
+  // as the person, with no label — the fallback route, wherever the room.
+  const labelled = await kinds({ name: 'Jo Example', slackStyles: { [slack.id]: 'labelled' } });
+  for (const kind of ['post', 'reply', 'file'] as const) {
+    const said = labelled.get(kind) ?? '';
+    assert.match(said, /^as you, .*beginning "<your name in Slack> \(agent\):"/, kind);
+    assert.match(said, /"Jo Example \(agent\):" where Slack has no name for you/, kind);
+    assert.doesNotMatch(said, /as your agent/, kind);
+  }
+  assert.match(labelled.get('post') ?? '', /in its words and its notification/);
+  assert.match(labelled.get('post') ?? '', /with no APP tag/);
+  assert.equal(labelled.get('reaction'), 'as you, with no label: a reaction carries no words');
+  // An edit is made by whoever posted the message, whatever the style: the person's own, as them, its new words
+  // labelled; one the app posted stays the app's. The report said every edit went out as the person.
+  const edit = labelled.get('edit') ?? '';
+  assert.match(
+    edit,
+    /^an edit of your own message goes out as you, its new words beginning "<your name in Slack> \(agent\):"/,
+  );
+  assert.match(edit, /"Jo Example \(agent\):" where Slack has no name for you/);
+  assert.match(edit, /; an edit of a message the app posted stays the app’s$/);
+
+  // app, the default: a reaction is the app's where it can post, and the person's, unlabelled, elsewhere — never a
+  // phrase, which a reaction does not carry.
+  const app = await kinds({ name: 'Jo Example' });
+  assert.match(app.get('reaction') ?? '', /^as the app where it can post, .*; elsewhere as you, with no label/);
+  assert.doesNotMatch(app.get('reaction') ?? '', /\(agent\)/);
+  assert.match(app.get('post') ?? '', /^as your agent: <your name in Slack> \(agent\), or Jo Example \(agent\)/);
+  assert.match(
+    app.get('edit') ?? '',
+    /^an edit of your own message goes out as you, .*; an edit of a message the app posted stays the app’s$/,
+  );
+  // A `me` rule still decides first, whatever the style.
+  const me = await kinds({ slackStyles: { [slack.id]: 'labelled' }, rules: [{ account: 'acme/slack', as: 'me' }] });
+  assert.ok([...me.values()].every((said) => said === 'as you, with no label'));
+});
+
+test('style: where the workspace’s app cannot post from this machine, the report says every agent message goes as you', async () => {
+  // The Slack route never acts as the app without its bot user and token: a workspace an organisation connected with no
+  // agent app, one signed in before the app, one connected to read, one whose app token Slack revoked. Under `app` the
+  // report still said a reaction was the app's where it could post, and a post went out "as your agent".
+  const cases: [string, Record<string, unknown>, RegExp][] = [
+    ['no agent app on this machine', slack, /this workspace's app has no bot token on this machine yet/],
+    ['connected to read', { ...slack, tier: 'read', mode: 'read' }, /this workspace is connected to read/],
+    [
+      'its app token revoked',
+      { ...slack, appTokenRevoked: { at: CREATED, slackError: 'token_revoked' } },
+      /this workspace's app token was revoked, and no new one is on this machine yet/,
+    ],
+    ['a bot user that is not one', { ...slack, botUserId: 'not a user' }, /no bot token on this machine yet/],
+  ];
+  for (const [what, account, reason] of cases) {
+    for (const style of ['app', 'labelled'] as const) {
+      const agentLabel = {
+        name: 'Jo Example',
+        ...(style === 'labelled' ? { slackStyles: { [slack.id]: 'labelled' } } : {}),
+      };
+      const { workspace, said } = await slackKinds(agentLabel, account);
+      const where = `${what}, ${style}`;
+      assert.equal(workspace?.appRoute, false, where);
+      assert.match(workspace?.note ?? '', reason, where);
+      assert.match(workspace?.note ?? '', /every agent message goes out as you/, where);
+      assert.equal(said.get('reaction'), 'as you, with no label: a reaction carries no words', where);
+      for (const kind of ['post', 'reply', 'file'] as const) {
+        assert.match(
+          said.get(kind) ?? '',
+          /^as you, beginning "<your name in Slack> \(agent\):" in its words and its notification, with no APP tag/,
+          `${where}: ${kind}`,
+        );
+      }
+      assert.match(
+        said.get('edit') ?? '',
+        /^an edit of your own message goes out as you, .*; a message the app posted cannot be edited from here until its app can post again$/,
+        where,
+      );
+      for (const line of said.values()) assert.doesNotMatch(line, /as the app|as your agent|stays the app/, where);
+    }
+  }
+  // With the app's bot user recorded, the route is the app's where it can post.
+  assert.equal((await slackKinds({})).workspace?.appRoute, true);
+  assert.equal((await slackKinds({})).workspace?.note, undefined);
+  // And the command says so beside the style.
+  const m = machine({}, { accounts: { 'acme/slack': slack } });
+  const shown = spawnSync(process.execPath, [...NODE_FLAGS, CLI, 'label'], { encoding: 'utf8', env: m.env });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.match(
+    shown.stdout,
+    /style {4}app — but its app cannot post from this machine, so every agent message goes out as you/,
+  );
 });
 
 test('style: labelled waits for a yes, its preview naming what it trades; it is recorded by the account’s id', async () => {

@@ -20,7 +20,16 @@ import { managedRuntimeEntry } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
-import { organisationDrift, organisationsOf, orphanMarkedRows, shownPath, shownText } from '../organisations.ts';
+import {
+  ignoredListOf,
+  ignoredOf,
+  notAppliedDetail,
+  organisationDrift,
+  organisationsOf,
+  orphanMarkedRows,
+  shownPath,
+  shownText,
+} from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
@@ -299,6 +308,10 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
  * an organisation with no record is something to look at too: the row is an ordinary client again.
  *
  * Nothing at all is said on a machine with no profile, so every other doctor reads as it always did.
+ *
+ * An entry of a profile's `extensions` that this release did not apply is said too, on a line of its own: information,
+ * never a failure — the rest of the profile is in force, and the release that applies it is named (design 2026-10-19,
+ * X7).
  */
 function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
@@ -312,7 +325,6 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
         ok: true,
         detail: `${shownText(record?.label ?? '', 64)}: ${active === null ? 'no Google client' : `new mailboxes get "${active}"`}${record?.slack ? `; Slack workspace ${shownText(record.slack.workspace, 40)}` : ''}`,
       });
-      continue;
     }
     for (const item of drift) {
       checks.push({
@@ -321,6 +333,34 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
         ...(item.kind === 'report' ? { warn: true as const } : {}),
         detail: item.detail,
         fix: item.fix,
+      });
+    }
+    const ignored = ignoredOf(record);
+    if (ignored.length > 0) {
+      checks.push({
+        name: `organisation ${organisation}`,
+        ok: true,
+        detail: `${ignored.length} ${ignored.length === 1 ? 'extension' : 'extensions'} not applied here: ${ignored
+          .map((entry) => notAppliedDetail(entry))
+          .join('; ')}`,
+      });
+    }
+    // A list of skipped entries this release cannot read in part is read without that part: nothing applies from it,
+    // so the check is something to look at, not a failure, and `org update` writes the list again from the profile.
+    if (ignoredListOf(record).malformed) {
+      checks.push({
+        name: `organisation ${organisation}`,
+        ok: true,
+        warn: true,
+        detail:
+          'its record of the extensions not applied here holds something this release cannot read, so that part is ignored; no extension applies from it',
+        fix: remedy(
+          handoffSentence(
+            handoffs.core(['org', 'update', organisation]),
+            (command) => `Run ${command} to write it again from the profile.`,
+            { instead: 'Call comms_org_update from a chat to write it again from the profile.' },
+          ),
+        ),
       });
     }
   }

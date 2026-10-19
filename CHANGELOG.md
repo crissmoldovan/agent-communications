@@ -3,6 +3,118 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.21.0
+
+**Organisation profiles can gain new fields without breaking members on an older release, and the rough edges found
+while setting up 0.20.0 on a real machine are fixed.** Every release since 0.13.0 refused a whole organisation
+profile over one key it did not know, so an admin could not add anything without stopping `org update` for every
+member who had not updated (CUE-494). From this release a profile has one place for new fields, `extensions`, and a
+release that does not know an entry skips it or asks you to update first — never applying it behind your back. The
+other changes come from the owner's own 0.20.0 setup on 2026-10-18: previews that showed internal ids, a label report
+that ignored the Slack style, a terminal approval that said "in the chat", a printed command that an update would
+later delete, and a prune that covered one server at a time.
+
+Nothing to do when you update: it is additive. Three results gain fields — `extensions` on the `comms_org_*` tools,
+`appRoute` per Slack workspace in `comms_label`, and `servers` and `refusedServers` from a prune — and a new error code,
+`NEEDS_NEWER_RELEASE` (exit 1), refuses a profile this release is too old for, where a profile of `version` 2 got
+`BAD_DATA` before. `agentcomms mcp prune` with no `--server` now covers every server, still shown to you and approved
+first; `--server core` does what it did. Members of an organisation should be on 0.21.0 before its admin adds the
+first extension.
+
+**An organisation can add new fields to its profile without breaking `org update` for members on 0.21.0 or later.**
+Until now every release refused a whole profile carrying any key it did not know, so one new field stopped
+`agentcomms org update` for every member who had not updated yet. From 0.21.0 a profile may carry an `extensions`
+section, the one place later releases add fields; everything else in the profile stays as strict as before. Each
+entry says whether it is `required` and the release that first understands it (`since`). On your release:
+
+- An optional entry it does not know is skipped, and the rest of the profile applies. `org add`, `org update` and
+  `org show` (and `comms_org_*`, under `extensions`) say `not applied here: <name> (needs <since> or later)`, and
+  `doctor` lists it as information. When you update to a release that understands it, `org update` applies it then:
+  at once if it only tightens something, and otherwise only after your yes, though the profile's file did not change.
+- A required entry it does not know stops `org add` or `org update` with a new code, `NEEDS_NEWER_RELEASE` (exit 1):
+  "acme's profile needs agent-communications 0.23.0 or later for "<name>": nothing was changed". Your last approved
+  settings stay exactly as they were, and nothing else stops. The hint names the update command and the
+  `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1",
+  and so is one given to `agent-gmail setup --profile` (and `gmail_setup` with `profile`), whose hint names the update
+  command too.
+  When the same command also turned `--for-other-addresses off`, which applies before the profile is read, or applied a
+  tighter cap at once, the refusal says so: "…: for other addresses was turned off; nothing else was changed".
+
+For admins nothing changes today: profiles stay valid as they are, and a release that adds the first extension says
+so in its notes. Members on 0.20.0 or older refuse any profile with `extensions` (they keep their last approved
+settings), so add one only once your members run 0.21.0 or later. The two files beside a profile,
+`<profile>.agent-app.json` and `<profile>.updates.json`, stay exactly as they are, and new fields go in `extensions`
+rather than in a new file. [Upgrading](docs/upgrading.md#0210-organisation-profiles-gain-extensions) has the rules.
+
+**A tighter update cap from your organisation applies at once.** `agentcomms org update` (and `comms_org_update`)
+asked for approval before applying any change to `<profile>.updates.json`, even one that only made updates less
+frequent. A cap that only tightens — `never` where it said `every-14-days`, `background: false` added, or caps added
+where there were none — now applies at once with no approval, even beside a change to the profile that waits. The
+preview lists it under "Done already, at once", and the result lists it first. A looser cap in any part, a caps file
+removed, or a mix of tighter and looser still asks first, as does a cap read from a new `--source`; a caps file that
+capped nothing, removed, is no change and asks nobody. `org add` still
+asks before anything, as it adds the whole profile.
+
+**A label change's preview names your Slack workspace as you know it.** `agentcomms label style <workspace> labelled`
+(or `comms_label` with `style`) showed the workspace's internal id where its name belongs: "how the agent’s Slack
+messages look: acc_… app → acc_… labelled". It now reads "how the agent’s Slack messages look in cue/slack: app →
+labelled", and a Slack icon change reads the same way: "the icon of the agent’s Slack posts in cue/slack: your Slack
+photo → :jo-agent:". The word, name and rule previews already named accounts by name, and still do. The approval still
+binds the workspace's id, so it cannot be spent on another workspace connected later under the same name: if the
+workspace's name comes to mean another account between your yes and the write, the change is refused and nothing is
+written.
+
+**`agentcomms label` says what a Slack workspace's style does to each kind of message.** For a workspace whose style
+is `labelled`, the report (and `comms_label` with no change) still said every kind went out "as your agent", even a
+reaction. It now says what the Slack route does there: a post, reply or file goes out as you, beginning
+"<your name in Slack> (agent):" in its words and its notification, with no APP tag; and a reaction is made as you, with
+no label, since a reaction carries no words. Under `app`, the default, a reaction is now said to be the app's where it
+can post, and yours, with no label, elsewhere; posts, replies and files read as before. Under either style, an edit is
+said as Slack makes it: an edit of your own message goes out as you, its new words beginning with the label, and an
+edit of a message the app posted stays the app's. And for a workspace whose agent app cannot post from this machine —
+connected through an organisation with no agent app, signed in before the app, connected to read, or with its app token
+revoked — the report no longer promises the app: it says every agent message there goes out as you, labelled, and every
+reaction as you, unlabelled, with the reason beside it, and `label` prints "style app — but its app cannot post from
+this machine". `comms_label` gives each Slack workspace `appRoute: true` or `false`.
+
+**Slack doctor no longer says organisations cannot post as an app.** For a workspace connected through an
+organisation's profile that names no agent app, `agent-slack doctor` said posting as the app "is not available through
+an organisation’s shared app yet", which stopped being true in 0.20.0. It now says posts go out as you, labelled, and
+that posting as an app becomes possible once your organisation's admin adds an agent app to its profile; the check
+then says what to do. It is still a note, with nothing for you to run.
+
+**A change you approve at your terminal says so.** Under the `chat` change policy, a command run at a terminal, such as
+`agentcomms update --background-job on` or `agentcomms label style <workspace> labelled`, printed a preview headed
+"approved by a yes in the chat", then asked you to type yes right there. The header now reads "approved by a yes typed
+here, at this terminal". Every CLI that asks this way says so: core's, Gmail's, Slack's, Resend's and WhatsApp's (the
+events service's server is installed and pruned through core's). And `approve <id>`, run for a change an agent
+prepared under `chat`, said "approved by a yes in the chat" above its request for a code; it now reads "approved by a
+code typed here, at this terminal". A preview an agent shows you in a chat still says "a yes in the chat", and under
+`confirm` it still says "a code typed at a terminal".
+
+**Commands printed for you keep working after an update.** Setting up the background job printed "To remove it:"
+followed by a command that started a versioned runtime, such as `…/runtime/0.20.0-core/…/cli.mjs`. The background job
+prunes old runtimes, so two releases later that command no longer existed. Every command a managed install prints now
+names your installation's stable launcher (`<data>/launch/core`, or the channel's own) when it starts that same
+release. That covers "To remove it", an approval, a change to run again, an update's next step and a doctor fix. Where
+there is no launcher yet, it names your managed CLI shim if that starts the very same file, and otherwise the runtime,
+as before. A command printed from a checkout, an npx cache or a global install is unchanged.
+
+**`agentcomms mcp prune` clears out every server's old runtimes at once.** With no `--server`, it used to prune only
+core's own runtimes; Gmail's, Slack's and the events service's needed `--server <name>` each, though an update tells
+you to prune them all. It now goes through every managed server and lists each runtime it would remove, grouped by
+server, in one preview you approve. `--server <name>` still keeps it to one server, and `comms_server_prune` works the
+same way: with no `channel` it covers every server. It keeps what it kept: this release's runtime, any runtime a
+client config or a printed entry names or a running process uses, and the runtime each stable launcher starts plus
+the one it keeps to roll back to. It now also keeps any runtime newer than this release or than what its launcher
+starts, which an update may be installing or checking. And a prune never runs beside an update: while
+`agentcomms update`, a rollback or the background run is under way, a prune that would remove something is refused at
+once and deletes nothing, and one approved before is refused when it is claimed; run it again in a few minutes. A dry
+run still answers. This holds for `--server` and for each channel's own `mcp prune` too. A server whose runtimes it
+cannot check, such as one whose stable launcher's pointer cannot be read, keeps them all while the others go ahead,
+and is named in the preview, at the end of what the command prints, and under `refusedServers` in the result. After an
+update, the result now names this one prune, not one command per channel.
+
 ## 0.20.0
 
 **Updates never interrupt a conversation any more, and by default they install themselves in the background, checked

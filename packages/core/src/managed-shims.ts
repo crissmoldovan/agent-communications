@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { accessSync, constants, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { type LockOptions, withFileLock } from './lock.ts';
@@ -117,11 +118,33 @@ function emptyReceipt(): ReceiptFile {
 }
 
 async function readReceipt(context: ManagedShimContext): Promise<ReceiptFile | null> {
-  let parsed: unknown;
+  let text: string;
   try {
-    parsed = JSON.parse(await readFile(receiptPath(context), 'utf8'));
+    text = await readFile(receiptPath(context), 'utf8');
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? emptyReceipt() : null;
+  }
+  return receiptFrom(text);
+}
+
+/** `readReceipt`, for a reader that cannot wait: the command locator. */
+function readReceiptSync(context: ManagedShimContext): ReceiptFile | null {
+  let text: string;
+  try {
+    text = readFileSync(receiptPath(context), 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? emptyReceipt() : null;
+  }
+  return receiptFrom(text);
+}
+
+/** The receipt a file holds, or null when it is not one this installation writes. */
+function receiptFrom(text: string): ReceiptFile | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
   }
   if (
     typeof parsed !== 'object' ||
@@ -449,6 +472,32 @@ export async function inspectManagedShim(
     status: 'current',
     detail: 'the managed shim is current',
   };
+}
+
+/**
+ * The managed shim for `binary` that starts `entry`, for a reader that cannot wait — the command locator, which names
+ * it in place of a versioned runtime's entry when this installation has no stable launcher for it (0.21): its path as a
+ * person puts it on PATH, or null.
+ *
+ * Only a shim this installation's receipt records at that very place, whose file is still the one it wrote, unchanged,
+ * and which starts `entry` — the same file — with a Node that is there: what it runs now is exactly what the command it
+ * stands in for would run. Never on a platform that has no shims, and never a file anyone else wrote.
+ */
+export function managedShimStarting(context: ManagedShimContext, binary: string, entry: string): string | null {
+  if (!managedShimsSupported(context) || !isSafeBinary(binary)) return null;
+  try {
+    const publicPath = managedShimPath(context, binary);
+    const path = join(realpathSync(dirname(publicPath)), basename(publicPath));
+    const recorded = readReceiptSync(context)?.shims[binary];
+    if (recorded === undefined || recorded.path !== path) return null;
+    if (!lstatSync(path).isFile() || sha256(readFileSync(path, 'utf8')) !== recorded.digest) return null;
+    if (realpathSync(recorded.entry) !== realpathSync(entry)) return null;
+    accessSync(recorded.node, constants.X_OK);
+    accessSync(path, constants.X_OK);
+    return publicPath;
+  } catch {
+    return null;
+  }
 }
 
 /** Create or repoint one shim, but only while its target is free or still matches this installation's receipt. */

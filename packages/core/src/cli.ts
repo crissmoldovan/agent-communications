@@ -144,7 +144,8 @@ Usage — run these with this CLI, each as the words after its program:
   org update <organisation> [--source <file>] [--for-other-addresses on|off] [--adopt <client>]
                                 [--store keychain|file] [--approval <id>]
                                 read a profile again and repair drift: a changed profile, a new
-                                source and --for-other-addresses on are approved first
+                                source, a looser update cap and --for-other-addresses on are
+                                approved first; a tighter cap applies at once
   org remove <organisation> [--approval <id>]
                                 forget a profile and the clients it made: approved first
   label                         how what an agent sends is labelled — "Jo Example (agent)" — and who
@@ -172,7 +173,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 [--print] [--no-verify] [--approval <id>]
                                 register the core server, or another declared server, and prove it starts
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
-                                remove that server's managed runtimes that nothing uses
+                                remove the managed runtimes that nothing uses: every managed server's,
+                                listed by server, or with --server that one's
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
@@ -218,7 +220,7 @@ Options:
   -h, --help    show this help
   -v, --version show the version
 
-Exit codes: 0 ok · 1 unexpected · 10 approval required
+Exit codes: 0 ok · 1 unexpected, or a profile that needs a later release · 10 approval required
             64 usage · 65 bad data · 66 not found · 69 provider unavailable · 75 transient
             77 auth or scope missing · 78 config error
 `;
@@ -915,7 +917,8 @@ export async function main(
           const result = await gatedChangeAtTerminal(
             core,
             serverPruneChange(core, env, {
-              channel: values.server ?? 'core',
+              // No server named: every managed server's runtimes, as an update leaves them behind.
+              channel: values.server,
               dryRun: values['dry-run'],
               includePrinted: values['include-printed'],
             }),
@@ -1194,7 +1197,9 @@ function renderLabel(report: LabelReport): string {
       lines.push(
         account.style === 'labelled'
           ? '  style    labelled — every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
-          : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
+          : account.appRoute === false
+            ? '  style    app — but its app cannot post from this machine, so every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
+            : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
       );
     }
   }
@@ -1350,7 +1355,10 @@ function renderOrgList(views: readonly OrganisationView[], handoffs: CliHandoffs
 function renderOrgChange(result: OrgChangeResult): string {
   const lines = [result.changed ? 'Done.' : `Nothing to change: ${result.organisation} matches its profile.`];
   for (const line of result.applied) lines.push(`  - ${line}`);
-  if (result.reported.length > 0) lines.push('', 'Left as it is:', ...result.reported.map((line) => `  - ${line}`));
+  // What the profile's own notes say below — an extension not applied here — is said there once, not here as well.
+  const below = new Set(result.profile.notes);
+  const reported = result.reported.filter((line) => !below.has(line));
+  if (reported.length > 0) lines.push('', 'Left as it is:', ...reported.map((line) => `  - ${line}`));
   lines.push('', renderOrg(result.profile));
   return lines.join('\n');
 }

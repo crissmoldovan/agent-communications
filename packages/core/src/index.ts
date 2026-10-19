@@ -126,6 +126,7 @@ export {
   type OrgChangeResult,
   type OrgOptions,
   orgAddChange,
+  readProfileOrRefuse,
 } from './operations/organisations.ts';
 /*
  * The registration and pruning changes, for the channels' own `mcp install` and `mcp prune`: the one change the core

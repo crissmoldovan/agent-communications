@@ -267,7 +267,9 @@ test("a workspace connected through an organisation's app gets a note that names
     assert.equal(check?.status, 'ok', 'a profile workspace warned about something its person cannot change');
     assert.equal(check?.fix, null, 'a profile workspace was given a command to run');
     assert.match(check?.detail ?? '', /as you, labelled/);
-    assert.match(check?.detail ?? '', /organisation’s shared app/);
+    // Since 0.20.0 an organisation can add an agent app to its profile (CUE-493): the note says so, not "not yet".
+    assert.match(check?.detail ?? '', /possible once your organisation's admin adds an agent app to its profile/);
+    assert.doesNotMatch(check?.detail ?? '', /not available|shared app yet/);
     // Paste-once refuses its rotating tokens; the client-secret sign-in refuses a profile account outright.
     const said = `${check?.detail} ${check?.fix}`;
     assert.doesNotMatch(said, /workspace bot/);
@@ -330,7 +332,8 @@ test('without the field, a profile workspace keeps today’s note; with the toke
   const none = await organisationAppIdentity();
   assert.equal(none?.status, 'ok');
   assert.equal(none?.fix, null);
-  assert.match(none?.detail ?? '', /organisation’s shared app/);
+  assert.match(none?.detail ?? '', /as you, labelled/);
+  assert.match(none?.detail ?? '', /possible once your organisation's admin adds an agent app to its profile/);
   assert.doesNotMatch(`${none?.detail}`, /workspace bot/);
 
   const pasted = await organisationAppIdentity({ agentApp: 'A0AGENT0001', pasted: true });

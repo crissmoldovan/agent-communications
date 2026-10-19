@@ -16,6 +16,7 @@ import {
   readAgentLabelSettings,
   resolveIdentity,
   type SlackStyle,
+  slackAgentAppOf,
   slackStyleOf,
 } from '../agent-label.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -105,6 +106,11 @@ export interface LabelAccountView {
    * post; `labelled`, every one as the person, labelled in its words.
    */
   style?: SlackStyle;
+  /**
+   * Slack only: whether the workspace's agent app can act from this machine — `send` mode, with its bot user recorded.
+   * False, and every agent message there goes out as the person, whatever the style: `note` says why.
+   */
+  appRoute?: boolean;
   /** Why `kinds` is empty, or what limits it. */
   note?: string;
 }
@@ -204,9 +210,30 @@ export function labelChange(
       if (!planned.changes) return { change: change.kind, changed: false, note, ...reportOf(await core.config.load()) };
       // Made again from the configuration read inside the store's lock: whatever else moved meanwhile stays as it is,
       // and a loosening that is no longer the one approved is the store's to refuse.
-      const written = await core.config.update((config) => planChange(config, change).edit(config), {
-        ...(consent ? { consent } : {}),
-      });
+      const written = await core.config.update(
+        (config) => {
+          const again = planChange(config, change);
+          /*
+           * The workspace by its id, as the approval binds it. The values the store compares name a workspace as the
+           * person knows it, and the change looks the workspace up by that name: if the name came to mean another
+           * account between the claim and this write — the approved one removed, another renamed to its name — the
+           * style, icon or rule would land on that other account, and the store would see the same names. Refused.
+           */
+          if ((again.target?.id ?? null) !== (target?.id ?? null)) {
+            const name = target?.name ?? again.target?.name ?? 'that account';
+            throw new CommsError(
+              'LOOSENING_REFUSED',
+              `this is not the change that was approved: ${name} is another account now`,
+              {
+                hint: 'The configuration changed after the approval was given. Nothing was written. Prepare the change again and ask again.',
+                details: { paths: [SETTING_PATHS[change.kind]] },
+              },
+            );
+          }
+          return again.edit(config);
+        },
+        { ...(consent ? { consent } : {}) },
+      );
       await core.audit.append({
         inboxId: target?.id ?? '',
         ...(target ? { alias: target.name } : {}),
@@ -229,6 +256,16 @@ type CheckedChange =
   | { kind: 'removeRule'; rule: AgentLabelRule }
   | { kind: 'icon'; account: string; emoji: string | null }
   | { kind: 'style'; account: string; style: SlackStyle };
+
+/** The setting each change writes, as `classifyChange` names it. */
+const SETTING_PATHS: Readonly<Record<LabelChangeKind, string>> = {
+  word: 'agentLabel.word',
+  name: 'agentLabel.name',
+  addRule: 'agentLabel.rules',
+  removeRule: 'agentLabel.rules',
+  icon: 'agentLabel.slackIcons',
+  style: 'agentLabel.slackStyles',
+};
 
 const AUDIT_OPERATIONS: Readonly<Record<LabelChangeKind, string>> = {
   word: 'label.word',
@@ -685,6 +722,54 @@ function agentPhrase(settings: AgentLabelSettings, platform: string): string {
   return phrase === null ? own : `${own}, or ${phrase} where it has none`;
 }
 
+/**
+ * What an `agent` act of one kind looks like to the people who get it, as the channel's own route sends it.
+ *
+ * In a Slack workspace (design 2026-10-15 §3, S2, S5 and S6; the owner's decision, 2026-10-17):
+ *
+ * - `labelled`: every post, reply and file goes out as the person, its words beginning with the label — even where the
+ *   app could post — and a reaction is made as the person with no label, since it carries no words;
+ * - `app`, the default: a reaction is the app's where the app can post, and the person's, unlabelled, elsewhere. Posts,
+ *   replies and files carry the phrase either way — as the app's name where it posts, at the start of the words where
+ *   it does not — and are said as everywhere else;
+ * - a workspace whose app cannot act from this machine (`slackAgentAppOf`: no agent app, connected to read, signed in
+ *   before the app, its token revoked) takes the labelled route for every one, whatever the style: the route never acts
+ *   as the app without its bot user;
+ * - an edit, whatever the style, is made by whoever posted the message: the person's own as them, its new words
+ *   labelled, and one the app posted as the app — which only its bot token can change.
+ */
+function agentAppearance(settings: AgentLabelSettings, account: ConnectedAccount, kind: ActKind): string {
+  if (account.platform !== 'slack') return `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`;
+  const word = settings.word ?? DEFAULT_AGENT_LABEL_WORD;
+  const phrase = settingPhrase(settings);
+  const named = phrase === null ? '' : `, or "${phrase}:" where Slack has no name for you`;
+  const own = `"<your name in Slack> (${word}):"`;
+  const app = account.kind === 'channel' && 'botUserId' in slackAgentAppOf(account.account);
+  if (kind === 'edit') {
+    return `an edit of your own message goes out as you, its new words beginning ${own}${named}; ${
+      app
+        ? 'an edit of a message the app posted stays the app’s'
+        : 'a message the app posted cannot be edited from here until its app can post again'
+    }`;
+  }
+  if (!app || slackStyleOf(settings, account.id) === 'labelled') {
+    if (kind === 'reaction') return `${AS_YOU}: a reaction carries no words`;
+    return `as you, beginning ${own} in its words and its notification, with no APP tag${named}`;
+  }
+  if (kind === 'reaction') {
+    return `as the app where it can post, which shows it is your agent; elsewhere ${AS_YOU}: a reaction carries no words`;
+  }
+  return `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`;
+}
+
+/** Why a Slack workspace's agent app cannot act from this machine, as its account view notes it; null when it can. */
+function noAppNote(account: ConnectedAccount): string | null {
+  if (account.platform !== 'slack' || account.kind !== 'channel') return null;
+  const app = slackAgentAppOf(account.account);
+  if ('botUserId' in app) return null;
+  return `Its agent app cannot post from this machine — ${app.reason} — so every agent message goes out as you, labelled in its words, and every reaction as you, with no label.`;
+}
+
 function queryFor(account: ConnectedAccount, kind: ActKind, conversation?: string): IdentityQuery {
   const base = { account: account.alias, accountId: account.id, kind };
   if (conversation === undefined) return base;
@@ -751,10 +836,11 @@ function accountView(account: ConnectedAccount, settings: AgentLabelSettings): L
       identity: decided.identity,
       source: decided.source === 'rule' ? 'rule' : 'default',
       ...(decided.rule ? { rule: agentLabelRuleText(decided.rule) } : {}),
-      appearsAs: decided.identity === 'me' ? AS_YOU : `${AS_AGENT}: ${agentPhrase(settings, account.platform)}`,
+      appearsAs: decided.identity === 'me' ? AS_YOU : agentAppearance(settings, account, kind),
     };
   });
   const emoji = settings.slackIcons?.[account.id];
+  const noApp = noAppNote(account);
   return {
     account: account.alias,
     platform: account.platform,
@@ -765,9 +851,17 @@ function accountView(account: ConnectedAccount, settings: AgentLabelSettings): L
       .filter((rule) => rule.account === account.alias && rule.conversation !== undefined)
       .map(agentLabelRuleText),
     ...(account.platform === 'slack'
-      ? { icon: emoji === undefined ? { photo: true as const } : { emoji }, style: slackStyleOf(settings, account.id) }
+      ? {
+          icon: emoji === undefined ? { photo: true as const } : { emoji },
+          style: slackStyleOf(settings, account.id),
+          appRoute: noApp === null,
+        }
       : {}),
-    ...(acts === undefined ? { note: 'It sends nothing through these tools, so nothing it does is labelled.' } : {}),
+    ...(acts === undefined
+      ? { note: 'It sends nothing through these tools, so nothing it does is labelled.' }
+      : noApp !== null
+        ? { note: noApp }
+        : {}),
   };
 }
 

@@ -625,18 +625,20 @@ export function doctor(input: DoctorInput): DoctorResult {
         });
       } else if (workspace.organisation !== undefined) {
         /*
-         * Connected through an organisation profile's shared app. Neither way works for it: the client-secret sign-in
-         * refuses a profile account — the administrator holds the secret, not its members — and paste-once refuses the
-         * rotating token an organisation's app has. So this names no command. And it is `ok`, a note rather than a
-         * warning, as the read install's `files` row is: posting as the person, labelled, is how such a workspace
-         * works, nothing its person can do changes that, and a warning on every healthy one is one people stop reading.
+         * Connected through an organisation profile's shared app, whose profile names no agent app. Neither way works
+         * for the shared app itself: the client-secret sign-in refuses a profile account — the administrator holds the
+         * secret, not its members — and paste-once refuses the rotating token an organisation's app has. So this names
+         * no command. What can change it is the organisation's (CUE-493): its admin adds an agent app to its profile,
+         * and this check then says what the member does. And it is `ok`, a note rather than a warning, as the read
+         * install's `files` row is: posting as the person, labelled, is how such a workspace works until then, nothing
+         * its person can do changes that, and a warning on every healthy one is one people stop reading.
          */
         checks.push({
           id: 'app-identity',
           title,
           status: 'ok',
           detail:
-            "connected through an organisation profile, so an agent's posts go out as you, labelled in their text. Posting as the app is not available through an organisation’s shared app yet",
+            "connected through an organisation profile, so an agent's posts go out as you, labelled in their text. Posting as an app becomes possible once your organisation's admin adds an agent app to its profile; this check then says what to do",
           fix: null,
           workspace: workspace.alias,
         });

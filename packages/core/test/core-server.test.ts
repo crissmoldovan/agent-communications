@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { gatedChange } from '../src/change-flow.ts';
 import { beginChangeApproval, finishChangeApproval } from '../src/changes.ts';
-import { CHANNEL_SERVERS } from '../src/channel-servers.ts';
+import { CHANNEL_SERVERS, SERVERS } from '../src/channel-servers.ts';
 import type { PrintedCommand } from '../src/cli-command.ts';
 import { inlineCommand } from '../src/cli-runtime.ts';
 import { commandAsJson } from '../src/command-line.ts';
@@ -17,16 +17,17 @@ import { type Core, openCore } from '../src/core.ts';
 import { CommsError, ERROR_REGISTRY, EXIT_CODES } from '../src/errors.ts';
 import { CORE_CALLER, handoffText, isCommand } from '../src/handoffs.ts';
 import { newApprovalId } from '../src/ids.ts';
-import { launcherPaths, readPointer } from '../src/launcher.ts';
+import { launcherPaths, readPointer, switchPointer } from '../src/launcher.ts';
 import { managedShimPath, writeManagedShim } from '../src/managed-shims.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { type McpProduct, managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
 import { changePolicyReport } from '../src/operations/change-policy.ts';
 import { type DoctorCheck, type DoctorReport, doctor } from '../src/operations/maintenance.ts';
-import { serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
+import { type PruneAllResult, serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
 import { renderDoctor } from '../src/render.ts';
 import type { SecretStore } from '../src/secrets.ts';
 import { sendEpochOf } from '../src/send-epoch.ts';
+import { withUpdateLock } from '../src/update-lock.ts';
 import { VERSION } from '../src/version.ts';
 import { v1SendRecord, writeV1Record } from './fixtures/approval-v1-0.13.0.ts';
 import { pinArgs, writeManaged } from './fixtures/cli-command/trees.ts';
@@ -2022,18 +2023,356 @@ test("a channel's own prune keeps its own release, and removes the rest only onc
   assert.ok(!existsSync(theirs) && existsSync(own));
 });
 
-test('`agentcomms mcp prune --dry-run` returns what the tool does', async () => {
+test('`agentcomms mcp prune --dry-run` returns what the tool does, for every server or for the one named', async () => {
   const m = machine();
   runtime(m, '@agentcomms/core', '0.0.1');
+  runtime(m, '@agentcomms/gmail', '0.0.1');
   const { ok, close } = await connect(m);
   try {
-    const tool = await ok('comms_server_prune', { channel: 'core', dryRun: true });
+    const every = await ok('comms_server_prune', { dryRun: true });
     const command = cli(m, ['mcp', 'prune', '--dry-run', '--json']);
     assert.equal(command.status, 0, command.stderr);
-    assert.deepEqual(command.json().data, tool.result);
+    assert.deepEqual(command.json().data, every.result);
+    const one = await ok('comms_server_prune', { channel: 'core', dryRun: true });
+    const narrowed = cli(m, ['mcp', 'prune', '--server', 'core', '--dry-run', '--json']);
+    assert.equal(narrowed.status, 0, narrowed.stderr);
+    assert.deepEqual(narrowed.json().data, one.result);
   } finally {
     await close();
   }
+});
+
+/** A runtime with its CLI in place, as a stable launcher's pointer may name one. */
+function startableRuntime(m: Machine, packageName: string, version: string): string {
+  const dir = runtime(m, packageName, version);
+  writeFileSync(managedRuntimeEntry(m.core.paths.dataDir, packageName, version), '');
+  return dir;
+}
+
+test('with no server named, prune covers every managed server, grouped by server, approved first', async () => {
+  const m = machine();
+  const core = { old: runtime(m, '@agentcomms/core', '0.0.1'), current: runtime(m, '@agentcomms/core', VERSION) };
+  const gmail = [runtime(m, '@agentcomms/gmail', '0.0.1'), runtime(m, '@agentcomms/gmail', '0.0.2')];
+  const events = runtime(m, '@agentcomms/events-daemon', '0.0.1');
+  // Slack's stable launcher starts 0.0.3, and keeps 0.0.2 to fall back and roll back to: neither is removed.
+  const slack = {
+    unused: runtime(m, '@agentcomms/slack', '0.0.1'),
+    previous: startableRuntime(m, '@agentcomms/slack', '0.0.2'),
+    current: startableRuntime(m, '@agentcomms/slack', '0.0.3'),
+  };
+  await switchPointer(m.core.paths.dataDir, 'slack', slack.previous);
+  await switchPointer(m.core.paths.dataDir, 'slack', slack.current);
+  const unused = [core.old, ...gmail, slack.unused, events];
+  const { ok, close } = await connect(m, { processes: nobodyRuns });
+  try {
+    const dry = await ok('comms_server_prune', { dryRun: true });
+    assert.equal(dry.applied, true, 'a dry run asks nobody');
+    const shown = dry.result as {
+      dryRun: boolean;
+      removed: { path: string; server: string }[];
+      servers: {
+        server: string;
+        label: string;
+        removed: { path: string }[];
+        kept: { path: string; reason: string }[];
+      }[];
+    };
+    assert.equal(shown.dryRun, true);
+    // Every managed server the registry declares, in its order, each with its own part of the prune.
+    assert.deepEqual(
+      shown.servers.map((each) => each.server),
+      [...SERVERS],
+    );
+    const part = (server: string) => shown.servers.find((each) => each.server === server);
+    assert.deepEqual(
+      part('core')?.removed.map((item) => item.path),
+      [core.old],
+    );
+    assert.deepEqual(
+      part('core')?.kept.map((item) => [item.path, item.reason]),
+      [[core.current, 'this release']],
+    );
+    assert.deepEqual(
+      part('gmail')?.removed.map((item) => item.path),
+      gmail,
+    );
+    assert.deepEqual(
+      part('events')?.removed.map((item) => item.path),
+      [events],
+    );
+    assert.deepEqual(
+      part('slack')?.removed.map((item) => item.path),
+      [slack.unused],
+    );
+    assert.deepEqual(
+      part('slack')?.kept.map((item) => [item.path, item.reason]),
+      [
+        [
+          slack.previous,
+          "the stable launcher's previous runtime: what it falls back to, and what a rollback goes back to",
+        ],
+        [slack.current, 'the stable launcher starts it'],
+      ],
+    );
+    assert.deepEqual([...shown.removed.map((item) => item.path)].sort(), [...unused].sort(), 'and all of it together');
+    assert.ok(
+      unused.every((path) => existsSync(path)),
+      'a dry run removes nothing',
+    );
+
+    const first = await ok('comms_server_prune', {});
+    assert.equal(first.approvalRequired, true, 'removing is approved first');
+    const preview = String(first.preview);
+    assert.match(preview, /^Remove 5 unused runtimes: 1 agentcomms \(core\), 2 Gmail, 1 Slack, 1 events$/m);
+    // Each listed, grouped by server in the registry's order.
+    const lines = preview.split('\n').filter((line) => line.includes('deletes the unused'));
+    assert.deepEqual(lines, [
+      `  - deletes the unused agentcomms (core) runtime 0.0.1 at ${core.old}`,
+      `  - deletes the unused Gmail runtime 0.0.1 at ${gmail[0]}`,
+      `  - deletes the unused Gmail runtime 0.0.2 at ${gmail[1]}`,
+      `  - deletes the unused Slack runtime 0.0.1 at ${slack.unused}`,
+      `  - deletes the unused events runtime 0.0.1 at ${events}`,
+    ]);
+    assert.ok(
+      unused.every((path) => existsSync(path)),
+      'asking removed nothing',
+    );
+
+    const second = await ok('comms_server_prune', { approvalId: first.approvalId });
+    assert.equal(second.applied, true, JSON.stringify(second));
+    assert.ok(
+      unused.every((path) => !existsSync(path)),
+      'every unused runtime is gone',
+    );
+    for (const kept of [core.current, slack.previous, slack.current]) assert.ok(existsSync(kept), kept);
+
+    // A named server narrows it, as before.
+    const narrowed = await ok('comms_server_prune', { channel: 'slack', dryRun: true });
+    assert.equal((narrowed.result as { servers?: unknown }).servers, undefined);
+  } finally {
+    await close();
+  }
+});
+
+test(
+  '`agentcomms mcp prune` with no server, from an agent, prints every server’s runtimes and waits for approval',
+  process.platform === 'win32'
+    ? { skip: 'WINDOWS_SKIP: with no `ps` to list what runs, prune shows nothing unused, so nothing waits' }
+    : {},
+  async () => {
+    const m = machine();
+    const old = runtime(m, '@agentcomms/core', '0.0.1');
+    const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
+    const pending = cli(m, ['mcp', 'prune'], { CLAUDECODE: '1' });
+    assert.equal(pending.status, 10, pending.stderr);
+    assert.ok(pending.stdout.includes(`deletes the unused agentcomms (core) runtime 0.0.1 at ${old}`), pending.stdout);
+    assert.ok(pending.stdout.includes(`deletes the unused Gmail runtime 0.0.1 at ${gmail}`), pending.stdout);
+    assert.ok(existsSync(old) && existsSync(gmail));
+    // And the dry run, as a person reads it: each server under its own name.
+    const dry = cli(m, ['mcp', 'prune', '--dry-run']);
+    assert.equal(dry.status, 0, dry.stderr);
+    assert.match(dry.stdout, /^agentcomms \(core\):\n {2}Would remove 0\.0\.1: /m);
+    assert.match(dry.stdout, /^Gmail:\n {2}Would remove 0\.0\.1: /m);
+  },
+);
+
+test('a prune is refused, removing nothing, while an update holds the update lock — every server or one', async () => {
+  // The background run installs a release and checks it before any pointer names it; a prune beside it would find
+  // that runtime unused and delete it. So a prune takes the lock an update takes, as a person's update does: refused at
+  // once, before anything is asked, and refused again when an approval is claimed while an update has started since.
+  const m = machine();
+  const old = runtime(m, '@agentcomms/core', '0.0.1');
+  const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
+  const refused = (error: unknown) => {
+    assert.ok(error instanceof CommsError, String(error));
+    assert.equal(error.code, 'LOCK_TIMEOUT');
+    assert.match(error.message, /^nothing was changed: /);
+    assert.match(error.message, /update/);
+    assert.match(error.hint ?? '', /Run the prune again in a few minutes/);
+    return true;
+  };
+  const prune = (request: Parameters<typeof serverPruneChange>[2], approvalId?: string) =>
+    gatedChange(m.core, serverPruneChange(m.core, m.env, { processes: nobodyRuns, ...request }), {
+      channel: 'core',
+      surface: 'cli',
+      ...(approvalId === undefined ? {} : { approvalId }),
+    });
+
+  // Asked while an update holds the lock: refused before an approval is prepared.
+  await withUpdateLock(m.core.paths.stateDir, async () => {
+    await assert.rejects(prune({}), refused);
+    await assert.rejects(prune({ channel: 'gmail' }), refused);
+    // A dry run removes nothing, so it is still free.
+    const dry = await prune({ dryRun: true });
+    assert.equal(dry.status, 'applied');
+  });
+  assert.equal((await m.core.approvals.list()).length, 0, 'no approval was prepared while the update ran');
+
+  // Asked with no update under way, and claimed while one is: the claim is refused, and nothing is removed.
+  for (const request of [{}, { channel: 'gmail' as const }]) {
+    const asked = await prune(request);
+    assert.equal(asked.status, 'approval-required');
+    if (asked.status !== 'approval-required') return;
+    await withUpdateLock(m.core.paths.stateDir, async () => {
+      await assert.rejects(prune(request, asked.prepared.approvalId), refused);
+    });
+    assert.ok(existsSync(old) && existsSync(gmail), 'a prune beside an update removed a runtime');
+  }
+});
+
+test('a runtime newer than this release, or than what its stable launcher starts, is never pruned', async () => {
+  // What an update is installing, or checking before it switches, is newer than anything a pointer names yet. Even
+  // with no lock held — an update interrupted half-way, a lock taken over — that runtime is not shown as unused.
+  const m = machine();
+  const newer = runtime(m, '@agentcomms/gmail', '999.0.0');
+  const gmailOld = runtime(m, '@agentcomms/gmail', '0.0.1');
+  const slack = {
+    old: runtime(m, '@agentcomms/slack', '0.0.1'),
+    current: startableRuntime(m, '@agentcomms/slack', '0.0.3'),
+    installing: runtime(m, '@agentcomms/slack', '0.0.4'),
+  };
+  await switchPointer(m.core.paths.dataDir, 'slack', slack.current);
+  const { ok, close } = await connect(m, { processes: nobodyRuns });
+  try {
+    const dry = await ok('comms_server_prune', { dryRun: true });
+    const shown = dry.result as {
+      removed: { path: string }[];
+      kept: { path: string; reason: string }[];
+    };
+    assert.deepEqual(shown.removed.map((item) => item.path).sort(), [gmailOld, slack.old].sort());
+    const why = (path: string) => shown.kept.find((item) => item.path === path)?.reason ?? '';
+    assert.match(why(newer), new RegExp(`^newer than this release, ${VERSION.replaceAll('.', '\\.')}: `));
+    assert.match(why(slack.installing), /^newer than 0\.0\.3, which the stable launcher starts: /);
+    assert.match(why(newer), /an update may be installing it, or checking it before it switches/);
+
+    // The removal approved and applied: only what was shown unused goes.
+    const first = await ok('comms_server_prune', {});
+    assert.doesNotMatch(String(first.preview), /999\.0\.0|0\.0\.4/);
+    await ok('comms_server_prune', { approvalId: first.approvalId });
+    assert.ok(existsSync(newer) && existsSync(slack.installing) && existsSync(slack.current));
+    assert.ok(!existsSync(gmailOld) && !existsSync(slack.old));
+
+    // And `--server` alike.
+    const one = await ok('comms_server_prune', { channel: 'slack', dryRun: true });
+    assert.match(
+      (one.result as { kept: { path: string; reason: string }[] }).kept.find((item) => item.path === slack.installing)
+        ?.reason ?? '',
+      /^newer than 0\.0\.3, which the stable launcher starts: /,
+    );
+  } finally {
+    await close();
+  }
+});
+
+test('a prune of every server names each server it could not check, in the preview and in the result', async () => {
+  // One server's prune stopped — its stable launcher's pointer cannot be read — while the others went ahead. The
+  // preview named only what the others would remove, and the result said `refused` only when every server stopped,
+  // so the one left unchecked was easy to miss.
+  const m = machine();
+  const core = runtime(m, '@agentcomms/core', '0.0.1');
+  const slack = runtime(m, '@agentcomms/slack', '0.0.1');
+  const { pointer } = launcherPaths(m.core.paths.dataDir, 'slack');
+  mkdirSync(dirname(pointer), { recursive: true });
+  writeFileSync(pointer, 'not a runtime\n');
+  const { ok, close } = await connect(m, { processes: nobodyRuns });
+  type Refused = { server: string; label: string; refused: string }[];
+  const slackRefused = (refused: Refused | undefined) => {
+    assert.equal(refused?.length, 1, JSON.stringify(refused));
+    assert.equal(refused?.[0]?.server, 'slack');
+    assert.equal(refused?.[0]?.label, 'Slack');
+    assert.match(refused?.[0]?.refused ?? '', /could not be read/);
+  };
+  try {
+    const dry = await ok('comms_server_prune', { dryRun: true });
+    const shown = dry.result as { refused?: string; refusedServers?: Refused };
+    assert.equal(shown.refused, undefined, 'not every server stopped');
+    slackRefused(shown.refusedServers);
+
+    const first = await ok('comms_server_prune', {});
+    assert.equal(first.approvalRequired, true);
+    const lines = String(first.preview).split('\n');
+    assert.ok(
+      lines.includes(`  - deletes the unused agentcomms (core) runtime 0.0.1 at ${core}`),
+      String(first.preview),
+    );
+    const unchecked = lines.find((line) => line.startsWith('  - does not check the Slack runtimes'));
+    assert.match(
+      unchecked ?? '',
+      /^ {2}- does not check the Slack runtimes, and removes none of them: .*could not be read/,
+    );
+
+    const done = await ok('comms_server_prune', { approvalId: first.approvalId });
+    const result = done.result as { refused?: string; refusedServers?: Refused; removed: { path: string }[] };
+    assert.deepEqual(
+      result.removed.map((item) => item.path),
+      [core],
+    );
+    assert.equal(result.refused, undefined);
+    slackRefused(result.refusedServers);
+    assert.ok(existsSync(slack), 'a server that was not checked keeps its runtimes');
+
+    // Nothing else to remove: it applies at once, and still says which server it could not check.
+    const again = await ok('comms_server_prune', {});
+    assert.equal(again.applied, true);
+    slackRefused((again.result as { refusedServers?: Refused }).refusedServers);
+  } finally {
+    await close();
+  }
+});
+
+test(
+  '`agentcomms mcp prune` ends with each server it could not check, and its --json carries them',
+  process.platform === 'win32'
+    ? { skip: 'WINDOWS_SKIP: with no `ps` to list what runs, every server is left unchecked, not one' }
+    : {},
+  () => {
+    const m = machine();
+    runtime(m, '@agentcomms/core', '0.0.1');
+    runtime(m, '@agentcomms/slack', '0.0.1');
+    const { pointer } = launcherPaths(m.core.paths.dataDir, 'slack');
+    mkdirSync(dirname(pointer), { recursive: true });
+    writeFileSync(pointer, 'not a runtime\n');
+    // As a person reads it, at the end of the list.
+    const dry = cli(m, ['mcp', 'prune', '--dry-run']);
+    assert.equal(dry.status, 0, dry.stderr);
+    const last = dry.stdout.trim().split('\n').at(-1) ?? '';
+    assert.match(last, /^Not checked, so none of its runtimes was removed: Slack \(.*could not be read.*\)\.$/);
+    // And as the tool returns it.
+    const refused = (
+      cli(m, ['mcp', 'prune', '--dry-run', '--json']).json().data as {
+        refusedServers?: { server: string; refused: string }[];
+      }
+    ).refusedServers;
+    assert.deepEqual(
+      refused?.map((each) => each.server),
+      ['slack'],
+    );
+    assert.match(refused?.[0]?.refused ?? '', /could not be read/);
+  },
+);
+
+test('a prune of every server lists the running processes again for each server, just before deciding', async () => {
+  // One listing taken at the start served every server, so a process started from a runtime while the servers
+  // before it were pruned did not keep it. Each server's prune lists them itself, as the prune of one server does.
+  const m = machine();
+  runtime(m, '@agentcomms/core', '0.0.1');
+  const gmail = runtime(m, '@agentcomms/gmail', '0.0.1');
+  let listed = 0;
+  // Nothing runs when the first server is pruned; by the time Gmail is, a server started from its runtime.
+  const processes = async () =>
+    listed++ === 0 ? [] : [`node ${gmail}/node_modules/@agentcomms/gmail/dist/cli.mjs mcp`];
+  const outcome = await gatedChange(m.core, serverPruneChange(m.core, m.env, { dryRun: true, processes }), {
+    channel: 'core',
+    surface: 'cli',
+  });
+  assert.equal(outcome.status, 'applied');
+  if (outcome.status !== 'applied') return;
+  const result = outcome.result as PruneAllResult;
+  assert.ok(listed >= 2, `the processes were listed ${listed} time(s) for two servers`);
+  assert.deepEqual(
+    result.kept.filter((item) => item.path === gmail).map((item) => item.reason),
+    ['a running process uses it'],
+  );
 });
 
 // ── Migrations ──────────────────────────────────────────────────────────────────────────────────────────────────

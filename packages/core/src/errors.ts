@@ -38,6 +38,7 @@ export type ErrorCode =
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
   | 'LOOSENING_REFUSED'
+  | 'NEEDS_NEWER_RELEASE'
   | 'USAGE'
   | 'CURSOR_MISMATCH'
   | 'BAD_DATA'
@@ -93,6 +94,17 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     exit: EXIT_CODES.APPROVAL,
     retryable: false,
     summary: 'a safety setting can only be loosened by a person',
+  },
+  /*
+   * A document this release is too old to read in full: an organisation profile carrying an extension it must refuse
+   * unless it understands it, or a later profile version (design 2026-10-19, X3). Nothing was changed, and nothing else
+   * is stopped — the person updates, then runs the command again. Its own code, so an agent branches on "update first"
+   * rather than on BAD_DATA's "ask for another"; exit 1, as the design gives it.
+   */
+  NEEDS_NEWER_RELEASE: {
+    exit: EXIT_CODES.UNEXPECTED,
+    retryable: false,
+    summary: 'this needs a later agent-communications; update first, then run it again',
   },
   USAGE: { exit: EXIT_CODES.USAGE, retryable: false, summary: 'the command or arguments are wrong' },
   CURSOR_MISMATCH: { exit: EXIT_CODES.USAGE, retryable: false, summary: 'the cursor belongs to a different query' },

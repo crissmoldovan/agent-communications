@@ -4,7 +4,6 @@ import type { ApprovalState } from '../approvals.ts';
 import type { GatedChange } from '../change-flow.ts';
 import {
   CHANNELS,
-  isChannel,
   requireChannelManifest,
   SERVERS,
   type ServerId,
@@ -15,7 +14,7 @@ import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
-import { type CliHandoffs, type Handoff, handoffChoices, handoffSentence, requireHandoffs } from '../handoffs.ts';
+import { type CliHandoffs, type Handoff, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
 import {
   exchangePointer,
@@ -1406,18 +1405,18 @@ function runtimeProduct(packageName: string, version: string): Promise<McpProduc
 }
 
 /**
- * Every declared server's `mcp prune`, as a person runs it at a terminal: each channel command is located among this
- * machine's registrations, and each service uses core — never a bare name (CUE-403).
+ * The prune of every managed server's old runtimes, as a person runs it at a terminal: core's own `mcp prune`, which
+ * with no `--server` covers every server the registry declares (0.21) — located, never a bare name (CUE-403).
  */
-function pruneCommands(handoffs: CliHandoffs): string {
-  return handoffChoices(
-    SERVERS.map((channel) =>
-      isChannel(channel)
-        ? handoffs.of(channel, ['mcp', 'prune'])
-        : handoffs.core(['mcp', 'prune', '--server', channel]),
-    ),
-    'none of their commands is locatable here:',
-    { conjunction: 'and' },
+function pruneSentence(handoffs: CliHandoffs): string {
+  return handoffSentence(
+    handoffs.core(['mcp', 'prune']),
+    (command) =>
+      `Then, from the restarted server, prune the runtimes the old versions leave behind: comms_server_prune with no channel, which prunes every server’s — at a terminal, ${command}.`,
+    {
+      instead:
+        'Then, from the restarted server, prune the runtimes the old versions leave behind with comms_server_prune and no channel, which prunes every server’s.',
+    },
   );
 }
 
@@ -1658,7 +1657,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
   ];
   const next =
     clients.length > 0
-      ? `Restart ${clients.length === 1 ? clients[0] : `${clients.slice(0, -1).join(', ')} and ${clients.at(-1)}`} to load the new servers: no MCP client loads a new server into a session that is already running. Then, from the restarted server, prune the runtimes the old versions leave behind: comms_server_prune for each channel — at a terminal, ${pruneCommands(planned.handoffs)}.`
+      ? `Restart ${clients.length === 1 ? clients[0] : `${clients.slice(0, -1).join(', ')} and ${clients.at(-1)}`} to load the new servers: no MCP client loads a new server into a session that is already running. ${pruneSentence(planned.handoffs)}`
       : null;
   return { status, latest: planned.latest, steps, manual: planned.manual, ok, next };
 }

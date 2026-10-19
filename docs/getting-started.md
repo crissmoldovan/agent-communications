@@ -273,6 +273,21 @@ Weigh before sharing:
 
 The [Slack README](../packages/slack/README.md#an-organisations-agent-app) has the details.
 
+### When your organisation's profile changes
+
+Run `git pull` in the organisation's repository, then `agentcomms org update <organisation>`. It shows what changed
+and asks before applying it. A repair of what was approved before, a tighter update cap and
+`--for-other-addresses off` apply at once.
+
+From 0.21.0 a profile may carry an `extensions` section, where later releases add new fields. An entry your release
+does not know is either skipped, and named as `not applied here`, or, when the organisation marks it required,
+`org update` stops, says which release it needs, and changes nothing. Update first, then run `org update` again.
+
+**For administrators:** nothing changes today. Members on 0.20.0 or older refuse any profile with `extensions`, and
+keep their last approved settings until they update, so add an extension only once your members run 0.21.0 or later.
+New fields go under `extensions`, never in another file beside the profile. [Upgrading](upgrading.md#0210-organisation-profiles-gain-extensions)
+has the rules.
+
 - [Sending and approvals](sending.md) — the gate in detail, and what it does not cover
 - [CLI reference](reference/cli.md) — every command · [Slack](reference/slack-cli.md)
 - [MCP tool reference](reference/mcp-tools.md) — every tool · [Slack](reference/slack-mcp-tools.md)

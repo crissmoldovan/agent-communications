@@ -571,7 +571,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Show an organisation profile',
       description:
-        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, and any drift from what was approved, each with the call that repairs it. Never includes a client secret or the profile’s contents.',
+        'One organisation profile: its label, source and SHA-256, its Google clients and their mailboxes, its Slack apps, any drift from what was approved, each with the call that repairs it, and `extensions`: which of the profile’s extensions are applied here, and which are not, with the release each needs. Never includes a client secret or the profile’s contents.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
       },
@@ -624,7 +624,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Update an organisation profile',
       description:
-        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, and `forOtherAddresses: "off"`, apply at once and are listed in the result.',
+        'Read an organisation profile again from its file, apply what changed in it, and repair drift — a client of the organisation’s that was removed or changed here. A changed profile, a new `source`, and `forOtherAddresses: "on"` are a change: the first call returns the preview listing each change before → after ("secret changed" for a new client secret) and an approvalId; call again with it once the person agrees. Repairing drift, a tighter update cap from the organisation, and `forOtherAddresses: "off"` apply at once, even beside a change that waits, and are listed in the result; a looser cap is approved first. An extension the profile marks optional that this release does not know is skipped and named in `extensions`; one it marks required refuses the update (NEEDS_NEWER_RELEASE), changing nothing — update first, then call it again.',
       inputSchema: {
         organisation: z.string().describe('the organisation, as the first half of its account names: `rgc`'),
         source: z.string().min(1).optional().describe('read the profile from this file from now on'),
@@ -775,9 +775,12 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove unused runtimes',
       description:
-        'Remove a declared server’s managed runtimes that no client config names, no printed entry names and no process runs — what upgrades leave behind. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId.',
+        'Remove the managed runtimes that no client config names, no printed entry names, no process runs and no stable launcher starts or keeps for a rollback — what upgrades leave behind. One newer than this release, or than what its stable launcher starts, stays: an update may be installing it. With no `channel`, every managed server’s, listed by server; with one, only that server’s. `dryRun` only lists them, and asks nobody. Removing them is a change: the first call returns the preview and an approvalId. While an update is under way on this machine, removing is refused and nothing changes: try again in a few minutes.',
       inputSchema: {
-        channel: z.enum(SERVERS as [string, ...string[]]).describe('whose runtimes'),
+        channel: z
+          .enum(SERVERS as [string, ...string[]])
+          .optional()
+          .describe('whose runtimes; left out, every managed server’s'),
         dryRun: z.boolean().optional().describe('only say what would be removed'),
         includePrinted: z
           .boolean()
@@ -793,7 +796,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       change(
         () =>
           serverPruneChange(core, env, {
-            channel: args.channel as (typeof SERVERS)[number],
+            channel: args.channel as (typeof SERVERS)[number] | undefined,
             dryRun: args.dryRun,
             includePrinted: args.includePrinted,
             processes: options.processes,

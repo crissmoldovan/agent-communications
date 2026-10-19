@@ -327,7 +327,13 @@ test('an unknown key is an error anywhere in a profile, and the key is shown neu
 
 test('the kind and version are exactly what a version-1 profile says', () => {
   refused(profile({ agentcomms: 'profile' }), /agentcomms/);
-  refused(profile({ version: 2 }), /version/);
+  // A later version is one this release is too old for, not a wrong profile: refused as needing a later release
+  // (design 2026-10-19, X3), with its own code — no longer BAD_DATA's "expected 1".
+  assert.throws(
+    () => parseProfile(JSON.stringify(profile({ version: 2 }))),
+    (error: unknown) =>
+      error instanceof CommsError && error.code === 'NEEDS_NEWER_RELEASE' && /version 2/.test(error.message),
+  );
   refused(profile({ version: '1' }), /version/);
 });
 

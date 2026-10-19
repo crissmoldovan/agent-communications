@@ -1,15 +1,15 @@
-import { effectiveAccountSendPolicy, securityNotice, sendEpochOf } from '@agentcomms/core';
+import { effectiveAccountSendPolicy, securityNotice, sendEpochOf, slackAgentAppOf } from '@agentcomms/core';
 import type { SlackCall } from '../api/call.ts';
 import { closedPermit, type WritePermit } from '../api/guard.ts';
 import type { SlackContext } from '../context.ts';
 import { VERSION } from '../version.ts';
 import { appPostRecordFor } from './app-posts.ts';
-import { appTokenRevokedOf, forgetAppToken } from './app-token.ts';
+import { forgetAppToken } from './app-token.ts';
 import { attachPolicyOf } from './drafts.ts';
-import { labelSettingsOf, noAppReason, revokedAppReason } from './label.ts';
+import { labelSettingsOf } from './label.ts';
 import type { PostDeps, PrepareDeps } from './send.ts';
 import { openApp, openWorkspace, type SessionDeps } from './session.ts';
-import { botUserIdOf, requireWorkspace } from './workspaces.ts';
+import { requireWorkspace } from './workspaces.ts';
 
 /**
  * Everything the gate needs, assembled once — for the CLI and the MCP server alike.
@@ -33,8 +33,8 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
   const config = await context.config();
   const { alias: name, account } = requireWorkspace(config, alias, context.handoffs);
   const { call, teamId } = await openWorkspace(context, name, deps);
-  const mode = account.mode ?? account.tier;
-  const botUserId = mode === 'send' ? botUserIdOf(account) : undefined;
+  // Whether this account's app can act, as core's label report reads it too: the two never disagree (`slackAgentAppOf`).
+  const agentApp = slackAgentAppOf(account);
   // Opened at most once, and only when an act routes to the app (design 2026-10-15 S2).
   let app: Promise<SlackCall> | undefined;
   return {
@@ -65,14 +65,14 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
       account: name,
       accountId: account.id,
       settings: labelSettingsOf(config),
-      ...(botUserId === undefined
+      ...('reason' in agentApp
         ? {
             // A token Slack refused and nothing replaced since says so (CUE-493); otherwise, why there is none.
-            noApp: mode === 'send' && appTokenRevokedOf(account) !== undefined ? revokedAppReason() : noAppReason(mode),
+            noApp: agentApp.reason,
           }
         : {
             app: {
-              userId: botUserId,
+              userId: agentApp.botUserId,
               call: () => {
                 app ??= openApp(context, name, account, deps);
                 return app;

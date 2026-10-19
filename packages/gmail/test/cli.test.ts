@@ -9,6 +9,7 @@ import {
   commandText,
   EXIT_CODES,
   externalCommand,
+  inlineCommand,
   isCommand,
   newAccountId,
   openCore,
@@ -1619,6 +1620,27 @@ test('an incoming Slack-only profile needs no unrelated mailbox name and resumes
   const config = await harness.core.config.load();
   assert.equal(config.version, 2);
   assert.equal(config.version === 2 ? config.organisations?.acme?.gmail : undefined, undefined);
+});
+
+test('setup --profile with a profile this release is too old for names the located update, as org add does', async () => {
+  // Setup read the profile itself, so a version-2 profile was refused with core's parser's own hint — "Update it
+  // first" — and no command, where `org add` names the update command, located for this shell (design 2026-10-19, X3).
+  const harness = offlineCliHarness();
+  const path = join(tempDir(), 'acme.agentcomms.json');
+  await writeFile(
+    path,
+    JSON.stringify({ agentcomms: 'organisation-profile', version: 2, organisation: 'acme', label: 'Acme Test Org' }),
+  );
+  const result = await cli(harness, ['setup', '--profile', path, '--inbox', 'acme/gmail', '--json'], {
+    platform: 'darwin',
+  });
+  const error = result.json<Envelope<never>>().error;
+  assert.equal(error?.code, 'NEEDS_NEWER_RELEASE', result.stdout);
+  const update = gmailHandoffs(harness.core.paths, 'darwin').core(['update']);
+  assert.ok(isCommand(update));
+  assert.ok(error?.hint?.includes(inlineCommand(update)), error?.hint);
+  assert.doesNotMatch(error?.hint ?? '', /Update it first/);
+  assertNoBareCommand(error?.hint ?? '', 'darwin');
 });
 
 test('setup refuses --org-approval without --profile', async () => {

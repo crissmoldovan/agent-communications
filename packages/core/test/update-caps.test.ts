@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { type GatedChange, gatedChange } from '../src/change-flow.ts';
+import type { PreparedChange } from '../src/changes.ts';
 import type { Streams } from '../src/cli-runtime.ts';
 import type { ConfigV2 } from '../src/config.ts';
 import { CommsError } from '../src/errors.ts';
@@ -193,20 +194,21 @@ test('caps are added with the profile, under its approval, and its preview says 
   assert.match(String(record?.updates?.sha256), /^[0-9a-f]{64}$/);
 });
 
-test('a changed caps file, or one gone, is approved first even with the profile unchanged; a hand-edited record is put back at once', async () => {
-  const o = org({ max: 'every-14-days' });
+test('a loosened caps file, or one gone, is approved first even with the profile unchanged; a hand-edited record is put back at once', async () => {
+  // Loosened, not tightened: a tighter file applies at once (design 2026-10-19, X6), tested below.
+  const o = org({ max: 'never' });
   await add(o);
-  // Changed: the organisation now says never.
-  writeFileSync(o.updates, `${JSON.stringify({ organisation: 'acme', max: 'never' })}\n`);
+  // Changed: the organisation now says every-14-days, which updates more than never.
+  writeFileSync(o.updates, `${JSON.stringify({ organisation: 'acme', max: 'every-14-days' })}\n`);
   const changed = await update(o);
-  assert.ok(changed.prepared, 'a changed caps file was applied without an approval');
-  assert.match(changed.prepared.preview, /updates: at most every-14-days → at most never/);
-  assert.equal(((await o.m.core.config.load()) as ConfigV2).organisations?.acme?.updates?.max, 'never');
+  assert.ok(changed.prepared, 'a loosened caps file was applied without an approval');
+  assert.match(changed.prepared.preview, /updates: at most never → at most every-14-days/);
+  assert.equal(((await o.m.core.config.load()) as ConfigV2).organisations?.acme?.updates?.max, 'every-14-days');
   // Gone: the organisation lifts its caps, which is a change of what it says, approved first too.
   rmSync(o.updates);
   const gone = await update(o);
   assert.ok(gone.prepared, 'a caps file gone was applied without an approval');
-  assert.match(gone.prepared.preview, /updates: at most never → no caps/);
+  assert.match(gone.prepared.preview, /updates: at most every-14-days → no caps/);
   assert.equal(((await o.m.core.config.load()) as ConfigV2).organisations?.acme?.updates, undefined);
   // Hand-edited: the record says otherwise than the file it was read from. Put back at once.
   writeFileSync(o.updates, `${JSON.stringify({ organisation: 'acme', max: 'never' })}\n`);
@@ -219,6 +221,214 @@ test('a changed caps file, or one gone, is approved first even with the profile 
   const repaired = await update(o);
   assert.equal(repaired.prepared, null, 'putting the record back asked for an approval');
   assert.equal(((await o.m.core.config.load()) as ConfigV2).organisations?.acme?.updates?.max, 'never');
+});
+
+// ── A tighter cap applies at once (design 2026-10-19, X6) ────────────────────────────────────────────────────────
+
+const writeCaps = (o: Org, caps: Record<string, unknown>) =>
+  writeFileSync(o.updates, `${JSON.stringify({ organisation: 'acme', ...caps })}\n`);
+const recordOf = async (o: Org) => ((await o.m.core.config.load()) as ConfigV2).organisations?.acme;
+
+test('a tighter cap applies at once, with its SHA-256 recorded and nobody asked', async () => {
+  for (const [from, to, words] of [
+    [{ max: 'every-14-days' }, { max: 'never' }, 'updates: at most every-14-days → at most never'],
+    [undefined, { max: 'every-14-days' }, 'updates: no caps → at most every-14-days'],
+    [{}, { background: false }, 'updates: no caps → no background updates'],
+    [
+      { max: 'every-14-days' },
+      { max: 'every-14-days', background: false },
+      'updates: at most every-14-days → at most every-14-days, no background updates',
+    ],
+    [
+      { max: 'never' },
+      { max: 'never', background: false },
+      'updates: at most never → at most never, no background updates',
+    ],
+  ] as const) {
+    const o = org(from as Record<string, unknown> | undefined);
+    await add(o);
+    writeCaps(o, to);
+    const { prepared, result } = await update(o);
+    assert.equal(prepared, null, `${JSON.stringify(from)} → ${JSON.stringify(to)} asked for an approval`);
+    assert.equal(result.changed, true);
+    assert.ok(
+      result.applied.some((line) => line.startsWith(`${words}, read from `)),
+      `${JSON.stringify(result.applied)}`,
+    );
+    const read = await readProfileFile(o.profile);
+    const caps = (await recordOf(o))?.updates;
+    assert.equal(caps?.sha256, read.updates?.sha256, 'the SHA-256 of the file now in force');
+    assert.equal(caps?.max, read.updates?.max);
+    assert.equal(caps?.background, read.updates?.background);
+  }
+});
+
+test('a tighter cap beside a waiting profile change is applied before the preview, which marks it done; the claim lists it', async () => {
+  for (const surface of ['chat', 'terminal'] as const) {
+    const o = org({ max: 'every-14-days' });
+    await add(o);
+    writeFileSync(o.profile, `${JSON.stringify({ ...PROFILE, label: 'Acme Renamed' }, null, 2)}\n`);
+    writeCaps(o, { max: 'never' });
+    const terminal = orgUpdateChange(o.m.core, { organisation: 'acme' }, options(o.m));
+    const first = await gatedChange(o.m.core, terminal, { channel: 'core', surface: 'mcp' });
+    assert.equal(first.status, 'approval-required', `${surface}: the label still asks`);
+    assert.equal((await recordOf(o))?.updates?.max, 'never', `${surface}: the tighter cap waited for the label`);
+    assert.equal((await recordOf(o))?.label, 'Acme Test Org', `${surface}: the label did not wait`);
+    const { preview, summary, approvalId } = (first as { prepared: PreparedChange }).prepared;
+    assert.match(summary, /what only tightens was applied at once/);
+    assert.match(
+      preview,
+      /Done already, at once, as this was prepared:\n {2}- updates: at most every-14-days → at most never, read from /,
+    );
+    assert.doesNotMatch(preview.split('Done already')[0] ?? '', /updates: /, 'listed apart from what approving does');
+    assert.match(preview, /label: Acme Test Org → Acme Renamed/);
+    const claim =
+      surface === 'terminal' ? terminal : orgUpdateChange(o.m.core, { organisation: 'acme', approvalId }, options(o.m));
+    const second = await gatedChange(o.m.core, claim, { channel: 'core', surface: 'mcp', approvalId });
+    assert.equal(second.status, 'applied', surface);
+    const result = (second as { result: { applied: string[] } }).result;
+    assert.match(String(result.applied[0]), /^updates: at most every-14-days → at most never, read from /, surface);
+    assert.ok(
+      result.applied.some((line) => /label: Acme Test Org → Acme Renamed/.test(line)),
+      surface,
+    );
+    assert.equal((await recordOf(o))?.label, 'Acme Renamed');
+    assert.equal((await recordOf(o))?.updates?.max, 'never');
+  }
+  // The person says no to the rest: the tighter cap stands.
+  const o = org({ max: 'every-14-days' });
+  await add(o);
+  writeFileSync(o.profile, `${JSON.stringify({ ...PROFILE, label: 'Acme Renamed' }, null, 2)}\n`);
+  writeCaps(o, { background: false, max: 'every-14-days' });
+  const first = await gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme' }, options(o.m)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  const { approvalId } = (first as { prepared: PreparedChange }).prepared;
+  await o.m.core.approvals.revoke(approvalId, 'the person said no', { disposition: 'person' });
+  assert.equal((await recordOf(o))?.updates?.background, false);
+  assert.equal((await recordOf(o))?.label, 'Acme Test Org');
+});
+
+test('a caps file moved between the preview and the claim refuses the claim, and nothing looser lands', async () => {
+  // The preview applied a tighter cap at once and waited on a label. Before the claim the file moved: loosened past
+  // what was applied, removed, or tightened further. The approval describes the cap it applied, so the claim is
+  // refused; the label waits on; and the record keeps the tightest cap any call applied — never a looser one.
+  for (const [what, moved, expect] of [
+    ['loosened', { max: 'every-14-days' }, { max: 'never', background: undefined }],
+    ['emptied', {}, { max: 'never', background: undefined }],
+    ['removed', null, { max: 'never', background: undefined }],
+    ['tightened further', { max: 'never', background: false }, { max: 'never', background: false }],
+  ] as const) {
+    const o = org({ max: 'every-14-days' });
+    await add(o);
+    writeFileSync(o.profile, `${JSON.stringify({ ...PROFILE, label: 'Acme Renamed' }, null, 2)}\n`);
+    writeCaps(o, { max: 'never' });
+    const first = await gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme' }, options(o.m)), {
+      channel: 'core',
+      surface: 'mcp',
+    });
+    assert.equal(first.status, 'approval-required', what);
+    const { approvalId } = (first as { prepared: PreparedChange }).prepared;
+    assert.equal((await recordOf(o))?.updates?.max, 'never', `${what}: the tighter cap was not applied at the preview`);
+    if (moved === null) rmSync(o.updates);
+    else writeCaps(o, moved);
+    await assert.rejects(
+      gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme', approvalId }, options(o.m)), {
+        channel: 'core',
+        surface: 'mcp',
+        approvalId,
+      }),
+      (error: unknown) => error instanceof CommsError,
+      `${what}: the claim was not refused`,
+    );
+    const rec = await recordOf(o);
+    assert.equal(rec?.label, 'Acme Test Org', `${what}: the label landed on a refused claim`);
+    assert.equal(rec?.updates?.max, expect.max, `${what}: the cap in force`);
+    assert.equal(rec?.updates?.background, expect.background, `${what}: background`);
+  }
+});
+
+test('a looser cap, a removed file and a mix of tighter and looser all ask, and nothing moves before the yes', async () => {
+  for (const [from, to, words] of [
+    [{ max: 'never' }, { max: 'every-14-days' }, /updates: at most never → at most every-14-days/],
+    [{ max: 'every-14-days' }, {}, /updates: at most every-14-days → no caps/],
+    [{ background: false }, {}, /updates: no background updates → no caps/],
+    [{ max: 'never' }, null, /updates: at most never → no caps/],
+    // Tighter in one part and looser in another counts as looser.
+    [
+      { max: 'never' },
+      { max: 'every-14-days', background: false },
+      /updates: at most never → at most every-14-days, no background updates/,
+    ],
+  ] as const) {
+    const o = org(from as Record<string, unknown>);
+    await add(o);
+    if (to === null) rmSync(o.updates);
+    else writeCaps(o, to);
+    const before = readFileSync(o.m.configPath, 'utf8');
+    const first = await gatedChange(o.m.core, orgUpdateChange(o.m.core, { organisation: 'acme' }, options(o.m)), {
+      channel: 'core',
+      surface: 'mcp',
+    });
+    assert.equal(first.status, 'approval-required', `${JSON.stringify(from)} → ${JSON.stringify(to)} was applied`);
+    assert.equal(readFileSync(o.m.configPath, 'utf8'), before, 'the record moved before the yes');
+    const { preview } = (first as { prepared: PreparedChange }).prepared;
+    assert.match(preview, words);
+    assert.doesNotMatch(preview, /Done already/);
+  }
+});
+
+test('removing a caps file that capped nothing is no change: nothing to approve, and the record forgets it at once', async () => {
+  // `{}` caps nothing, so taking it away loosens nothing. It asked for approval of "updates: no caps → no caps".
+  const o = org({});
+  await add(o);
+  assert.ok((await recordOf(o))?.updates, 'the empty caps file was recorded');
+  rmSync(o.updates);
+  const { prepared, result } = await update(o);
+  assert.equal(prepared, null, 'removing a caps file that capped nothing asked for an approval');
+  assert.equal(result.changed, true);
+  assert.equal((await recordOf(o))?.updates, undefined);
+  // And again: nothing to change.
+  assert.equal((await update(o)).result.changed, false);
+});
+
+test('a tighter cap read from a new source waits for that source to be approved', async () => {
+  const o = org({ max: 'every-14-days' });
+  await add(o);
+  const elsewhere = join(o.m.home, 'elsewhere');
+  mkdirSync(elsewhere);
+  const moved = join(elsewhere, 'acme.agentcomms.json');
+  writeFileSync(moved, readFileSync(o.profile));
+  writeFileSync(
+    join(elsewhere, 'acme.agentcomms.updates.json'),
+    `${JSON.stringify({ organisation: 'acme', max: 'never' })}\n`,
+  );
+  const first = await gatedChange(
+    o.m.core,
+    orgUpdateChange(o.m.core, { organisation: 'acme', source: moved }, options(o.m)),
+    { channel: 'core', surface: 'mcp' },
+  );
+  assert.equal(first.status, 'approval-required');
+  assert.equal((await recordOf(o))?.updates?.max, 'every-14-days', 'a cap from a source nobody approved applied');
+  assert.match(
+    (first as { prepared: PreparedChange }).prepared.preview,
+    /updates: at most every-14-days → at most never/,
+  );
+});
+
+test('org add still approves everything, the tightest caps too', async () => {
+  const o = org({ max: 'never', background: false });
+  const first = await gatedChange(o.m.core, orgAddChange(o.m.core, { file: o.profile }, options(o.m)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+  assert.equal(first.status, 'approval-required');
+  assert.equal(
+    ((await o.m.core.config.load()) as ConfigV2).organisations,
+    undefined,
+    'something was added before the yes',
+  );
 });
 
 // ── What the caps do ─────────────────────────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 name: comms-update
 description: "Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings."
 license: MIT
-compatibility: "@agentcomms/core@0.20.0"
+compatibility: "@agentcomms/core@0.21.0"
 metadata:
   group: communications
   lifecycle: release
@@ -50,9 +50,17 @@ ends it at once. A pause never holds a security fix: its notice is said at once,
 - `never`: nothing asks npm; they update by hand.
 
 An organisation's profile can cap this: `<profile>.updates.json`, beside the `.agentcomms.json` file, may say every 14
-days at most, or never, and may turn background updates off. It is read and approved with the profile (`comms_org_add`,
-`comms_org_update`), only ever tightens, and a level set above it waits until the cap is lifted; `comms_doctor` names
-the cap and the profile it comes from. Say so when a person asks for a level the cap holds back.
+days at most, or never, and may turn background updates off. It is read and approved with the profile (`comms_org_add`),
+and only ever tightens: a level set above it waits until the cap is lifted. `comms_org_update` applies a tighter cap at
+once, even beside a change that waits, and asks before a looser one. `comms_doctor` names the cap and the profile it
+comes from. Say so when a person asks for a level the cap holds back.
+
+**An organisation's profile that needs a later release** is a reason to update. `comms_org_add` or `comms_org_update`
+refuses with `NEEDS_NEWER_RELEASE` — `rgc's profile needs agent-communications 0.23.0 or later for "<name>": nothing
+was changed` — and nothing else stops. Offer the update (steps 1 to 3 below); once it is done and the client
+restarted, call `comms_org_update` again. An entry the profile marks optional is only skipped: `org show` names it as
+`not applied here`, and the update that understands it applies it at the next `comms_org_update`, asking first unless
+it only tightens.
 
 A level that updates less is a change the person approves: show the preview, which says what stops happening, and
 wait for their yes (under `confirm`, the approve command the result gives, at their own terminal, and
@@ -112,9 +120,11 @@ Say so, and stop until they have. From 0.14.0 this matters more: the first 0.14 
 prepares, approves or sends anything, or changes a send policy, moves the shared configuration to
 version 3, and a server still running 0.13 then fails every call it starts with "this release reads
 versions 1 and 2" until its client is restarted. Approvals a 0.13 server prepared and nobody used are
-retired then ("prepared by an earlier release; prepare it again"): prepare them again. After the restart, call `comms_server_prune` for `core`, `gmail`
-and `slack` (each shows what it will delete and asks); it keeps any version a running process still
-uses, so a window that was not restarted keeps its old one until it is.
+retired then ("prepared by an earlier release; prepare it again"): prepare them again. After the restart, call `comms_server_prune` with no
+`channel`: it goes through every managed server's old runtimes, lists them by server, and asks before it deletes any.
+It keeps any version a running process still uses, so a window that was not restarted keeps its old one until it
+is, and the runtimes each stable launcher starts or keeps for a rollback. While an update or the background run is
+under way it is refused and deletes nothing: say so, and call it again in a few minutes.
 
 ## 4. Then walk through what the new release asks of the person
 
@@ -150,7 +160,7 @@ messages, in this order, skipping any that does not apply:
 |---|---|
 | What is behind | `agentcomms update --check` |
 | Update | `agentcomms update` — at a terminal it shows the plan and asks `yes`; anywhere else it exits `10` with the preview and an approval id, then `agentcomms update --approval <id>` |
-| Clear out old versions | `agentcomms mcp prune`, `agent-gmail mcp prune`, `agent-slack mcp prune` |
+| Clear out old versions | `agentcomms mcp prune` — every managed server's, listed by server; `--server <name>` for one |
 | Not now | `agentcomms update --pause [1\|7\|14]` — no approval; `agentcomms update --resume` ends it |
 | How often it checks | `agentcomms update --level auto\|every-14-days\|never` — less often is approved like any change; more often is at once |
 

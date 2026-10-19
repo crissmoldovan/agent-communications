@@ -76,7 +76,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 |---|---|
 | `comms_channels_available` | which declared servers exist — core, Gmail, Resend, Slack, WhatsApp and events — which are installed and at which version, and which clients start each |
 | `comms_server_install` | register a declared channel or service server with a client; the server appears once the client restarts |
-| `comms_server_prune` | remove the managed runtimes old releases left behind; `dryRun` lists them |
+| `comms_server_prune` | remove the managed runtimes old releases left behind: every managed server's, listed by server, or one `channel`'s; `dryRun` lists them |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |

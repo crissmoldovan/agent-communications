@@ -360,7 +360,8 @@ It checks the token as for any app: a bot token of the workspace's team, with ex
 one that rotates. When the organisation's profile names its agent app, it also asks Slack (`bots.info`, with your own
 token) which app the token's bot belongs to, and refuses another app's token, naming it. Until you paste it,
 `agent-slack doctor` says "ask your organisation's admin for the agent app's token, then `workspace bot <name>`" when
-the profile names the app, and otherwise notes that posts go out as you, labelled.
+the profile names the app. Otherwise it notes that posts go out as you, labelled, and that posting as an app becomes
+possible once your organisation's admin adds an agent app to its profile.
 
 ##### For administrators
 

@@ -1922,7 +1922,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const profilePath = options.profile
           ? profileSourcePath(String(options.profile), context.env, context.cwd, context.handoffs)
           : undefined;
-        const incomingProfile = profilePath ? await loadSetupProfile(profilePath) : undefined;
+        const incomingProfile = profilePath ? await loadSetupProfile(profilePath, context.handoffs) : undefined;
         const incomingProfileHasGmail = incomingProfile?.profile.gmail !== undefined;
         /*
          * The client step is decided for the mailbox this run is adding only when a Gmail profile participates in

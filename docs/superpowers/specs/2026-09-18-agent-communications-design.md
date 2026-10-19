@@ -888,7 +888,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   `{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`; lists also support
   `--jsonl`. Data to stdout, messages to stderr. Colour off when not a TTY, with `NO_COLOR`, `TERM=dumb` or
   `--no-color`. Prompts only when stdin and stdout are TTYs, never with `--json`, `--no-input` or `CI`.
-- **Exit codes:** 0 ok · 1 unexpected · 10 send refused / approval required · 64 usage · 65 bad data ·
+- **Exit codes:** 0 ok · 1 unexpected, or a document this release is too old for · 10 send refused / approval required · 64 usage · 65 bad data ·
   66 not found · 69 provider or store unavailable · 75 transient, Google-side (rate limits, backend errors) ·
   77 auth or scope missing · 78 config error. Documented in `--help`. Error codes map to them as follows:
 
@@ -902,6 +902,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   | `TRANSIENT`, `KEYCHAIN_APPROVAL_PENDING`, `LOCK_TIMEOUT` | 75 |
   | `AUTH_REQUIRED`, `SCOPE_MISSING` | 77 |
   | `CONFIG` | 78 |
+  | `NEEDS_NEWER_RELEASE` (an organisation profile this release is too old for: update first, then run it again — [extensions design](2026-10-19-organisation-profile-extensions-design.md), X3), `UNEXPECTED` | 1 |
 
   `error.code` in the JSON envelope is always the specific code; the registry in core (code, exit, retryable,
   summary) is the single source, and the docs table is generated from it.

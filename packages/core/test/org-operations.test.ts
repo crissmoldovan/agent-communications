@@ -1996,8 +1996,14 @@ test('other addresses off is written before anything is read or planned: an unre
     ['an unreadable profile', (_m, path) => rmSync(path), 'NOT_FOUND'],
     [
       'an invalid profile',
-      (_m, path) => writeFileSync(path, '{"agentcomms": "organisation-profile", "version": 7}'),
+      (_m, path) => writeFileSync(path, '{"agentcomms": "organisation-profile", "version": 1}'),
       'BAD_DATA',
+    ],
+    // A later version is refused as one this release is too old for (design 2026-10-19, X3), and still narrows.
+    [
+      'a profile of a later version',
+      (_m, path) => writeFileSync(path, '{"agentcomms": "organisation-profile", "version": 7}'),
+      'NEEDS_NEWER_RELEASE',
     ],
     [
       'a secret store that cannot be opened',

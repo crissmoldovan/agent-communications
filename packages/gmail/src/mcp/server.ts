@@ -1590,7 +1590,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         }
         const setupInbox = pinned ? targetInbox(inbox) : inbox;
         const configBeforeProfile = await context.config();
-        const incomingProfile = profilePath ? await loadSetupProfile(profilePath) : undefined;
+        const incomingProfile = profilePath ? await loadSetupProfile(profilePath, context.handoffs) : undefined;
         const incomingProfileHasGmail = incomingProfile?.profile.gmail !== undefined;
         const clientChoiceNeedsMailbox = incomingProfileHasGmail || setupClientChoiceNeedsMailbox(configBeforeProfile);
         if (clientChoiceNeedsMailbox && !setupInbox) {

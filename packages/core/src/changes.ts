@@ -84,7 +84,15 @@ export interface ChangeOptions {
 }
 
 /** What preparing a change needs: the options of every step, and the channel that prepares it. */
-export type PrepareChangeOptions = ChangeOptions & { channel: string };
+export type PrepareChangeOptions = ChangeOptions & {
+  channel: string;
+  /**
+   * The person reading this preview gives their yes here, at this terminal: a CLI asking a person at a terminal
+   * (`gatedChangeAtTerminal`). The preview's header says so under `chat`, where it otherwise says the yes is in the chat
+   * — as it is for an agent, which shows the preview to the person there. Only the words: the approval is the same.
+   */
+  askedHere?: boolean | undefined;
+};
 
 export interface PreparedChange {
   approvalId: string;
@@ -199,7 +207,7 @@ export async function prepareChange(
       summary,
       loosened: binding.loosened,
       effects: binding.effects,
-      preview: renderChangePreview({ ...record, change: binding }),
+      preview: renderChangePreview({ ...record, change: binding }, { askedHere: options.askedHere === true }),
       expiresAt: record.expiresAt,
       next: nextStep(record.approvalId, policy, core, options),
       approval: await core.approvals.approvalOf(record),
@@ -332,7 +340,8 @@ export async function beginChangeApproval(
   try {
     record = await changeRecord(core, approvalId);
     const challenge = await core.approvals.issueChallenge(approvalId, 'change', options.platform);
-    return { approvalId, preview: renderChangePreview(record), challenge };
+    // This screen asks for a code, here: a change prepared under `chat` says so, not that a yes in the chat approves it.
+    return { approvalId, preview: renderChangePreview(record, { codeHere: true }), challenge };
   } catch (error) {
     await auditRefusal(core, 'change.approve', error, {
       surface: options.surface,
@@ -610,6 +619,39 @@ function shown(value: SettingValue): string {
   return String(value);
 }
 
+/**
+ * The label settings kept for each Slack workspace, by its name (`labelSettingValue`), and what a workspace with none
+ * has: its style is `app`, and the app's posts show the person's photo.
+ */
+const PER_WORKSPACE: Readonly<Record<string, string>> = {
+  'agentLabel.slackStyles': 'app',
+  'agentLabel.slackIcons': 'your Slack photo',
+};
+
+function recordOf(value: SettingValue): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+/**
+ * A setting kept for each workspace, as the person reads it: each workspace it moves, by name, from → to —
+ * `in acme/slack: app → labelled` — and none it leaves as it was. Undefined for any other setting, or a value of
+ * another shape, which is shown as every other setting is.
+ */
+function perWorkspace(field: string, before: SettingValue, after: SettingValue): string | undefined {
+  const none = PER_WORKSPACE[field];
+  const [was, now] = [recordOf(before ?? {}), recordOf(after ?? {})];
+  if (none === undefined || was === undefined || now === undefined) return undefined;
+  const value = (record: Readonly<Record<string, unknown>>, name: string) =>
+    Object.hasOwn(record, name) ? String(record[name]) : none;
+  const moved = [...new Set([...Object.keys(was), ...Object.keys(now)])]
+    .filter((name) => value(was, name) !== value(now, name))
+    .sort();
+  if (moved.length === 0) return undefined;
+  return moved.map((name) => `in ${name}: ${value(was, name)} → ${value(now, name)}`).join(', and ');
+}
+
 /** One loosening as a line a person reads: what, from, to, and what that means. */
 function describeLoosening(loosening: Loosening): string {
   const scoped = /^(inboxes|accounts)\.([^.]+)\.(.+)$/.exec(loosening.path);
@@ -619,7 +661,12 @@ function describeLoosening(loosening: Loosening): string {
     ? `${scoped[2]} ${label}${loosening.id === undefined ? ' (connected by this change)' : ''}`
     : label;
   const words = meaning(field, loosening.after, scoped ? (scoped[1] as 'inboxes' | 'accounts') : undefined);
-  const line = `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}${words ? ` — ${words}` : ''}`;
+  const workspaces = scoped ? undefined : perWorkspace(field, loosening.before, loosening.after);
+  const moved =
+    workspaces === undefined
+      ? `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}`
+      : `${what} ${workspaces}`;
+  const line = `${moved}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.
   return truncateDisplay(line, 300);
@@ -633,12 +680,24 @@ function describeLoosening(loosening: Loosening): string {
  * once as it was prepared (`doneAtOnce`). There it says what is true: those lines, listed apart, are done already, and
  * the rest is what waits for the approval. Decided by that field alone, never by the words of an effect, which can
  * carry text a person or a profile chose; every other preview's header is word for word what it was.
+ *
+ * It says how the change is approved: under `confirm`, a code typed at a terminal; under `chat`, a yes in the chat —
+ * or, `askedHere`, a yes typed here, at this terminal, where a CLI asks the person reading it at once; or, `codeHere`,
+ * a code typed here, at this terminal, where `approve <id>` shows a change prepared under `chat` and asks for its code.
  */
 export function renderChangePreview(
   record: Pick<ApprovalRecord, 'approvalId' | 'requiredPolicy'> & { change: ChangeBinding },
+  options: { askedHere?: boolean | undefined; codeHere?: boolean | undefined } = {},
 ): string {
   const { change } = record;
-  const how = changePolicyOf(record) === 'chat' ? 'a yes in the chat' : 'a code typed at a terminal';
+  const how =
+    changePolicyOf(record) === 'chat'
+      ? options.codeHere === true
+        ? 'a code typed here, at this terminal'
+        : options.askedHere === true
+          ? 'a yes typed here, at this terminal'
+          : 'a yes in the chat'
+      : 'a code typed at a terminal';
   const target = change.target;
   const about =
     target === null

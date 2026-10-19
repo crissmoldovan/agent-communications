@@ -370,6 +370,24 @@ export interface OrganisationRecord {
     | undefined;
   /** The organisation's update caps, from the file beside its profile; absent when it names none. */
   updates?: OrganisationUpdates | undefined;
+  /**
+   * The entries of the profile's `extensions` this release did not know and skipped, being optional (design 2026-10-19,
+   * X3): the release that first understands each, and the SHA-256 of the entry's canonical JSON — as
+   * `Record<string, OrganisationIgnoredExtension>`. Kept in step with the profile. Absent when none was skipped.
+   *
+   * Held as the file holds it, whatever its shape, and read only through `ignoredListOf`, which keeps the well-formed
+   * entries and names the rest: 0.21.0 is the first release to read it, so a shape a later release or a hand gave it
+   * must never make the whole configuration unreadable, nor be dropped by an unrelated write. Losing it is safe: a
+   * later release that understands an entry judges applying it by its classifier whether or not the list names it —
+   * a tightening at once, anything else approved first, never a repair of drift (X4).
+   */
+  ignoredExtensions?: unknown;
+}
+
+/** One skipped extension, as the record keeps it (design 2026-10-19, X3). */
+export interface OrganisationIgnoredExtension {
+  since: string;
+  sha256: string;
 }
 
 export interface ConfigV2 extends ConfigBody {
@@ -673,6 +691,8 @@ const organisationRecordSchema = z.looseObject({
   updates: z
     .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
     .optional(),
+  // Any shape: read through `ignoredListOf`, so one malformed entry never makes config.json unreadable (X3).
+  ignoredExtensions: z.unknown().optional(),
 });
 
 const formerNameSchema = z.looseObject({ name: nameSchema, id: z.string().min(1) });
@@ -1986,7 +2006,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // message unlabelled, or that changes how the label looks, waits for the person. Its values are rendered as the
   // other settings' are, so the preview shows them and the approval binds them.
   for (const loosening of classifyAgentLabelChange(agentLabelOf(before), agentLabelOf(after))) {
-    loosen(loosening.path, labelSettingValue(loosening, loosening.was), labelSettingValue(loosening, loosening.now));
+    loosen(
+      loosening.path,
+      labelSettingValue(loosening, loosening.was, before),
+      labelSettingValue(loosening, loosening.now, after),
+    );
   }
   return { loosened: changes.map((change) => change.path), changes };
 }
@@ -2002,14 +2026,26 @@ export function agentLabelRuleText(rule: AgentLabelRule): string {
 }
 
 /**
- * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles as they are, the
- * rest as text.
+ * A label setting's value as a loosening carries it: the rules in words, the icons and the Slack styles by the name of
+ * the workspace each is for, in `config` — the side the value was read from — and the rest as text.
+ *
+ * Icons and styles are stored by the account's id, so they follow a rename; a preview names the workspace as the person
+ * knows it, `acme/slack`, never its id, which they have never seen (0.21). The ids are still what an approval binds:
+ * `changedSettings` records the stored values as they are. An id that names no connected account — one removed since —
+ * has no other name, and keeps its id.
  */
-function labelSettingValue(loosening: AgentLabelLoosening, value: unknown): SettingValue | undefined {
+function labelSettingValue(loosening: AgentLabelLoosening, value: unknown, config: Config): SettingValue | undefined {
   if (value === undefined || value === null) return undefined;
   if (loosening.path === 'agentLabel.rules') return (value as readonly AgentLabelRule[]).map(agentLabelRuleText);
-  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles')
-    return { ...(value as Readonly<Record<string, string>>) };
+  if (loosening.path === 'agentLabel.slackIcons' || loosening.path === 'agentLabel.slackStyles') {
+    const accounts = connectedAccounts(config);
+    return Object.fromEntries(
+      Object.entries(value as Readonly<Record<string, string>>).map(([id, entry]) => [
+        accounts.find((account) => account.id === id)?.alias ?? id,
+        entry,
+      ]),
+    );
+  }
   return String(value);
 }
 

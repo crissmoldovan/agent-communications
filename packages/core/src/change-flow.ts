@@ -86,6 +86,8 @@ export async function gatedChange<T>(
     channel: string;
     approvalId?: string | undefined;
     platform?: NodeJS.Platform | undefined;
+    /** A person at this terminal is asked for the yes, so a preview prepared now says so (`PrepareChangeOptions`). */
+    askedHere?: boolean | undefined;
   },
 ): Promise<GatedOutcome<T>> {
   const request = await change.plan(await core.config.load());
@@ -113,6 +115,7 @@ export async function gatedChange<T>(
         surface: options.surface,
         channel: options.channel,
         platform: options.platform,
+        askedHere: options.askedHere,
       }),
     };
   }
@@ -214,17 +217,19 @@ export async function gatedChangeAtTerminal<T>(
   },
 ): Promise<T> {
   const streams = options.streams ?? defaultStreams;
+  // Decided before anything is prepared, so the preview a person here reads says their yes is given here.
+  const person =
+    agentMarker(options.env) === null && canPrompt(options.env, streams, { json: options.output.json === true });
   const first = await gatedChange(core, change, {
     surface: 'cli',
     channel: options.channel,
     approvalId: options.approvalId,
     platform: options.output.platform,
+    askedHere: person,
   });
   if (first.status === 'applied') return first.result;
 
   const { prepared } = first;
-  const person =
-    agentMarker(options.env) === null && canPrompt(options.env, streams, { json: options.output.json === true });
   if (!person) {
     /*
      * The preview is what the agent has to show the person, so it is printed, not only tucked into the JSON

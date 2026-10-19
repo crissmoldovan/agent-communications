@@ -105,6 +105,52 @@ export function slackStyleOf(settings: AgentLabelSettings | undefined, accountId
     : DEFAULT_SLACK_STYLE;
 }
 
+/** A Slack user id, as a bot user's is recorded: `U…`, or `W…` on Enterprise Grid. */
+const SLACK_BOT_USER = /^[UW][A-Z0-9]{2,39}$/;
+
+/** The bot user a Slack workspace's agent app posts as, from its account record, or undefined when none is recorded. */
+export function slackBotUserIdOf(account: unknown): string | undefined {
+  const value = (account as { botUserId?: unknown } | undefined)?.botUserId;
+  return typeof value === 'string' && SLACK_BOT_USER.test(value) ? value : undefined;
+}
+
+/**
+ * Why a Slack workspace with no app route takes the labelled fallback: one signed in before the agent app or connected
+ * by an organisation with none, or one connected to read. Fixed strings: Slack binds them into an approval.
+ */
+export function slackNoAppReason(mode: string | undefined): string {
+  return mode === 'send'
+    ? "this workspace's app has no bot token on this machine yet"
+    : 'this workspace is connected to read';
+}
+
+/** Why a workspace whose app's bot token Slack refused takes the fallback (CUE-493), until another is pasted. */
+export const SLACK_REVOKED_APP_REASON = "this workspace's app token was revoked, and no new one is on this machine yet";
+
+/**
+ * Whether a Slack workspace's agent app can act from this machine, read from its account record as Slack's gate reads
+ * it (design 2026-10-15 S1 and S2): in `send` mode with the app's bot user recorded, it posts and reacts as the app
+ * where it can; otherwise every agent act goes out as the person — labelled when it has words — for the reason given.
+ *
+ * One reading, for the gate that routes an act and the label report that says how it will look: two readings would let
+ * the report promise the app where the route never takes it. A token recorded and then unreadable from the keychain is
+ * not seen here; the route says so at the act.
+ */
+export function slackAgentAppOf(account: unknown): { readonly botUserId: string } | { readonly reason: string } {
+  const record = (typeof account === 'object' && account !== null ? account : {}) as {
+    mode?: unknown;
+    tier?: unknown;
+    appTokenRevoked?: unknown;
+  };
+  const mode =
+    typeof record.mode === 'string' ? record.mode : typeof record.tier === 'string' ? record.tier : undefined;
+  const botUserId = mode === 'send' ? slackBotUserIdOf(account) : undefined;
+  if (botUserId !== undefined) return { botUserId };
+  const revoked = record.appTokenRevoked as { at?: unknown } | undefined;
+  const wasRevoked = typeof revoked?.at === 'string' && Number.isFinite(Date.parse(revoked.at));
+  return { reason: mode === 'send' && wasRevoked ? SLACK_REVOKED_APP_REASON : slackNoAppReason(mode) };
+}
+
 /** Why a name cannot be labelled, or undefined when it can. */
 function nameProblem(name: string): string | undefined {
   if (name.length === 0) return 'the name is empty';
