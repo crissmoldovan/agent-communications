@@ -1,6 +1,7 @@
 //! The thirteen commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
-//! each declared to Tauri in `build.rs`. `installation` and `cli` work here; the other eleven say `APP_NOT_BUILT` until
-//! Phase 2 of the plan replaces each body with one call into its module.
+//! each declared to Tauri in `build.rs`. `installation` and `cli` work here, and so do the seven from
+//! `open_in_terminal` to `set_login_item` (Task 6); the updater's and the deep link's say `APP_NOT_BUILT` until Task 7
+//! replaces each body with one call into its module.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{
@@ -10,8 +11,8 @@ use crate::ipc::{
 use crate::launchers::discover;
 use crate::paths::FolderOverrides;
 use crate::runner::{run, RunContext};
-use crate::AppState;
-use tauri::State;
+use crate::{links, login_item, settings, terminal, AppState};
+use tauri::{AppHandle, State};
 
 /// Every command, in the order `build.rs` declares them; a test checks the two and the capability file agree.
 pub const NAMES: &[&str] = &[
@@ -63,55 +64,68 @@ pub async fn cli(call: Call, state: State<'_, AppState>) -> Result<CliResult, Ap
     blocking(move || run(&call, &ctx)).await
 }
 
-/// Opens the system terminal with an approve, change or sign-in command (DA6, DA10). Task 6.
+/// Opens the system terminal with an approve, change or sign-in command (DA6, DA10), or copies it and says why. A
+/// change's own pending approval is revoked first.
 #[tauri::command]
-pub fn open_in_terminal(command: TerminalCommand) -> Result<TerminalOutcome, AppError> {
-    let _ = command;
-    Err(AppError::not_built("open_in_terminal"))
+pub async fn open_in_terminal(
+    command: TerminalCommand,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<TerminalOutcome, AppError> {
+    let ctx = context(&state);
+    blocking(move || terminal::open(&app, command, &ctx)).await?
 }
 
-/// Puts text on the clipboard. Task 6.
+/// Puts text on the clipboard: what the screen shows, and nothing hidden in it.
 #[tauri::command]
-pub fn copy_text(text: String) -> Result<(), AppError> {
-    let _ = text;
-    Err(AppError::not_built("copy_text"))
+pub fn copy_text(text: String, app: AppHandle) -> Result<(), AppError> {
+    terminal::copy(&app, &text)
 }
 
-/// Opens an `https://` link to slack.com or google.com that a doctor fix names. Task 6.
+/// Opens an `https://` link to slack.com, google.com or a subdomain of either, that a doctor fix names.
 #[tauri::command]
-pub fn open_link(url: String) -> Result<(), AppError> {
-    let _ = url;
-    Err(AppError::not_built("open_link"))
+pub fn open_link(url: String, app: AppHandle) -> Result<(), AppError> {
+    links::open_link(&app, &url)
 }
 
-/// Opens a writing profile in the default editor, after `profile init` makes it if it is missing. Task 6.
+/// Opens a writing profile in the default editor, after `profile init` makes it if it is missing; only a `.md` file
+/// in `<config>/compose/` opens.
 #[tauri::command]
-pub fn open_profile(
+pub async fn open_profile(
     account: Option<AccountName>,
     conversation: Option<ConversationId>,
+    app: AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<ProfileOpened, AppError> {
-    let _ = (account, conversation);
-    Err(AppError::not_built("open_profile"))
+    let ctx = context(&state);
+    blocking(move || links::open_profile(&app, &ctx, account, conversation)).await?
 }
 
-/// The app's settings and the folders they resolve to. Task 6.
+/// The app's settings and the folders they resolve to.
 #[tauri::command]
-pub fn get_settings() -> Result<AppSettings, AppError> {
-    Err(AppError::not_built("get_settings"))
+pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, AppError> {
+    Ok(settings::current(&app, &state))
 }
 
-/// Saves the folder overrides. Task 6.
+/// Keeps the folder overrides, each a full path or none, and uses them from the next call on.
 #[tauri::command]
-pub fn set_folders(folders: FolderOverrides) -> Result<AppSettings, AppError> {
-    let _ = folders;
-    Err(AppError::not_built("set_folders"))
+pub fn set_folders(
+    folders: FolderOverrides,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppSettings, AppError> {
+    settings::set_folders(&app, &state, folders)
 }
 
-/// Starts the app at login, or stops it. Task 6.
+/// Starts the app at login, or stops it.
 #[tauri::command]
-pub fn set_login_item(on: bool) -> Result<AppSettings, AppError> {
-    let _ = on;
-    Err(AppError::not_built("set_login_item"))
+pub fn set_login_item(
+    on: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppSettings, AppError> {
+    login_item::set(&app, on)?;
+    Ok(settings::current(&app, &state))
 }
 
 /// Where the app's own updater stands. Task 7.
@@ -191,7 +205,7 @@ mod tests {
 
     #[test]
     fn the_unbuilt_commands_say_so() {
-        let refusal = copy_text(String::new()).expect_err("not built");
+        let refusal = updater_state().expect_err("not built");
         assert_eq!(refusal.code, "APP_NOT_BUILT");
         assert_eq!(
             take_deep_link().expect_err("not built").code,

@@ -173,9 +173,11 @@ pub enum TerminalOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CopyReason {
-    /// Linux with none of the terminals the app knows.
+    /// No terminal the app knows was found (Linux with none of its three, Windows without cmd.exe), or the one found
+    /// would not start or take the command (macOS: Terminal refused osascript): the line is copied.
     NoTerminal,
-    /// Windows, with a word that cannot be written as one safe line: its words are copied as JSON.
+    /// A word that cannot be written as one safe line — on Windows one cmd.exe would act on, anywhere a line break or
+    /// a format character: its words are copied as JSON.
     NoSafeLine,
 }
 

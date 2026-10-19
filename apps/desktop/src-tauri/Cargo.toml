@@ -25,6 +25,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 semver = "1"
+# Task 6: links and profile files open from Rust (the capability file grants no plugin), and Copy writes the clipboard.
+tauri-plugin-opener = "2.7"
+tauri-plugin-clipboard-manager = "2.5"
+
+# Task 6: the login item is SMAppService's on macOS (13 and later), as Supbuddy's is.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
+
+# Task 6: and tauri-plugin-autostart's everywhere else.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-autostart = "2.7"
 
 [dev-dependencies]
 tempfile = "3"
