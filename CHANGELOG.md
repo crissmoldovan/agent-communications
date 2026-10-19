@@ -33,8 +33,9 @@ profiles need 0.22.0, standing approvals 0.23.0, and the update status this rele
 
 It is released on its own tag, `desktop-vX.Y.Z`, on the commit of the release it ships with, and never as Latest.
 macOS gets a DMG signed with a Developer ID and notarised, built on the owner's Mac, that installs a later signed
-release when you choose to, after checking its signature. Windows and Linux get an unsigned `.exe`, `.AppImage` and
-`.deb` from CI, whose updater is off. [The desktop app](README.md#the-desktop-app) says how to install it, and
+release when you choose to, after checking its signature — once a release carries the updater: one published before
+the updater key is set up says, in its release and in Settings, that its updater is off, and that copy is replaced by
+hand. Windows and Linux get an unsigned `.exe`, `.AppImage` and `.deb` from CI, whose updater is off. [The desktop app](README.md#the-desktop-app) says how to install it, and
 [Releasing](docs/RELEASING.md#the-desktop-app) how the owner releases it.
 
 **`agentcomms update --status` says where updates stand on this machine, and asks npm nothing.** Until now the level,

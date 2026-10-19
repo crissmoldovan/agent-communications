@@ -314,11 +314,11 @@ Agent Comms, the tray app in `apps/desktop`, is released on its own tag, `deskto
 `vX.Y.Z` release it ships with. Its version is the repository's (`pnpm sync:versions` writes its `tauri.conf.json`),
 and none of it goes to npm. A release of it holds:
 
-- **macOS:** a universal DMG, signed with the Developer ID in the owner's login keychain and notarised, and the
-  updater's signed archive with its `latest.json`. They are built on the owner's Mac by
-  `apps/desktop/scripts/release-desktop.sh` and published by `apps/desktop/scripts/publish-desktop.sh`. The signing
-  identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate. The app is signed under the
-  hardened runtime with one entitlement, `com.apple.security.automation.apple-events`
+- **macOS:** a universal DMG, signed with the Developer ID in the owner's login keychain and notarised, and — once
+  the updater key is committed — the updater's signed archive with its `latest.json`. They are built on the owner's
+  Mac by `apps/desktop/scripts/release-desktop.sh` and published by `apps/desktop/scripts/publish-desktop.sh`. The
+  signing identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate. The app is signed
+  under the hardened runtime with one entitlement, `com.apple.security.automation.apple-events`
   (`apps/desktop/src-tauri/Entitlements.plist`), and its `Info.plist` says why it asks to control Terminal: Approve in
   Terminal drives Terminal through `osascript`, which a signed build may not do without both.
 - **Windows and Linux:** an NSIS `.exe`, an AppImage and a `.deb`, unsigned. `.github/workflows/desktop-release.yml`
@@ -340,9 +340,17 @@ unsigned builds need no key; `release-desktop.sh` turns it on with `--config`. A
 every CI build, has its updater off and says so in Settings. No token is baked into the app, because this repository
 is public.
 
+**The first signed release may have no updater.** With `plugins.updater.pubkey` in `tauri.conf.json` still empty,
+`release-desktop.sh` still builds, signs and notarises the DMG, but with updater artefacts off, and says so in a box
+you confirm by typing `off`; `publish-desktop.sh` then publishes it without `latest.json`, and says the updater stays
+off. Such a copy never updates itself: it is replaced by hand. To turn the updater on, do steps 1 and 2 below —
+generate the key, commit its `.pub` — and release the next version; from the release after that one, installed copies
+update themselves. `apps/desktop/scripts/updater-key.mjs` makes the decision: off with no pubkey; with one, the key
+must be there, mode 600, and its `.pub` the pubkey, or the release is refused before anything else is read or built.
+
 ### The owner's steps
 
-Once:
+Once (steps 1 and 2 turn the updater on, and may wait until after the first signed release; see above):
 
 1. Generate the updater key, and keep it readable by you alone:
 
@@ -358,13 +366,23 @@ Once:
    that value.
 3. Create `.env.desktop-release.local` at the repository root, with mode 600 (`chmod 600 .env.desktop-release.local`);
    git ignores it. It holds `APPLE_SIGNING_IDENTITY` (`Developer ID Application: …`), `APPLE_ID`, `APPLE_TEAM_ID`,
-   `APPLE_PASSWORD` (an app-specific password) and, if the updater key has one, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-   `AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE` and `AGENTCOMMS_UPDATER_KEY_FILE` point the scripts elsewhere. Neither script
-   prints any of these values.
+   `APPLE_PASSWORD` (an app-specific password), which Tauri reads from its environment to notarise the app, and, if
+   the updater key has one, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE` and
+   `AGENTCOMMS_UPDATER_KEY_FILE` point the scripts elsewhere. Neither script prints any of these values.
+4. Store the notarisation credentials the DMG is submitted with in a notarytool keychain profile, so no password is
+   ever on a command line:
+
+   ```bash
+   xcrun notarytool store-credentials agentcomms-notary --apple-id <your Apple ID> --team-id <your team ID>
+   ```
+
+   It asks for the app-specific password and keeps it in the login keychain. `release-desktop.sh` uses the profile
+   `agentcomms-notary`, or the one `AGENTCOMMS_NOTARY_PROFILE` names, and refuses before building when it does not
+   answer.
 
 Each release, after `vX.Y.Z` is out:
 
-4. Tag `desktop-vX.Y.Z` on the `vX.Y.Z` commit, and push the tag:
+5. Tag `desktop-vX.Y.Z` on the `vX.Y.Z` commit, and push the tag:
 
    ```bash
    git tag desktop-vX.Y.Z vX.Y.Z && git push origin desktop-vX.Y.Z
@@ -374,7 +392,7 @@ Each release, after `vX.Y.Z` is out:
    four desktop legs, makes the draft release and attaches the Windows and Linux files. The release stays a draft.
    If a leg fails for a reason outside the repository, re-run it: the draft is found again and uploads replace what
    is there.
-5. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
+6. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
 
    ```bash
    git checkout desktop-vX.Y.Z
@@ -383,14 +401,15 @@ Each release, after `vX.Y.Z` is out:
    ```
 
    Both refuse a dirty tree, a tag that is not the app's version, a HEAD that is not the tag's commit and a missing
-   terminal, and ask for the version to be typed back. `release-desktop.sh` builds the universal app, signs,
-   notarises and staples the app and the DMG, and stages them in
-   `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they were built from. `publish-desktop.sh`
-   refuses a release already published with its DMG, attaches the signed files and `THIRD_PARTY_LICENSES` to the
-   draft, and stops if the workflow's Windows and Linux files are not attached yet; run it again once they are. Then
-   it uploads `latest.json` and publishes the release, still not Latest.
-6. Update between two signed versions. The first signed release has nothing to update from, so from the second on:
-   with the previous signed version installed, choose Check for Updates… in the tray. It should find the new
+   terminal, and ask for the version to be typed back. `release-desktop.sh` decides the updater from the key first
+   (on, off, or refused), then reads the signing environment, builds the universal app, signs, notarises and staples
+   the app and the DMG, and stages them in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they
+   were built from and whether the updater is on. `publish-desktop.sh` refuses a release already published, whatever
+   it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft, and stops if the workflow's Windows and
+   Linux files are not attached yet; run it again once they are. Then, with the updater on, it uploads `latest.json`;
+   with it off, it says the updater stays off. It publishes the release, still not Latest.
+7. Update between two signed versions with the updater on. The first such release has nothing to update from, so from
+   the second on: with the previous one installed, choose Check for Updates… in the tray. It should find the new
    release, check its signature against the key in the app, install it and restart.
 
 ## Do not run agents in this checkout during a release

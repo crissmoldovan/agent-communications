@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -211,11 +211,10 @@ describe("the owner's release scripts", () => {
     expect(script).toContain('ENV_FILE="${AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE:-.env.desktop-release.local}"');
     // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow and shell text, not a template
     expect(script).toContain('KEY_FILE="${AGENTCOMMS_UPDATER_KEY_FILE:-$HOME/.agentcomms/tauri-updater.key}"');
-    expect(script).toMatch(/\[ "\$\(mode "\$KEY_FILE"\)" = 600 \] \|\| refuse/);
-    expect(script).toContain('config.plugins?.updater?.pubkey');
-    expect(script).toContain('TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"\nexport TAURI_SIGNING_PRIVATE_KEY\n');
+    // The key's presence, mode and match are updater-key.mjs's, asked before the signing environment is read.
+    expect(script).toContain('  TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"\n  export TAURI_SIGNING_PRIVATE_KEY\n');
     expect(script).toContain(
-      `pnpm --filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'`,
+      'pnpm --filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config "$UPDATER_CONFIG"',
     );
     expect(script).toContain('OUT="apps/desktop/src-tauri/target/desktop-release/$VERSION"');
     for (const staged of [
@@ -240,6 +239,100 @@ describe("the owner's release scripts", () => {
     expectQuietAboutSecrets(script);
   });
 
+  it('release-desktop.sh decides the updater from the key before it reads the signing environment, either way', () => {
+    const script = read(RELEASE_SH);
+    // The decision is the helper's, and it comes after the refusals and the version typed back, and before the
+    // signing environment is read (U8).
+    const decided = script.indexOf('UPDATER="$(node apps/desktop/scripts/updater-key.mjs "$KEY_FILE")"');
+    expect(decided).toBeGreaterThan(script.indexOf('[ "$TYPED" = "$VERSION" ] || refuse'));
+    expect(decided).toBeLessThan(script.indexOf('. "$ENV_FILE"'));
+    // On: the key is in the build's environment and the updater artefacts are made, checked and staged.
+    expect(script).toContain('if [ "$UPDATER" = on ]; then\n  TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"');
+    expect(script).toContain(`UPDATER_CONFIG='{"bundle":{"createUpdaterArtifacts":true}}'`);
+    // Off: confirmed by typing it, no key in the build's environment at all, whatever the signing environment held,
+    // no updater artefacts, and it says so.
+    expect(script).toContain('[ "$OFF" = off ] || refuse');
+    expect(script).toContain(`UPDATER_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}'`);
+    const unset = script.indexOf('unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
+    expect(unset).toBeGreaterThan(script.indexOf('. "$ENV_FILE"'));
+    expect(unset).toBeLessThan(script.indexOf('tauri build'));
+    expect(script).toContain("echo 'THE UPDATER IS OFF:");
+    expect(script).toContain('--config "$UPDATER_CONFIG"');
+    expect(script).toContain('printf \'%s\\n\' "$UPDATER" > "$OUT/.updater"');
+    // The DMG is notarised with a keychain profile: no password on a command line.
+    const notary = script
+      .replace(/\\\n\s*/g, ' ')
+      .split('\n')
+      .filter((line) => /^\s*xcrun notarytool\b/.test(line));
+    expect(notary.length).toBeGreaterThan(0);
+    for (const line of notary) {
+      expect(line).toContain('--keychain-profile "$NOTARY_PROFILE"');
+      expect(line).not.toMatch(/--password|--apple-id|APPLE_PASSWORD/);
+    }
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: shell text, not a template
+    expect(script).toContain('NOTARY_PROFILE="${AGENTCOMMS_NOTARY_PROFILE:-agentcomms-notary}"');
+  });
+
+  it('publish-desktop.sh uploads latest.json only for a release with the updater, and says when it is off', () => {
+    const script = read(PUBLISH_SH);
+    expect(script).toContain('UPDATER="$(cat "$OUT/.updater")"');
+    expect(script).toMatch(/case "\$UPDATER" in on \| off\) ;; \*\) refuse/);
+    const manifest = script.indexOf('node apps/desktop/scripts/updater-manifest.mjs');
+    const branch = script.lastIndexOf('if [ "$UPDATER" = on ]; then', manifest);
+    expect(branch).toBeGreaterThan(-1);
+    expect(script.slice(branch, manifest)).not.toMatch(/\nfi\n/);
+    expect(script).toMatch(/The updater stays off/);
+    // A release already published is never written to again: only a draft is filled.
+    expect(script).toContain('gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft');
+    expect(script).toMatch(/is already published: bump the version/);
+  });
+
+  it('updater-key.mjs: an empty pubkey is off, said loudly; a set one needs its key, mode 600 and matching', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'agentcomms-updater-key-'));
+    try {
+      const config = (pubkey: string) => {
+        const path = join(folder, 'tauri.conf.json');
+        writeFileSync(path, JSON.stringify({ plugins: { updater: { pubkey, endpoints: [] } } }));
+        return path;
+      };
+      const key = join(folder, 'tauri-updater.key');
+      const run = (configFile: string) =>
+        spawnSync(process.execPath, [join(APP, 'scripts', 'updater-key.mjs'), key, configFile], { encoding: 'utf8' });
+
+      // No pubkey committed: off, with what to do, and no key needed.
+      const off = run(config(''));
+      expect(off.status).toBe(0);
+      expect(off.stdout).toBe('off\n');
+      expect(off.stderr).toMatch(/THE UPDATER IS OFF FOR THIS RELEASE/);
+      expect(off.stderr).toMatch(/tauri signer generate -w ~\/\.agentcomms\/tauri-updater\.key/);
+      expect(off.stderr).toMatch(/release the next version/);
+
+      // A pubkey committed: the key must be there, its own, and the pubkey's.
+      const pub = config('UFVCTElDIEtFWQ==');
+      expect(run(pub).status).toBe(1);
+      expect(run(pub).stderr).toMatch(/the updater key pair is missing/);
+      writeFileSync(key, 'SECRET-KEY-TEXT', { mode: 0o600 });
+      writeFileSync(`${key}.pub`, 'ANOTHER KEY\n');
+      chmodSync(key, 0o600);
+      expect(run(pub).stderr).toMatch(/is not plugins\.updater\.pubkey/);
+      writeFileSync(`${key}.pub`, 'UFVCTElDIEtFWQ==\n');
+      const on = run(pub);
+      expect(on.status).toBe(0);
+      expect(on.stdout).toBe('on\n');
+      expect(on.stderr).toBe('');
+      if (process.platform !== 'win32') {
+        chmodSync(key, 0o644);
+        const loose = run(pub);
+        expect(loose.status).toBe(1);
+        expect(loose.stderr).toMatch(/must have mode 600, not 644/);
+      }
+      // Whatever it says, it never says the key.
+      for (const each of [off, on, run(pub)]) expect(`${each.stdout}${each.stderr}`).not.toContain('SECRET-KEY-TEXT');
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   it('publish-desktop.sh writes latest.json for both Mac architectures and never takes Latest', () => {
     const script = read(PUBLISH_SH);
     expect(script.startsWith('#!/bin/bash\nset -euo pipefail\numask 077\n')).toBe(true);
@@ -253,9 +346,8 @@ describe("the owner's release scripts", () => {
       '[ "$TYPED" = "$VERSION" ] || refuse',
     ]);
 
-    // A release already out with its DMG is refused; otherwise CI's draft is used, or a draft is made.
-    expect(script).toContain('gh release view "$TAG" --repo "$REPO" --json isDraft,assets');
-    expect(script).toMatch(/already published with its DMG/);
+    // A release already out is refused; otherwise CI's draft is used, or a draft is made.
+    expect(script).toContain('gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft');
     expect(script).toContain(
       'gh release create "$TAG" --repo "$REPO" --verify-tag --draft --latest=false --title "Agent Comms $VERSION" --notes-file',
     );
