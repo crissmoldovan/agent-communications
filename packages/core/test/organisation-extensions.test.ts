@@ -856,3 +856,53 @@ test('a malformed list of skipped entries leaves the configuration readable, is 
     assert.ok(!after.checks.some((check) => /cannot read, so that part is ignored/.test(check.detail)), where);
   }
 });
+
+// ── What a refusal says was changed, when this call changed something at once ───────────────────────────────────────
+
+test('a refusal after other addresses was turned off at once says so, rather than that nothing was changed', async () => {
+  // `--for-other-addresses off` is written before the profile is read. A profile this release is too old for was then
+  // refused with "…: nothing was changed", though the narrowing had just been written.
+  const refusedAfter = async (document: unknown) => {
+    const m = machine();
+    writeProfile(m, profile());
+    await approved(m, (approvalId) =>
+      orgAddChange(m.core, { file: 'acme.agentcomms.json', forOtherAddresses: true, approvalId }, options(m)),
+    );
+    assert.equal((await record(m))?.forOtherAddresses, true);
+    writeProfile(m, document);
+    const call = (forOtherAddresses?: 'off') =>
+      gatedChange(
+        m.core,
+        orgUpdateChange(
+          m.core,
+          { organisation: 'acme', ...(forOtherAddresses ? { forOtherAddresses } : {}) },
+          options(m),
+        ),
+        { channel: 'core', surface: 'mcp' },
+      );
+    let message = '';
+    await assert.rejects(call('off'), (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      assert.equal(error.code, 'NEEDS_NEWER_RELEASE');
+      message = error.message;
+      return true;
+    });
+    assert.equal((await record(m))?.forOtherAddresses, false, 'the narrowing was not written');
+    // Asked again, nothing is narrowed by this call: then nothing was changed, and it says so.
+    let again = '';
+    await assert.rejects(call('off'), (error: unknown) => {
+      again = (error as Error).message;
+      return true;
+    });
+    return { message, again };
+  };
+  for (const document of [
+    { ...profile(), version: 2 },
+    profile({ extensions: { 'future-thing': { required: true, since: '99.0.0' } } }),
+  ]) {
+    const { message, again } = await refusedAfter(document);
+    assert.match(message, /: for other addresses was turned off; nothing else was changed$/, message);
+    assert.doesNotMatch(message, /: nothing was changed$/);
+    assert.match(again, /: nothing was changed$/, again);
+  }
+});

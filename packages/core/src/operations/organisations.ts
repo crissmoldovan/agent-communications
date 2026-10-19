@@ -1197,6 +1197,37 @@ interface Planned {
    * the narrowing, then what only tightened (`tightenAtOnce`). Written already, and reported first among what applied.
    */
   doneAtOnce: string[];
+  /** What this very call wrote at once, as a refusal after it has to say (`saidDoneAtOnce`). */
+  doneNow: DoneNow;
+}
+
+/** What one call of an `org update` wrote at once on its own, before anything else: a narrowing, and tightenings. */
+interface DoneNow {
+  narrowed: boolean;
+  tightened: string[];
+}
+
+/**
+ * A refusal raised after this call wrote something at once, in words that say so (finding 9 of the 0.21 review): a
+ * narrowing and what only tightens are written before the profile is read, checked, planned or applied, so a refusal
+ * after them that said "nothing was changed" was false. Its own words otherwise, and the same code, hint and details.
+ */
+function saidDoneAtOnce(error: unknown, done: DoneNow): unknown {
+  if (!(error instanceof CommsError) || !error.message.includes('nothing was changed')) return error;
+  const parts = [
+    ...(done.narrowed ? ['for other addresses was turned off'] : []),
+    ...(done.tightened.length > 0 ? ['what only tightens was applied'] : []),
+  ];
+  if (parts.length === 0) return error;
+  return new CommsError(
+    error.code,
+    error.message.replace('nothing was changed', `${parts.join(', and ')}; nothing else was changed`),
+    {
+      ...(error.hint === undefined ? {} : { hint: error.hint }),
+      ...(error.details === undefined ? {} : { details: error.details }),
+      cause: error,
+    },
+  );
 }
 
 /**
@@ -1274,100 +1305,115 @@ function profileChange(
       registry,
     });
   };
+  /** One call's plan: what it did at once on the way is recorded in `doneNow` as it goes, for a refusal to say. */
+  const planCall = async (given: Config, doneNow: DoneNow): Promise<ChangeRequest> => {
+    let config = given;
+    /*
+     * A narrowing applies at once, whatever else the call asks for and whatever becomes of it (§D8). So
+     * `--for-other-addresses off` is written first, on its own, under the credentials lock — before the profile is
+     * read, checked or planned, and before a secret store is chosen or opened. Done after them, an unreadable or
+     * invalid profile, or a store that could not be opened, refused the call with the organisation's client still
+     * serving the person's other addresses; done with the plan, it waited for whatever approval the rest needed.
+     * The rest is then planned from what the narrowing left, and refused or approved as before.
+     */
+    let narrowedNow = false;
+    if (spec.mode === 'update' && spec.forOtherAddresses === 'off' && spec.organisation !== undefined) {
+      const outcome = await narrowAtOnce(core, options, spec.organisation);
+      config = outcome.config;
+      narrowedNow = outcome.changed;
+      doneNow.narrowed = narrowedNow;
+    }
+    /*
+     * A narrowing done while an approval was prepared belongs to that approval's story: the preview says it was
+     * done, and the result of the claim lists it, as every change is listed. The claim plans from a record already
+     * off, so it learns of it from the preparation — this change's own earlier call at a terminal, or, from a chat
+     * where each call builds the change afresh, the approval it claims, which carries the line.
+     */
+    const narrowedBefore =
+      spec.mode === 'update' &&
+      spec.forOtherAddresses === 'off' &&
+      (narrowedEarlier || (await approvalRecordsNarrowing(core, spec.approvalId)));
+    narrowedEarlier ||= narrowedNow;
+    const narrowed = narrowedNow || narrowedBefore;
+    const file = spec.file ?? (await readOrRefuse(spec.path(config), spec.mode, commands.handoffs, spec.organisation));
+    /*
+     * What this release cannot take at all is refused before anything of the profile is applied, the tightenings
+     * below included (design 2026-10-19, X3): an entry it does not know and must not skip, or one it knows marked in
+     * a way it cannot be held to. The record stays exactly as the last approval left it.
+     */
+    const verdict = profileExtensions(file.profile, registry);
+    if (verdict.refused.length > 0) {
+      throw needsNewerRelease(file.profile.organisation, verdict.refused, spec.mode, commands.handoffs);
+    }
+    /*
+     * What only tightens applies at once, as a narrowing does (design 2026-10-19, X4, X6): written before the rest is
+     * planned, so it never waits for an approval the rest needs, and the preview marks it done. A claim plans from a
+     * record already tightened, and learns what was done from its own earlier call at a terminal, or from the
+     * approval it claims — each line held to the record it says it left.
+     */
+    let tightenedNow: string[] = [];
+    if (spec.mode === 'update' && !spec.sourceGiven && spec.organisation !== undefined) {
+      const outcome = await tightenAtOnce(core, options, spec.organisation, file, verdict, registry, config);
+      config = outcome.config;
+      tightenedNow = outcome.done;
+      doneNow.tightened = tightenedNow;
+    }
+    const tightenedBefore =
+      tightenedEarlier.length > 0
+        ? tightenedEarlier
+        : spec.mode === 'update' && spec.organisation !== undefined
+          ? stillTightened(
+              (await approvalDoneAtOnce(core, spec.approvalId)).filter((line) => line !== NARROWED_WHEN_PREPARED),
+              recordOf(config, spec.organisation),
+              file,
+              verdict,
+              registry,
+            )
+          : [];
+    const tightened = [...tightenedBefore, ...tightenedNow.filter((line) => !tightenedBefore.includes(line))];
+    tightenedEarlier = tightened;
+    const doneAtOnce = [...(narrowed ? [NARROWED_WHEN_PREPARED] : []), ...tightened];
+    await refuseChangedProfile(core, spec.approvalId, file, options.surface);
+    const now = (options.now?.() ?? new Date()).toISOString();
+    const profilePlan = await plan(config, file, verdict, now);
+    const store = await storeFor(config, profilePlan);
+    planned = { plan: profilePlan, file, inputs: inputsOf(config), store, now, narrowed, doneAtOnce, doneNow };
+    const { organisation } = profilePlan;
+    const label = shownText(file.profile.label, 64);
+    const effects = profilePlan.needsApproval ? previewLines(spec.mode, profilePlan, file, store) : [];
+    const atOnce = [
+      ...(narrowed ? ['; for other addresses was turned off at once'] : []),
+      ...(tightened.length > 0 ? ['; what only tightens was applied at once'] : []),
+    ].join('');
+    return {
+      before: config,
+      after: withPlan(config, profilePlan, store),
+      summary:
+        spec.mode === 'add'
+          ? `Add the organisation profile "${organisation}" (${label}): its apps beside what you have`
+          : `Update the organisation profile "${organisation}" (${label})${atOnce}`,
+      effects,
+      ...(doneAtOnce.length > 0 && profilePlan.needsApproval ? { doneAtOnce } : {}),
+    };
+  };
   return {
     plan: async (given): Promise<ChangeRequest> => {
-      let config = given;
-      /*
-       * A narrowing applies at once, whatever else the call asks for and whatever becomes of it (§D8). So
-       * `--for-other-addresses off` is written first, on its own, under the credentials lock — before the profile is
-       * read, checked or planned, and before a secret store is chosen or opened. Done after them, an unreadable or
-       * invalid profile, or a store that could not be opened, refused the call with the organisation's client still
-       * serving the person's other addresses; done with the plan, it waited for whatever approval the rest needed.
-       * The rest is then planned from what the narrowing left, and refused or approved as before.
-       */
-      let narrowedNow = false;
-      if (spec.mode === 'update' && spec.forOtherAddresses === 'off' && spec.organisation !== undefined) {
-        const outcome = await narrowAtOnce(core, options, spec.organisation);
-        config = outcome.config;
-        narrowedNow = outcome.changed;
+      const doneNow: DoneNow = { narrowed: false, tightened: [] };
+      try {
+        return await planCall(given, doneNow);
+      } catch (error) {
+        throw saidDoneAtOnce(error, doneNow);
       }
-      /*
-       * A narrowing done while an approval was prepared belongs to that approval's story: the preview says it was
-       * done, and the result of the claim lists it, as every change is listed. The claim plans from a record already
-       * off, so it learns of it from the preparation — this change's own earlier call at a terminal, or, from a chat
-       * where each call builds the change afresh, the approval it claims, which carries the line.
-       */
-      const narrowedBefore =
-        spec.mode === 'update' &&
-        spec.forOtherAddresses === 'off' &&
-        (narrowedEarlier || (await approvalRecordsNarrowing(core, spec.approvalId)));
-      narrowedEarlier ||= narrowedNow;
-      const narrowed = narrowedNow || narrowedBefore;
-      const file =
-        spec.file ?? (await readOrRefuse(spec.path(config), spec.mode, commands.handoffs, spec.organisation));
-      /*
-       * What this release cannot take at all is refused before anything of the profile is applied, the tightenings
-       * below included (design 2026-10-19, X3): an entry it does not know and must not skip, or one it knows marked in
-       * a way it cannot be held to. The record stays exactly as the last approval left it.
-       */
-      const verdict = profileExtensions(file.profile, registry);
-      if (verdict.refused.length > 0) {
-        throw needsNewerRelease(file.profile.organisation, verdict.refused, spec.mode, commands.handoffs);
-      }
-      /*
-       * What only tightens applies at once, as a narrowing does (design 2026-10-19, X4, X6): written before the rest is
-       * planned, so it never waits for an approval the rest needs, and the preview marks it done. A claim plans from a
-       * record already tightened, and learns what was done from its own earlier call at a terminal, or from the
-       * approval it claims — each line held to the record it says it left.
-       */
-      let tightenedNow: string[] = [];
-      if (spec.mode === 'update' && !spec.sourceGiven && spec.organisation !== undefined) {
-        const outcome = await tightenAtOnce(core, options, spec.organisation, file, verdict, registry, config);
-        config = outcome.config;
-        tightenedNow = outcome.done;
-      }
-      const tightenedBefore =
-        tightenedEarlier.length > 0
-          ? tightenedEarlier
-          : spec.mode === 'update' && spec.organisation !== undefined
-            ? stillTightened(
-                (await approvalDoneAtOnce(core, spec.approvalId)).filter((line) => line !== NARROWED_WHEN_PREPARED),
-                recordOf(config, spec.organisation),
-                file,
-                verdict,
-                registry,
-              )
-            : [];
-      const tightened = [...tightenedBefore, ...tightenedNow.filter((line) => !tightenedBefore.includes(line))];
-      tightenedEarlier = tightened;
-      const doneAtOnce = [...(narrowed ? [NARROWED_WHEN_PREPARED] : []), ...tightened];
-      await refuseChangedProfile(core, spec.approvalId, file, options.surface);
-      const now = (options.now?.() ?? new Date()).toISOString();
-      const profilePlan = await plan(config, file, verdict, now);
-      const store = await storeFor(config, profilePlan);
-      planned = { plan: profilePlan, file, inputs: inputsOf(config), store, now, narrowed, doneAtOnce };
-      const { organisation } = profilePlan;
-      const label = shownText(file.profile.label, 64);
-      const effects = profilePlan.needsApproval ? previewLines(spec.mode, profilePlan, file, store) : [];
-      const atOnce = [
-        ...(narrowed ? ['; for other addresses was turned off at once'] : []),
-        ...(tightened.length > 0 ? ['; what only tightens was applied at once'] : []),
-      ].join('');
-      return {
-        before: config,
-        after: withPlan(config, profilePlan, store),
-        summary:
-          spec.mode === 'add'
-            ? `Add the organisation profile "${organisation}" (${label}): its apps beside what you have`
-            : `Update the organisation profile "${organisation}" (${label})${atOnce}`,
-        effects,
-        ...(doneAtOnce.length > 0 && profilePlan.needsApproval ? { doneAtOnce } : {}),
-      };
     },
     apply: async (consent) => {
       if (planned === null)
         throw new CommsError('UNEXPECTED', 'the organisation profile was applied before it was planned');
-      return applyProfile(core, options, spec.mode, planned, consent, commands);
+      const done = planned;
+      try {
+        return await applyProfile(core, options, spec.mode, done, consent, commands);
+      } catch (error) {
+        throw saidDoneAtOnce(error, done.doneNow);
+      }
     },
   };
 }

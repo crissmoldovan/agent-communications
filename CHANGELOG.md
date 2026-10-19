@@ -19,6 +19,8 @@ entry says whether it is `required` and the release that first understands it (`
   "acme's profile needs agent-communications 0.23.0 or later for "<name>": nothing was changed". Your last approved
   settings stay exactly as they were, and nothing else stops. The hint names the update command and the
   `org update` to run after it. A profile of a later `version` than 1 is refused the same way, no longer with "expected 1".
+  When the same command also turned `--for-other-addresses off`, which applies before the profile is read, or applied a
+  tighter cap at once, the refusal says so: "…: for other addresses was turned off; nothing else was changed".
 
 For admins nothing changes today: profiles stay valid as they are, and a release that adds the first extension says
 so in its notes. Members on 0.20.0 or older refuse any profile with `extensions` (they keep their last approved

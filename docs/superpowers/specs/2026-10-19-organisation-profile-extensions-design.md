@@ -113,6 +113,10 @@ A version-1 profile may carry one more top-level key, `extensions`, an object:
   `<organisation>'s profile needs agent-communications <since> or later for "<name>": nothing was changed`.
 - The hint says to update first, then run `org update` again. It names the update command through the handoff and
   locator, never a binary in a string.
+- What the same call already wrote at once is not undone, and the message says so rather than "nothing was changed":
+  `--for-other-addresses off` is written before the profile is read, and a tightening before it is planned (X6), so
+  such a refusal ends `…: for other addresses was turned off; nothing else was changed` (or `what only tightens was
+  applied`). Every refusal after them that would say "nothing was changed" says it the same way.
 - This is a refusal of that one command. No other tool is stopped (U1).
 
 **`version` greater than 1:** from 0.21 this is refused with the same "update first" message, no longer zod's
