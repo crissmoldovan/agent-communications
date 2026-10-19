@@ -1,0 +1,612 @@
+{
+  "notice": "Each case edits the synthetic report in metrics-v1.json and must be refused with its code. None is quality evidence.",
+  "cases": [
+    {
+      "name": "message-text-in-a-token-field",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/languages/0/language",
+          "value": "Lunch on Friday? Reply to sender@example.test"
+        }
+      ]
+    },
+    {
+      "name": "subject-field",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/subject",
+          "value": "Quarterly numbers"
+        }
+      ]
+    },
+    {
+      "name": "rule-question-field",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/question",
+          "value": "Is this an invoice?"
+        }
+      ]
+    },
+    {
+      "name": "raw-labels-field",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/labels",
+          "value": []
+        }
+      ]
+    },
+    {
+      "name": "slack-handle",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/node",
+          "value": "<@U012AB3CD>"
+        }
+      ]
+    },
+    {
+      "name": "address",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/node",
+          "value": "owner@example.test"
+        }
+      ]
+    },
+    {
+      "name": "event-id",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runtime/laya",
+          "value": "0123456789abcdef0123456789abcdef"
+        }
+      ]
+    },
+    {
+      "name": "path",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/node",
+          "value": "/srv/laya-corpus/batch-1"
+        }
+      ]
+    },
+    {
+      "name": "secret-prefix",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/referenceEnvironment/torch",
+          "value": "xoxb-1234567890"
+        }
+      ]
+    },
+    {
+      "name": "secret-mixed-case",
+      "code": "QUALITY_REPORT_RAW",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/referenceEnvironment/numpy",
+          "value": "3aB9xQ7mP2kL8vN4cR6t"
+        }
+      ]
+    },
+    {
+      "name": "per-item-scores",
+      "code": "QUALITY_REPORT_PER_ITEM",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/expectedCalibrationError",
+          "value": [0.12, 0.87, 0.4]
+        }
+      ]
+    },
+    {
+      "name": "unknown-field",
+      "code": "QUALITY_REPORT_SHAPE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/extra",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "missing-field",
+      "code": "QUALITY_REPORT_SHAPE",
+      "edits": [
+        {
+          "op": "remove",
+          "pointer": "/architectures/0/templates/1/channels/0/auroc"
+        }
+      ]
+    },
+    {
+      "name": "schema-version",
+      "code": "QUALITY_REPORT_SHAPE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/schemaVersion",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "name": "duplicate-template",
+      "code": "QUALITY_REPORT_DUPLICATE",
+      "edits": [
+        {
+          "op": "duplicate",
+          "pointer": "/architectures/0/templates/1",
+          "into": "/architectures/0/templates"
+        }
+      ]
+    },
+    {
+      "name": "duplicate-channel",
+      "code": "QUALITY_REPORT_DUPLICATE",
+      "edits": [
+        {
+          "op": "duplicate",
+          "pointer": "/architectures/0/templates/1/channels/0",
+          "into": "/architectures/0/templates/1/channels"
+        }
+      ]
+    },
+    {
+      "name": "duplicate-architecture",
+      "code": "QUALITY_REPORT_DUPLICATE",
+      "edits": [
+        {
+          "op": "duplicate",
+          "pointer": "/architectures/0",
+          "into": "/architectures"
+        }
+      ]
+    },
+    {
+      "name": "one-channel-only",
+      "code": "QUALITY_REPORT_COVERAGE",
+      "edits": [
+        {
+          "op": "remove",
+          "pointer": "/architectures/0/templates/1/channels/1"
+        }
+      ]
+    },
+    {
+      "name": "missing-template",
+      "code": "QUALITY_REPORT_COVERAGE",
+      "edits": [
+        {
+          "op": "remove",
+          "pointer": "/architectures/0/templates/0"
+        }
+      ]
+    },
+    {
+      "name": "manifest-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/manifestSha256",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "runtime-lock-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runtimeLockSha256",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "platform-file-list-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/platformFileListDigest",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "runtime-version",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runtime/laya",
+          "value": "0.1.3"
+        }
+      ]
+    },
+    {
+      "name": "runner-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runnerSha256",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "template-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/templateSha256",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "subject-digest",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/subjectDigest",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "x64-claimed-with-arm64-evidence",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/architecture",
+          "value": "x64"
+        }
+      ]
+    },
+    {
+      "name": "reference-revision",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/revision",
+          "value": "7b928d828b7b0e022f929d9bd2e44165aa270148"
+        }
+      ]
+    },
+    {
+      "name": "reference-invocation",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/invocation",
+          "value": "router-predict-v1"
+        }
+      ]
+    },
+    {
+      "name": "reference-device",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/device",
+          "value": "cuda"
+        }
+      ]
+    },
+    {
+      "name": "reference-tokenizer",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/files/tokenizer",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "reference-weights",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/files/weights",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "reference-encoder-config",
+      "code": "QUALITY_REPORT_REFERENCE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/reference/files/encoderConfig",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "model-card-calibration",
+      "code": "QUALITY_REPORT_CALIBRATION",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/calibration",
+          "value": "model-card"
+        }
+      ]
+    },
+    {
+      "name": "refitted-temperatures",
+      "code": "QUALITY_REPORT_CALIBRATION",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/calibration",
+          "value": "refitted-temperatures"
+        }
+      ]
+    },
+    {
+      "name": "199-pairs-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/pairs",
+          "value": 199
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/answered",
+          "value": 199
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/refused/tokenLimit",
+          "value": 0
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/languages",
+          "value": [
+            {
+              "language": "en",
+              "pairs": 199,
+              "answered": 199,
+              "refusedForLength": 0
+            }
+          ]
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/reference/answered",
+          "value": 199
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/warmRequests",
+          "value": 198
+        }
+      ]
+    },
+    {
+      "name": "under-30-percent-positive-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/positiveShare",
+          "value": 0.295
+        }
+      ]
+    },
+    {
+      "name": "ece-over-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/expectedCalibrationError",
+          "value": 0.11
+        }
+      ]
+    },
+    {
+      "name": "brier-over-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/brierScore",
+          "value": 0.21
+        }
+      ]
+    },
+    {
+      "name": "auroc-under-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/auroc",
+          "value": 0.79
+        }
+      ]
+    },
+    {
+      "name": "reference-delta-over-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/reference/maxProbabilityDelta",
+          "value": 0.0011
+        }
+      ]
+    },
+    {
+      "name": "input-token-mismatch-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/reference/inputTokenMismatches",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "warm-p95-over-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/warmLatencyP95Ms",
+          "value": 2001
+        }
+      ]
+    },
+    {
+      "name": "peak-memory-over-threshold-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/peakWorkerBytes",
+          "value": 3000000001
+        }
+      ]
+    },
+    {
+      "name": "malformed-answer-marked-passing",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/answered",
+          "value": 219
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/refused/malformed",
+          "value": 1
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/languages/0/answered",
+          "value": 219
+        },
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/1/reference/answered",
+          "value": 219
+        }
+      ]
+    },
+    {
+      "name": "template-passing-with-failing-channel",
+      "code": "QUALITY_REPORT_VERDICT",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/0/passed",
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "counts-do-not-add-up",
+      "code": "QUALITY_REPORT_COUNTS",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/architectures/0/templates/1/channels/0/answered",
+          "value": 235
+        }
+      ]
+    },
+    {
+      "name": "fixture-report-as-release-evidence",
+      "code": "QUALITY_REPORT_FIXTURE",
+      "mode": "release",
+      "edits": []
+    },
+    {
+      "name": "worker-source-changed",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [],
+      "files": {
+        "packages/events-daemon/src/runtime/laya/worker-runtime.ts": "export function answer(): void {\n  // changed\n}\n"
+      }
+    },
+    {
+      "name": "subject-includes-the-report",
+      "code": "QUALITY_SUBJECT_INCLUDES_REPORT",
+      "edits": [],
+      "files": {
+        "packages/events-daemon/src/runtime/laya/worker-main.ts": "import report from \"../../../../events-laya-runtime/gate/laya-en-onnx-68f27dfe.json\" with { type: \"json\" };\n\nvoid report;\n"
+      }
+    },
+    {
+      "name": "reference-record-absent",
+      "code": "QUALITY_REFERENCE_RECORD",
+      "edits": [],
+      "record": null
+    },
+    {
+      "name": "reference-record-mutable",
+      "code": "QUALITY_REFERENCE_RECORD",
+      "edits": [],
+      "record": {
+        "from": "- immutable: `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`",
+        "to": "- immutable: `main`"
+      }
+    },
+    {
+      "name": "reference-record-input-missing",
+      "code": "QUALITY_REFERENCE_RECORD",
+      "edits": [],
+      "record": {
+        "from": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979",
+        "to": "not-recorded"
+      }
+    }
+  ]
+}

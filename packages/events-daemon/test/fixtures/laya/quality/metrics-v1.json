@@ -1,0 +1,319 @@
+{
+  "notice": "Synthetic vectors and a synthetic report for the gate arithmetic and the report checks. They are not Laya quality evidence and are refused as release evidence.",
+  "vectors": [
+    {
+      "name": "one-per-bin",
+      "probabilities": [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95],
+      "labels": [0, 0, 0, 1, 0, 1, 1, 1, 1, 1],
+      "expected": {
+        "expectedCalibrationError": 0.28,
+        "brierScore": 0.1125,
+        "auroc": 0.9583333333333334,
+        "positiveShare": 0.6
+      }
+    },
+    {
+      "name": "bin-edges",
+      "probabilities": [0, 0.1, 0.2, 0.3, 0.5, 0.9, 1, 1],
+      "labels": [0, 0, 1, 0, 1, 1, 1, 0],
+      "expected": {
+        "expectedCalibrationError": 0.325,
+        "brierScore": 0.25,
+        "auroc": 0.71875,
+        "positiveShare": 0.5
+      }
+    },
+    {
+      "name": "shared-bins",
+      "probabilities": [0.12, 0.18, 0.14, 0.81, 0.86, 0.89, 0.47, 0.52],
+      "labels": [0, 1, 0, 1, 1, 0, 1, 0],
+      "expected": {
+        "expectedCalibrationError": 0.27125,
+        "brierScore": 0.2631875,
+        "auroc": 0.625,
+        "positiveShare": 0.5
+      }
+    },
+    {
+      "name": "all-tied",
+      "probabilities": [0.5, 0.5, 0.5, 0.5],
+      "labels": [1, 0, 1, 0],
+      "expected": {
+        "expectedCalibrationError": 0,
+        "brierScore": 0.25,
+        "auroc": 0.5,
+        "positiveShare": 0.5
+      }
+    },
+    {
+      "name": "one-class",
+      "probabilities": [0.9, 0.8],
+      "labels": [1, 1],
+      "expected": {
+        "expectedCalibrationError": 0.14999999999999997,
+        "brierScore": 0.024999999999999988,
+        "auroc": null,
+        "positiveShare": 1
+      }
+    }
+  ],
+  "latency": [
+    {
+      "name": "twenty-requests",
+      "valuesMs": [
+        100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000
+      ],
+      "expectedP95Ms": 1900
+    },
+    {
+      "name": "one-request",
+      "valuesMs": [5],
+      "expectedP95Ms": 5
+    },
+    {
+      "name": "unsorted",
+      "valuesMs": [30, 10, 20],
+      "expectedP95Ms": 30
+    }
+  ],
+  "memory": [
+    {
+      "name": "three-samples",
+      "samples": [100, 300, 200],
+      "expectedPeak": 300
+    }
+  ],
+  "referenceDelta": [
+    {
+      "name": "rounded-pairs",
+      "worker": [0.5, 0.25, 0.9],
+      "reference": [0.5004, 0.2499, 0.8995],
+      "expected": 0.000500000000000056
+    }
+  ],
+  "candidateFiles": {
+    "packages/events-daemon/package.json": "{ \"name\": \"synthetic-candidate\", \"private\": true }\n",
+    "packages/events-daemon/src/runtime/judge-coordinator.ts": "// Synthetic stand-in for the envelope source; not daemon code.\n",
+    "packages/events-daemon/src/runtime/laya/worker-main.ts": "import { answer } from \"./worker-runtime.ts\";\n\nanswer();\n",
+    "packages/events-daemon/src/runtime/laya/worker-runtime.ts": "export function answer(): void {}\n",
+    "packages/events-daemon/src/runtime/laya/worker-supervisor.ts": "// Synthetic stand-in for the supervisor source; not daemon code.\n",
+    "packages/events-daemon/tsdown.config.ts": "// Synthetic stand-in for a build input.\n",
+    "scripts/run-laya-quality-gate.mjs": "// Synthetic stand-in for the runner; its digest is the fixture report runnerSha256.\n"
+  },
+  "report": {
+    "schemaVersion": 1,
+    "manifestId": "laya-en-onnx-68f27dfe",
+    "manifestSha256": "af8c09a378164e5ae7b2cea5a1f59302dcf07553d2ff72473e9da4d6c5169ea3",
+    "runtimeLockSha256": "1fcd8113d4b233ea9b047e00ee7df751855f20cf7b215a62e2036e994d372946",
+    "runtime": {
+      "laya": "0.1.2",
+      "onnxruntimeNode": "1.30.0",
+      "tokenizers": "0.2.0"
+    },
+    "runnerSha256": "43ed8f7f706c6ffaa95597283b1626872a4be043b7580bd1ae504dd88c06815f",
+    "reference": {
+      "record": "hf-laya-python-reference",
+      "revision": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851",
+      "invocation": "system-one-cpu-v1",
+      "device": "cpu",
+      "files": {
+        "api": "be3b46819c9999c3ef88e0f2ecf6d3ab1cdfed1d9a8b466fc89811e34d44031b",
+        "common": "8d83611d480c971d640a7b7d3aa2f2219c5e8455e9cc2329fd073681bd8be23e",
+        "config": "ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd",
+        "encoderConfig": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979",
+        "tokenizer": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30",
+        "tokenizerConfig": "50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12",
+        "weights": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c"
+      }
+    },
+    "corpus": {
+      "kind": "synthetic-fixture",
+      "consent": "written-attested",
+      "retention": "encrypted-external",
+      "handling": "aggregate-only"
+    },
+    "calibration": "bundle-temperatures",
+    "architectures": [
+      {
+        "architecture": "arm64",
+        "platformFileListDigest": "66fc435dd8e2c6ffe25ae24cbccf7012d76d625894e74dbd2f2d7eeba88c2202",
+        "subjectDigest": "9bccec13c074d7845effabe338103f6398d46dd625e742e652c78740ec73a8e8",
+        "node": "0.0.0-fixture",
+        "referenceEnvironment": {
+          "python": "0.0.0-fixture",
+          "torch": "0.0.0-fixture",
+          "transformers": "0.0.0-fixture",
+          "numpy": "0.0.0-fixture"
+        },
+        "templates": [
+          {
+            "templateId": "laya-choice2-v1",
+            "templateSha256": "36b7c018309b476ceb3afc3381dd5514381b36076ec1f656260015ed42c9d01d",
+            "channels": [
+              {
+                "channel": "gmail",
+                "pairs": 240,
+                "answered": 0,
+                "refused": {
+                  "crashed": 0,
+                  "malformed": 0,
+                  "other": 0,
+                  "templateBlocked": 236,
+                  "timeout": 0,
+                  "tokenLimit": 4
+                },
+                "positiveShare": null,
+                "languages": [
+                  {
+                    "language": "en",
+                    "pairs": 230,
+                    "answered": 0,
+                    "refusedForLength": 4
+                  },
+                  {
+                    "language": "und",
+                    "pairs": 10,
+                    "answered": 0,
+                    "refusedForLength": 0
+                  }
+                ],
+                "expectedCalibrationError": null,
+                "brierScore": null,
+                "auroc": null,
+                "reference": {
+                  "answered": 0,
+                  "refused": 0,
+                  "inputTokenMismatches": 0,
+                  "maxProbabilityDelta": null
+                },
+                "warmLatencyP95Ms": null,
+                "warmRequests": 0,
+                "peakWorkerBytes": 2000000000,
+                "passed": false
+              },
+              {
+                "channel": "slack",
+                "pairs": 220,
+                "answered": 0,
+                "refused": {
+                  "crashed": 0,
+                  "malformed": 0,
+                  "other": 0,
+                  "templateBlocked": 220,
+                  "timeout": 0,
+                  "tokenLimit": 0
+                },
+                "positiveShare": null,
+                "languages": [
+                  {
+                    "language": "en",
+                    "pairs": 220,
+                    "answered": 0,
+                    "refusedForLength": 0
+                  }
+                ],
+                "expectedCalibrationError": null,
+                "brierScore": null,
+                "auroc": null,
+                "reference": {
+                  "answered": 0,
+                  "refused": 0,
+                  "inputTokenMismatches": 0,
+                  "maxProbabilityDelta": null
+                },
+                "warmLatencyP95Ms": null,
+                "warmRequests": 0,
+                "peakWorkerBytes": 2000000000,
+                "passed": false
+              }
+            ],
+            "passed": false
+          },
+          {
+            "templateId": "laya-noul-v1",
+            "templateSha256": "fc39610ab838a51b9f740928a280cb7b6a12c85d11f98a4436a3862ec52978fc",
+            "channels": [
+              {
+                "channel": "gmail",
+                "pairs": 240,
+                "answered": 236,
+                "refused": {
+                  "crashed": 0,
+                  "malformed": 0,
+                  "other": 0,
+                  "templateBlocked": 0,
+                  "timeout": 0,
+                  "tokenLimit": 4
+                },
+                "positiveShare": 0.4,
+                "languages": [
+                  {
+                    "language": "en",
+                    "pairs": 230,
+                    "answered": 226,
+                    "refusedForLength": 4
+                  },
+                  {
+                    "language": "und",
+                    "pairs": 10,
+                    "answered": 10,
+                    "refusedForLength": 0
+                  }
+                ],
+                "expectedCalibrationError": 0.05,
+                "brierScore": 0.15,
+                "auroc": 0.85,
+                "reference": {
+                  "answered": 236,
+                  "refused": 0,
+                  "inputTokenMismatches": 0,
+                  "maxProbabilityDelta": 0.0005
+                },
+                "warmLatencyP95Ms": 150,
+                "warmRequests": 235,
+                "peakWorkerBytes": 2100000000,
+                "passed": true
+              },
+              {
+                "channel": "slack",
+                "pairs": 220,
+                "answered": 220,
+                "refused": {
+                  "crashed": 0,
+                  "malformed": 0,
+                  "other": 0,
+                  "templateBlocked": 0,
+                  "timeout": 0,
+                  "tokenLimit": 0
+                },
+                "positiveShare": 0.35,
+                "languages": [
+                  {
+                    "language": "en",
+                    "pairs": 220,
+                    "answered": 220,
+                    "refusedForLength": 0
+                  }
+                ],
+                "expectedCalibrationError": 0.07,
+                "brierScore": 0.18,
+                "auroc": 0.82,
+                "reference": {
+                  "answered": 220,
+                  "refused": 0,
+                  "inputTokenMismatches": 0,
+                  "maxProbabilityDelta": 0.0004
+                },
+                "warmLatencyP95Ms": 140,
+                "warmRequests": 219,
+                "peakWorkerBytes": 2100000000,
+                "passed": true
+              }
+            ],
+            "passed": true
+          }
+        ]
+      }
+    ]
+  }
+}

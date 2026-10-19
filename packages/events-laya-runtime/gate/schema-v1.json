@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentcomms:schema:laya-quality-gate:v1",
+  "title": "Laya quality gate aggregate, version 1",
+  "description": "The only artifact D11's labelled quality gate writes: aggregates per architecture, template and channel, bound to the candidate and the pinned Python reference. It holds no message, subject, address, handle, event id, rule question, label, per-item value, path or secret. scripts/verify-laya-quality-gate.mjs enforces this schema, the privacy scan, the candidate binding and the verdicts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestId",
+    "manifestSha256",
+    "runtimeLockSha256",
+    "runtime",
+    "runnerSha256",
+    "reference",
+    "corpus",
+    "calibration",
+    "architectures"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "runtimeLockSha256": { "$ref": "#/$defs/sha256" },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["laya", "onnxruntimeNode", "tokenizers"],
+      "properties": {
+        "laya": { "$ref": "#/$defs/version" },
+        "onnxruntimeNode": { "$ref": "#/$defs/version" },
+        "tokenizers": { "$ref": "#/$defs/version" }
+      }
+    },
+    "runnerSha256": { "$ref": "#/$defs/sha256" },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record", "revision", "invocation", "device", "files"],
+      "properties": {
+        "record": { "const": "hf-laya-python-reference" },
+        "revision": { "const": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851" },
+        "invocation": { "const": "system-one-cpu-v1" },
+        "device": { "const": "cpu" },
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["api", "common", "config", "encoderConfig", "tokenizer", "tokenizerConfig", "weights"],
+          "properties": {
+            "api": { "const": "be3b46819c9999c3ef88e0f2ecf6d3ab1cdfed1d9a8b466fc89811e34d44031b" },
+            "common": { "const": "8d83611d480c971d640a7b7d3aa2f2219c5e8455e9cc2329fd073681bd8be23e" },
+            "config": { "const": "ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd" },
+            "encoderConfig": { "const": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979" },
+            "tokenizer": { "const": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30" },
+            "tokenizerConfig": { "const": "50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12" },
+            "weights": { "const": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c" }
+          }
+        }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "consent", "retention", "handling"],
+      "properties": {
+        "kind": { "enum": ["consented-external", "synthetic-fixture"] },
+        "consent": { "const": "written-attested" },
+        "retention": { "const": "encrypted-external" },
+        "handling": { "const": "aggregate-only" }
+      }
+    },
+    "calibration": { "const": "bundle-temperatures" },
+    "architectures": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/architecture" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "version": { "type": "string", "pattern": "^[0-9][0-9A-Za-z.+-]{0,31}$" },
+    "count": { "type": "integer", "minimum": 0 },
+    "share": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "measure": { "type": ["number", "null"], "minimum": 0 },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "architecture",
+        "platformFileListDigest",
+        "subjectDigest",
+        "node",
+        "referenceEnvironment",
+        "templates"
+      ],
+      "properties": {
+        "architecture": { "enum": ["arm64", "x64"] },
+        "platformFileListDigest": { "$ref": "#/$defs/sha256" },
+        "subjectDigest": { "$ref": "#/$defs/sha256" },
+        "node": { "$ref": "#/$defs/version" },
+        "referenceEnvironment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["python", "torch", "transformers", "numpy"],
+          "properties": {
+            "python": { "$ref": "#/$defs/version" },
+            "torch": { "$ref": "#/$defs/version" },
+            "transformers": { "$ref": "#/$defs/version" },
+            "numpy": { "$ref": "#/$defs/version" }
+          }
+        },
+        "templates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/template" }
+        }
+      }
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["templateId", "templateSha256", "channels", "passed"],
+      "properties": {
+        "templateId": { "type": "string", "pattern": "^laya-[a-z0-9-]{1,32}$" },
+        "templateSha256": { "$ref": "#/$defs/sha256" },
+        "channels": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/channel" },
+                { "type": "object", "properties": { "channel": { "const": "gmail" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/channel" },
+                { "type": "object", "properties": { "channel": { "const": "slack" } } }
+              ]
+            }
+          ],
+          "items": false
+        },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "pairs",
+        "answered",
+        "refused",
+        "positiveShare",
+        "languages",
+        "expectedCalibrationError",
+        "brierScore",
+        "auroc",
+        "reference",
+        "warmLatencyP95Ms",
+        "warmRequests",
+        "peakWorkerBytes",
+        "passed"
+      ],
+      "properties": {
+        "channel": { "enum": ["gmail", "slack"] },
+        "pairs": { "$ref": "#/$defs/count" },
+        "answered": { "$ref": "#/$defs/count" },
+        "refused": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["crashed", "malformed", "other", "templateBlocked", "timeout", "tokenLimit"],
+          "properties": {
+            "crashed": { "$ref": "#/$defs/count" },
+            "malformed": { "$ref": "#/$defs/count" },
+            "other": { "$ref": "#/$defs/count" },
+            "templateBlocked": { "$ref": "#/$defs/count" },
+            "timeout": { "$ref": "#/$defs/count" },
+            "tokenLimit": { "$ref": "#/$defs/count" }
+          }
+        },
+        "positiveShare": { "$ref": "#/$defs/share" },
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["language", "pairs", "answered", "refusedForLength"],
+            "properties": {
+              "language": { "type": "string", "pattern": "^(?:[a-z]{2,3}|und)$" },
+              "pairs": { "$ref": "#/$defs/count" },
+              "answered": { "$ref": "#/$defs/count" },
+              "refusedForLength": { "$ref": "#/$defs/count" }
+            }
+          }
+        },
+        "expectedCalibrationError": { "$ref": "#/$defs/share" },
+        "brierScore": { "$ref": "#/$defs/share" },
+        "auroc": { "$ref": "#/$defs/share" },
+        "reference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["answered", "refused", "inputTokenMismatches", "maxProbabilityDelta"],
+          "properties": {
+            "answered": { "$ref": "#/$defs/count" },
+            "refused": { "$ref": "#/$defs/count" },
+            "inputTokenMismatches": { "$ref": "#/$defs/count" },
+            "maxProbabilityDelta": { "$ref": "#/$defs/share" }
+          }
+        },
+        "warmLatencyP95Ms": { "$ref": "#/$defs/measure" },
+        "warmRequests": { "$ref": "#/$defs/count" },
+        "peakWorkerBytes": { "anyOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] },
+        "passed": { "type": "boolean" }
+      }
+    }
+  }
+}
