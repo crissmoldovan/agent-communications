@@ -478,7 +478,7 @@ test('an entry gone from the profile is dropped from the record; a changed one i
   const changed = await update(m);
   assert.ok(changed.prepared, 'a changed entry is a changed profile');
   assert.equal(
-    (await record(m))?.ignoredExtensions?.['future-thing']?.sha256,
+    ((await record(m))?.ignoredExtensions as Record<string, { sha256?: string }> | undefined)?.['future-thing']?.sha256,
     canonicalSha({ required: false, since: '99.0.0', v: 2 }),
   );
   writeProfile(m, profile());
@@ -689,4 +689,170 @@ test('a tightening extension applies at once beside a change that waits, and the
   assert.equal(second.status, 'applied');
   assert.equal((await record(m))?.label, 'Acme Renamed');
   assert.ok((second as { result: OrgChangeResult }).result.applied.some((line) => /^extension app-limit: /.test(line)));
+});
+
+// ── X4, held to what the record holds: a value it never held is never a repair ───────────────────────────────────────
+
+/** The configuration file as a hand, or another release, leaves it. */
+function editRecord(m: Machine, change: (record: Record<string, unknown>) => void): void {
+  const raw = JSON.parse(readFileSync(m.configPath, 'utf8')) as { organisations: { acme: Record<string, unknown> } };
+  change(raw.organisations.acme);
+  writeFileSync(m.configPath, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
+/** The first call of an update under `registry`, as an agent makes it. */
+const askUpdate = (m: Machine, registry: Registry) =>
+  gatedChange(m.core, orgUpdateChange(m.core, { organisation: 'acme' }, options(m, registry)), {
+    channel: 'core',
+    surface: 'mcp',
+  });
+
+test('the repair trap, unlisted: an entry the record never held is a change its classifier judges, though nothing lists it skipped', async () => {
+  // X4 rested on `ignoredExtensions` alone. With the entry not listed — a hand edit, or a later release that kept the
+  // list otherwise and was rolled back — the record held no value, the difference went to `changes`, and the same bytes
+  // moved it to `repairs`: a loosening applied at once, unasked, as "repairs: extension …".
+  for (const effect of ['loosens', 'who-acts'] as const) {
+    const m = machine();
+    writeProfile(m, profile({ extensions: { 'app-limit': { required: false, since: '0.21.0', limit: 5 } } }));
+    await add(m, registryOf());
+    editRecord(m, (rec) => {
+      delete rec.ignoredExtensions;
+    });
+    const before = readFileSync(m.configPath);
+    const first = await askUpdate(m, registryOf(known('app-limit', { classify: () => effect })));
+    assert.equal(first.status, 'approval-required', `${effect}: a value the record never held was applied as a repair`);
+    assert.deepEqual(readFileSync(m.configPath), before, `${effect}: something was applied before the yes`);
+    const { preview } = (first as { prepared: PreparedChange }).prepared;
+    assert.match(preview, /extension app-limit: none → limit 5 \((loosens|changes who acts)\)/);
+    assert.doesNotMatch(preview, /repairs: .*app-limit/);
+  }
+  // A tightening applies at once, and is reported as done, not as a repair.
+  const m = machine();
+  writeProfile(m, profile({ extensions: { 'app-limit': { required: false, since: '0.21.0', limit: 2 } } }));
+  await add(m, registryOf());
+  editRecord(m, (rec) => {
+    delete rec.ignoredExtensions;
+  });
+  const { prepared, result } = await update(m, registryOf(known('app-limit', { classify: () => 'tightens' })));
+  assert.equal(prepared, null);
+  assert.ok(
+    result.applied.some((line) => /^extension app-limit: none → limit 2 \(tightens\)/.test(line)),
+    JSON.stringify(result.applied),
+  );
+  assert.ok(!result.applied.some((line) => /^repairs: |were changed here/.test(line) && /app-limit/.test(line)));
+  assert.deepEqual(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, {
+    'app-limit': { limit: 2 },
+  });
+});
+
+test('the repair trap, withdrawn: a value the profile no longer names is taken away only as its classifier allows', async () => {
+  // N+1 applies an entry; rolled back to N, which does not know it, a new profile without it is approved and N keeps
+  // the record's value as it found it; N+1 again, with those same bytes, took the value away as drift — unasked.
+  for (const [effect, asks] of [
+    ['loosens', true],
+    ['who-acts', true],
+    ['tightens', false],
+  ] as const) {
+    const m = machine();
+    const later = registryOf(known('app-limit', { classify: () => effect }));
+    writeProfile(m, profile({ extensions: { 'app-limit': { required: false, since: '0.21.0', limit: 5 } } }));
+    await add(m, later);
+    assert.deepEqual(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, {
+      'app-limit': { limit: 5 },
+    });
+    // Release N: the profile without the entry, approved; the value N cannot see stays in the record.
+    writeProfile(m, profile());
+    await update(m, registryOf());
+    assert.deepEqual(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, {
+      'app-limit': { limit: 5 },
+    });
+    const before = readFileSync(m.configPath);
+    // Release N+1 again, the same bytes from the same place.
+    const first = await askUpdate(m, later);
+    if (asks) {
+      assert.equal(first.status, 'approval-required', `${effect}: taking the value away was applied as a repair`);
+      assert.deepEqual(readFileSync(m.configPath), before, `${effect}: something was applied before the yes`);
+      const { preview } = (first as { prepared: PreparedChange }).prepared;
+      assert.match(preview, /extension app-limit: limit 5 → none \((loosens|changes who acts)\)/);
+      assert.doesNotMatch(preview, /repairs: .*app-limit/);
+    } else {
+      assert.equal(first.status, 'applied', 'taking away what only tightens asked for an approval');
+      const result = (first as { result: OrgChangeResult }).result;
+      assert.ok(
+        result.applied.some((line) => /^extension app-limit: limit 5 → none \(tightens\)/.test(line)),
+        JSON.stringify(result.applied),
+      );
+      assert.deepEqual(((await record(m)) as { extensionsApplied?: unknown })?.extensionsApplied, {});
+    }
+  }
+});
+
+test('the repair trap, reshaped: a value the record holds in another form is judged by its classifier, not repaired', async () => {
+  // A later release reads the same entry with a default its schema adds: the record holds the value as the earlier
+  // release left it, and the difference is no hand's — nobody approved the new form, so it is not drift.
+  const m = machine();
+  writeProfile(m, profile({ extensions: { 'app-limit': { required: false, since: '0.21.0', limit: 5 } } }));
+  await add(m, registryOf(known('app-limit')));
+  const reshaped = known('app-limit', {
+    schema: z.strictObject({ limit: z.number().int().min(0), scope: z.string().default('everything') }),
+    classify: () => 'loosens',
+    describe: (value: unknown) =>
+      value === undefined
+        ? 'none'
+        : `limit ${String((value as { limit?: unknown }).limit)}, ${String((value as { scope?: unknown }).scope ?? 'no scope')}`,
+  });
+  const before = readFileSync(m.configPath);
+  const first = await askUpdate(m, registryOf(reshaped));
+  assert.equal(first.status, 'approval-required', 'a value in a form nobody approved was applied as a repair');
+  assert.deepEqual(readFileSync(m.configPath), before);
+  assert.doesNotMatch((first as { prepared: PreparedChange }).prepared.preview, /repairs: .*app-limit/);
+});
+
+test('a malformed list of skipped entries leaves the configuration readable, is noted by doctor, and applies nothing as a repair', async () => {
+  // 0.21.0 is the first release to read `ignoredExtensions`, so whatever shape a later release or a hand gives it
+  // becomes a contract: read strictly, one malformed entry made the whole config.json unreadable.
+  const shapes: unknown[] = [
+    { 'app-limit': { since: 1, sha256: 'x' } },
+    { 'app-limit': 'skipped', other: { since: '0.22.0', sha256: 'y', more: true } },
+    'not a list',
+    [],
+  ];
+  for (const shape of shapes) {
+    const m = machine();
+    writeProfile(m, profile({ extensions: { 'app-limit': { required: false, since: '0.21.0', limit: 5 } } }));
+    await add(m, registryOf());
+    editRecord(m, (rec) => {
+      rec.ignoredExtensions = shape;
+    });
+    const where = JSON.stringify(shape);
+    const config = await m.core.config.load();
+    assert.ok((config as ConfigV2).organisations?.acme, `${where}: the configuration could not be read`);
+    const shown = await orgShow(m.core, 'acme', 'darwin');
+    assert.equal(shown.organisation, 'acme', where);
+    const report = await doctor(m.core, m.env, { keyring: null, platform: 'darwin' });
+    const noted = report.checks.find(
+      (check) => check.name === 'organisation acme' && /cannot read, so that part is ignored/.test(check.detail),
+    );
+    assert.ok(noted, `${where}: doctor said nothing of it`);
+    assert.equal(noted.ok, true);
+    assert.equal(noted.warn, true);
+    assert.match(noted.fix ?? '', /org update acme/);
+
+    // A release that knows the entry, as loosening: the list lost, it is still never a repair.
+    const before = readFileSync(m.configPath);
+    const first = await askUpdate(m, registryOf(known('app-limit', { classify: () => 'loosens' })));
+    assert.equal(first.status, 'approval-required', `${where}: the entry was applied as a repair`);
+    assert.deepEqual(readFileSync(m.configPath), before, `${where}: something was applied before the yes`);
+
+    // This release, the same bytes: the list is written again from the profile, and doctor is quiet.
+    const again = await update(m, registryOf());
+    assert.equal(again.prepared, null, `${where}: writing the list again asked somebody`);
+    assert.deepEqual(
+      (await record(m))?.ignoredExtensions,
+      { 'app-limit': { since: '0.21.0', sha256: canonicalSha({ required: false, since: '0.21.0', limit: 5 }) } },
+      where,
+    );
+    const after = await doctor(m.core, m.env, { keyring: null, platform: 'darwin' });
+    assert.ok(!after.checks.some((check) => /cannot read, so that part is ignored/.test(check.detail)), where);
+  }
 });

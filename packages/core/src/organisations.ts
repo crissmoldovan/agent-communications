@@ -8,6 +8,7 @@ import type {
   ClientConfig,
   Config,
   OrganisationGeneration,
+  OrganisationIgnoredExtension,
   OrganisationRecord,
   OrganisationServes,
   OrganisationSlackApp,
@@ -386,16 +387,45 @@ export function profileExtensions(
   return verdict;
 }
 
+/**
+ * An organisation record's list of skipped entries (X3), read leniently: every well-formed entry — an object with a
+ * string `since` and a string `sha256` — and whether the list held anything else. A list that is not an object at all
+ * counts as malformed, with no entries. The record is a file another release or a hand can write, and the first release
+ * to read the list must not make the whole configuration unreadable over its shape.
+ */
+export function ignoredListOf(record: OrganisationRecord | undefined): {
+  entries: Record<string, OrganisationIgnoredExtension>;
+  malformed: boolean;
+} {
+  const raw = record?.ignoredExtensions;
+  if (raw === undefined) return { entries: {}, malformed: false };
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { entries: {}, malformed: true };
+  const entries: Record<string, OrganisationIgnoredExtension> = {};
+  let malformed = false;
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const entry = value as { since?: unknown; sha256?: unknown } | null;
+    if (
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof entry.since === 'string' &&
+      typeof entry.sha256 === 'string'
+    ) {
+      entries[name] = { since: entry.since, sha256: entry.sha256 };
+    } else malformed = true;
+  }
+  return { entries, malformed };
+}
+
 /** The entries an organisation's record lists as not applied here, in name order, each with why (X3, X7). */
 export function ignoredOf(
   record: OrganisationRecord | undefined,
   registry: ExtensionRegistry = KNOWN_EXTENSIONS,
 ): IgnoredExtension[] {
-  const listed = record?.ignoredExtensions ?? {};
+  const listed = ignoredListOf(record).entries;
   return Object.keys(listed)
     .sort()
     .map((name) => {
-      const since = typeof listed[name]?.since === 'string' ? listed[name].since : '';
+      const since = listed[name]?.since ?? '';
       // A record is a file an older release or a hand can write: what it says is shown as untrusted text.
       return {
         name: shownText(name, 40),

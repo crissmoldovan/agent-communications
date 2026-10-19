@@ -97,6 +97,11 @@ A version-1 profile may carry one more top-level key, `extensions`, an object:
 - It is not applied. The rest of the profile is.
 - The record keeps it under `ignoredExtensions` as `{ "<name>": { "since": "<since>", "sha256": "<hex>" } }`. The
   SHA-256 is computed over the entry's canonical JSON: keys sorted, no whitespace.
+- That list is read leniently, because 0.21.0 is the first release to read it and its shape would otherwise be a
+  contract for ever: an entry that is not `{ since: string, sha256: string }`, or a list that is not an object, never
+  makes `config.json` unreadable. It is ignored, kept in the file as it is (an unrelated write never drops it), and
+  `doctor` notes it on the organisation's row as something to look at, with `org update` as the fix, which writes the
+  list again from the profile. Losing the list is safe only because of X4: nothing decides from it what applies.
 - The preview, the result and `org show` each say `not applied here: <name> (needs <since> or later)`.
 - When `since` is not later than the running release, the entry is one this release should know but does not, for
   example a typo or another fork. Then the words are `not applied here: <name> is not an extension this release
@@ -116,18 +121,29 @@ A version-1 profile may carry one more top-level key, `extensions`, an object:
 **The hint for any other unknown key:** it now says that new fields go under `extensions`, and to ask the
 organisation for its current profile.
 
-### X4. A skipped entry is never applied as a repair
+### X4. A value the record does not hold is never applied as a repair
 
 - When a later release understands an entry the record lists under `ignoredExtensions`, applying it is a **change**
   and never drift. This holds even when the profile's bytes and source are unchanged.
+- **The list is not what decides** (amended in review, 2026-10-19). Nothing here can tell an extension's approved value
+  from one no release ever showed anybody, so on `org update` *every* difference between the value the record holds
+  and the value the profile gives is judged by the extension's classifier, whether or not the list names it:
+  - an entry the record holds no value for though nothing lists it as skipped — a hand edit, or a list another
+    release kept otherwise and was rolled back from;
+  - an entry the record holds in a form this release reads differently, such as a default its schema adds;
+  - a known extension the profile no longer names while the record still holds a value — what a release that did not
+    know it leaves behind when it approves a profile without it.
 - The change is classified by the extension's own classifier:
-  - a tightening applies at once;
-  - a loosening, or a change of who acts, is approved first, and the preview shows it before → after.
+  - a tightening applies at once — from the very bytes the record was approved from, or for a skipped entry unchanged
+    since it was skipped, before any preview is returned, beside a change that waits — and is reported as done;
+  - a loosening, or a change of who acts, is approved first, and the preview shows it before → after, even with the
+    same bytes from the same place.
 - `ignoredExtensions` is kept in step with the profile:
   - an entry that disappears from the profile is dropped from it;
-  - an entry whose SHA-256 changed is a changed profile, which needs approval anyway, because the bytes changed.
-- In code: the unchanged-bytes branch that moves every change into `repairs` must leave out any change that comes
-  from an entry the record lists as ignored.
+  - an entry whose SHA-256 changed is a changed profile, which needs approval anyway, because the bytes changed;
+  - an entry this release applies is dropped from it when it is applied, and one whose value the record already holds
+    is dropped at once, as bookkeeping.
+- In code: no extension's change goes to the list the unchanged-bytes branch moves into `repairs`.
 
 ### X5. The two companion files stay, frozen
 

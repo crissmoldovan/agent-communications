@@ -21,6 +21,7 @@ import { resolveName } from '../names.ts';
 import { nodeProgram } from '../node-program.ts';
 import { compareVersions } from '../npm.ts';
 import {
+  ignoredListOf,
   ignoredOf,
   notAppliedDetail,
   organisationDrift,
@@ -342,6 +343,24 @@ function organisationChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[
         detail: `${ignored.length} ${ignored.length === 1 ? 'extension' : 'extensions'} not applied here: ${ignored
           .map((entry) => notAppliedDetail(entry))
           .join('; ')}`,
+      });
+    }
+    // A list of skipped entries this release cannot read in part is read without that part: nothing applies from it,
+    // so the check is something to look at, not a failure, and `org update` writes the list again from the profile.
+    if (ignoredListOf(record).malformed) {
+      checks.push({
+        name: `organisation ${organisation}`,
+        ok: true,
+        warn: true,
+        detail:
+          'its record of the extensions not applied here holds something this release cannot read, so that part is ignored; no extension applies from it',
+        fix: remedy(
+          handoffSentence(
+            handoffs.core(['org', 'update', organisation]),
+            (command) => `Run ${command} to write it again from the profile.`,
+            { instead: 'Call comms_org_update from a chat to write it again from the profile.' },
+          ),
+        ),
       });
     }
   }

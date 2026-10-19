@@ -372,11 +372,16 @@ export interface OrganisationRecord {
   updates?: OrganisationUpdates | undefined;
   /**
    * The entries of the profile's `extensions` this release did not know and skipped, being optional (design 2026-10-19,
-   * X3): the release that first understands each, and the SHA-256 of the entry's canonical JSON. Kept in step with the
-   * profile, and read by a later release that understands one: applying it then is a change it classifies and, unless
-   * it tightens, approved first — never a repair of drift (X4). Absent when none was skipped.
+   * X3): the release that first understands each, and the SHA-256 of the entry's canonical JSON — as
+   * `Record<string, OrganisationIgnoredExtension>`. Kept in step with the profile. Absent when none was skipped.
+   *
+   * Held as the file holds it, whatever its shape, and read only through `ignoredListOf`, which keeps the well-formed
+   * entries and names the rest: 0.21.0 is the first release to read it, so a shape a later release or a hand gave it
+   * must never make the whole configuration unreadable, nor be dropped by an unrelated write. Losing it is safe: a
+   * later release that understands an entry judges applying it by its classifier whether or not the list names it —
+   * a tightening at once, anything else approved first, never a repair of drift (X4).
    */
-  ignoredExtensions?: Record<string, OrganisationIgnoredExtension> | undefined;
+  ignoredExtensions?: unknown;
 }
 
 /** One skipped extension, as the record keeps it (design 2026-10-19, X3). */
@@ -686,7 +691,8 @@ const organisationRecordSchema = z.looseObject({
   updates: z
     .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
     .optional(),
-  ignoredExtensions: z.record(z.string(), z.looseObject({ since: z.string(), sha256: z.string() })).optional(),
+  // Any shape: read through `ignoredListOf`, so one malformed entry never makes config.json unreadable (X3).
+  ignoredExtensions: z.unknown().optional(),
 });
 
 const formerNameSchema = z.looseObject({ name: nameSchema, id: z.string().min(1) });

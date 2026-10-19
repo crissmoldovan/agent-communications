@@ -37,6 +37,7 @@ import {
   type GenerationState,
   generationState,
   type IgnoredExtension,
+  ignoredListOf,
   ignoredOf,
   KNOWN_EXTENSIONS,
   mailboxesOn,
@@ -983,33 +984,40 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
    * ── Extensions (design 2026-10-19) ──
    *
    * An extension this release knows is applied as its registry entry says, and a change of it is said before → after.
-   * One the record already holds is held to the profile like every other field: with the same bytes, a difference is
-   * drift, repaired below with the rest.
    *
-   * **A skipped entry is never applied as a repair (X4).** One the record lists as skipped was never approved — the
-   * release that read it did not know it — so applying it now is a change, the same bytes or not: what its classifier
-   * says a tightening applies at once, and anything else is approved first. Kept out of `changes` until the same-bytes
-   * rule below has moved what is drift into `repairs`, which would otherwise take it too.
+   * **A value the record does not hold is never applied as a repair (X4).** Drift is a record that moved from what was
+   * approved, and nothing here can tell an extension's approved value from one no release ever showed anybody: an entry
+   * the record lists as skipped, one it holds no value for though nothing lists it — a hand edit, a list another
+   * release kept otherwise — one it holds in a form this release reads differently, a schema's new default, and one the
+   * profile no longer names though the record still holds it, as a release that did not know it leaves it. So on an
+   * update every difference between what the record holds and what the profile says is judged by the extension's own
+   * classifier, the same bytes or not: a tightening applies at once, and anything else is approved first. None of it
+   * goes to `changes`, which the same-bytes rule below would move into `repairs`; an add approves everything anyway.
    */
   const { verdict, registry } = input;
   const understood = new Set(verdict.understood.map((entry) => entry.name));
-  const listedIgnored = previous?.ignoredExtensions ?? {};
-  const skippedNowKnown: string[] = [];
+  const listed = ignoredListOf(previous);
+  const judged: string[] = [];
   let extensionChanged = false;
-  for (const entry of verdict.understood) {
-    const before = previous ? entry.extension.recorded(previous) : undefined;
-    const wasSkipped = input.mode === 'update' && Object.hasOwn(listedIgnored, entry.name);
-    if (!wasSkipped && canonical(before) === canonical(entry.value)) continue;
-    const effect = entry.extension.classify(before, entry.value);
-    const line = extensionLine(entry.name, (value) => entry.extension.describe(value), before, entry.value, effect);
-    if (!wasSkipped) changes.push(line);
+  const judge = (line: string, effect: ExtensionEffect) => {
+    if (input.mode !== 'update') changes.push(line);
     else if (effect === 'tightens') immediate.push(line);
     else {
-      skippedNowKnown.push(line);
+      judged.push(line);
       extensionChanged = true;
     }
+  };
+  for (const entry of verdict.understood) {
+    const before = previous ? entry.extension.recorded(previous) : undefined;
+    // What the record holds already is what applying it leaves: nothing to do, whatever the list says.
+    if (canonical(before) === canonical(entry.value)) continue;
+    const effect = entry.extension.classify(before, entry.value);
+    judge(
+      extensionLine(entry.name, (value) => entry.extension.describe(value), before, entry.value, effect),
+      effect,
+    );
   }
-  // A known extension the record holds and the profile no longer names: taken away, as the profile now says.
+  // A known extension the record holds and the profile no longer names: taken away, as its classifier allows.
   const withdrawn = previous
     ? [...registry.values()]
         .filter((extension) => !understood.has(extension.name) && extension.recorded(previous) !== undefined)
@@ -1017,14 +1025,10 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     : [];
   for (const extension of withdrawn) {
     const before = previous ? extension.recorded(previous) : undefined;
-    changes.push(
-      extensionLine(
-        extension.name,
-        (value) => extension.describe(value),
-        before,
-        undefined,
-        extension.classify(before, undefined),
-      ),
+    const effect = extension.classify(before, undefined);
+    judge(
+      extensionLine(extension.name, (value) => extension.describe(value), before, undefined, effect),
+      effect,
     );
   }
   // What is skipped here, said wherever the profile is shown, and recorded with the SHA-256 of each entry (X3).
@@ -1034,9 +1038,29 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     verdict.ignored.map((entry) => [entry.name, { since: entry.since, sha256: entry.sha256 }]),
   );
   if (input.mode === 'update' && !shaChanged) {
-    // Only an edit made here can make the list differ from the same bytes: put back, as any other drift is.
-    const was = Object.fromEntries(Object.entries(listedIgnored).filter(([name]) => !understood.has(name)));
-    if (canonical(was) !== canonical(ignoredNow)) {
+    /*
+     * Only an edit made here can make the list differ from the same bytes: put back, as any other drift is — and it is
+     * bookkeeping only, since nothing above reads the list to decide what applies. Compared as the file holds it, so
+     * an entry this release cannot read, or a list that is not one, is written again as the profile says; and an entry
+     * this release now applies, whose value the record already holds, is no longer listed. One it applies with this
+     * plan leaves the list when it is applied.
+     */
+    const raw = previous?.ignoredExtensions;
+    const pending = (name: string) => {
+      const entry = verdict.understood.find((each) => each.name === name);
+      return (
+        entry !== undefined &&
+        previous !== undefined &&
+        canonical(entry.extension.recorded(previous)) !== canonical(entry.value)
+      );
+    };
+    const was =
+      raw === undefined
+        ? {}
+        : typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+          ? Object.fromEntries(Object.entries(raw).filter(([name]) => !pending(name)))
+          : raw;
+    if (listed.malformed || canonical(was) !== canonical(ignoredNow)) {
       repairs.push(
         `the extensions recorded as not applied here for ${organisation} were changed here; they are as the profile says again`,
       );
@@ -1051,8 +1075,8 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
      */
     repairs.unshift(...changes.splice(0));
   }
-  // Never drift: an entry the record lists as skipped, read by a release that knows it (X4).
-  changes.push(...skippedNowKnown);
+  // Never drift: an extension's value the record does not hold, judged above by its classifier (X4).
+  changes.push(...judged);
   /*
    * The update caps, from the file beside the profile (design 2026-10-16, U8): their own file and their own SHA-256,
    * so their own judgement. Another file — a new one, a changed one, one gone — is a change of what the organisation
@@ -1298,7 +1322,7 @@ function profileChange(
        */
       let tightenedNow: string[] = [];
       if (spec.mode === 'update' && !spec.sourceGiven && spec.organisation !== undefined) {
-        const outcome = await tightenAtOnce(core, options, spec.organisation, file, verdict, config);
+        const outcome = await tightenAtOnce(core, options, spec.organisation, file, verdict, registry, config);
         config = outcome.config;
         tightenedNow = outcome.done;
       }
@@ -1311,6 +1335,7 @@ function profileChange(
                 recordOf(config, spec.organisation),
                 file,
                 verdict,
+                registry,
               )
             : [];
       const tightened = [...tightenedBefore, ...tightenedNow.filter((line) => !tightenedBefore.includes(line))];
@@ -1369,17 +1394,20 @@ async function approvalDoneAtOnce(core: Core, approvalId: string | undefined): P
 
 /**
  * Of the tightenings an approval says its preparation made, those the record still shows made, in the approval's order:
- * a caps line whose file and record both hold the caps it names by their SHA-256, and an extension line whose entry the
- * profile still names, the record no longer lists as skipped, and holds as the profile says. A line the record no longer
- * bears out is left out, so the claim says otherwise than the approval and is refused — prepare it again.
+ * a caps line whose file and record both hold the caps it names by their SHA-256; an extension line whose entry the
+ * profile still names, the record no longer lists as skipped, and holds as the profile says; and one taking away an
+ * extension the profile no longer names, which the record no longer holds. A line the record no longer bears out is
+ * left out, so the claim says otherwise than the approval and is refused — prepare it again.
  */
 function stillTightened(
   lines: readonly string[],
   record: OrganisationRecord | undefined,
   file: ProfileFile,
   verdict: ExtensionVerdict,
+  registry: ExtensionRegistry,
 ): string[] {
   if (record === undefined) return [];
+  const listed = ignoredListOf(record).entries;
   return lines.filter((line) => {
     if (line.startsWith('updates: ')) {
       const caps = file.updates;
@@ -1390,12 +1418,14 @@ function stillTightened(
       );
     }
     const name = TIGHTENED_EXTENSION.exec(line)?.[1];
+    if (name === undefined) return false;
     const entry = verdict.understood.find((each) => each.name === name);
-    return (
-      entry !== undefined &&
-      !Object.hasOwn(record.ignoredExtensions ?? {}, entry.name) &&
-      canonical(entry.extension.recorded(record)) === canonical(entry.value)
-    );
+    if (entry === undefined) {
+      const known = registry.get(name);
+      const named = verdict.ignored.some((each) => each.name === name);
+      return known !== undefined && !named && known.recorded(record) === undefined;
+    }
+    return !Object.hasOwn(listed, entry.name) && canonical(entry.extension.recorded(record)) === canonical(entry.value);
   });
 }
 
@@ -1404,12 +1434,13 @@ function stillTightened(
  * X4, X6) — as `narrowAtOnce` writes a narrowing — with a line for each:
  *
  * - **a caps file that is no looser in any part than what the record holds** (`capsOrder`): its caps, and its SHA-256;
- * - **a skipped extension this release now knows, whose classifier reads applying it as tightening**, its entry the
- *   same as when it was skipped: applied, and no longer listed as skipped. A changed entry is a changed profile, which
- *   is approved with the rest.
+ * - **an extension's value the record does not hold, whose classifier reads applying it as tightening**: a skipped
+ *   entry the same as when it was skipped — applied, and no longer listed as skipped — or, from the very bytes the
+ *   record was approved from, an entry it holds no value for, or holds otherwise, though nothing lists it skipped;
+ * - **from those same bytes, a known extension the profile no longer names, whose taking away only tightens**.
  *
- * Nothing else of the record moves. A record that is not there, or a profile for another organisation, is left alone:
- * what is refused about it is the plan's to say.
+ * A changed entry is a changed profile, which is approved with the rest. Nothing else of the record moves. A record that
+ * is not there, or a profile for another organisation, is left alone: what is refused about it is the plan's to say.
  */
 async function tightenAtOnce(
   core: Core,
@@ -1417,14 +1448,15 @@ async function tightenAtOnce(
   organisation: string,
   file: ProfileFile,
   verdict: ExtensionVerdict,
+  registry: ExtensionRegistry,
   given: Config,
 ): Promise<{ config: Config; done: string[] }> {
   // Nothing to tighten in what the call was given: no lock taken, and nothing written — the common case.
-  if (tightenings(given, organisation, file, verdict).done.length === 0) return { config: given, done: [] };
+  if (tightenings(given, organisation, file, verdict, registry).done.length === 0) return { config: given, done: [] };
   return withCredentialsLock(core.paths.configDir, async () => {
     let done: string[] = [];
     const written = await core.config.update((current) => {
-      const tightened = tightenings(current, organisation, file, verdict);
+      const tightened = tightenings(current, organisation, file, verdict, registry);
       done = tightened.done;
       if (done.length === 0 || tightened.record === undefined) return current;
       return { ...current, organisations: { ...organisationsOf(current), [organisation]: tightened.record } };
@@ -1448,6 +1480,7 @@ function tightenings(
   organisation: string,
   file: ProfileFile,
   verdict: ExtensionVerdict,
+  registry: ExtensionRegistry,
 ): { record: OrganisationRecord | undefined; done: string[] } {
   const done: string[] = [];
   const record = recordOf(config, organisation);
@@ -1463,17 +1496,35 @@ function tightenings(
     next.updates = recordedCaps(capsNow);
     done.push(capsLine(capsWere, capsNow));
   }
+  const listed = ignoredListOf(record).entries;
+  // The bytes the record was approved from: what it does not hold of them as they say was never anybody's to approve.
+  const sameBytes = record.sha256 === file.sha256;
   for (const entry of verdict.understood) {
-    const skipped = own(record.ignoredExtensions, entry.name);
-    if (skipped?.sha256 !== entry.sha256) continue;
     const before = entry.extension.recorded(record);
+    if (canonical(before) === canonical(entry.value)) continue;
+    const skipped = own(listed, entry.name);
+    if (skipped !== undefined ? skipped.sha256 !== entry.sha256 : !sameBytes) continue;
     if (entry.extension.classify(before, entry.value) !== 'tightens') continue;
     next = entry.extension.apply(next, entry.value);
-    const left = { ...(next.ignoredExtensions ?? {}) };
-    delete left[entry.name];
-    if (Object.keys(left).length > 0) next.ignoredExtensions = left;
-    else delete next.ignoredExtensions;
+    if (skipped !== undefined) {
+      const left = { ...ignoredListOf(next).entries };
+      delete left[entry.name];
+      if (Object.keys(left).length > 0) next.ignoredExtensions = left;
+      else delete next.ignoredExtensions;
+    }
     done.push(extensionLine(entry.name, (value) => entry.extension.describe(value), before, entry.value, 'tightens'));
+  }
+  if (sameBytes) {
+    const named = new Set([...verdict.understood, ...verdict.ignored].map((entry) => entry.name));
+    const gone = [...registry.values()]
+      .filter((extension) => !named.has(extension.name) && extension.recorded(record) !== undefined)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const extension of gone) {
+      const before = extension.recorded(record);
+      if (extension.classify(before, undefined) !== 'tightens') continue;
+      next = extension.apply(next, undefined);
+      done.push(extensionLine(extension.name, (value) => extension.describe(value), before, undefined, 'tightens'));
+    }
   }
   return { record: next, done };
 }
