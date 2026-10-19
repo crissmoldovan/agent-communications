@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cli"
+description = "Enables the cli command without any pre-configured scope."
+commands.allow = ["cli"]
+
+[[permission]]
+identifier = "deny-cli"
+description = "Denies the cli command without any pre-configured scope."
+commands.deny = ["cli"]
