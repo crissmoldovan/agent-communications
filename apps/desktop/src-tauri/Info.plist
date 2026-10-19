@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Approve in Terminal drives Terminal through osascript (terminal.rs): macOS asks first, with these words. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Agent Comms opens Terminal so you can approve a change there.</string>
+</dict>
+</plist>
