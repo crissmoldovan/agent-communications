@@ -14,3 +14,15 @@
 .app-macos .app-titlebar-brand {
   padding-inline-start: 80px;
 }
+
+/*
+ * Base UI's Select hides its list's scrollbar with a <style> element it writes itself, which the content policy
+ * (`style-src 'self'`) refuses; `Root` tells it not to (`CSPProvider disableStyleElements`), and the rule is here.
+ */
+.base-ui-disable-scrollbar {
+  scrollbar-width: none;
+}
+
+.base-ui-disable-scrollbar::-webkit-scrollbar {
+  display: none;
+}

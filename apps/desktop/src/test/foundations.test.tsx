@@ -8,7 +8,7 @@ import { UntrustedText } from '../components/UntrustedText.tsx';
 import { COPY } from '../copy.ts';
 import { AppDataProvider, useAppData } from '../data.tsx';
 import { INSTALL_COMMAND } from '../install.ts';
-import type { Call, Installation } from '../ipc.ts';
+import type { Call, CliResult, Installation } from '../ipc.ts';
 import { cliKinds, createFakeBridge, EXAMPLE_INSTALLATION } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 
@@ -108,6 +108,42 @@ describe('the data the screens share', () => {
     await act(async () => window.dispatchEvent(new Event('focus')));
     await settle();
     expect(count('approvalsPending')).toBe(7);
+  });
+
+  it('a slow read never puts back what a later one found gone', async () => {
+    // The poll's read of the approvals is slow; meanwhile one is revoked, and a read after it finds it gone. When the
+    // slow read answers at last, with the approval still in it, it is too late to count.
+    const waiting = { approvalId: ID, kind: 'send', channel: 'gmail', state: 'pending' };
+    let answerSlow: (result: CliResult) => void = () => undefined;
+    let reads = 0;
+    const answers = createFakeBridge();
+    const bridge = createFakeBridge({
+      cli: (call) => {
+        if (call.kind !== 'approvalsPending') return answers.cli(call);
+        reads += 1;
+        if (reads === 1) return new Promise<CliResult>((resolve) => (answerSlow = resolve));
+        return Promise.resolve({ status: 'ok', exit: 0, data: [] });
+      },
+    });
+    const seen: { data: ReturnType<typeof useAppData> | null } = { data: null };
+    function Probe() {
+      seen.data = useAppData();
+      return null;
+    }
+    render(
+      <BridgeProvider bridge={bridge}>
+        <AppDataProvider>
+          <Probe />
+        </AppDataProvider>
+      </BridgeProvider>,
+    );
+    await settle();
+    expect(reads).toBe(1);
+    await act(async () => seen.data?.refresh('approvals'));
+    expect(seen.data?.approvals).toEqual({ state: 'ready', value: [] });
+    await act(async () => answerSlow({ status: 'ok', exit: 0, data: [waiting] }));
+    await settle();
+    expect(seen.data?.approvals).toEqual({ state: 'ready', value: [] });
   });
 
   it('polls only the reads this machine has: no events without its launcher', async () => {

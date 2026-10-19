@@ -89,6 +89,13 @@ describe("the app's repository rules", () => {
     expect(findings).toEqual([]);
   });
 
+  it('the end-to-end tests never reuse a server already on their port', () => {
+    // Another build of the app, or another program, answering on 4173 would be tested in this one's place.
+    const config = readFileSync(join(APP, 'playwright.config.ts'), 'utf8');
+    expect(config).toMatch(/\n\s+reuseExistingServer: false,\n/);
+    expect(config.match(/reuseExistingServer/g)).toHaveLength(1);
+  });
+
   it('no @tauri-apps/plugin- package is a dependency', () => {
     const manifest = JSON.parse(readFileSync(join(APP, 'package.json'), 'utf8'));
     const dependencies = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies });

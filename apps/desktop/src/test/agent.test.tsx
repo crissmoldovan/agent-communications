@@ -248,6 +248,18 @@ describe('Agent: the behaviour rules', () => {
     expect(within(rules).getByText(`Allow ${SECOND}`)).toBeTruthy();
   });
 
+  it('opening a picker adds no inline style, which the content policy would refuse', async () => {
+    // `style-src 'self'`: Base UI's Select writes a <style> to hide its scrollbar unless the app says not to.
+    const before = document.querySelectorAll('style').length;
+    renderApp(createFakeBridge(), { screen: 'agent' });
+    const rules = await section('Behaviour rules');
+    const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
+    fireEvent.click(within(form).getByRole('combobox', { name: 'Account' }));
+    expect(await screen.findByRole('option', { name: 'example/slack' })).toBeTruthy();
+    const added = [...document.querySelectorAll('style')].slice(before).map((style) => style.textContent ?? '');
+    expect(added).toEqual([]);
+  });
+
   it('a refused change says why, with its hint', async () => {
     const bridge = bridgeAnswering((call) =>
       call.kind === 'behaviourAllow'

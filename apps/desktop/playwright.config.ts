@@ -14,6 +14,7 @@ export default defineConfig({
   webServer: {
     command: 'pnpm exec vite preview --port 4173 --strictPort',
     url: 'http://localhost:4173',
-    reuseExistingServer: !process.env.CI,
+    // Never one already running on the port: it may be another build of the app, or not this app at all.
+    reuseExistingServer: false,
   },
 });

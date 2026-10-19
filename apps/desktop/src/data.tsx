@@ -46,6 +46,19 @@ async function read<T>(bridge: Bridge, call: Call): Promise<Loadable<T>> {
 }
 
 /**
+ * Keeps only the answer of the read asked last: each read takes a ticket as it starts, and its answer is kept only if
+ * no read started after it. So a slow poll that answers late cannot put back an approval a later read found revoked.
+ */
+function useLatestOnly(): () => () => boolean {
+  const asked = useRef(0);
+  return useCallback(() => {
+    asked.current += 1;
+    const ticket = asked.current;
+    return () => ticket === asked.current;
+  }, []);
+}
+
+/**
  * Whether the window can be seen: the document is visible, and the app's last word on its window was not "hidden"
  * (closing hides it to the tray).
  */
@@ -91,25 +104,35 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     }
   }, [bridge]);
 
+  const approvalsRead = useLatestOnly();
+  const updateStatusRead = useLatestOnly();
+  const eventsRead = useLatestOnly();
+
   const loadApprovals = useCallback(async () => {
-    setApprovals(await read<ApprovalView[]>(bridge, { kind: 'approvalsPending' }));
-  }, [bridge]);
+    const latest = approvalsRead();
+    const value = await read<ApprovalView[]>(bridge, { kind: 'approvalsPending' });
+    if (latest()) setApprovals(value);
+  }, [bridge, approvalsRead]);
 
   const loadUpdateStatus = useCallback(async () => {
+    const latest = updateStatusRead();
     if (!updatesSupported) {
       setUpdateStatus('unsupported');
       return;
     }
-    setUpdateStatus(await read<UpdateStatus>(bridge, { kind: 'updateStatus' }));
-  }, [bridge, updatesSupported]);
+    const value = await read<UpdateStatus>(bridge, { kind: 'updateStatus' });
+    if (latest()) setUpdateStatus(value);
+  }, [bridge, updatesSupported, updateStatusRead]);
 
   const loadEvents = useCallback(async () => {
+    const latest = eventsRead();
     if (!eventsPresent) {
       setEvents('absent');
       return;
     }
-    setEvents(await read<unknown>(bridge, { kind: 'eventsStatus' }));
-  }, [bridge, eventsPresent]);
+    const value = await read<unknown>(bridge, { kind: 'eventsStatus' });
+    if (latest()) setEvents(value);
+  }, [bridge, eventsPresent, eventsRead]);
 
   const ready = installed !== null;
   const refresh = useCallback(
