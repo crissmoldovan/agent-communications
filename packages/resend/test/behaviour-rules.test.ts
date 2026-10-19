@@ -287,10 +287,14 @@ test('the approval screen refuses a send a rule tightened since the prepare forb
 test('a rule tightened while a throttle is waited out stops the retry, and nothing is sent', async () => {
   const account = await ready();
   let now = Date.now();
+  // The harness's context but for its clocks: its surface and its platform, so the refusal's hint quotes core's
+  // `behaviour` report as `behaviourReport` does — not as this machine's shell would, which on Windows is another line.
   const context = new ResendContext({
     core: harness.core,
     env: harness.env,
     fetch: harness.fake.fetch,
+    surface: 'cli',
+    platform: 'darwin',
     throttle: {
       intervalMs: 0,
       now: () => now,

@@ -438,8 +438,20 @@ test('a trailing dot names the same domain, on the rule and on the recipient', (
   assert.equal(allowedAct(address, mail(['bob@client.test'], ['send'])).allowed, false);
 });
 
+// Whether a domain is one is core's own check (`domain-name.ts`), not Node's URL parser: Node 22.22 and 24.15 refuse
+// `xn--a.test` and a later Node 24 accepts it, and Node accepts `-x.test` and `a_b.test` on all of them.
 test('a rule whose domain is not one is unreadable, so its account allows nothing', () => {
-  for (const conversation of ['@exa|mple.com', 'bob@xn--a.test', '@client.test..', '@.', 'bob@a%b.test']) {
+  for (const conversation of [
+    '@exa|mple.com',
+    'bob@xn--a.test',
+    '@xn--.test',
+    '@client.test..',
+    '@.',
+    'bob@a%b.test',
+    '@-x.test',
+    '@x-.test',
+    'bob@a_b.test',
+  ]) {
     const settings = withRules([
       { account: 'acme/gmail', accountId: GMAIL_ID, conversation, acts: ['send'] },
       { account: 'acme/slack', accountId: SLACK_ID, acts: ['reply'] },
@@ -464,15 +476,17 @@ test('a rule whose domain is not one is unreadable, so its account allows nothin
   }
 });
 
-test('a recipient whose domain is not one meets only its account rule', () => {
+test('a recipient whose domain is not one meets every rule of its account, so only what all of them allow holds', () => {
   const settings = withRules([
-    { account: 'acme/gmail', accountId: GMAIL_ID, acts: ['reply'] },
-    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@exa.test', acts: ['reply', 'send'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, acts: ['reply', 'send'] },
+    { account: 'acme/gmail', accountId: GMAIL_ID, conversation: '@exa.test', acts: ['reply'] },
   ]);
-  const decision = allowedAct(settings, mail(['bob@exa|.test'], ['send']));
-  assert.equal(decision.allowed, false);
-  assert.deepEqual(!decision.allowed && decision.rule, { account: 'acme/gmail' }, 'the account rule decides');
-  assert.equal(allowedAct(settings, mail(['bob@exa.test'], ['send'])).allowed, true);
+  // A domain the rule cannot be read as naming must not pass the rule by: `@exa.test` forbids `send` here too.
+  for (const odd of ['bob@exa|.test', 'bob@x_y.exa.test', 'bob@-x.exa.test']) {
+    assert.equal(allowedAct(settings, mail([odd], ['send'])).allowed, false, odd);
+    assert.equal(allowedAct(settings, mail([odd], ['reply'])).allowed, true, odd);
+  }
+  assert.equal(allowedAct(settings, mail(['bob@other.test'], ['send'])).allowed, true);
 });
 
 /*
