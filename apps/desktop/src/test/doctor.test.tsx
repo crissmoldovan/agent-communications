@@ -23,7 +23,7 @@ async function open(name: string): Promise<void> {
 }
 
 describe('Doctor', () => {
-  it('Doctor: runs on open, never Gmail unasked; Copy copies the fix; Open link only for slack.com and google.com', async () => {
+  it('Doctor: runs on open, never Gmail unasked; Copy copies the fix; Open link for the page it names', async () => {
     const bridge = createFakeBridge();
     renderApp(bridge);
     // The doctors that run once at start, and Gmail's not among them.
@@ -57,14 +57,14 @@ describe('Doctor', () => {
     fireEvent.click(within(region('Gmail')).getByRole('button', { name: COPY.copy }));
     await waitFor(() =>
       expect(bridge.calls.filter((call) => call.command === 'copyText')).toEqual([
-        { command: 'copyText', args: 'sign in again: https://accounts.google.com/' },
+        { command: 'copyText', args: 'Remove the app at https://myaccount.google.com/connections and sign in again.' },
       ]),
     );
-    // Its google.com link opens through the app.
+    // The page it names opens through the app.
     fireEvent.click(within(region('Gmail')).getByRole('button', { name: 'Open link' }));
     await waitFor(() =>
       expect(bridge.calls.filter((call) => call.command === 'openLink')).toEqual([
-        { command: 'openLink', args: 'https://accounts.google.com/' },
+        { command: 'openLink', args: 'https://myaccount.google.com/connections' },
       ]),
     );
     // A core warning with no link has Copy and no Open link.
@@ -93,12 +93,13 @@ describe('Doctor', () => {
     expect([...doctorsRun(bridge).slice(5)].sort()).toEqual(STARTUP);
   });
 
-  it('offers Open link for slack.com and google.com links only', async () => {
+  it('offers Open link for the pages doctor fixes send a person to, and no others', async () => {
     const fix = [
       'Reinstall it: https://api.slack.com/apps/A0123456789, then',
       'allow it at https://myaccount.google.com/permissions.',
       'Not these: https://slack.com.evil.example/ https://evilslack.com/x http://slack.com/',
       'https://google.com@evil.example/ https://evil.example/?next=https://slack.com',
+      'https://www.google.com/url?q=https://evil.example/ https://app.slack.com/client https://accounts.google.com/',
     ].join(' ');
     const bridge = createFakeBridge(
       { installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core'] }) },
@@ -120,18 +121,29 @@ describe('Doctor', () => {
     expect(within(core).getByText(fix)).toBeTruthy();
   });
 
-  it('allowedLink takes https links to slack.com and google.com, or a subdomain of either, and nothing else', () => {
+  it('allowedLink takes https links to the three hosts doctor fixes name, and nothing else', () => {
     for (const url of [
-      'https://slack.com/',
-      'https://app.slack.com/client',
       'https://api.slack.com/apps',
-      'https://google.com',
-      'https://accounts.google.com/',
+      'https://api.slack.com/apps/A0123/app-manifest',
       'https://MYACCOUNT.GOOGLE.COM/permissions',
+      'https://myaccount.google.com/connections',
+      'https://console.cloud.google.com/auth/clients?project=example',
     ]) {
       expect(allowedLink(url), url).toBe(true);
     }
     for (const url of [
+      // Slack's and Google's other hosts: no doctor fix sends a person there.
+      'https://slack.com/',
+      'https://app.slack.com/client',
+      'https://example.slack.com/admin',
+      'https://google.com',
+      'https://www.google.com/',
+      'https://accounts.google.com/',
+      'https://support.google.com/accounts',
+      // Google's redirect, which would open anywhere, on any of its hosts.
+      'https://www.google.com/url?q=https://evil.example/',
+      'https://console.cloud.google.com/url?q=https://evil.example/',
+      'https://myaccount.google.com/url?q=https%3A%2F%2Fevil.example',
       'http://slack.com/',
       'https://slack.com.evil.example/',
       'https://evilslack.com/',

@@ -11,7 +11,7 @@
       "title": "example/gmail signs in",
       "status": "fail",
       "detail": "Google refused the refresh token",
-      "fix": "sign in again: https://accounts.google.com/",
+      "fix": "Remove the app at https://myaccount.google.com/connections and sign in again.",
       "inbox": "example/gmail"
     }
   ],

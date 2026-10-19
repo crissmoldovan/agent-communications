@@ -123,7 +123,7 @@ pub fn copy_text(text: String, app: AppHandle) -> Result<(), AppError> {
     terminal::copy(&app, &text)
 }
 
-/// Opens an `https://` link to slack.com, google.com or a subdomain of either, that a doctor fix names.
+/// Opens an `https://` link a doctor fix names, to api.slack.com, myaccount.google.com or console.cloud.google.com.
 #[tauri::command]
 pub fn open_link(url: String, app: AppHandle) -> Result<(), AppError> {
     links::open_link(&app, &url)

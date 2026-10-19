@@ -639,7 +639,8 @@ pub const COPY_LIMIT: usize = 64 * 1024;
 
 /// What copied text may not hold: a control character but a line break or a tab (a carriage return or an escape
 /// sequence pastes as something other than what was shown), or a format character (a right-to-left override shows
-/// text other than what pastes).
+/// text other than what pastes). Line breaks and tabs stay, after review too (DA16): a doctor fix is often several
+/// lines, and Copy gives exactly the text the screen shows.
 static NEVER_COPIED: LazyLock<Regex> = LazyLock::new(|| pattern(r"[\p{Cf}]|[^\P{Cc}\n\t]"));
 
 /// Whether `text` is something Copy takes: at most `COPY_LIMIT` bytes, and nothing `NEVER_COPIED` names.

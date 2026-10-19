@@ -29,12 +29,15 @@ const TONES: Readonly<Record<Status, 'ok' | 'warn' | 'danger' | 'neutral'>> = {
   skipped: 'neutral',
 };
 
-/** The domains whose links a fix may open: Slack's and Google's, where doctor fixes send a person to sign in. */
-const LINK_DOMAINS = ['slack.com', 'google.com'] as const;
+/**
+ * The hosts whose links a fix may open, exactly: where doctor fixes, and the hints a failing check carries into one,
+ * send a person — a Slack app's settings, an app's access to a Google account, Gmail's OAuth client (DA16).
+ */
+const LINK_HOSTS = ['api.slack.com', 'myaccount.google.com', 'console.cloud.google.com'] as const;
 
 /**
- * Whether the app may open `url` (DA7), as Rust's `links::allowed_link` decides it again before anything opens:
- * `https`, no user, password or port of its own, on slack.com, google.com or a subdomain of either.
+ * Whether the app may open `url` (DA7, DA16), as Rust's `links::allowed_link` decides it again before anything opens:
+ * `https`, no user, password or port of its own, on one of `LINK_HOSTS`, and never Google's `/url` redirect.
  */
 export function allowedLink(url: string): boolean {
   let parsed: URL;
@@ -46,8 +49,9 @@ export function allowedLink(url: string): boolean {
   if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.port !== '') {
     return false;
   }
-  const host = parsed.hostname;
-  return LINK_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  const path = parsed.pathname.toLowerCase();
+  if (path === '/url' || path.startsWith('/url/')) return false;
+  return (LINK_HOSTS as readonly string[]).includes(parsed.hostname);
 }
 
 /** Every `https://` link in a fix's text, without the punctuation that ends the sentence around it. */

@@ -1,6 +1,6 @@
-//! What the app opens outside itself, besides the terminal (DA7, DA15): `https://` links to slack.com or google.com
-//! that a doctor fix names, and a writing profile in `<config>/compose/`, in the default editor. Both go through the
-//! opener plugin from Rust: the capability file grants the webview none of its commands.
+//! What the app opens outside itself, besides the terminal (DA7, DA15, DA16): `https://` links to the pages doctor fixes
+//! send a person to, and a writing profile in `<config>/compose/`, in the default editor. Both go through the opener
+//! plugin from Rust: the capability file grants the webview none of its commands.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{AppError, CliResult, ProfileOpened};
@@ -10,8 +10,14 @@ use std::path::{Component, Path, PathBuf};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
-/// The domains a link may go to, or a subdomain of: where doctor fixes send a person to sign in or set an app up.
-pub const LINK_DOMAINS: [&str; 2] = ["slack.com", "google.com"];
+/// The hosts a link may go to, exactly: where doctor fixes, and the hints a failing check carries into one, send a person
+/// to set a Slack app up (`api.slack.com/apps`), to take an app's access away (`myaccount.google.com`), or to make
+/// Gmail's OAuth client (`console.cloud.google.com`). No other host of Slack's or Google's, and no subdomain (DA16).
+pub const LINK_HOSTS: [&str; 3] = [
+    "api.slack.com",
+    "myaccount.google.com",
+    "console.cloud.google.com",
+];
 
 /// The longest link the app opens.
 const LINK_LIMIT: usize = 2048;
@@ -19,10 +25,10 @@ const LINK_LIMIT: usize = 2048;
 /// What a link never holds as it is: a URL writes each of these, and anything outside printable ASCII, as `%XX`.
 const NEVER_IN_A_LINK: &[u8] = b"\"<>\\`{}";
 
-/// Whether the app may open `url`: `https://`, then a host that is slack.com, google.com or a subdomain of either —
-/// with no user, password or port, and every label letters, digits and inner hyphens — then, if anything, a path, a
-/// query or a fragment of printable ASCII with nothing a URL would have encoded. The UI checks the same before it
-/// asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it.
+/// Whether the app may open `url`: `https://`, then one of `LINK_HOSTS` — with no user, password or port, and every
+/// label letters, digits and inner hyphens — then, if anything, a path, a query or a fragment of printable ASCII with
+/// nothing a URL would have encoded, and never Google's `/url` redirect, which would open anywhere. The UI checks the
+/// same before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it.
 pub fn allowed_link(url: &str) -> bool {
     if url.len() > LINK_LIMIT {
         return false;
@@ -46,17 +52,17 @@ pub fn allowed_link(url: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     });
-    labelled
-        && LINK_DOMAINS
-            .iter()
-            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    let after = &rest[host.len()..];
+    let path = after[..after.find(['?', '#']).unwrap_or(after.len())].to_ascii_lowercase();
+    let redirect = path == "/url" || path.starts_with("/url/");
+    labelled && !redirect && LINK_HOSTS.contains(&host.as_str())
 }
 
 /// Opens `url` in the default browser, once `allowed_link` takes it.
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
     if !allowed_link(url) {
         return Err(AppError::refused(
-            "the app opens only https links to slack.com, google.com or a subdomain of either",
+            "the app opens only https links to the pages doctor fixes name: api.slack.com, myaccount.google.com and console.cloud.google.com",
         ));
     }
     app.opener()
@@ -172,22 +178,37 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn links_allow_only_https_slack_and_google() {
+    fn links_allow_only_the_hosts_doctor_fixes_name() {
         for url in [
-            "https://slack.com",
-            "https://slack.com/",
             "https://api.slack.com/apps",
             "https://api.slack.com/apps/A0123/oauth?x=1#scopes",
-            "https://example.slack.com/admin",
-            "https://google.com/",
+            "https://api.slack.com/apps/A0123/app-manifest",
             "https://console.cloud.google.com/apis/credentials?project=example",
             "https://myaccount.google.com/permissions",
-            "https://accounts.google.com/o/oauth2/v2/auth?scope=a%20b",
+            "https://myaccount.google.com/connections",
             "https://Console.Cloud.Google.com/",
+            "https://API.SLACK.COM/apps",
         ] {
             assert!(allowed_link(url), "{url} was refused");
         }
         for url in [
+            // Slack's and Google's other hosts: no doctor fix sends a person there (DA16, after review).
+            "https://slack.com",
+            "https://slack.com/",
+            "https://app.slack.com/client",
+            "https://example.slack.com/admin",
+            "https://google.com/",
+            "https://www.google.com/",
+            "https://accounts.google.com/o/oauth2/v2/auth?scope=a%20b",
+            "https://support.google.com/accounts",
+            "https://evil.api.slack.com/apps",
+            // Google's redirect opens anywhere, on whichever of its hosts serves it.
+            "https://www.google.com/url?q=https://evil.example/",
+            "https://console.cloud.google.com/url?q=https://evil.example/",
+            "https://myaccount.google.com/url?q=https%3A%2F%2Fevil.example",
+            "https://myaccount.google.com/url",
+            "https://myaccount.google.com/URL?q=x",
+            "https://myaccount.google.com/url/?q=x",
             "",
             "http://slack.com/",
             "HTTPS://slack.com/",
