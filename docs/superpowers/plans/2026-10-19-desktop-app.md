@@ -47,8 +47,9 @@ app comes after 0.23.0 (DA12).
   - render text as HTML or Markdown: no `dangerouslySetInnerHTML`, `innerHTML` or `@cueplusplus/ui/elements`;
   - give `ThemeProvider` `overrides`, whose `<style>` the CSP refuses;
   - handle a secret: sign-ins are Run in Terminal, CLI stdout is never logged, and tokens are never printed;
-  - put an absolute machine path in a repository file (fixtures use `/home/example`, `/Users/example` and
-    `C:\Users\example`);
+  - put an absolute machine path in a repository file. Fixtures use `/example/home` and an escaped
+    `C:\\example\\home`. The repository's skill check refuses any home-folder path, examples included, in every
+    `.md`, `.json`, `.ts` and `.mjs` file;
   - let a test touch the network, a real account or the real home.
 - **Windows-safe:**
   - Rust builds paths as strings with the target platform's separator, so a forced platform behaves the same on any
