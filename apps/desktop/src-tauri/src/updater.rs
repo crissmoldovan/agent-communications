@@ -2,8 +2,11 @@
 //! `desktop-v*` releases of this public repository through GitHub's API, with no token. Off in a copy built without the
 //! updater key, which says so.
 //!
-//! GitHub's Latest release is the CLI's, so the app's are published with `--latest=false` and found here: the highest
-//! complete `desktop-v<version>` release names the `latest.json` the plugin then reads, verifies and installs from.
+//! GitHub's Latest release is the CLI's, so the app's are published with `--latest=false` and found here: the tags
+//! `desktop-v<version>` are listed (`git/matching-refs`, which holds them all, however many CLI releases came since),
+//! and the highest tag whose release is complete names the `latest.json` the plugin then reads, verifies and installs
+//! from. Everything GitHub answers is read as untrusted: a tag is taken only as `desktop-v<major.minor.patch>`, and a
+//! release only when it is that tag's, published, and carries a `latest.json` this repository serves for it.
 
 use crate::ipc::{AppError, UpdaterState, UpdaterStatus};
 use crate::window;
@@ -21,9 +24,17 @@ pub const UPDATER_ON: bool = flag_is_on(option_env!("AGENTCOMMS_DESKTOP_UPDATER"
 pub const OFF_MESSAGE: &str =
     "Updates for this app are off: this copy was built without the updater key.";
 
-/// The releases GitHub's API lists: the CLI's `v*` and the app's `desktop-v*`, the newest first.
-pub const RELEASES_URL: &str =
-    "https://api.github.com/repos/crissmoldovan/agent-communications/releases?per_page=30";
+/// Every tag that starts `desktop-v`, as GitHub's API lists them: one list, not paged by releases.
+pub const TAGS_URL: &str =
+    "https://api.github.com/repos/crissmoldovan/agent-communications/git/matching-refs/tags/desktop-v";
+
+/// Where GitHub's API gives the release of one tag.
+const RELEASE_BY_TAG: &str =
+    "https://api.github.com/repos/crissmoldovan/agent-communications/releases/tags/";
+
+/// The most releases one check asks for, highest tag first: a tag pushed before its release is published is passed
+/// over for the one below it, and a run of such tags ends the search rather than ask GitHub about every one.
+const RELEASES_ASKED: usize = 5;
 
 /// Where this repository serves a release's files: a manifest from anywhere else is not taken.
 const DOWNLOADS: &str = "https://github.com/crissmoldovan/agent-communications/releases/download/";
@@ -98,36 +109,60 @@ struct Asset {
     browser_download_url: String,
 }
 
-/// The `latest.json` of the highest complete desktop release: not a draft, not a prerelease, tagged
-/// `desktop-v<major.minor.patch>` with no pre-release suffix, and carrying a `latest.json` that this repository serves
-/// for that tag. None when there is none, or the list cannot be read.
-pub fn pick_manifest_url(releases_json: &str) -> Option<String> {
-    let releases: Vec<Release> = serde_json::from_str(releases_json).ok()?;
-    releases
-        .iter()
-        .filter(|release| release.draft == Some(false) && release.prerelease == Some(false))
-        .filter_map(|release| {
-            let tag = release.tag_name.as_deref()?;
-            let version = semver::Version::parse(tag.strip_prefix(TAG_PREFIX)?).ok()?;
-            if !version.pre.is_empty() || !version.build.is_empty() {
-                return None;
-            }
-            let manifest = format!("{DOWNLOADS}{tag}/latest.json");
-            release
-                .assets
-                .iter()
-                .any(|asset| asset.name == "latest.json" && asset.browser_download_url == manifest)
-                .then_some((version, manifest))
-        })
-        .max_by(|(one, _), (other, _)| one.cmp(other))
-        .map(|(_, manifest)| manifest)
+/// The version a tag names, when it is `desktop-v<major.minor.patch>` with no pre-release or build part.
+fn version_of(tag: &str) -> Option<semver::Version> {
+    let version = semver::Version::parse(tag.strip_prefix(TAG_PREFIX)?).ok()?;
+    (version.pre.is_empty() && version.build.is_empty()).then_some(version)
 }
 
-/// Asks `get` for the releases list once, and picks the manifest from it. `get` is GitHub in the app and a stand-in in
-/// tests: nothing here reaches the network on its own.
+/// The desktop tags in what GitHub's `matching-refs` answered, highest version first: each `refs/tags/desktop-v…`
+/// whose version is a plain one. Anything else in the answer — another kind of ref, a tag written another way, or an
+/// answer that is not a list of refs — is left out.
+pub fn tags_of(refs_json: &str) -> Vec<String> {
+    let Ok(serde_json::Value::Array(refs)) = serde_json::from_str::<serde_json::Value>(refs_json)
+    else {
+        return vec![];
+    };
+    let mut tags: Vec<(semver::Version, String)> = refs
+        .iter()
+        .filter_map(|each| each.get("ref")?.as_str()?.strip_prefix("refs/tags/"))
+        .filter_map(|tag| Some((version_of(tag)?, tag.to_string())))
+        .collect();
+    tags.sort_by(|(one, _), (other, _)| other.cmp(one));
+    tags.dedup_by(|(one, _), (other, _)| one == other);
+    tags.into_iter().map(|(_, tag)| tag).collect()
+}
+
+/// The `latest.json` a release names, when it is `tag`'s, published (not a draft, not a prerelease), and carries a
+/// `latest.json` this repository serves for that tag. None otherwise, or when the answer is not a release.
+pub fn manifest_of(release_json: &str, tag: &str) -> Option<String> {
+    let release: Release = serde_json::from_str(release_json).ok()?;
+    if release.tag_name.as_deref() != Some(tag)
+        || release.draft != Some(false)
+        || release.prerelease != Some(false)
+        || version_of(tag).is_none()
+    {
+        return None;
+    }
+    let manifest = format!("{DOWNLOADS}{tag}/latest.json");
+    release
+        .assets
+        .iter()
+        .any(|asset| asset.name == "latest.json" && asset.browser_download_url == manifest)
+        .then_some(manifest)
+}
+
+/// Lists the desktop tags, then asks for the release of each, highest first, up to `RELEASES_ASKED`, and takes the
+/// first complete one's manifest. `get` is GitHub in the app and a stand-in in tests: nothing here reaches the network
+/// on its own. A release that cannot be fetched — a tag pushed before its release is out — is passed over.
 pub fn find_manifest(get: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
-    let releases = get(RELEASES_URL)?;
-    pick_manifest_url(&releases)
+    let tags = tags_of(&get(TAGS_URL)?);
+    tags.iter()
+        .take(RELEASES_ASKED)
+        .find_map(|tag| {
+            let release = get(&format!("{RELEASE_BY_TAG}{tag}")).ok()?;
+            manifest_of(&release, tag)
+        })
         .ok_or_else(|| "No release of this app has been published yet.".to_string())
 }
 
@@ -144,13 +179,17 @@ fn github_get(url: &str) -> Result<String, String> {
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .call()
-        .map_err(|error| format!("GitHub could not be asked for this app's releases: {error}."))?;
+        .map_err(|error| {
+            format!("GitHub could not be asked about this app's releases: {error}.")
+        })?;
     response
         .body_mut()
         .with_config()
         .limit(LIST_LIMIT)
         .read_to_string()
-        .map_err(|error| format!("GitHub's list of releases could not be read: {error}."))
+        .map_err(|error| {
+            format!("GitHub's answer about this app's releases could not be read: {error}.")
+        })
 }
 
 /// The updater's state, its update found, and whether a check or an install is under way.
@@ -355,78 +394,214 @@ mod tests {
     }
 
     #[test]
-    fn picks_the_highest_complete_desktop_release() {
-        let releases = json!([
-            // The CLI's release is GitHub's Latest, and is never the app's, even with a latest.json.
-            complete("v0.25.0"),
-            release("desktop-v0.27.0", true, false, &["latest.json"]),
-            release("desktop-v0.28.0", false, true, &["latest.json"]),
-            complete("desktop-v0.26.0-rc.1"),
-            release("desktop-v0.29.0", false, false, &["Agent.Comms.dmg"]),
-            complete("desktop-v0.24.2"),
-            // 0.24.10 is higher than 0.24.2: versions, not text, are compared.
-            complete("desktop-v0.24.10"),
-            complete("desktop-v0.9.0"),
-            // Not a version, or a version written another way.
-            complete("desktop-vnext"),
-            complete("desktop-v0.30"),
-            complete("desktop-v01.0.0"),
-            complete("desktop-v1.0.0+build.5"),
-            complete("desktop-0.31.0"),
-        ]);
+    fn a_release_names_its_manifest_only_when_it_is_that_tags_and_complete() {
+        let tag = "desktop-v0.24.10";
         assert_eq!(
-            pick_manifest_url(&releases.to_string()).as_deref(),
-            Some(format!("{DOWNLOAD}/desktop-v0.24.10/latest.json").as_str())
+            manifest_of(&complete(tag).to_string(), tag).as_deref(),
+            Some(format!("{DOWNLOAD}/{tag}/latest.json").as_str())
         );
-    }
-
-    #[test]
-    fn a_manifest_this_repository_does_not_serve_for_that_tag_is_skipped() {
-        let mut elsewhere = complete("desktop-v0.40.0");
+        for (release, asked) in [
+            // A draft, a prerelease, or one with no latest.json.
+            (release(tag, true, false, &["latest.json"]), tag),
+            (release(tag, false, true, &["latest.json"]), tag),
+            (release(tag, false, false, &["Agent.Comms.dmg"]), tag),
+            // Another tag's release, or the CLI's, even with a latest.json.
+            (complete("desktop-v0.24.9"), tag),
+            (complete("v0.25.0"), "v0.25.0"),
+            // A tag written another way than a plain version.
+            (complete("desktop-v0.26.0-rc.1"), "desktop-v0.26.0-rc.1"),
+            (complete("desktop-v1.0.0+build.5"), "desktop-v1.0.0+build.5"),
+            (complete("desktop-vnext"), "desktop-vnext"),
+        ] {
+            assert_eq!(manifest_of(&release.to_string(), asked), None, "{release}");
+        }
+        // A manifest this repository does not serve for that tag.
+        let mut elsewhere = complete(tag);
         elsewhere["assets"][2]["browser_download_url"] =
-            json!("https://example.com/desktop-v0.40.0/latest.json");
-        let mut other_tag = complete("desktop-v0.41.0");
+            json!("https://example.com/desktop-v0.24.10/latest.json");
+        assert_eq!(manifest_of(&elsewhere.to_string(), tag), None);
+        let mut other_tag = complete(tag);
         other_tag["assets"][2]["browser_download_url"] =
             json!(format!("{DOWNLOAD}/desktop-v0.24.0/latest.json"));
-        let releases = json!([elsewhere, other_tag, complete("desktop-v0.24.0")]);
-        assert_eq!(
-            pick_manifest_url(&releases.to_string()).as_deref(),
-            Some(format!("{DOWNLOAD}/desktop-v0.24.0/latest.json").as_str())
-        );
+        assert_eq!(manifest_of(&other_tag.to_string(), tag), None);
+        // A release that names another tag, whatever address its manifest has.
+        let mut renamed = complete(tag);
+        renamed["tag_name"] = json!("desktop-v0.24.9");
+        assert_eq!(manifest_of(&renamed.to_string(), tag), None);
+        // An answer that is not a release.
+        for body in ["", "not json", "[]", r#"{"message":"Not Found"}"#] {
+            assert_eq!(manifest_of(body, tag), None, "{body:?}");
+        }
     }
 
     #[test]
-    fn no_complete_release_or_an_unreadable_list_picks_nothing() {
-        assert_eq!(pick_manifest_url("[]"), None);
-        assert_eq!(pick_manifest_url("not json"), None);
+    fn tags_are_compared_as_versions_not_as_text() {
         assert_eq!(
-            pick_manifest_url(r#"{"message":"API rate limit exceeded"}"#),
-            None
-        );
-        assert_eq!(
-            pick_manifest_url(&json!([complete("v0.25.0")]).to_string()),
-            None
+            tags_of(&refs(&[
+                "desktop-v0.9.0",
+                "desktop-v0.24.2",
+                "desktop-v0.24.10",
+                "desktop-v1.0.0"
+            ])),
+            [
+                "desktop-v1.0.0",
+                "desktop-v0.24.10",
+                "desktop-v0.24.2",
+                "desktop-v0.9.0"
+            ]
         );
     }
 
-    #[test]
-    fn the_manifest_is_found_with_one_request_to_the_releases_list() {
-        let asked = RefCell::new(Vec::new());
-        let body = json!([complete("desktop-v0.24.0")]).to_string();
-        let get = |url: &str| {
+    /// A GitHub that answers each address from `pages`, records every address asked, and says 404 for the rest.
+    fn github<'a>(
+        pages: &'a [(String, String)],
+        asked: &'a RefCell<Vec<String>>,
+    ) -> impl Fn(&str) -> Result<String, String> + 'a {
+        move |url: &str| {
             asked.borrow_mut().push(url.to_string());
-            Ok(body.clone())
-        };
+            pages
+                .iter()
+                .find(|(at, _)| at == url)
+                .map(|(_, body)| body.clone())
+                .ok_or_else(|| format!("404 for {url}"))
+        }
+    }
+
+    fn refs(tags: &[&str]) -> String {
+        json!(tags
+            .iter()
+            .map(|tag| json!({
+                "ref": format!("refs/tags/{tag}"),
+                "object": { "sha": "0123456789abcdef0123456789abcdef01234567", "type": "commit" }
+            }))
+            .collect::<Vec<_>>())
+        .to_string()
+    }
+
+    fn release_at(tag: &str) -> String {
+        format!(
+            "https://api.github.com/repos/crissmoldovan/agent-communications/releases/tags/{tag}"
+        )
+    }
+
+    #[test]
+    fn a_desktop_release_is_found_however_many_cli_releases_came_after_it() {
+        // Thirty CLI releases, newest first, fill the first page of the releases list: the app's is not on it.
+        let cli: Vec<serde_json::Value> = (0..30)
+            .map(|n| complete(&format!("v0.{}.0", 60 - n)))
+            .collect();
+        let mut tags: Vec<String> = (0..35).map(|n| format!("desktop-v0.{n}.0")).collect();
+        tags.push("desktop-v0.24.10".into());
+        let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
+        let pages = vec![
+            (
+                "https://api.github.com/repos/crissmoldovan/agent-communications/releases?per_page=30".to_string(),
+                json!(cli).to_string(),
+            ),
+            (TAGS_URL.to_string(), refs(&tag_refs)),
+            (release_at("desktop-v0.34.0"), complete("desktop-v0.34.0").to_string()),
+        ];
+        let asked = RefCell::new(Vec::new());
         assert_eq!(
-            find_manifest(&get),
+            find_manifest(&github(&pages, &asked)),
+            Ok(format!("{DOWNLOAD}/desktop-v0.34.0/latest.json"))
+        );
+        // The tags first, then the highest one's release, and nothing else.
+        assert_eq!(
+            *asked.borrow(),
+            [TAGS_URL.to_string(), release_at("desktop-v0.34.0")]
+        );
+    }
+
+    #[test]
+    fn a_tag_with_no_complete_release_yet_is_passed_over_for_the_one_below() {
+        let pages = vec![
+            (
+                TAGS_URL.to_string(),
+                refs(&[
+                    "desktop-v0.24.0",
+                    "desktop-v0.25.0",
+                    "desktop-v0.26.0",
+                    "desktop-v0.27.0",
+                ]),
+            ),
+            // 0.27.0's tag is pushed and its release not made yet (404); 0.26.0's is a draft or a prerelease, which an
+            // anonymous read should never see, and is not taken if it does; 0.25.0's names a manifest elsewhere.
+            (
+                release_at("desktop-v0.26.0"),
+                release("desktop-v0.26.0", true, false, &["latest.json"]).to_string(),
+            ),
+            (release_at("desktop-v0.25.0"), {
+                let mut elsewhere = complete("desktop-v0.25.0");
+                elsewhere["assets"][2]["browser_download_url"] =
+                    json!("https://example.com/desktop-v0.25.0/latest.json");
+                elsewhere.to_string()
+            }),
+            (
+                release_at("desktop-v0.24.0"),
+                complete("desktop-v0.24.0").to_string(),
+            ),
+        ];
+        let asked = RefCell::new(Vec::new());
+        assert_eq!(
+            find_manifest(&github(&pages, &asked)),
             Ok(format!("{DOWNLOAD}/desktop-v0.24.0/latest.json"))
         );
-        assert_eq!(*asked.borrow(), [RELEASES_URL]);
+        assert_eq!(asked.borrow().len(), 5);
+        // A release for another tag than the one asked for is not that tag's.
+        let pages = vec![
+            (TAGS_URL.to_string(), refs(&["desktop-v0.30.0"])),
+            (
+                release_at("desktop-v0.30.0"),
+                complete("desktop-v0.29.0").to_string(),
+            ),
+        ];
+        assert!(find_manifest(&github(&pages, &RefCell::new(Vec::new()))).is_err());
+    }
 
-        let failing = |_: &str| Err("offline".to_string());
+    #[test]
+    fn the_tags_are_read_as_untrusted_and_only_a_few_releases_are_asked_for() {
+        // What is not a desktop-v<major.minor.patch> tag is never asked about.
+        let hostile = json!([
+            { "ref": "refs/tags/desktop-v9.0.0-rc.1" },
+            { "ref": "refs/tags/desktop-v9.0.0+build.1" },
+            { "ref": "refs/tags/desktop-v09.0.0" },
+            { "ref": "refs/tags/desktop-v9.0" },
+            { "ref": "refs/tags/desktop-v9.0.0/../../x" },
+            { "ref": "refs/heads/desktop-v9.0.0" },
+            { "ref": "refs/tags/v9.0.0" },
+            { "ref": 7 },
+            { "no": "ref" },
+            "refs/tags/desktop-v9.0.0",
+            { "ref": "refs/tags/desktop-v0.24.0" }
+        ])
+        .to_string();
+        assert_eq!(tags_of(&hostile), vec!["desktop-v0.24.0".to_string()]);
+        for body in [
+            "",
+            "not json",
+            "{}",
+            r#"{"message":"Not Found"}"#,
+            "[]",
+            "null",
+        ] {
+            assert!(tags_of(body).is_empty(), "{body:?}");
+        }
+        // Many tags with no release: a few are asked about, then the search stops.
+        let many: Vec<String> = (0..40).map(|n| format!("desktop-v1.{n}.0")).collect();
+        let tag_refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let pages = vec![(TAGS_URL.to_string(), refs(&tag_refs))];
+        let asked = RefCell::new(Vec::new());
+        assert!(find_manifest(&github(&pages, &asked)).is_err());
+        assert_eq!(asked.borrow().len(), 1 + RELEASES_ASKED);
+        // The tags cannot be read: said so, and nothing else is asked.
+        let asked = RefCell::new(Vec::new());
+        let failing = |url: &str| {
+            asked.borrow_mut().push(url.to_string());
+            Err::<String, String>("offline".into())
+        };
         assert!(find_manifest(&failing).is_err());
-        let empty = |_: &str| Ok("[]".to_string());
-        assert!(find_manifest(&empty).is_err());
+        assert_eq!(asked.borrow().len(), 1);
     }
 
     #[test]
