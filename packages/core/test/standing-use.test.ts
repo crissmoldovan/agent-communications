@@ -96,6 +96,8 @@ function use(
     childDigest?: string;
     channel?: string;
     places?: 'exact' | 'threads-i-am-in';
+    /** Who wrote it: a sender of its own for each message unless named, so only the per-sender test meets that limit. */
+    sender?: string;
   },
 ): StandingUseRequest {
   const act = target.act ?? 'reaction';
@@ -112,6 +114,7 @@ function use(
       textDigest: 'e'.repeat(64),
       edited: false,
       places: target.places ?? 'exact',
+      sender: target.sender ?? `U_${target.ts}`,
     },
     child: {
       draftId: `reaction:C0ROOM:${target.ts}`,
@@ -157,6 +160,7 @@ test('a use is counted, the child minted after the count, and the child names it
     channel: 'C0ROOM',
     ts: '1760864000.000100',
     thread: '1760864000.000100',
+    sender: 'U_1760864000.000100',
     targetDigest: 'e'.repeat(64),
     edited: false,
   });
@@ -187,6 +191,48 @@ test('a place narrowed away while Slack was read is refused at the mint, and not
   // The place it kept still goes.
   await mintStandingUse(core, use(record, { ts: '5.000300', channel: 'C0LOBBY' }));
   assert.equal((await uses(core)).length, 1);
+});
+
+test('per sender: a day of acts on one person’s messages, across every standing approval, then it frees', async () => {
+  const { core, clock } = machine();
+  const first = await standing(core, { perHour: 30 });
+  const second = await standing(core, { perHour: 30 });
+  const firstAt = clock.now;
+  // Three of Sam's messages, in three threads, under two standing approvals: the default allows three a day.
+  await mintStandingUse(core, use(first, { ts: '20.000100', sender: 'U0SAM' }));
+  clock.now += MINUTE;
+  await mintStandingUse(core, use(second, { ts: '20.000200', sender: 'U0SAM' }));
+  clock.now += MINUTE;
+  await mintStandingUse(core, use(first, { ts: '20.000300', sender: 'U0SAM' }));
+  clock.now += MINUTE;
+  for (const record of [first, second]) {
+    await assert.rejects(
+      mintStandingUse(core, use(record, { ts: `20.0004${record === first ? '1' : '2'}0`, sender: 'U0SAM' })),
+      refusedWith('STANDING_LIMIT', {
+        limit: 'perSender',
+        allowed: 3,
+        freesAt: new Date(firstAt + DAY).toISOString(),
+      }),
+    );
+  }
+  // Anyone else is counted on their own.
+  await mintStandingUse(core, use(first, { ts: '20.000500', sender: 'U0ANA' }));
+  // A day after the first, one frees.
+  clock.now = firstAt + DAY + 1;
+  await mintStandingUse(core, use(second, { ts: '20.000600', sender: 'U0SAM' }));
+  assert.equal((await uses(core)).filter((entry) => entry.sender === 'U0SAM').length, 4);
+});
+
+test('a lower per-sender limit, narrowed, holds at once', async () => {
+  const { core } = machine();
+  const record = await standing(core, { perSender: 2 });
+  assert.equal(record.standing?.limits.perSender, 2);
+  await core.approvals.narrowStanding(record.approvalId, ACME, { limits: { perSender: 1 } });
+  await mintStandingUse(core, use(record, { ts: '21.000100', sender: 'U0SAM' }));
+  await assert.rejects(
+    mintStandingUse(core, use(record, { ts: '21.000200', sender: 'U0SAM' })),
+    refusedWith('STANDING_LIMIT', { limit: 'perSender', allowed: 1 }),
+  );
 });
 
 test('each of per thread, per hour and per day is reached and refused with when it frees', async () => {

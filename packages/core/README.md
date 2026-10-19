@@ -119,8 +119,8 @@ terminal, because something an agent read could otherwise change how every later
 message that has just arrived from another person — the newest from someone else in its thread or channel, within 15
 minutes — with one of the contents you wrote: a standard emoji reaction (`eyes` when you name none), or a short fixed
 reply of at most 200 characters. It covers the places you named, or the threads you posted in yourself in the last 14
-days; by default once a thread, 10 an hour and 30 a day (3, 30 and 100 at most); and it ends 7 days after you approve
-it, 30 at most. A reply goes in the thread as the app or labelled, a reaction only as the app, and every act raises a
+days; by default once a thread, 10 an hour, 30 a day and 3 a day on any one person's messages (3, 30, 100 and 10 at
+most); and it ends 7 days after you approve it, 30 at most. Each act goes 5 to 30 seconds after the agent asks for it. A reply goes in the thread as the app or labelled, a reaction only as the app, and every act raises a
 notification on your screen, goes in the audit and shows in `standing list`. Mail, top-level posts, edits, deletions,
 files and removing a reaction are never sent this way.
 
@@ -144,6 +144,12 @@ Every use is counted in the account's acknowledgement ledger, `standing/<account
 account's standing approvals can be used, since what they have counted cannot be known, and `doctor` names the account,
 the line and the file. To recover, end that account's standing approvals (`standing off`, or `standing revoke` for
 each), then move the file aside; a new ledger starts empty, and you can make new standing approvals.
+
+**What it can still leak.** An agent misled by something it read still chooses which arriving messages to acknowledge,
+with which content, and when, and anyone watching the acts can read those choices: at the defaults, tens of bits an
+hour. A pause of 5 to 30 seconds before each act, and at most 3 acts a day on any one person's messages, narrow that;
+they do not close it. Do not make a standing approval for an agent that also reads sensitive mail, files or secrets in
+the same session.
 
 **What it does not defend.** It holds against an agent acting through the MCP tools. An agent with an unrestricted
 shell, running as you, is out of its reach: it can already get past the terminal check, edit the configuration and run

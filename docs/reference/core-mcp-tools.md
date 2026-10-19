@@ -93,7 +93,7 @@ Cancel an approval so it can never be used: a send, a post, or a configuration c
 
 ### `comms_approval_wait`
 
-Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with `claimable` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. `waitSeconds` is 30 when left out, 300 at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.
+Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with `claimable` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends `active` once the person has approved it — it is used through its channel's acknowledgement, never claimed — and `standing` says pending, active or ended, with why. `waitSeconds` is 30 when left out, 300 at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.
 
 *read-only*
 
@@ -169,7 +169,7 @@ Report or change which acts an agent may start at all — post, reply, reaction,
 
 Report, narrow or end the standing approvals: acknowledgements — a standard emoji reaction, or a short fixed reply the person wrote — that an agent may send without asking, on a message that has just arrived from another person, within the places, counts and days the person set. With no change it only reports: each one's state, its contents, each named by its digest, its places and limits as in force, when it ends, its uses in the last day and its last 10 acts. Otherwise exactly one of `narrow` — keep fewer contents or places, lower a limit, or end it sooner — `revoke`, which ends one, or `off`, which ends every one. Each applies at once and asks nobody, since each only takes away; one that would allow more is refused. Nothing here creates or widens one: that is prepared on Slack and approved by the person at their own terminal, with its code. End one, or all, whenever the person asks.
 
-*writes · idempotent*
+*writes · destructive · idempotent*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|

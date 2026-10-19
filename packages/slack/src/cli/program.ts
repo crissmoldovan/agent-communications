@@ -1537,6 +1537,10 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--per-thread <n>', 'acts per thread, across every standing approval: 1 to 3, 1 when left out')
     .option('--per-hour <n>', 'acts an hour: 1 to 30, 10 when left out')
     .option('--per-day <n>', 'acts a day: 1 to 100, 30 when left out')
+    .option(
+      '--per-sender <n>',
+      'acts a day on messages from any one person, across every standing approval: 1 to 10, 3 when left out',
+    )
     .option('--expires <days>', 'how long it lasts once approved, as 7d: 1d to 30d, 7d when left out')
     .option('--replaces <id>', 'the standing approval this replaces: narrower applies at once, wider asks for a code')
     .action(
@@ -1575,6 +1579,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             perThread: count('--per-thread', flags.perThread),
             perHour: count('--per-hour', flags.perHour),
             perDay: count('--per-day', flags.perDay),
+            perSender: count('--per-sender', flags.perSender),
             ...(flags.expires === undefined ? {} : { expiresDays: parseExpiry(String(flags.expires)) }),
             ...(flags.replaces === undefined ? {} : { replaces: String(flags.replaces) }),
           },

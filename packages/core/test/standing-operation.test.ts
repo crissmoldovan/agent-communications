@@ -136,7 +136,16 @@ function use(record: ApprovalRecord, ts: string, act: StandingAct = 'reaction', 
     inboxSub: 'U_ME',
     act,
     contentDigest: digestOf(record, act),
-    target: { channel: 'C0ROOM', ts, thread, textDigest: 'e'.repeat(64), edited: false, places: 'exact' },
+    // A sender of its own for each message, unless a test is about the per-sender limit.
+    target: {
+      channel: 'C0ROOM',
+      ts,
+      thread,
+      textDigest: 'e'.repeat(64),
+      edited: false,
+      places: 'exact',
+      sender: `U_${ts}`,
+    },
     child: {
       draftId: `reaction:C0ROOM:${ts}`,
       draftMessageId: 'd'.repeat(64),
@@ -178,7 +187,7 @@ test('the report on an empty store', async () => {
 
 test('the report shows uses today and the last 10 acts with links', async () => {
   const { core, clock } = machine();
-  const limits = { perThread: 3, perHour: 30, perDay: 100, expiresDays: 7 };
+  const limits = { perThread: 3, perHour: 30, perDay: 100, perSender: 3, expiresDays: 7 };
   const record = await standing(core, { limits });
   const other = await standing(core, { limits });
   const approvedAt = Date.parse(record.approvedAt as string);
@@ -538,7 +547,7 @@ test('narrow applies at once; a narrow that widens is USAGE, naming agent-slack 
     [reply],
   );
   assert.deepEqual(bareNames(view?.places), { kind: 'exact', places: [ROOM] });
-  assert.deepEqual(view?.limits, { perThread: 2, perHour: 3, perDay: 30, expiresDays: 2 });
+  assert.deepEqual(view?.limits, { perThread: 2, perHour: 3, perDay: 30, perSender: 3, expiresDays: 2 });
   assert.equal(view?.expiresAt, new Date(approvedAt + 2 * DAY).toISOString());
   // At once: the reaction it no longer holds is refused on the very next use.
   await assert.rejects(
@@ -560,6 +569,7 @@ test('narrow applies at once; a narrow that widens is USAGE, naming agent-slack 
   for (const narrow of [
     { limits: { perHour: 4 } },
     { limits: { perDay: 101 } },
+    { limits: { perSender: 4 } },
     { limits: { expiresDays: 3 } },
     { keep: [reply, digestOf(record, 'reaction')] },
     { places: ['C0ROOM', 'C0DESK'] },
@@ -580,6 +590,7 @@ test('narrow applies at once; a narrow that widens is USAGE, naming agent-slack 
     perThread: 2,
     perHour: 3,
     perDay: 30,
+    perSender: 3,
     expiresDays: 2,
   });
   // Not a narrowing at all.
@@ -714,7 +725,7 @@ test('the CLI and MCP give the same result', async () => {
     assert.deepEqual(
       (afterCommand.approvals.find((view) => view.id === first.approvalId) as unknown as { limits: StandingLimits })
         .limits,
-      { perThread: 1, perHour: 5, perDay: 30, expiresDays: 3 },
+      { perThread: 1, perHour: 5, perDay: 30, perSender: 3, expiresDays: 3 },
     );
     const byTool = await call('comms_standing', {
       narrow: { id: first.approvalId, keep: [digestOf(first, 'reaction')], limits: { perDay: 20 } },

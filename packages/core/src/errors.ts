@@ -113,7 +113,7 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     summary: 'this standing approval does not cover this act',
   },
   /*
-   * A standing approval's limit is reached (S6): `details.limit` (perThread, perHour or perDay), `details.allowed` and
+   * A standing approval's limit is reached (S6): `details.limit` (perThread, perHour, perDay or perSender), `details.allowed` and
    * `details.freesAt`. Never queued, and not retryable: the agent asks the person instead.
    */
   STANDING_LIMIT: {

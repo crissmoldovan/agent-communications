@@ -11,8 +11,10 @@ import {
   requireHandoffs,
   type SecretStore,
   type SendPacing,
+  type StandingPause,
   secretsStoreOf,
   sendPacing,
+  standingPause,
 } from '@agentcomms/core';
 import { closedPermit, type FetchLike, guardSlackRequests } from './api/guard.ts';
 import { SLACK_ORIGIN } from './api/methods.ts';
@@ -72,6 +74,11 @@ export interface SlackContextOptions {
   notify?: Notifier | null | undefined;
   /** How the default notifier starts its program: `execFile`, with no shell, unless a test injects one. */
   noticeRunner?: NoticeRunner | undefined;
+  /**
+   * The pause between deciding a standing act and making it (design 2026-10-19-standing-approvals, S9, the lead's call
+   * after review): core's — 5 to 30 seconds from the CSPRNG — unless a test injects one, so no test waits.
+   */
+  standingPause?: StandingPause | undefined;
 }
 
 /**
@@ -149,6 +156,8 @@ export class SlackContext {
   readonly foregroundSignIn: SlackContextOptions['foregroundSignIn'];
   /** What raises each standing act's notification on the person's screen (S10): none only when `null` was given. */
   readonly notify: Notifier | undefined;
+  /** The pause between deciding a standing act and making it: core's unless a test injects one. */
+  readonly standingPause: StandingPause;
 
   constructor(options: SlackContextOptions = {}) {
     this.env = options.env ?? process.env;
@@ -172,6 +181,7 @@ export class SlackContext {
     this.fetch = options.fetch;
     this.slackBaseUrl = options.slackBaseUrl;
     this.persist = options.persist;
+    this.standingPause = options.standingPause ?? standingPause();
     // The platform's own notifier unless one is given, as `sendPacing` is core's unless a test injects one (S10).
     this.notify =
       options.notify === null

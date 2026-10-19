@@ -79,7 +79,8 @@ they set ([design](docs/superpowers/specs/2026-10-19-standing-approvals-design.m
 - **Injected text cannot choose the words, the message or the place.** There is no free text: the gate builds the post
   from the person's own content, named by digest. The target is fixed by what just happened — the newest message from
   someone else, at most 15 minutes old, not yet acknowledged — and the places are the ones named, or threads the
-  person posted in themselves. What is left is about one bit per act, within the counts.
+  person posted in themselves. Each act goes 5 to 30 seconds after it is decided, by a pause drawn from the operating
+  system's random source, and at most 3 a day answer any one person's messages.
 - **No loops, no floods, no false yes.** Only messages from people, by an allow-list that refuses bots, apps,
   workflows, Slackbot and this account's own posts; nothing with buttons or menus; once a thread across every standing
   approval, with hourly and daily caps spent at the moment of use and never refunded; `eyes` by default, and a warning
@@ -92,6 +93,12 @@ they set ([design](docs/superpowers/specs/2026-10-19-standing-approvals-design.m
   account each end them, and loosening again revives none.
 - **Visibility does not rest on the agent.** Every act raises an operating-system notification and is audited with
   the acknowledged message's digest and whether it had been edited; `standing list` and `doctor` show them.
+
+**What it can still leak.** An agent that has taken in instructions it should not follow still chooses which of the
+messages that arrive to acknowledge, with which content, and when, and whoever watches the acts can read those choices.
+At the defaults — 10 acts an hour, up to 10 contents, any fresh message in the places covered — that is tens of bits an
+hour: a token or a password within a day. The pause and the per-person cap narrow it; neither closes it. **Do not
+create a standing approval for an agent that also reads sensitive mail, files or secrets in the same session.**
 
 **What it does not defend.** It defends against an agent acting through this project's MCP tools. **An agent with an
 unrestricted shell, running as the person, is out of reach:** it can already get past the terminal check (below), edit

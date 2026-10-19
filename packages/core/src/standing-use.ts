@@ -31,8 +31,9 @@ import type { AckUse } from './standing-ledger.ts';
  * 7. the target: a message acknowledged once, under any standing approval;
  * 8. `perThread`, across every standing approval of the account;
  * 9. `perHour` and `perDay`, of this one;
- * 10. the `use` line written — the count spent — naming the child about to be minted;
- * 11. the child minted.
+ * 10. `perSender`: a day's acts on messages from one person, across every standing approval of the account;
+ * 11. the `use` line written — the count spent — naming the child about to be minted;
+ * 12. the child minted.
  *
  * Nothing ever removes a `use` line: a count is never refunded, whatever is refused after it, however the act ends.
  */
@@ -56,6 +57,8 @@ export interface StandingUseRequest {
     textDigest: string;
     edited: boolean;
     places: StandingPlaces['kind'];
+    /** Who wrote the message, by their Slack id: what `perSender` counts by. */
+    sender: string;
   };
   child: { draftId: string; draftMessageId: string; contentDigest: string; expect: Expectation; riskFlags: string[] };
 }
@@ -108,6 +111,7 @@ function checkedRequest(request: StandingUseRequest): void {
     !filled(target.ts) ||
     !filled(target.thread) ||
     (target.places !== 'exact' && target.places !== 'threads-i-am-in') ||
+    !filled(target.sender) ||
     !HEX64.test(target.textDigest) ||
     typeof target.edited !== 'boolean' ||
     !filled(child.draftId) ||
@@ -206,7 +210,17 @@ export async function mintStandingUse(
           throw standingLimitReached(limit, inForce.limits[limit], freesAt, askInstead(core));
         }
       }
-      // 10. The count spent, before the child exists: written under both locks, and never removed.
+      // 10. Per sender, a day, across every standing approval of the account: what one recipient can be told by which
+      // of their messages are acknowledged is bounded by this, whatever else is allowed.
+      const fromSender = used
+        .filter((entry) => entry.sender === request.target.sender)
+        .map((entry) => Date.parse(entry.at))
+        .filter((when) => when > time - STANDING_DAY_MS);
+      if (fromSender.length >= inForce.limits.perSender) {
+        const freesAt = new Date(Math.min(...fromSender) + STANDING_DAY_MS).toISOString();
+        throw standingLimitReached('perSender', inForce.limits.perSender, freesAt, askInstead(core));
+      }
+      // 11. The count spent, before the child exists: written under both locks, and never removed.
       const childId = newApprovalId();
       await append({
         kind: 'use',
@@ -218,10 +232,11 @@ export async function mintStandingUse(
         channel,
         ts,
         thread,
+        sender: request.target.sender,
         targetDigest: request.target.textDigest,
         edited: request.target.edited,
       });
-      // 11. The child, under the id its count names.
+      // 12. The child, under the id its count names.
       const child = await core.approvals.createStandingChild({
         approvalId: childId,
         standingId: record.approvalId,

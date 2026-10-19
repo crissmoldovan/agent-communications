@@ -18,7 +18,8 @@ of your contents; it never writes the words, and it cannot pick an old message, 
 - `agent-slack standing add --workspace cue/slack --reactions eyes --replies-file ~/acks.txt --places C0123ABC
   --expires 7d` prepares one. `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in
   yourself in the last 14 days, where a message this product sent for you does not count. With no content, it holds
-  `eyes` alone. The limits are once a thread, 10 an hour and 30 a day by default (3, 30 and 100 at most), and it ends
+  `eyes` alone. The limits are once a thread, 10 an hour, 30 a day and 3 a day on any one person's messages by default
+  (3, 30, 100 and 10 at most, with `--per-sender` for the last), and it ends
   7 days after you approve it, 30 at most.
 - **Its preview shows everything you are agreeing to:** each content in full with its digest, and a warning for an
   emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another organisation
@@ -39,9 +40,10 @@ its digest, and nothing else. It is refused, with `STANDING_REFUSED` and its rea
   this account's own posts — though a thread you started yourself counts — and carry no buttons or menus;
 - is in a place it covers, which has not grown to 50 members or more, or changed who shares it, since you approved it.
 
-A limit reached is `STANDING_LIMIT`, saying which and when it frees. A count is spent when the act is about to go and
-never refunded, even when the act then fails. Either refusal says nothing was sent, and tells the agent to stop and ask
-you.
+A limit reached is `STANDING_LIMIT`, saying which and when it frees. A count is spent when the act is decided and
+never refunded, even when the act then fails; the act itself goes 5 to 30 seconds later, by a pause drawn from the
+operating system's random source, and both times are recorded. Either refusal says nothing was sent, and tells the
+agent to stop and ask you.
 
 **It always goes as your agent, and you see every act.** A reply goes in the thread, as the app or labelled
 "Jo Example (agent):", even under a rule that would send your posts as you; a reaction goes only as the app, and only
@@ -62,7 +64,10 @@ Why: agents that listen in Slack were stopping to ask before sending even "Got i
 standing approval keeps your yes on the exact words while letting the moment go, inside limits you set, and it is
 built for what an agent might be told by something it read: no free text, a target fixed by what just happened, low
 counts, and nothing that looks like you. It holds against an agent acting through the tools; an agent with a shell
-running as you is out of its reach, as SECURITY.md says.
+running as you is out of its reach, as SECURITY.md says. **What it can still leak:** an agent misled by something it
+read still chooses which arriving messages to acknowledge, with what and when, and anyone watching can read those
+choices — tens of bits an hour at the defaults. The pause and the per-person limit narrow that; they do not close it.
+Do not make a standing approval for an agent that also reads sensitive mail, files or secrets in the same session.
 
 **Upgrading.**
 - Nothing changes until you create a standing approval, at your terminal. Until then every reaction and reply still

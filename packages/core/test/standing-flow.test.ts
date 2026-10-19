@@ -271,7 +271,11 @@ test('the preview shows each content, digest, warning, place, count, sharing, li
   assert.ok(preview.indexOf(warning) < preview.indexOf(reply?.digest as string));
   assert.ok(lines.includes('#support (C0ROOM): 12 members, not shared with another organisation'));
   assert.ok(lines.some((line) => line.startsWith('#all-hands (C0BIG): 412 members, shared with another organisation')));
-  assert.ok(lines.includes('Limits: 2 per thread, 5 an hour, 20 a day; it ends 3 days after you approve it.'));
+  assert.ok(
+    lines.includes(
+      'Limits: 2 per thread, 5 an hour, 20 a day, 3 a day on messages from any one person; it ends 3 days after you approve it.',
+    ),
+  );
   assert.equal(preview, renderStandingPreview(record), 'the record renders the preview it was prepared with');
 
   const threads = await prepared(core, { places: { kind: 'threads-i-am-in' } });

@@ -44,6 +44,8 @@ export interface StandingActView {
   ts: string;
   /** What the act came to, or `pending` while nothing is recorded: under way, or its process stopped first. */
   outcome: AckOutcome['outcome'] | 'pending';
+  /** When the act itself started, after the pause that follows the decision (`at`), where it was recorded. */
+  actAt?: string;
   /** The acknowledged message's permalink, where one was recorded. */
   link?: string;
 }
@@ -147,6 +149,7 @@ function actView(use: AckUse, entries: (AckUse | AckOutcome)[]): StandingActView
     channel: use.channel,
     ts: use.ts,
     outcome: outcome?.outcome ?? 'pending',
+    ...(outcome?.actAt === undefined ? {} : { actAt: outcome.actAt }),
     ...(outcome?.link === undefined ? {} : { link: outcome.link }),
   };
 }

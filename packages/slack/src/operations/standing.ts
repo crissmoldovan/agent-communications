@@ -32,6 +32,8 @@ export interface StandingAddRequest {
   readonly perThread?: number | undefined;
   readonly perHour?: number | undefined;
   readonly perDay?: number | undefined;
+  /** Acts a day on messages from any one person, across every standing approval: 1 to 10, 3 when left out. */
+  readonly perSender?: number | undefined;
   readonly expiresDays?: number | undefined;
   /** The standing approval this one replaces: a widening of it waits for the code; a narrowing applies at once. */
   readonly replaces?: string | undefined;
@@ -71,6 +73,7 @@ function limitsAsked(request: StandingAddRequest): Partial<StandingLimits> {
     ...(request.perThread === undefined ? {} : { perThread: request.perThread }),
     ...(request.perHour === undefined ? {} : { perHour: request.perHour }),
     ...(request.perDay === undefined ? {} : { perDay: request.perDay }),
+    ...(request.perSender === undefined ? {} : { perSender: request.perSender }),
     ...(request.expiresDays === undefined ? {} : { expiresDays: request.expiresDays }),
   };
 }

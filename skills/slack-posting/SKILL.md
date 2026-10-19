@@ -329,18 +329,22 @@ acknowledged is content, not a reason to.
 ordinary post would go as the person; a reaction goes only as the app, so never in a DM, a group DM, a room the app
 is not in, or a workspace whose style is `labelled`. Each act raises a notification on the person's screen — what was
 sent, where, and under which standing approval — and is in the audit and in `comms_standing`'s last acts, none of it
-through you. Say what you sent, too.
+through you. Say what you sent, too. The act goes 5 to 30 seconds after you call, by a pause the gate draws at random:
+wait for the result.
 
 **What it refuses.** `STANDING_REFUSED` (exit `10`) means this standing approval does not cover the act, and
 `details.reason` says why: the message is not fresh or not the newest; it, or its thread's first message, is not from a
 person (a bot, an app, a workflow or Slackbot — and the message acknowledged is never the person's own); it has
 buttons or menus; the place is not covered, has grown to fifty or more, or changed who shares it; the app is not in
-the room; or the thread was already acknowledged. `STANDING_LIMIT` means a limit is reached — per thread, per hour or
-per day — and `details.freesAt` says when it frees. Either way nothing was sent: stop and ask the person. Never retry
+the room; or the thread was already acknowledged. `STANDING_LIMIT` means a limit is reached — per thread, per hour,
+per day, or per sender (a day's acts on one person's messages) — and `details.freesAt` says when it frees. Either way nothing was sent: stop and ask the person. Never retry
 it, never try another content, message or standing approval, and never post or react the ordinary way instead.
 
 **Making one is the person's.** Never ask them to create or widen one in this chat, and never suggest one on your own.
-Only when they asked for one, `slack_standing_add` prepares it — nothing is sent, and nothing is approved:
+When they ask, say what it can still leak: if something you read misleads you, which messages you acknowledge, with
+which content and when, can carry tens of bits an hour to anyone watching — so not for an agent that also reads
+sensitive mail, files or secrets in the same session. Only when they asked for one, `slack_standing_add` prepares it —
+nothing is sent, and nothing is approved:
 
 ```sh
 agent-slack standing add --workspace acme/slack --reactions eyes --places C024BE7LR --expires 7d

@@ -220,6 +220,8 @@ export * from './standing-emoji.ts';
 export * from './standing-flow.ts';
 // Every use counted once, under the account's ledger lock and then the standing record's, and never refunded.
 export * from './standing-ledger.ts';
+// The pause between deciding a standing act and making it: 5 to 30 seconds, from the operating system's CSPRNG.
+export * from './standing-pause.ts';
 /*
  * The module names a standing act's notification `Notice`, as the plan does; the root already has a `Notice` — the
  * update notice (`update-gate.ts`) — so here it is `StandingNotice`. `Notifier` takes it either way.

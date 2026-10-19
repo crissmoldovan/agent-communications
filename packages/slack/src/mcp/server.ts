@@ -1084,6 +1084,10 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         perThread: z.number().optional().describe('acts per thread, across every standing approval: 1 to 3'),
         perHour: z.number().optional().describe('acts an hour: 1 to 30'),
         perDay: z.number().optional().describe('acts a day: 1 to 100'),
+        perSender: z
+          .number()
+          .optional()
+          .describe('acts a day on messages from any one person, across every standing approval: 1 to 10'),
         expiresDays: z.number().optional().describe('days it lasts once approved: 1 to 30'),
         replaces: z.string().optional().describe('the standing approval this replaces'),
       },
@@ -1103,6 +1107,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             perThread: args.perThread,
             perHour: args.perHour,
             perDay: args.perDay,
+            perSender: args.perSender,
             expiresDays: args.expiresDays,
             replaces: args.replaces,
           },

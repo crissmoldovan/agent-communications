@@ -85,7 +85,7 @@ adds enforcement, not freedom, and its contents, places and limits hold only on 
 | # | Threat | What it would cost | Mitigation |
 |---|---|---|---|
 | T1 | Injected text makes the agent send words of the attacker's choosing | impersonation, data leak | **No free text.** The gate builds the payload from the person's fixed content, named by digest (S3, S9). |
-| T2 | Injected text leaks data by choosing which content, which message or where (a covert channel) | a few bits per act | A fixed target: the newest message from someone else, just arrived (S4). Fixed places (S5), one emoji by default (S3), low counts (S6). |
+| T2 | Injected text leaks data by choosing which content, which message, where and when (a covert channel) | tens of bits an hour at the defaults (§10.11) | A fixed target: the newest message from someone else, just arrived (S4). Fixed places (S5), one emoji by default (S3), low counts (S6), at most 3 a day on one person's messages, and a random pause before each act (§10.11). Not closed: see below. |
 | T3 | Messages go to new people or places | spam, a wrong-recipient leak | Exact places, or threads the person really posted in; threads only, no mentions; big rooms and other organisations only where named exactly, failing closed (S5). |
 | T4 | Volume: loops with another bot, or a flood | reputation, rate limits | Humans only, by allow-list (S4). Once per thread across all standing approvals; hourly and daily caps (S6). |
 | T5 | Being taken for the person ("Got it" read as their promise) | reputation | A reply goes as the app or labelled; a reaction only as the app (S7). |
@@ -104,7 +104,12 @@ adds enforcement, not freedom, and its contents, places and limits hold only on 
 - **An agent with an unrestricted shell, running as the person.** It can already get past the terminal check, edit the
   configuration and run the CLI as the person (§3), as can anyone who can write to the configuration directory. An OS
   user-presence check would reach further: future work (§7).
-- T2's covert channel: about one bit per act (act or not, on a message the agent did not choose), within the counts.
+- T2's covert channel, which is wider than this section first said (§10.11, the lead's call after review). The agent
+  still chooses which of the messages that arrive in its places to acknowledge, with which of up to 10 contents, and
+  when within the 15 minutes; whoever watches the acts can read those choices. At the defaults that is tens of bits an
+  hour — enough for a token or a password within a day. The pause and the per-sender cap narrow it; nothing here closes
+  it. **Do not create a standing approval for an agent that also reads sensitive mail, files or secrets in the same
+  session.**
 - Under `chat`, an agent that ignores the skills and takes the ordinary path: today's risk, unchanged.
 
 ## 5. Decisions
@@ -487,3 +492,23 @@ word.
     A ✅ or 👍 in the words reads as a yes as surely as the reaction. A reply holding any of `yes`, `approved`,
     `approve`, `go ahead`, `lgtm`, `ok`, `done` or `confirmed`, as whole words in any case, gets S3's reads-as-approval
     warning, shown under that reply in the preview. **(lead's call, after review)**
+11. **The covert channel is far wider than §4 first said, and the gate now narrows it** (S6, S9, §4 T2; Slack review
+    S1). An agent under injected instructions still chooses which of the messages arriving in its places to
+    acknowledge, with which of up to 10 contents, and when within the 15 minutes; whoever watches can read those
+    choices. At the defaults that is tens of bits an hour. So:
+    - **The docs say so plainly** — §4, SECURITY.md, the core and Slack READMEs, getting started, the changelog and
+      the skills — and say not to create a standing approval for an agent that also reads sensitive mail, files or
+      secrets in the same session.
+    - **A pause between the decision and the act:** 5 to 30 seconds, a whole number of milliseconds from the operating
+      system's CSPRNG (`standingPause`, `node:crypto`'s `randomInt`), taken after the count is spent and before the
+      newest-message read and the claim. The act's own time is recorded beside the decision's: `actAt` in the
+      ledger's outcome line and in the audit, with `pausedMs`; `standing list` shows it. The child's two minutes cover
+      it. A refusal before the count waits no pause. Tests inject the pause (`SlackContext.standingPause`), so none
+      waits.
+    - **A per-sender daily cap,** `perSender`: at most this many acts a day on messages from any one person, counted
+      across every standing approval of the account, as `perThread` is. 3 by default, 1 to 10, part of the limits and
+      their digest: narrowing it applies at once, raising it is a widening and asks for the code. `--per-sender` on
+      `agent-slack standing add` and `agentcomms standing narrow`, `perSender` on `slack_standing_add` and
+      `comms_standing`. The ledger's `use` line records the sender. Reached, it is `STANDING_LIMIT`, `perSender`, with
+      when it frees.
+    - The 15-minute window stays. **(lead's call, after review)**

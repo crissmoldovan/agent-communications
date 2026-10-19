@@ -211,7 +211,7 @@ Usage — run these with this CLI, each as the words after its program:
                                 contents by digest, places, limits and end, its uses in the last day and
                                 its last acts
   standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>]
-                                [--per-day <n>] [--expires <n>d]
+                                [--per-day <n>] [--per-sender <n>] [--expires <n>d]
                                 keep fewer contents or places, lower a limit, or end it sooner: applies
                                 at once, and never allows more
   standing revoke <id>          end one standing approval at once, and every act of it not yet sent
@@ -372,6 +372,7 @@ function parse(argv: string[]) {
       'per-thread': { type: 'string' },
       'per-hour': { type: 'string' },
       'per-day': { type: 'string' },
+      'per-sender': { type: 'string' },
       expires: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
@@ -509,7 +510,7 @@ function labelOptionsGiven(values: { conversation?: string; kinds?: string; as?:
 }
 
 /** `standing narrow`'s own options, as typed. */
-const STANDING_OPTIONS = ['keep', 'places', 'per-thread', 'per-hour', 'per-day', 'expires'] as const;
+const STANDING_OPTIONS = ['keep', 'places', 'per-thread', 'per-hour', 'per-day', 'per-sender', 'expires'] as const;
 
 function standingOptionsGiven(values: Partial<Record<(typeof STANDING_OPTIONS)[number], unknown>>): string[] {
   return STANDING_OPTIONS.filter((flag) => values[flag] !== undefined);
@@ -1054,7 +1055,7 @@ export async function main(
         if (sub === 'narrow') {
           if (id === undefined || extra.length > 0) {
             throw usage(
-              'usage: standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>] [--per-day <n>] [--expires <n>d]',
+              'usage: standing narrow <id> [--keep <digest,…>] [--places <id,…>] [--per-thread <n>] [--per-hour <n>] [--per-day <n>] [--per-sender <n>] [--expires <n>d]',
             );
           }
           taking(STANDING_OPTIONS);
@@ -1069,6 +1070,7 @@ export async function main(
               perThread: wholeNumber(values['per-thread'], { name: '--per-thread', min: 0 }),
               perHour: wholeNumber(values['per-hour'], { name: '--per-hour', min: 0 }),
               perDay: wholeNumber(values['per-day'], { name: '--per-day', min: 0 }),
+              perSender: wholeNumber(values['per-sender'], { name: '--per-sender', min: 0 }),
               expiresDays: values.expires === undefined ? undefined : parseExpiry(values.expires),
             }).filter(([, value]) => value !== undefined),
           );
@@ -1485,8 +1487,10 @@ function renderStandingView(view: StandingView): string {
   }
   if (view.places.kind === 'threads-i-am-in') lines.push('  in threads where you posted yourself in the last 14 days');
   else lines.push('  in', ...view.places.places.flatMap(standingPlaceLines));
-  const { perThread, perHour, perDay, expiresDays } = view.limits;
-  lines.push(`  limits ${perThread} per thread, ${perHour} an hour, ${perDay} a day, for ${expiresDays} days`);
+  const { perThread, perHour, perDay, perSender, expiresDays } = view.limits;
+  lines.push(
+    `  limits ${perThread} per thread, ${perHour} an hour, ${perDay} a day, ${perSender} a day from any one person, for ${expiresDays} days`,
+  );
   lines.push(`  ${view.usesToday} ${view.usesToday === 1 ? 'use' : 'uses'} in the last day`);
   for (const act of view.lastActs) {
     lines.push(

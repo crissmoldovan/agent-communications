@@ -7,6 +7,7 @@ import {
   type Notifier,
   openCore,
   type StandingNotice,
+  type StandingPause,
   type Streams,
 } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
@@ -120,6 +121,8 @@ export interface StandingWorld {
   readonly clock: { now: number };
   /** Every notice raised on the person's screen, when the world was made with the recording notifier. */
   readonly notices: StandingNotice[];
+  /** Every pause between a standing act's decision and the act, in the order taken: what each said it waited. */
+  readonly pauses: number[];
   /** What Slack was asked, by method. */
   requests(method: string): SlackRequest[];
 }
@@ -137,6 +140,11 @@ export interface StandingWorldOptions {
    * the platform's real notifier: no test shows a notification.
    */
   readonly notify?: Notifier | null;
+  /**
+   * The pause between a standing act's decision and the act. Left out, one that records into `pauses`, says it waited
+   * the shortest pause, and returns at once: no test waits, and the clock is the test's to move.
+   */
+  readonly pause?: StandingPause;
 }
 
 export async function standingWorld(t: TestContext, options: StandingWorldOptions = {}): Promise<StandingWorld> {
@@ -169,6 +177,14 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
   };
   // `null` reaches the context as it is: left out, the context would take the platform's real notifier.
   const notify = options.notify === null ? null : (options.notify ?? recording);
+  const pauses: number[] = [];
+  const given = options.pause ?? (async () => 5_000);
+  // Never core's own, which waits 5 to 30 seconds: what a test gives, or the shortest, at once.
+  const pause: StandingPause = async () => {
+    const ms = await given();
+    pauses.push(ms);
+    return ms;
+  };
   const context = new SlackContext({
     core,
     env: harness.env,
@@ -177,6 +193,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     platform: 'darwin',
     surface: 'mcp',
     notify,
+    standingPause: pause,
   });
   return {
     harness,
@@ -187,6 +204,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     slack: { fetch: fake.fetch },
     clock,
     notices,
+    pauses,
     requests: (method) => fake.requests.filter((request) => request.method === method),
   };
 }
@@ -268,8 +286,9 @@ export async function cli(
     openBrowser: () => undefined,
     probe: (input, init) => w.harness.probe(input, init),
     read: w.fake.fetch,
-    // The world's notifier, or none: never the platform's real one.
+    // The world's notifier, or none: never the platform's real one. Its pause too: never core's, which waits.
     notify: w.context.notify ?? null,
+    standingPause: w.context.standingPause,
   });
   const stdout = options.streams === undefined ? fallback.out() : (options.streams.said?.() ?? '');
   const stderr = options.streams === undefined ? fallback.err() : '';
@@ -295,8 +314,9 @@ export async function mcp(w: StandingWorld, t: TestContext): Promise<McpClient> 
     fetch: w.fake.fetch,
     platform: 'darwin',
     now: () => new Date(w.clock.now),
-    // The world's notifier, or none: never the platform's real one.
+    // The world's notifier, or none: never the platform's real one. Its pause too: never core's, which waits.
     notify: w.context.notify ?? null,
+    standingPause: w.context.standingPause,
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });

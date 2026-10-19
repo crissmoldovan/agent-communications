@@ -275,8 +275,9 @@ agentcomms standing off    # end every one, at once
 it shows, typed at your terminal: never by a yes in chat. An agent then chooses only whether to acknowledge a message
 that has just arrived, and with which of your contents. Every act goes out as your agent, and raises a notification on
 your screen. Mail, top-level posts, edits, deletions and files are never sent this way. It holds against an agent
-acting through the tools, not against one with a shell running as you; [SECURITY.md](../SECURITY.md) says what it
-does not defend.
+acting through the tools, not against one with a shell running as you, and an agent misled by something it read can
+still say tens of bits an hour by which messages it acknowledges: do not make one for an agent that also reads
+sensitive mail, files or secrets in the same session. [SECURITY.md](../SECURITY.md) says what it does not defend.
 
 ### An organisation's agent app, for administrators
 

@@ -28,6 +28,8 @@ export interface AckUse {
   ts: string;
   /** The thread the message is in — its parent's `ts` — or the message's own `ts` outside one. */
   thread: string;
+  /** Who wrote the acknowledged message, by their Slack id: what `perSender` counts by, across the account. */
+  sender: string;
   /** SHA-256 of the acknowledged message's text at the act, so an edit since shows. */
   targetDigest: string;
   edited: boolean;
@@ -37,6 +39,11 @@ export interface AckUse {
 export interface AckOutcome {
   kind: 'outcome';
   at: string;
+  /**
+   * When the act itself started, after the pause between the decision and the act (S9, the lead's call after review):
+   * a use's own `at` is when it was decided.
+   */
+  actAt?: string;
   childId: string;
   outcome: 'sent' | 'failed' | 'unknown';
   link?: string;
@@ -65,7 +72,16 @@ function entryOf(line: string): AckEntry | null {
   const entry = raw as Record<string, unknown>;
   if (!isTime(entry.at)) return null;
   if (entry.kind === 'use') {
-    const fields = ['standingId', 'childId', 'contentDigest', 'channel', 'ts', 'thread', 'targetDigest'] as const;
+    const fields = [
+      'standingId',
+      'childId',
+      'contentDigest',
+      'channel',
+      'ts',
+      'thread',
+      'sender',
+      'targetDigest',
+    ] as const;
     if (!fields.every((field) => isString(entry[field]) && entry[field] !== '')) return null;
     if (entry.act !== 'reaction' && entry.act !== 'reply') return null;
     if (typeof entry.edited !== 'boolean') return null;
@@ -79,6 +95,7 @@ function entryOf(line: string): AckEntry | null {
       channel: entry.channel as string,
       ts: entry.ts as string,
       thread: entry.thread as string,
+      sender: entry.sender as string,
       targetDigest: entry.targetDigest as string,
       edited: entry.edited,
     };
@@ -86,9 +103,11 @@ function entryOf(line: string): AckEntry | null {
   if (entry.kind === 'outcome') {
     if (!isString(entry.childId) || !isString(entry.outcome) || !OUTCOMES.includes(entry.outcome)) return null;
     if (!isString(entry.notice) || (entry.link !== undefined && !isString(entry.link))) return null;
+    if (entry.actAt !== undefined && !isTime(entry.actAt)) return null;
     return {
       kind: 'outcome',
       at: entry.at,
+      ...(entry.actAt === undefined ? {} : { actAt: entry.actAt as string }),
       childId: entry.childId,
       outcome: entry.outcome as AckOutcome['outcome'],
       ...(entry.link === undefined ? {} : { link: entry.link as string }),

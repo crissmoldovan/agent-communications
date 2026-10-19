@@ -496,7 +496,8 @@ agent-slack ack --workspace acme/slack --standing <id> --channel C024BE7LR --ts 
 `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in yourself in the last 14 days,
 where a message this product sent for you does not count. The preview shows each content in full with its digest,
 warning for an emoji that can read as approval, such as ✅, or a reply that says "OK", "Done" or the like; each place with its member count and whether another
-organisation shares it; the limits (`--per-thread`, `--per-hour`, `--per-day`); and the expiry. A place of 50 members
+organisation shares it; the limits (`--per-thread`, `--per-hour`, `--per-day`, and `--per-sender`: acts a day on any
+one person's messages, 3 by default, 10 at most); and the expiry. A place of 50 members
 or more, or one with someone from another organisation in it, is allowed only when named exactly, and one that has
 grown to 50 or changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and
 asks again; a replacement that only narrows applies at once.
@@ -505,12 +506,15 @@ Every act goes out as your agent: a reply in the thread, as the app or labelled 
 `me` rule; a reaction only as the app, and only where the app is a member, so never in a DM, a group DM, a room the
 app is not in, or a `labelled` workspace. Each act raises a notification on your screen — what was sent, where, and
 under which standing approval — and goes in the audit, with the acknowledged message's digest and whether it had been
-edited. A refusal is `STANDING_REFUSED` with its reason, or `STANDING_LIMIT` with when the limit frees (exit `10`):
-nothing was sent.
+edited. Each act goes 5 to 30 seconds after the agent asks for it, by a pause drawn at random, so the moment it appears
+is not the agent's to choose. A refusal is `STANDING_REFUSED` with its reason, or `STANDING_LIMIT` with when the limit
+frees (exit `10`): nothing was sent.
 
 The core lists, narrows and ends them: `agentcomms standing list`, `agentcomms standing revoke <id>`, and
 `agentcomms standing off`, which ends every one at once. What a standing approval does not defend — an agent with a
-shell, running as you — is in the core's README and the repository's SECURITY.md.
+shell, running as you — is in the core's README and the repository's SECURITY.md, and so is what it can still leak: an
+agent misled by something it read can still say tens of bits an hour by which messages it acknowledges, with what and
+when. Do not make one for an agent that also reads sensitive mail, files or secrets in the same session.
 
 ## Your agent's emoji
 

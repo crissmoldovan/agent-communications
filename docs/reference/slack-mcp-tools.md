@@ -347,6 +347,7 @@ Prepare a standing approval — acknowledgements your agent may later send witho
 | `perThread` | number | no | acts per thread, across every standing approval: 1 to 3 |
 | `perHour` | number | no | acts an hour: 1 to 30 |
 | `perDay` | number | no | acts a day: 1 to 100 |
+| `perSender` | number | no | acts a day on messages from any one person, across every standing approval: 1 to 10 |
 | `expiresDays` | number | no | days it lasts once approved: 1 to 30 |
 | `replaces` | string | no | the standing approval this replaces |
 
@@ -424,7 +425,7 @@ Delete a message slack_delete_prepare prepared — only after the person has see
 
 ### `slack_approval_wait`
 
-Wait for an approval — a post, a reaction, a change or a download’s question — to be usable or finished, and say where it stands: pending (with `claimable` true when a yes in the chat can use it), approved, being posted, used, failed, unknown, expired, revoked, corrupt, or answered for a question. `waitSeconds` is 30 when left out, 300 at most, and 0 for its status now. It only looks: it never approves, claims or posts. Ended still waiting, wait again — never prepare it again while it is pending or being posted. The same as `approval wait` in the Slack CLI.
+Wait for an approval — a post, a reaction, a change or a download’s question — to be usable or finished, and say where it stands: pending (with `claimable` true when a yes in the chat can use it), approved, being posted, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends `active` once the person has approved it — slack_ack uses it, nothing claims it — and `standing` says pending, active or ended, with why. `waitSeconds` is 30 when left out, 300 at most, and 0 for its status now. It only looks: it never approves, claims or posts. Ended still waiting, wait again — never prepare it again while it is pending or being posted. The same as `approval wait` in the Slack CLI.
 
 *read-only*
 

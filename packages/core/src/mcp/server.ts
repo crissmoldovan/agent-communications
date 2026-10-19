@@ -634,6 +634,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
                 perThread: limitArg('acts per thread, or per message outside one, across every standing approval'),
                 perHour: limitArg('acts an hour'),
                 perDay: limitArg('acts a day'),
+                perSender: limitArg('acts a day on messages from any one person, across every standing approval'),
                 expiresDays: limitArg('days from its approval until it ends'),
               })
               .optional()

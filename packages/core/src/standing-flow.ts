@@ -17,12 +17,12 @@ import {
   classifyStandingChange,
   type ExactPlace,
   effectiveStanding,
+  replyWarningPrefix,
   type SharedState,
   type StandingBinding,
   type StandingLimits,
   type StandingNarrowing,
   type StandingPlaces,
-  replyWarningPrefix,
   standingBindingProblem,
   standingDigest,
 } from './standing.ts';
@@ -325,7 +325,7 @@ export function renderStandingPreview(record: ApprovalRecord): string {
     standing.places.kind === 'threads-i-am-in'
       ? [`threads-i-am-in: threads in ${workspace} where you posted yourself in the last 14 days`]
       : standing.places.places.map(placeLine);
-  const { perThread, perHour, perDay, expiresDays } = standing.limits;
+  const { perThread, perHour, perDay, perSender, expiresDays } = standing.limits;
   return [
     ...(standing.proposedBy === 'agent' ? [STANDING_AGENT_LINE] : []),
     `Standing approval for ${workspace}: your agent may acknowledge, without asking, a message that has just arrived from another person.`,
@@ -337,7 +337,7 @@ export function renderStandingPreview(record: ApprovalRecord): string {
     'Places:',
     ...places,
     '',
-    `Limits: ${perThread} per thread, ${perHour} an hour, ${perDay} a day; it ends ${plural(expiresDays, 'day', 'days')} after you approve it.`,
+    `Limits: ${perThread} per thread, ${perHour} an hour, ${perDay} a day, ${perSender} a day on messages from any one person; it ends ${plural(expiresDays, 'day', 'days')} after you approve it.`,
     ...(standing.replaces === undefined ? [] : [`Replaces ${standing.replaces}: approving this ends it.`]),
     '',
     `approval ${record.approvalId} · approved only with the code typed at a terminal · approving it sends nothing`,

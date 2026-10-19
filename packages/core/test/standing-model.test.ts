@@ -152,7 +152,13 @@ test('a reply whose words read as approval is warned for, word by word, in any c
     );
   }
   // Whole words only: these say none of them.
-  for (const reply of ['Okay, looking', 'Bookkeeping noted', 'Not undone yet', 'Going ahead later? Checking', 'Got it']) {
+  for (const reply of [
+    'Okay, looking',
+    'Bookkeeping noted',
+    'Not undone yet',
+    'Going ahead later? Checking',
+    'Got it',
+  ]) {
     assert.deepEqual(warned(reply), [], reply);
   }
   // A reaction's warnings first, then each reply's, in the order written.
@@ -186,11 +192,12 @@ test('a digest covers kind and text, and reordering contents keeps each digest',
 });
 
 test('limits outside the table are refused, and parseExpiry reads <n>d from 1 to 30', () => {
-  assert.deepEqual(checkedLimits({}), { perThread: 1, perHour: 10, perDay: 30, expiresDays: 7 });
-  assert.deepEqual(checkedLimits({ perThread: 3, perHour: 30, perDay: 100, expiresDays: 30 }), {
+  assert.deepEqual(checkedLimits({}), { perThread: 1, perHour: 10, perDay: 30, perSender: 3, expiresDays: 7 });
+  assert.deepEqual(checkedLimits({ perThread: 3, perHour: 30, perDay: 100, perSender: 10, expiresDays: 30 }), {
     perThread: 3,
     perHour: 30,
     perDay: 100,
+    perSender: 10,
     expiresDays: 30,
   });
   for (const outside of [
@@ -198,6 +205,8 @@ test('limits outside the table are refused, and parseExpiry reads <n>d from 1 to
     { perThread: 4 },
     { perHour: 31 },
     { perDay: 101 },
+    { perSender: 0 },
+    { perSender: 11 },
     { perDay: 0 },
     { expiresDays: 31 },
     { expiresDays: 0 },
@@ -322,7 +331,7 @@ test('a subset of contents and places with lower limits narrows; the same is sam
       binding({
         contents: fewer,
         places: { kind: 'exact', places: [ROOM] },
-        limits: { perThread: 1, perHour: 5, perDay: 20, expiresDays: 3 },
+        limits: { perThread: 1, perHour: 5, perDay: 20, perSender: 2, expiresDays: 3 },
       }),
     ),
     'narrows',
@@ -369,7 +378,7 @@ test('effectiveStanding keeps only the kept digests and the lower limits', () =>
   );
   assert.deepEqual(narrowed.places, { kind: 'exact', places: [ROOM] });
   // The lower of each: a narrowing never raises a limit, whatever it says.
-  assert.deepEqual(narrowed.limits, { perThread: 1, perHour: 10, perDay: 30, expiresDays: 2 });
+  assert.deepEqual(narrowed.limits, { perThread: 1, perHour: 10, perDay: 30, perSender: 3, expiresDays: 2 });
   assert.notEqual(classifyStandingChange(before, narrowed), 'widens');
   assert.deepEqual(effectiveStanding(before), before, 'nothing narrowed is the approval as it was');
   assert.deepEqual(effectiveStanding(before, {}), before);

@@ -1047,6 +1047,66 @@ test('a clock earlier than the last act refuses', async (t) => {
   assert.equal(w.world.reactions.length, 1);
 });
 
+// ── Less to say by choosing (S6, S9, the lead's call after review) ─────────────────────────────────────────────────
+
+test('the act waits a pause after its count is spent, and the act’s own time is recorded beside the decision', async (t) => {
+  let decidedAt: number | undefined;
+  const seen: { uses: number; reactions: number }[] = [];
+  const w: StandingWorld = await world(t, {
+    pause: async () => {
+      // The count is spent, and nothing is sent yet: the pause is between the two.
+      seen.push({ uses: (await ledger(w)).uses.length, reactions: w.world.reactions.length });
+      decidedAt = w.clock.now;
+      w.clock.now += 17_000;
+      return 17_000;
+    },
+  });
+  const s = await inEng(w);
+  const ts = say(w, { channel: ENG });
+  const done = await acknowledge(w, withEyes(s, ENG, ts));
+  assert.equal(done.act, 'reaction');
+  assert.deepEqual(seen, [{ uses: 1, reactions: 0 }]);
+  assert.deepEqual(w.pauses, [17_000]);
+  const { uses, outcomes } = await ledger(w);
+  assert.equal(uses[0]?.at, new Date(decidedAt as number).toISOString(), 'the use is when it was decided');
+  assert.equal(outcomes[0]?.actAt, new Date((decidedAt as number) + 17_000).toISOString(), 'the act, after it');
+  const [record] = (await w.core.audit.tail({ limit: 100 })).filter((each) => each.operation === 'slack.ack');
+  assert.equal(record?.ids?.pausedMs, '17000');
+  assert.equal(record?.ids?.actAt, outcomes[0]?.actAt);
+});
+
+test('a refusal before the count waits no pause', async (t) => {
+  const w = await world(t);
+  const s = await inEng(w);
+  const stale = say(w, { channel: ENG, ago: 16 * 60_000 });
+  assertRefused(await refused(acknowledge(w, withEyes(s, ENG, stale)), 'stale'), 'not-fresh', 'stale');
+  assert.deepEqual(w.pauses, [], 'a pause was taken for nothing');
+});
+
+test('a fourth act on one person’s messages in a day is refused, across standing approvals: perSender', async (t) => {
+  const w = await world(t);
+  const first = await inEng(w);
+  const second = await inEng(w, { reactions: ['raised_hands'], replies: [] });
+  for (const [index, s] of [first, second, first].entries()) {
+    const ts = say(w, { channel: ENG, text: `question ${index}` });
+    const content = s === first ? s.digest('reaction', 'eyes') : s.digest('reaction', 'raised_hands');
+    await acknowledge(w, { standingId: s.id, channel: ENG, ts, content });
+    w.clock.now += 60_000;
+  }
+  const fourth = say(w, { channel: ENG, text: 'question 3' });
+  const limited = await refused(acknowledge(w, withEyes(first, ENG, fourth)), 'fourth');
+  assert.equal(limited.code, 'STANDING_LIMIT', limited.message);
+  assert.equal(limited.details?.limit, 'perSender');
+  assert.equal(limited.details?.allowed, 3);
+  assert.equal(typeof limited.details?.freesAt, 'string');
+  assert.match(limited.message, /3 a day on messages from one person/);
+  assert.equal(w.world.reactions.length, 3, 'the fourth was sent');
+  // Someone else's is counted on its own.
+  w.clock.now += 1_000;
+  const other = say(w, { channel: ENG, user: ANA, text: 'and mine?' });
+  assert.equal((await acknowledge(w, withEyes(first, ENG, other))).act, 'reaction');
+});
+
 // ── Seeing it (S10) ────────────────────────────────────────────────────────────────────────────────────────────
 
 test('each act raises a notice saying what was sent, where, and under which standing approval', async (t) => {
@@ -1108,6 +1168,9 @@ test('the audit keeps the acknowledged text’s digest and edited state', async 
     ts,
     targetDigest: sha256Hex(text),
     edited: 'true',
+    // The pause between the decision and the act, and when the act started: the world's pause takes no time.
+    pausedMs: '5000',
+    actAt: new Date(w.clock.now).toISOString(),
     notice: 'raised',
   });
   const [use] = (await ledger(w)).uses;

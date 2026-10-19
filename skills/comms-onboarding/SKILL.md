@@ -162,7 +162,8 @@ their own terminal with `agentcomms profile init <account>`. Before you write an
 **Acknowledging without asking** is a standing approval, and only ever the person's. With one, an agent may answer a
 Slack message that has just arrived from someone else with a reaction or a short reply the person wrote in advance,
 in places, counts and days they set; every use goes out as the agent and is shown on their screen. Nothing changes
-until they create one, at their own terminal with a code. Do not offer one during setup, and never ask them to make
+until they create one, at their own terminal with a code. It is not for an agent that also reads sensitive mail, files
+or secrets in the same session: which messages it acknowledges, and when, can carry tens of bits an hour. Do not offer one during setup, and never ask them to make
 one in chat. If they ask, the slack-posting skill prepares it with `slack_standing_add`, which only prepares: they
 approve it at their terminal with the approve command the result gives. `comms_standing` with no change shows them;
 with `revoke`, `narrow` or `off` it narrows or ends them at once, whenever they ask.

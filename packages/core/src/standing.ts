@@ -51,11 +51,16 @@ export interface ExactPlace {
 /** S5: exact channels or DMs, or the threads in one workspace where the person posted themselves. */
 export type StandingPlaces = { kind: 'exact'; places: ExactPlace[] } | { kind: 'threads-i-am-in' };
 
-/** S6: the limits. `perThread` counts across every standing approval of the account. */
+/**
+ * S6: the limits. `perThread` and `perSender` count across every standing approval of the account: `perSender` is how
+ * many acts a day may answer messages from any one person (the lead's call, after review), the cap on what an injected
+ * agent can say to one recipient by choosing which of their messages to acknowledge.
+ */
 export interface StandingLimits {
   perThread: number;
   perHour: number;
   perDay: number;
+  perSender: number;
   expiresDays: number;
 }
 
@@ -122,10 +127,11 @@ export const STANDING_LIMITS: Readonly<Record<keyof StandingLimits, { default: n
     perThread: Object.freeze({ default: 1, min: 1, max: 3 }),
     perHour: Object.freeze({ default: 10, min: 1, max: 30 }),
     perDay: Object.freeze({ default: 30, min: 1, max: 100 }),
+    perSender: Object.freeze({ default: 3, min: 1, max: 10 }),
     expiresDays: Object.freeze({ default: 7, min: 1, max: 30 }),
   });
 
-const LIMIT_NAMES = ['perThread', 'perHour', 'perDay', 'expiresDays'] as const;
+const LIMIT_NAMES = ['perThread', 'perHour', 'perDay', 'perSender', 'expiresDays'] as const;
 
 /** Why a content a person wrote is refused: `details.reason` of the BAD_DATA. */
 export type ContentRefusal =
@@ -345,6 +351,7 @@ export function standingDigest(binding: StandingBinding): string {
         perThread: binding.limits.perThread,
         perHour: binding.limits.perHour,
         perDay: binding.limits.perDay,
+        perSender: binding.limits.perSender,
         expiresDays: binding.limits.expiresDays,
       },
       proposedBy: binding.proposedBy,
@@ -677,10 +684,11 @@ export function standingRefused(reason: StandingRefusal, hint: string): CommsErr
   });
 }
 
-const LIMIT_WORDS: Readonly<Record<'perThread' | 'perHour' | 'perDay', string>> = Object.freeze({
+const LIMIT_WORDS: Readonly<Record<'perThread' | 'perHour' | 'perDay' | 'perSender', string>> = Object.freeze({
   perThread: 'per thread',
   perHour: 'an hour',
   perDay: 'a day',
+  perSender: 'a day on messages from one person',
 });
 
 /**
@@ -688,7 +696,7 @@ const LIMIT_WORDS: Readonly<Record<'perThread' | 'perHour' | 'perDay', string>> 
  * an ISO time, or null for `perThread`, which never frees. Never queued.
  */
 export function standingLimitReached(
-  limit: 'perThread' | 'perHour' | 'perDay',
+  limit: 'perThread' | 'perHour' | 'perDay' | 'perSender',
   allowed: number,
   freesAt: string | null,
   hint: string,

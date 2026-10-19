@@ -267,6 +267,66 @@ test('--replaces with a subset narrows at once', async (t) => {
   assert.equal(record.narrowed?.limits?.perHour, 4);
 });
 
+test('--per-sender sets a day’s acts on one person’s messages; out of range is refused, and raising it asks', async (t) => {
+  const w = await standingWorld(t);
+  const original = await approvedAtTerminal(w, ['--places', ENG, '--per-sender', '2']);
+  assert.equal((await recordOf(w, original)).standing?.limits.perSender, 2);
+  const left = await cli(w, ['--json', 'standing', 'add', '--workspace', 'acme', '--places', ENG]);
+  assert.match(left.json().error?.details.preview, /3 a day on messages from any one person/, 'three when left out');
+  for (const outside of ['0', '11']) {
+    const refused = await cli(w, [
+      '--json',
+      'standing',
+      'add',
+      '--workspace',
+      'acme',
+      '--places',
+      ENG,
+      '--per-sender',
+      outside,
+    ]);
+    assert.notEqual(refused.code, EXIT_CODES.OK, outside);
+    assert.notEqual(refused.code, EXIT_CODES.APPROVAL, `${outside}: prepared`);
+  }
+  // Raising it is a widening: a new standing approval, approved with its code.
+  const raised = await cli(w, [
+    '--json',
+    'standing',
+    'add',
+    '--workspace',
+    'acme',
+    '--places',
+    ENG,
+    '--per-sender',
+    '5',
+    '--replaces',
+    original,
+  ]);
+  assert.equal(raised.code, EXIT_CODES.APPROVAL, raised.stdout);
+  assert.equal(raised.json().error?.code, 'APPROVAL_PENDING');
+  // Lowering it applies at once.
+  const lowered = await cli(w, [
+    '--json',
+    'standing',
+    'add',
+    '--workspace',
+    'acme',
+    '--places',
+    ENG,
+    '--per-sender',
+    '1',
+    '--replaces',
+    original,
+  ]);
+  assert.equal(lowered.code, EXIT_CODES.OK, lowered.stdout);
+  assert.equal((await recordOf(w, original)).narrowed?.limits?.perSender, 1);
+  // The tool takes it too.
+  const { call } = await mcp(w, t);
+  const tool = await call('slack_standing_add', { workspace: 'acme', places: [ENG], perSender: 4 });
+  assert.notEqual(tool.isError, true, JSON.stringify(tool.structuredContent));
+  assert.equal((await recordOf(w, tool.structuredContent?.approvalId)).standing?.limits.perSender, 4);
+});
+
 test('agent-slack approve completes a standing record with its code', async (t) => {
   const w = await standingWorld(t);
   const { call } = await mcp(w, t);

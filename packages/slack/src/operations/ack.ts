@@ -67,11 +67,13 @@ import { requireWorkspace } from './workspaces.ts';
  *    and spec 2's rules (`allowedAct`).
  * 3. **The mint** (`mintStandingUse`), under the account's acknowledgement ledger lock and then the standing record's:
  *    the count is spent there, never refunded, and a one-shot child minted.
- * 4. **The newest-message read again**, since it is one call: refused now, the child is revoked and the count stays
+ * 4. **The pause:** 5 to 30 seconds from the CSPRNG (`standingPause`), so the moment an acknowledgement appears is
+ *    not the agent's to choose; the act's own time is recorded beside the decision's.
+ * 5. **The newest-message read again**, since it is one call: refused now, the child is revoked and the count stays
  *    spent.
- * 5. **The act, through the existing path:** `postPrepared` or `reactPrepared`, whose claim (`claimOrHandOver`) asks
- *    the rules again and takes a child only from here.
- * 6. **After it:** the outcome in the ledger, a notice on the person's screen, and the audit — none of which ever fails
+ * 6. **The act, through the existing path:** `postPrepared` or `reactPrepared`, whose claim (`claimOrHandOver`) asks
+ *    the rules again — and core reads the standing approval again — and takes a child only from here.
+ * 7. **After it:** the outcome in the ledger, a notice on the person's screen, and the audit — none of which ever fails
  *    the act.
  *
  * There is no new send path: the child is claimed and sent as every Slack act is.
@@ -635,11 +637,13 @@ export async function ack(
         edited: message.edited !== undefined && message.edited !== null,
         // What the place was checked against: the mint refuses it if the record no longer covers it there.
         places: inForce.places.kind,
+        // Who wrote it, which `perSender` counts by: a person's id, as `human` has read it.
+        sender: message.user as string,
       },
       child,
     });
     childId = minted.child.approvalId;
-    const ids = {
+    const ids: Record<string, string> = {
       standingId: request.standingId,
       childId,
       contentDigest: content.digest,
@@ -651,12 +655,21 @@ export async function ack(
 
     let approval: ApprovalObject;
     let posted: { ts?: string | undefined } | undefined;
+    let actAt: string | undefined;
     try {
-      // 4. The newest-message read again, just before the claim: refused now, the count stays spent.
+      /*
+       * 4. The pause (the lead's call, after review): 5 to 30 seconds from the CSPRNG between the decision and the act,
+       * so the moment an acknowledgement appears is not the agent's to choose. The act's own time is recorded.
+       */
+      const pausedMs = await context.standingPause();
+      actAt = context.core.acks.now().toISOString();
+      ids.pausedMs = String(pausedMs);
+      ids.actAt = actAt;
+      // 5. The newest-message read again, just before the claim: refused now, the count stays spent.
       const again = await newest(gate, channel, target, null);
       if (again !== 'newest') throw refuse(again === 'not-newest' ? 'not-newest' : 'unreadable');
       /*
-       * 5. The act, through the existing path: the child is claimed there, once, and only there — with the gate as the
+       * 6. The act, through the existing path: the child is claimed there, once, and only there — with the gate as the
        * configuration is now, as every send's is built at send. A label, a policy or a rule changed since the mint is
        * what the claim sees, so the act it binds is decided again, and a different one is refused.
        */
@@ -674,6 +687,7 @@ export async function ack(
         outcome: unknown ? 'unknown' : 'failed',
         childId,
         ids,
+        actAt,
         notice: unknown
           ? ackNotice({ act, text: content.text, place: placeName(facts), standingId: request.standingId })
           : undefined,
@@ -682,11 +696,12 @@ export async function ack(
       throw error;
     }
 
-    // 6. After it: the ledger's outcome, the notice, the audit — none of them ever fails the act.
+    // 7. After it: the ledger's outcome, the notice, the audit — none of them ever fails the act.
     const notice = await afterward(context, gate, {
       outcome: 'sent',
       childId,
       ids,
+      actAt,
       notice: ackNotice({ act, text: content.text, place: placeName(facts), standingId: request.standingId }),
     });
     return {
@@ -742,6 +757,8 @@ async function afterward(
     outcome: 'sent' | 'failed' | 'unknown';
     childId: string;
     ids: Record<string, string>;
+    /** When the act started, after the pause: absent when it was refused before then. */
+    actAt?: string | undefined;
     notice: StandingNotice | undefined;
     reason?: string | undefined;
   },
@@ -752,6 +769,7 @@ async function afterward(
     await context.core.acks.recordOutcome(gate.accountId, {
       kind: 'outcome',
       at: context.core.acks.now().toISOString(),
+      ...(done.actAt === undefined ? {} : { actAt: done.actAt }),
       childId: done.childId,
       outcome: done.outcome,
       ...(link === undefined ? {} : { link }),
