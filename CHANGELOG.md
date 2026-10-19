@@ -3,7 +3,23 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.22.0
+
+**What an agent may do is now yours to set, per account and per conversation, and every channel holds it.** This is
+the first of the behaviour rules the owner asked for with the agent label: "react and reply, but never start a
+conversation, edit or delete". Until now the send policy and your yes to each message were the only boundary. Now a
+rule can forbid an act outright, the tools refuse it before any preview and again at send, and a rule fails closed
+wherever it could otherwise go quiet. How the agent writes comes from a writing profile you keep, which it reads
+before it writes.
+
+Nothing changes when you update: with no rule, every act is allowed exactly as in 0.21.0. Results gain a few fields
+and one new code, `ACT_NOT_ALLOWED` (exit 10). Two refusals are new for everyone, rules or not:
+- **A Slack post or reaction must name its conversation by id** (`C…`, `G…`, `D…`). A channel's name is refused, because
+  Slack posts into a room by its name and so no rule could have matched it.
+- **A Slack `thread_ts` must look like a message's ts.**
+
+**Servers started before 0.22.0 enforce no rule** until their client restarts them. The first rule you add says so,
+and `doctor` names any such server.
 
 **You can decide what an agent may do at all, on each account and in each conversation, and how it writes there.**
 Until now the only boundary was the send policy and your yes to each message: in a workspace that could post, every act
