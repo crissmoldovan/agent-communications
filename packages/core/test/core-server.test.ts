@@ -245,6 +245,7 @@ const READING = [
   'comms_channels_available',
   'comms_orgs_list',
   'comms_org_show',
+  'comms_profile',
 ];
 const CHANGING = [
   'comms_attach',
