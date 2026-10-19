@@ -46,6 +46,9 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     postingAs: account.userId,
     policy: effectiveAccountSendPolicy(config, name),
     sendEpoch: sendEpochOf(config, account.id),
+    // The behaviour rules as the file holds them each time they are asked (design 2026-10-19-agent-behaviour-rules, B4):
+    // at prepare, and again just before a claim — never this reading, which a rule tightened since would not be in.
+    currentConfig: () => context.config(),
     // What a post with files is checked against, at prepare and again at send: the mode, the grant, and the folders.
     mode: account.mode ?? account.tier,
     grantedScopes: account.grantedScopes,
