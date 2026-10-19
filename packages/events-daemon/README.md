@@ -156,11 +156,14 @@ Two kinds of judge are available:
 
 The third kind, **`laya`**, will run the Laya model on this machine, in an isolated worker. This release does not offer
 it yet: it ships no reviewed runtime lock, so `agent-events judge kinds list` and `agent-events judge model status` show
-Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`, `agent-events judge kind enable laya` refuses before
-anything is prepared, and a judge naming it is refused. On a release that offers it, `judge model status` reports the
-runtime and model installation (`idle`, `installing`, `downloading`, `verifying`, `ready`, `failed` or `unavailable`),
-its byte progress and any failure or unavailable reason; `judge kind disable laya` cancels a download and keeps the
-verified files; and `judge model remove` deletes them, only while Laya is disabled.
+Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`, and `agent-events judge kind enable laya` refuses
+before anything is prepared. You can still add a Laya judge, and a rule that names it: both are configuration, and a
+Laya judge answers only once you have enabled Laya and its model is ready. Until then `rule enable` refuses that rule
+with Laya's reason: `E2_EXTERNAL_REFERENCE_BLOCKED` in this release, `LAYA_PLATFORM_UNAVAILABLE` on Linux and Windows,
+and `LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply. On a release that offers it, `judge model status`
+reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`, `ready`, `failed` or
+`unavailable`), its byte progress and any failure or unavailable reason; `judge kind disable laya` cancels a download and
+keeps the verified files; and `judge model remove` deletes them, only while Laya is disabled.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing
@@ -247,6 +250,25 @@ is the judge document exactly as you added it:
 A local judge has `"kind": "local-endpoint"`, your server's `provider`, `model` and `endpoint`, and that endpoint's
 address in `"approvedAddressSet": ["127.0.0.1"]`. It needs no key.
 
+A Laya judge names the Laya provider, this release's reviewed model as `model` (the `manifestId` that
+`judge model status` shows) and the yes/no template `laya-noul-v1`. It needs no key and no endpoint:
+
+```json
+{
+  "judgeId": "laya",
+  "version": 1,
+  "kind": "laya",
+  "provider": "laya",
+  "model": "laya-en-onnx-68f27dfe",
+  "promptTemplate": "laya-noul-v1"
+}
+```
+
+It runs on this Mac, in English only, with a 512-token context, on the CPU and one call at a time, and the approval
+view of a rule that names it says so. Another model is refused (`LAYA_MANIFEST_NOT_REVIEWED`), and so is the two-option
+template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) until where its answer comes from has been reviewed. A budget's
+`laya` provider entry allows at most one call at a time.
+
 **What a judge sees, and what it decides:**
 - Only the fields in `inputs`, sanitised and marked as untrusted inside a fixed prompt. The rule's `condition` must
   check a content field too (`/subject` above), so a judge is never asked about every event.
@@ -294,6 +316,16 @@ replaces exactly the six results that carried v1's typed `E2_REQUIRED` placehold
 [`laya-model-status-v1.schema.json`](src/operations/contracts/laya-model-status-v1.schema.json): eight closed fields —
 the state, the reviewed manifest id and runtime-lock digest, `bytesVerified` of `totalBytes`, a failure code, an
 unavailable reason and the last update time — and never a path, input, request, response, key or token.
+
+[`b3-control-v3.schema.json`](src/operations/contracts/b3-control-v3.schema.json) is v2 with a Laya judge variant: a
+Laya judge document is exactly `judgeId`, `version`, `kind` and `provider` `laya`, the reviewed manifest id as `model`
+and `promptTemplate` `laya-noul-v1`, and v3 accepts one in `judge add` and `judge update` and in the rule documents of
+`rule create`, `rule update` and `rule test`. It replaces the results of `judgesList`, `addJudge`, `updateJudge`,
+`rule-create` and `rule-update`, and the approval view of a rule that names a Laya judge adds `layaJudge`: its template,
+manifest id and D11's limits, and no input text. A refusal is `BAD_DATA` with one of five closed reasons in
+`details.reason`, named in its message too. Its vectors are in
+[`test/fixtures/b3-control-contract-v3`](test/fixtures/b3-control-contract-v3). An owner without E2's artifact manager
+still answers v1.
 
 ## Licence
 
