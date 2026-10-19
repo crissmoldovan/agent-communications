@@ -96,6 +96,24 @@ class ArtifactMutex {
   }
 }
 
+/**
+ * The enabled selection one Laya worker is started for. Task 8's supervisor captures it before it verifies the trees
+ * and requires it unchanged — same pointer version and digest, same manager epoch — after every await before it sends
+ * a load or a request.
+ */
+export interface LayaWorkerSelection {
+  readonly epoch: number;
+  readonly version: number;
+  readonly digest: string;
+  readonly manifestId: string;
+  readonly promptTemplates: readonly string[];
+}
+
+/** The one worker supervisor this manager stops whenever it fences Laya's work: a kind disable, an update, a stop. */
+export interface LayaWorkerStopper {
+  stop(): Promise<void>;
+}
+
 interface ActiveEnablement {
   readonly version: number;
   readonly digest: string;
@@ -247,6 +265,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
   #epoch = 0;
   #job: ArtifactJob | undefined;
   #stopped = false;
+  #worker: LayaWorkerStopper | undefined;
 
   constructor(options: LayaArtifactManagerOptions) {
     this.#store = options.store;
@@ -382,6 +401,8 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
       return disabled;
     });
     await job?.settled.catch(() => undefined);
+    // D11: a disabled kind's worker exits. In-flight work was already stopped by E's purge of its reservation.
+    await this.#worker?.stop();
     return result;
   }
 
@@ -412,6 +433,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     });
     await job?.settled.catch(() => undefined);
     if (!applied) return null;
+    await this.#worker?.stop();
     await this.#audit?.append({
       inboxId: '',
       operation: 'events.disableJudgeKind',
@@ -576,6 +598,65 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     };
   }
 
+  /** Task 8's one worker supervisor; the returned function detaches exactly that supervisor. */
+  attachWorker(worker: LayaWorkerStopper): () => void {
+    if (this.#worker !== undefined) throw new Error('a Laya worker supervisor is already attached');
+    this.#worker = worker;
+    return () => {
+      if (this.#worker === worker) this.#worker = undefined;
+    };
+  }
+
+  /**
+   * The selection a worker may start for: the active pointer, only while its document is exactly this release's
+   * reviewed one, with the manager's current epoch. Null before an enablement, after a disable, an update or a stop.
+   */
+  workerSelection(): LayaWorkerSelection | null {
+    if (this.#stopped) return null;
+    const active = this.#activeEnablement();
+    if (active === null) return null;
+    const selection = this.#selectionFor(active);
+    if (selection === null) return null;
+    return {
+      epoch: this.#epoch,
+      version: active.version,
+      digest: active.digest,
+      manifestId: selection.manifest.manifestId,
+      promptTemplates: selection.manifest.promptTemplates,
+    };
+  }
+
+  /**
+   * D11: a worker whose per-start boundary proof failed, or whose verified runtime would not load, leaves Laya
+   * `failed` with that closed code until its person acts — no later request starts another child for it. The write is
+   * made only while the selection that worker verified is still the current one, in the same transaction.
+   */
+  recordWorkerFailure(started: LayaWorkerSelection, failureCode: 'boundary-failed' | 'runtime-failed'): void {
+    try {
+      this.#store.immediate(() => {
+        const current = this.workerSelection();
+        if (
+          current === null ||
+          current.epoch !== started.epoch ||
+          current.version !== started.version ||
+          current.digest !== started.digest
+        )
+          return;
+        const row = this.#models.get(started.manifestId);
+        if (row?.state !== 'ready') return;
+        this.#models.write({
+          manifestId: started.manifestId,
+          state: 'failed',
+          bytesVerified: row.bytesVerified,
+          failureCode,
+          now: this.#now(),
+        });
+      });
+    } catch {
+      // A store that cannot be written records nothing; the supervisor has already killed that worker.
+    }
+  }
+
   /**
    * Task 8's supervisor registers each in-flight worker request by its E reservation. The returned signal fires when
    * an E purge terminalises exactly that reservation; nothing else is touched.
@@ -615,6 +696,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     for (const work of this.#tracked.values()) work.controller.abort(new ArtifactWorkStale());
     this.#tracked.clear();
     await job?.settled.catch(() => undefined);
+    await this.#worker?.stop();
   }
 
   #fence(): ArtifactJob | undefined {

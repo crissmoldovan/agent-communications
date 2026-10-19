@@ -1,0 +1,751 @@
+{
+  "schemaVersion": 1,
+  "task": 8,
+  "owners": [
+    {
+      "id": "task-8"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-laya-child-env-and-downloader-fence",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider"
+    },
+    {
+      "id": "e2-laya-worker-limits-and-supervision",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d1-132-138-supervisor-no-daemon-authority",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor has no daemon authority"
+    },
+    {
+      "id": "d5-1053-1071-coordinator-answer",
+      "owner": "task-8",
+      "test": "E2 Laya evaluation uses coordinator answer"
+    },
+    {
+      "id": "d5-1080-1096-late-worker-result",
+      "owner": "task-8",
+      "test": "E2 late worker result is discarded"
+    },
+    {
+      "id": "d10-2035-2047-no-worker-before-approved-test",
+      "owner": "task-8",
+      "test": "E2 no worker before approved synthetic call"
+    },
+    {
+      "id": "d11-2096-2128-laya-evaluation-gating",
+      "owner": "task-8",
+      "test": "E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unavailable Laya or no budget"
+    },
+    {
+      "id": "d11-2134-2151-cpu-only-load",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider"
+    },
+    {
+      "id": "d11-2153-2165-supervisor-timeout-crash-idle",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: an idle worker exits after its idle window"
+    },
+    {
+      "id": "d11-2206-2213-worker-runtime-vectors",
+      "owner": "task-8",
+      "test": "E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count"
+    },
+    {
+      "id": "s8-3393-3432-worker-limits",
+      "owner": "task-8",
+      "test": "E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-late-worker-result-discarded",
+      "owner": "task-8",
+      "test": "E2 late worker result is discarded"
+    },
+    {
+      "id": "e2-purge-kills-in-flight-laya-work",
+      "owner": "task-8",
+      "test": "E2 purge kills only its in-flight Laya work"
+    },
+    {
+      "id": "e2-verified-selection-before-load",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor: a selection changed after its trees were verified sends no load"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-8.json",
+      "owner": "task-8"
+    }
+  ],
+  "externalSources": [
+    {
+      "id": "npm-receptron-laya-0.1.2-load",
+      "url": "https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz",
+      "fetchedAt": "2026-10-12T23:05:21Z",
+      "immutable": "60d5fcd9665732df4f8827468cf369274e17e4ef78a2d35ce5efc0339eee2dc0",
+      "fact": "@receptron/laya 0.1.2 dist/laya.js Laya.load(opts) uses path.resolve(opts.modelDir) when opts.modelDir is set and otherwise calls ensureBundle(opts); it reads laya_config.json, tokenizer/tokenizer.json and tokenizer/tokenizer_config.json from that directory with JSON.parse, builds new Tokenizer(tokenizerJson, tokenizerConfig) from @huggingface/tokenizers, throws unless [CLS], [SEP], [MASK] and [PAD] are tokens, and opens ort.InferenceSession.create(<modelDir>/laya.onnx, { executionProviders: opts.executionProviders ?? [\"cpu\"], graphOptimizationLevel: \"all\", ...opts.sessionOptions }), so opts.sessionOptions can override the execution providers; close() calls session.release()",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-receptron-laya-0.1.2-download",
+      "url": "https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz",
+      "fetchedAt": "2026-10-12T23:05:21Z",
+      "immutable": "e24e61d0769876b6dfb2d71134337c905376b56d5268de8cda8113457d6ea4f2",
+      "fact": "@receptron/laya 0.1.2 dist/download.js ensureBundle(opts) fetches laya.onnx, laya.onnx.data, laya_config.json, tokenizer/tokenizer.json and tokenizer/tokenizer_config.json from https://huggingface.co/<opts.repo or receptron/laya-onnx>/resolve/<opts.revision or main>/<file> with redirect \"follow\", adds Authorization: Bearer <opts.token or HF_TOKEN> when either is set, and writes into opts.cacheDir or LAYA_CACHE or <XDG_CACHE_HOME or ~/.cache>/receptron-laya; the module's top level only imports node built-ins and defines constants and functions, so importing it performs no I/O",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-receptron-laya-0.1.2-render",
+      "url": "https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz",
+      "fetchedAt": "2026-10-12T23:05:21Z",
+      "immutable": "9ae537429c31e12320632c9e4f34a8fce4d0df89ae5fe897ad5a929b1ef3be0c",
+      "fact": "@receptron/laya 0.1.2 dist/sequence.js buildSequence lays a question out as [CLS] \"<type> question: <instructions>\" [SEP], then [MASK] and the text of each option, then [SEP] <state> [SEP], after replacing every literal \"[MASK]\" in instructions, options and state with a space; it encodes each option as \" \" + text cut to 48 tokens, cuts every option to max(4, floor((head_max_len - 16) / options)) tokens when head_max_len minus the options' total is below 16, cuts the instructions to max(8, the remaining head budget) tokens, silently cuts the state (a string as is, otherwise Python-style json.dumps) to max(0, max_len - length so far - 1) tokens, cuts the whole sequence to max_len and drops markers at or beyond it; options render as \"key: description\" or \"key\" (choice), \"level <i>: <text>\" (score) and \"false: <text>\", \"true: <text>\" with defaults \"no, the statement does not hold\" and \"yes, the statement holds\" (noul)",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-receptron-laya-0.1.2-output",
+      "url": "https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz",
+      "fetchedAt": "2026-10-12T23:05:21Z",
+      "immutable": "60d5fcd9665732df4f8827468cf369274e17e4ef78a2d35ce5efc0339eee2dc0",
+      "fact": "@receptron/laya 0.1.2 dist/laya.js systemOne(state, questions) requires at least one question and throws when a question's markers do not match its options; it feeds input_ids int64 [n, L] right-padded with [PAD], attention_mask int64 [n, L], marker_pos int64 [n, K], marker_mask bool [n, K] and qtype int64 [n] (choice 0, score 1, noul 2), throws unless logits and act_probs are float32, divides each row's logits by temperature_by_options[\"<type>:<2, 3-5, 6-10 or 11+>\"] or else temperature[qtype] or else 1, applies softmax, and answers noul as round4(p[1]), score as round4(sum of i * p[i]) and choice as the most probable option, with round4 probabilities, confidence 1 - normalized entropy and rl_agent.act_probability from act_probs; usage is input_tokens = the sum of the already-cut sequence lengths and output_tokens = 0, and model is \"laya\"",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-onnx-config",
+      "url": "https://huggingface.co/receptron/laya-onnx/raw/68f27dfe5a27a54fb2b1fefc432f43f972e90868/laya_config.json",
+      "fetchedAt": "2026-10-12T23:06:11Z",
+      "immutable": "5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561",
+      "fact": "receptron/laya-onnx laya_config.json at revision 68f27dfe5a27a54fb2b1fefc432f43f972e90868 sets max_len 512, head_max_len 192, temperature [1.6369030475616455, 1.2514300346374512, 1.983399510383606] and temperature_by_options choice:3-5 1.7601518630981445, choice:6-10 1.0000158548355103, score:3-5 1.2514300346374512, noul:2 1.983399510383606, choice:11+ 0.10058280825614929, choice:2 1.9063563346862793",
+      "reviewer": "coordinator"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-t8-runtime-512-refusal",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated",
+      "testPattern": "E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated",
+      "before": "  return sequence > LAYA_MAX_SEQUENCE_TOKENS ? null : sequence;",
+      "after": "  return sequence;"
+    },
+    {
+      "id": "e2-t8-runtime-option-limit",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: an option over 48 tokens is refused, never cut",
+      "testPattern": "E2 Laya worker runtime: an option over 48 tokens is refused, never cut",
+      "before": "  if (options.some((count) => count > LAYA_OPTION_MAX_TOKENS)) return null;",
+      "after": "  if (false) return null;"
+    },
+    {
+      "id": "e2-t8-runtime-head-budget",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: a head over its 192-token budget is refused, never cut",
+      "testPattern": "E2 Laya worker runtime: a head over its 192-token budget is refused, never cut",
+      "before": "  if (2 + head + options.length + optionTokens > LAYA_HEAD_MAX_TOKENS) return null;",
+      "after": "  if (false) return null;"
+    },
+    {
+      "id": "e2-t8-runtime-value-range",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped",
+      "testPattern": "E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped",
+      "before": "!Number.isFinite(value) || value < 0 || value > 1) return null;",
+      "after": "!Number.isFinite(value)) return null;"
+    },
+    {
+      "id": "e2-t8-runtime-value-finite",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped",
+      "testPattern": "E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped",
+      "before": "typeof value !== 'number' || !Number.isFinite(value) || ",
+      "after": "typeof value !== 'number' || "
+    },
+    {
+      "id": "e2-t8-runtime-usage-count",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: the runtime must report the uncut count and no output tokens",
+      "testPattern": "E2 Laya worker runtime: the runtime must report the uncut count and no output tokens",
+      "before": "if (answer.usage.input_tokens !== sequenceTokens || ",
+      "after": "if ("
+    },
+    {
+      "id": "e2-t8-runtime-usage-output",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: the runtime must report the uncut count and no output tokens",
+      "testPattern": "E2 Laya worker runtime: the runtime must report the uncut count and no output tokens",
+      "before": " || answer.usage.output_tokens !== 0) return null;",
+      "after": ") return null;"
+    },
+    {
+      "id": "e2-t8-runtime-noul-type",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed",
+      "testPattern": "E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed",
+      "before": "  if (!isRecord(decision) || decision.type !== 'noul') return null;",
+      "after": "  if (!isRecord(decision)) return null;"
+    },
+    {
+      "id": "e2-t8-runtime-one-answer",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed",
+      "testPattern": "E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed",
+      "before": "  if (!exactKeys(answer.answers, [LAYA_QUESTION_NAME])) return null;",
+      "after": "  if (false) return null;"
+    },
+    {
+      "id": "e2-t8-runtime-choice-blocked",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: laya-choice2-v1 is counted but refused until its runtime wire is recorded",
+      "testPattern": "E2 Laya worker runtime: laya-choice2-v1 is counted but refused until its runtime wire is recorded",
+      "before": "  if (layaTemplate(request.templateId).type !== 'noul') return { kind: 'refused', code: 'template-blocked' };",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-runtime-mask",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/templates.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: every literal [MASK] is counted as the space the runtime replaces it with",
+      "testPattern": "E2 Laya worker runtime: every literal [MASK] is counted as the space the runtime replaces it with",
+      "before": "  return text.replaceAll('[MASK]', ' ');",
+      "after": "  return text;"
+    },
+    {
+      "id": "e2-t8-runtime-cpu-only",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "testPattern": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "before": "  return { modelDir, executionProviders: ['cpu'] };",
+      "after": "  return { modelDir, executionProviders: ['cpu'], sessionOptions: { executionProviders: ['coreml'] } } as never;"
+    },
+    {
+      "id": "e2-t8-runtime-downloader-unreachable",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "testPattern": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "before": "  return { modelDir, executionProviders: ['cpu'] };",
+      "after": "  return { executionProviders: ['cpu'] } as never;"
+    },
+    {
+      "id": "e2-t8-runtime-context-limits",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 worker CPU load: a model whose context limits are not the reviewed ones is refused before any runtime",
+      "testPattern": "E2 worker CPU load: a model whose context limits are not the reviewed ones is refused before any runtime",
+      "before": "!isRecord(config) || config.max_len !== LAYA_MAX_SEQUENCE_TOKENS || config.head_max_len !== LAYA_HEAD_MAX_TOKENS",
+      "after": "!isRecord(config)"
+    },
+    {
+      "id": "e2-t8-runtime-entry-in-tree",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 worker CPU load: a package entry that leaves its verified tree is refused, never followed",
+      "testPattern": "E2 worker CPU load: a package entry that leaves its verified tree is refused, never followed",
+      "before": "  return entry.split('/').some((part) => part === '' || part === '.' || part === '..') ? null : entry;",
+      "after": "  return entry;"
+    },
+    {
+      "id": "e2-t8-phase-e-exception-file",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "testPattern": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "before": "    file === LAYA_WORKER_RUNTIME ? executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '') : executableText;",
+      "after": "    file.startsWith('packages/events-daemon/src/runtime/laya/') ? executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '') : executableText;"
+    },
+    {
+      "id": "e2-t8-phase-e-exception-once",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "testPattern": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "before": "executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '')",
+      "after": "executableText.replaceAll(LAYA_VERIFIED_RUNTIME_IMPORT, '')"
+    },
+    {
+      "id": "e2-t8-phase-e-exception-exact",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "testPattern": "E2 Laya worker runtime: phase E's computed-import rule exempts only the verified runtime import",
+      "before": "executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '')",
+      "after": "executableText.replace(/(?:await\\s+)?(?:import|require)\\s*\\([^\\n]*\\)/gu, '')"
+    },
+    {
+      "id": "e2-t8-worker-request-binding",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: the real worker entry loads only the verified trees and answers each bound request",
+      "testPattern": "E2 Laya worker runtime: the real worker entry loads only the verified trees and answers each bound request",
+      "before": "    frame.nonce !== binding.nonce ||\n",
+      "after": "/* e2-t8 mutant: guard removed */\n"
+    },
+    {
+      "id": "e2-t8-worker-request-fields",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: the real worker entry refuses a request frame with any field beyond its own",
+      "testPattern": "E2 Laya worker runtime: the real worker entry refuses a request frame with any field beyond its own",
+      "before": "    keys.length !== expected.length ||\n    keys.some((key, index) => key !== expected[index]) ||\n",
+      "after": "/* e2-t8 mutant: guard removed */\n"
+    },
+    {
+      "id": "e2-t8-supervisor-value-range",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "testPattern": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "before": "    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) return null;",
+      "after": "    if (typeof value !== 'number' || !Number.isFinite(value)) return null;"
+    },
+    {
+      "id": "e2-t8-supervisor-token-bound",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "testPattern": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "before": "    if ((inputTokens as number) > LAYA_MAX_SEQUENCE_TOKENS) return null;",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-closed-answer",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "testPattern": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "before": "    if (!exactFrame(frame, ['type', ...BINDING_FIELDS, 'requestId', 'value', 'inputTokens'])) return null;",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-request-id",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "testPattern": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "before": "  if (!bound(frame, binding) || frame.requestId !== requestId) return null;",
+      "after": "  if (!bound(frame, binding)) return null;"
+    },
+    {
+      "id": "e2-t8-supervisor-bound-child",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "testPattern": "E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker",
+      "before": "  if (!bound(frame, binding) || frame.requestId !== requestId) return null;",
+      "after": "  if (frame.requestId !== requestId) return null;"
+    },
+    {
+      "id": "e2-t8-supervisor-kill-timeout",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child",
+      "testPattern": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child",
+      "before": "      await this.#kill(worker, result.gone);",
+      "after": "      void result;"
+    },
+    {
+      "id": "e2-t8-supervisor-unexpected-frame",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: any unexpected frame kills the worker, a late probe-attempt included",
+      "testPattern": "E2 Laya supervisor: any unexpected frame kills the worker, a late probe-attempt included",
+      "before": "        if (pending === undefined) {\n          void this.#kill(worker, 'laya-malformed');\n          return;\n        }",
+      "after": "        if (pending === undefined) continue;"
+    },
+    {
+      "id": "e2-t8-supervisor-resume",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: one framed request, after the proof, bound to the proven child and carrying no event, account or target",
+      "testPattern": "E2 Laya supervisor: one framed request, after the proof, bound to the proven child and carrying no event, account or target",
+      "before": "    worker.child.stdout.resume();\n",
+      "after": "/* e2-t8 mutant: guard removed */\n"
+    },
+    {
+      "id": "e2-t8-supervisor-gate-before-write",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: E gates the reservation immediately before the one write, and a refused gate writes nothing",
+      "testPattern": "E2 Laya supervisor: E gates the reservation immediately before the one write, and a refused gate writes nothing",
+      "before": "    try {\n      hooks.finalGate();",
+      "after": "    worker.child.stdin.write(bytes);\n    try {\n      hooks.finalGate();"
+    },
+    {
+      "id": "e2-t8-supervisor-serialised",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: requests are serialised — the second waits in the queue while the first is in flight",
+      "testPattern": "E2 Laya supervisor: requests are serialised — the second waits in the queue while the first is in flight",
+      "before": "    const run = this.#queue.then(() => this.#execute(request, hooks, tracked.signal));",
+      "after": "    const run = this.#execute(request, hooks, tracked.signal);"
+    },
+    {
+      "id": "e2-t8-supervisor-load-selection",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: a selection changed after its trees were verified sends no load",
+      "testPattern": "E2 Laya supervisor: a selection changed after its trees were verified sends no load",
+      "before": "    if (!sameSelection(this.#artifacts.workerSelection(), selection)) {\n      await this.#kill(worker, 'laya-authority-changed');",
+      "after": "    if (false) {\n      await this.#kill(worker, 'laya-authority-changed');"
+    },
+    {
+      "id": "e2-t8-supervisor-request-selection",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: a selection changed while the worker was idle refuses before any request is written",
+      "testPattern": "E2 Laya supervisor: a selection changed while the worker was idle refuses before any request is written",
+      "before": "    if (!sameSelection(this.#artifacts.workerSelection(), worker.selection))",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t8-supervisor-boundary-record",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: a failed proof sends no load and records boundary-failed",
+      "testPattern": "E2 Laya supervisor: a failed proof sends no load and records boundary-failed",
+      "before": "      if (boundary.code === 'boundary-failed') this.#artifacts.recordWorkerFailure(selection, 'boundary-failed');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-runtime-record",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: a runtime that refuses to load records runtime-failed and is killed",
+      "testPattern": "E2 Laya supervisor: a runtime that refuses to load records runtime-failed and is killed",
+      "before": "      this.#artifacts.recordWorkerFailure(selection, 'runtime-failed');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-verify-before-start",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: an unready model, a failed verification or unavailable Laya starts no child",
+      "testPattern": "E2 Laya supervisor: an unready model, a failed verification or unavailable Laya starts no child",
+      "before": "    if (!verified.ok) return refusedBefore(verified.failureCode ?? 'laya-not-ready');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-purge-kill",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: a purge of the in-flight reservation kills its worker at once",
+      "testPattern": "E2 Laya supervisor: a purge of the in-flight reservation kills its worker at once",
+      "before": "    signal.addEventListener('abort', onPurge, { once: true });",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-crash-exit",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor timeout/crash/idle: a crash is no-match and the next request restarts the worker",
+      "testPattern": "E2 Laya supervisor timeout/crash/idle: a crash is no-match and the next request restarts the worker",
+      "before": "    worker.child.once('exit', () => void this.#kill(worker, 'laya-crashed'));",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-idle-exit",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor timeout/crash/idle: an idle worker exits after its idle window",
+      "testPattern": "E2 Laya supervisor timeout/crash/idle: an idle worker exits after its idle window",
+      "before": "      if (worker.pending === undefined) void this.#kill(worker, 'laya-stopped');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-supervisor-short-directory",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor: each worker directory keeps the probe’s socket within macOS’s 103 bytes for any home",
+      "testPattern": "E2 Laya supervisor: each worker directory keeps the probe’s socket within macOS’s 103 bytes for any home",
+      "before": "export const LAYA_WORKER_DIRECTORY_PARENT = '/tmp';",
+      "after": "export const LAYA_WORKER_DIRECTORY_PARENT = process.cwd();"
+    },
+    {
+      "id": "e2-t8-coordinator-laya-route",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation uses coordinator answer",
+      "testPattern": "E2 Laya evaluation uses coordinator answer",
+      "before": "    if (agentic.judge.kind === JUDGE_KIND_LAYA) return this.#evaluateLaya(input, agentic.judge, envelope);",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-coordinator-laya-gate",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation uses coordinator answer",
+      "testPattern": "E2 Laya evaluation uses coordinator answer",
+      "before": "      finalGate: () => ioGate.finalGate('write'),",
+      "after": "      finalGate: () => undefined,"
+    },
+    {
+      "id": "e2-t8-coordinator-actual-tokens",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation uses coordinator answer",
+      "testPattern": "E2 Laya evaluation uses coordinator answer",
+      "before": "        actualInputTokens: result.inputTokens,",
+      "after": "        actualInputTokens: laya.request.body.length,"
+    },
+    {
+      "id": "e2-t8-budget-laya-io-phase",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation uses coordinator answer",
+      "testPattern": "E2 Laya evaluation uses coordinator answer",
+      "before": " : this.#judgeKind === JUDGE_KIND_LAYA ? 'write' : 'tcp';",
+      "after": " : 'tcp';"
+    },
+    {
+      "id": "e2-t8-judge-laya-provider",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "testPattern": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "before": "    if (judge.provider !== JUDGE_KIND_LAYA) return fail('a Laya judge names the canonical Laya provider');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-judge-laya-template",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "testPattern": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "before": "    if (!isLayaTemplateId(judge.promptTemplate)) return fail('a Laya judge names one immutable Laya prompt template');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-judge-laya-fields",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "testPattern": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "before": "    exactKeys(judge, ['judgeId', 'version', 'kind', 'provider', 'model', 'promptTemplate'], 'a Laya judge document');",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-versions-laya-judge-offered",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/versions.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "testPattern": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "before": "    if (document.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-versions-laya-rule-offered",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/versions.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "testPattern": "E2 Laya judge document: one exact shape, and none where Laya is not offered",
+      "before": "    if (document.agentic?.judge.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-versions-database-inputs",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/domain/versions.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation uses coordinator answer",
+      "testPattern": "E2 Laya evaluation uses coordinator answer",
+      "before": "  constructor(database: DatabaseSync, options: LayaEnablementInputs = layaEnablementInputsFor(database)) {",
+      "after": "  constructor(database: DatabaseSync, options: LayaEnablementInputs = {}) {"
+    },
+    {
+      "id": "e2-t8-manager-disable-stops-worker",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation: a kind disable stops the idle worker",
+      "testPattern": "E2 Laya evaluation: a kind disable stops the idle worker",
+      "before": "    // D11: a disabled kind's worker exits. In-flight work was already stopped by E's purge of its reservation.\n    await this.#worker?.stop();\n",
+      "after": "/* e2-t8 mutant: guard removed */\n"
+    },
+    {
+      "id": "e2-t8-manager-worker-failure-write",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed, and no second child starts",
+      "testPattern": "E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed, and no second child starts",
+      "before": "        this.#models.write({\n          manifestId: started.manifestId,\n          state: 'failed',",
+      "after": "        void ({\n          manifestId: started.manifestId,\n          state: 'failed',"
+    },
+    {
+      "id": "e2-t8-manager-worker-failure-current",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation: a worker failure is recorded only for the selection its trees were verified for",
+      "testPattern": "E2 Laya evaluation: a worker failure is recorded only for the selection its trees were verified for",
+      "before": "          current === null ||\n          current.epoch !== started.epoch ||\n          current.version !== started.version ||\n          current.digest !== started.digest\n",
+      "after": "          current === null\n"
+    },
+    {
+      "id": "e2-t8-worker-binding-exact",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime: the real worker entry loads only the verified trees and answers each bound request",
+      "testPattern": "E2 Laya worker runtime: the real worker entry loads only the verified trees and answers each bound request",
+      "before": "        binding = {\n          nonce: probe.nonce,\n          pid: probe.pid,\n          profile: probe.profile,\n          entry: probe.entry,\n          pipeGeneration: probe.pipeGeneration,\n        };",
+      "after": "        binding = probe;"
+    },
+    {
+      "id": "e2-t8-coordinator-pre-io-no-match",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-coordinator.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed, and no second child starts",
+      "testPattern": "E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed, and no second child starts",
+      "before": "    if (disposition === 'released' && result.code === 'laya-stopped')",
+      "after": "    if (disposition === 'released')"
+    },
+    {
+      "id": "e2-t8-judge-test-laya-route",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/judge-test.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 no worker before approved synthetic call",
+      "testPattern": "E2 no worker before approved synthetic call",
+      "before": "    if (authority.judge.kind === JUDGE_KIND_LAYA) return this.#testLaya(input, authority, authority.judge);",
+      "after": "/* e2-t8 mutant: guard removed */"
+    },
+    {
+      "id": "e2-t8-b3-inventory-closed",
+      "kind": "production",
+      "owner": "task-8",
+      "source": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge document: B3 v1’s judge inventory carries no Laya row",
+      "testPattern": "E2 Laya judge document: B3 v1’s judge inventory carries no Laya row",
+      "before": "        if (judge.kind === JUDGE_KIND_LAYA) return [];",
+      "after": "/* e2-t8 mutant: guard removed */"
+    }
+  ]
+}

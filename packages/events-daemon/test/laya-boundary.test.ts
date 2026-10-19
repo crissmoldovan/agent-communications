@@ -1110,10 +1110,17 @@ test("E2 boundary: phase E's fetch rule exempts only the probe's one loopback fe
 
 test('E2 boundary: the worker loads only its probe, its protocol and Node built-ins before any runtime', async () => {
   const sourceRoot = dirname(workerMain);
+  // Task 8's runtime adapter and its templates load with the worker too, and import Node built-ins only: the runtime
+  // and model are reached only by the adapter's one verified-tree import, after the load frame.
   const allowed = new Set(
-    ['worker-main.ts', 'worker-boundary-probe.ts', 'worker-protocol.ts', '../../network/error-sink.ts'].map((file) =>
-      resolve(sourceRoot, file),
-    ),
+    [
+      'worker-main.ts',
+      'worker-boundary-probe.ts',
+      'worker-protocol.ts',
+      'worker-runtime.ts',
+      'templates.ts',
+      '../../network/error-sink.ts',
+    ].map((file) => resolve(sourceRoot, file)),
   );
   const seen = new Set<string>();
   const pending = [workerMain];

@@ -20,6 +20,7 @@ import {
   canonicalJudgeKindEnablement,
   judgeKindDefinition,
   type LayaEnablementInputs,
+  layaEnablementInputsFor,
 } from './judges.ts';
 import { assertJudgeKindEnabled, EventDomainError, isJudgeKind, JUDGE_KINDS } from './lifecycle.ts';
 
@@ -48,13 +49,14 @@ export class ImmutableVersions {
   readonly #database: DatabaseSync;
   readonly #layaInputs: LayaEnablementInputs;
 
-  constructor(database: DatabaseSync, options: LayaEnablementInputs = {}) {
+  constructor(database: DatabaseSync, options: LayaEnablementInputs = layaEnablementInputsFor(database)) {
     this.#database = database;
     this.#layaInputs = options;
   }
 
   createRule(input: unknown): PendingVersion {
     const document = canonicalFullRuleDocument(input);
+    if (document.agentic?.judge.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);
     this.assertEmbeddedVersions(document);
     return this.insert('rule_versions', 'rule', document.ruleId, document.version, document);
   }
@@ -84,9 +86,15 @@ export class ImmutableVersions {
     return this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
   }
 
-  /** Validates a dormant judge version; this deliberately does not require an enabled kind. */
+  /**
+   * Validates a dormant judge version; this deliberately does not require an enabled kind. A Laya judge, or a rule
+   * naming one, is refused with the kind's own closed reason wherever this release or platform does not offer Laya —
+   * with the placeholder lock, everywhere — so none exists before the kind could be enabled (D11).
+   */
   prepareJudge(input: unknown): CanonicalJudgeDocument {
-    return canonicalJudge(input);
+    const document = canonicalJudge(input);
+    if (document.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);
+    return document;
   }
 
   createJudge(input: unknown): PendingVersion {
