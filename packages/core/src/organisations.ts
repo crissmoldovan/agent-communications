@@ -13,6 +13,7 @@ import type {
   OrganisationSlackApp,
 } from './config.ts';
 import { hasNames } from './config.ts';
+import { canonicalJson } from './digest.ts';
 import { CommsError } from './errors.ts';
 import {
   type CliHandoffs,
@@ -28,6 +29,8 @@ import { clientSecretRef, GOOGLE_CLIENT_ID_PATTERN } from './oauth-client-record
 import { expandHome, homeDirectory } from './paths.ts';
 import { truncateDisplay } from './render.ts';
 import { neutralise } from './untrusted.ts';
+import { VERSION } from './version.ts';
+import { compareVersions } from './versions.ts';
 
 /**
  * Organisation profiles (design 2026-10-02): an organisation makes its apps once — a Google OAuth client, a Slack app
@@ -41,9 +44,10 @@ import { neutralise } from './untrusted.ts';
  * one place a profile changes the configuration, each change approved first.
  *
  * **A profile is data, never code, and none of it is trusted.** Every field comes from whoever wrote the document, so
- * each has a grammar and a bound, an unknown key is an error, and the two free-text fields are neutralised and put on
- * one line wherever they are shown. The client secret is never shown anywhere — not in a preview, an effect, an error,
- * the audit log, a command's output or a tool's result.
+ * each has a grammar and a bound, an unknown key is an error — anywhere but inside `extensions`, the one door a later
+ * release's fields come in by (design 2026-10-19) — and the two free-text fields are neutralised and put on one line
+ * wherever they are shown. The client secret is never shown anywhere — not in a preview, an effect, an error, the audit
+ * log, a command's output or a tool's result.
  */
 
 /** What a profile says it is, in its first key. */
@@ -99,11 +103,60 @@ const slackAppSchema: z.ZodType<ProfileSlackApp, unknown> = z.strictObject({
     .optional(),
 });
 
+// ── Extensions (design 2026-10-19) ───────────────────────────────────────────────────────────────────────────────
+
+/** The most entries a profile's `extensions` may have (X1). */
+export const EXTENSIONS_MAX = 16;
+
+/** An extension's name: a lower-case letter, then 1–39 lower-case letters, digits or hyphens (X1). */
+export const EXTENSION_NAME_PATTERN: RegExp = /^[a-z][a-z0-9-]{1,39}$/;
+
+/** A release as `since` names it: `MAJOR.MINOR.PATCH` and nothing more — no prerelease, no build, no `v`. */
+const PLAIN_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/**
+ * One entry of a profile's `extensions`, as the generic schema has checked it: `required` and `since`, and the
+ * extension's own fields, which only a release that knows the extension can check (`profileExtensions`).
+ */
+export interface ProfileExtension {
+  required: boolean;
+  since: string;
+  [field: string]: unknown;
+}
+
+const extensionEntrySchema = z.looseObject({
+  required: z.boolean({ message: 'required is true or false: whether a release that does not know it must refuse it' }),
+  since: z
+    .string({ message: 'since is the first release that understands it, as MAJOR.MINOR.PATCH' })
+    .regex(PLAIN_VERSION, 'since is the first release that understands it, as MAJOR.MINOR.PATCH: 0.23.0'),
+});
+
+/**
+ * The one door a version-1 profile has for what later releases add (design 2026-10-19, X1): at most 16 entries, each
+ * named to the grammar above and each an object carrying `required` and `since`. Its other fields are the extension's;
+ * every other object of the profile stays strict.
+ */
+const extensionsSchema = z
+  .record(
+    z
+      .string()
+      .regex(
+        EXTENSION_NAME_PATTERN,
+        'an extension is named by a lower-case letter, then 1–39 lower-case letters, digits or hyphens',
+      ),
+    extensionEntrySchema,
+    { message: 'extensions is an object of named entries' },
+  )
+  .refine((entries) => Object.keys(entries).length <= EXTENSIONS_MAX, {
+    message: `extensions has at most ${EXTENSIONS_MAX} entries`,
+  });
+
 /**
  * The strict schema every profile passes (design 2026-10-02 §D2): exactly these keys, each to its grammar and bound.
  *
  * Version 1 names apps and nothing else — no defaults, no policies. Either `gmail` or `slack` may be absent, and so may
- * either Slack app: a profile that stops naming one is how an organisation withdraws it (§D8).
+ * either Slack app: a profile that stops naming one is how an organisation withdraws it (§D8). From 0.21.0 it may also
+ * carry `extensions` (design 2026-10-19): the only key whose contents are not all this release's to know.
  */
 const profileSchema = z.strictObject({
   agentcomms: z.literal(PROFILE_KIND),
@@ -144,6 +197,7 @@ const profileSchema = z.strictObject({
       apps: z.strictObject({ read: slackAppSchema.optional(), send: slackAppSchema.optional() }),
     })
     .optional(),
+  extensions: extensionsSchema.optional(),
 });
 
 export interface ProfileSlackApp {
@@ -173,6 +227,8 @@ export interface OrganisationProfile {
   label: string;
   gmail?: ProfileGmail | undefined;
   slack?: ProfileSlack | undefined;
+  /** What later releases add, by name (design 2026-10-19). Absent on every profile written for 0.20.0 or older. */
+  extensions?: Record<string, ProfileExtension> | undefined;
 }
 
 export const organisationProfileSchema: z.ZodType<OrganisationProfile, unknown> = profileSchema;
@@ -194,6 +250,179 @@ export function servesText(serves: OrganisationServes): string {
     : `addresses at ${serves.domains.map((domain) => shownText(domain)).join(', ')}`;
 }
 
+// ── Known extensions (design 2026-10-19, X2) ─────────────────────────────────────────────────────────────────────
+
+/**
+ * What a change of an extension does, as its own classifier says: `tightens` applies at once, as every tightening does;
+ * `loosens` and `who-acts` — a change of who acts — are approved first, before → after (X4).
+ */
+export type ExtensionEffect = 'tightens' | 'loosens' | 'who-acts';
+
+/**
+ * One extension this release knows, as the registry holds it. Its entry in a profile is untrusted like every other
+ * field: checked against `schema`, and shown only through `describe`, whose words are fixed around values neutralised.
+ */
+export interface KnownExtension {
+  readonly name: string;
+  /**
+   * Whether a release that does not know it may skip it (X2). It may when its absence leaves every other field meaning
+   * the same, and this machine no looser; it must be understood when skipping it would let the rest do more than
+   * intended — a limit on an app, a narrower `serves` — or would change who acts. The pull request that adds an entry
+   * states which, and why: that statement is a review item.
+   */
+  readonly ignorable: boolean;
+  /** Its own fields — the entry without `required` and `since` — as this release reads them. */
+  readonly schema: z.ZodType<unknown, unknown>;
+  /** What moving from `before` to `after` does; `undefined` on either side is "not there". */
+  classify(before: unknown, after: unknown): ExtensionEffect;
+  /** The value the record holds of it, as `apply` left it; `undefined` when it holds none. */
+  recorded(record: OrganisationRecord): unknown;
+  /** The record with `value` applied; `undefined` takes it away. Pure: it returns a new record. */
+  apply(record: OrganisationRecord, value: unknown): OrganisationRecord;
+  /** A value as a preview names it; `undefined` is "none". */
+  describe(value: unknown): string;
+}
+
+/** The extensions a release knows, by name. */
+export type ExtensionRegistry = ReadonlyMap<string, KnownExtension>;
+
+/**
+ * The extensions this release knows: none. 0.21.0 ships the mechanism with an empty registry; a later feature adds its
+ * entry in the pull request that adds the feature, and tests inject their own.
+ */
+export const KNOWN_EXTENSIONS: ExtensionRegistry = new Map<string, KnownExtension>();
+
+/** Why an entry is not applied here: a later release has it, this one should and does not, or it waits for `org update`. */
+export type IgnoredReason = 'needs-newer' | 'unknown' | 'pending';
+
+/** An entry not applied here, as a result and `org show` name it. */
+export interface IgnoredExtension {
+  name: string;
+  since: string;
+  reason: IgnoredReason;
+}
+
+/** An entry this release knows, its own fields as its schema read them. */
+export interface UnderstoodExtension {
+  name: string;
+  value: unknown;
+  sha256: string;
+  extension: KnownExtension;
+}
+
+/** A profile's extensions against a registry: what this release applies, what it skips, and what it must refuse. */
+export interface ExtensionVerdict {
+  understood: UnderstoodExtension[];
+  /** Unknown and optional: not applied, and recorded as skipped. */
+  ignored: (IgnoredExtension & { sha256: string })[];
+  /** Unknown and required: the profile cannot be taken here at all. */
+  refused: IgnoredExtension[];
+}
+
+/** The SHA-256 of an entry's canonical JSON — keys sorted at every level, no whitespace (X3). */
+export function extensionSha256(entry: unknown): string {
+  return createHash('sha256').update(canonicalJson(entry), 'utf8').digest('hex');
+}
+
+/**
+ * Why an entry this release does not know is not applied: `needs-newer` when the release it names comes after this one;
+ * otherwise `unknown` — one this release should know and does not, a typo or another fork's (X3).
+ */
+export function sinceReason(since: string, running: string = VERSION): 'needs-newer' | 'unknown' {
+  const order = compareVersions(since, running);
+  return order !== null && order > 0 ? 'needs-newer' : 'unknown';
+}
+
+/**
+ * A profile's extensions, read against the extensions a release knows (X2, X3), in name order:
+ *
+ * - known: held to its own schema, and refused, naming it, when it must be understood and is marked optional — the
+ *   marker exists for older releases, and a release that knows the field holds the profile to it. Marked required when
+ *   it could have been ignored is only stricter than needed, and accepted;
+ * - unknown and optional: skipped;
+ * - unknown and required: refused — the caller says so in the words of a profile that needs a later release.
+ *
+ * Refusals of the first kind are BAD_DATA, in the words of every other refusal of a profile.
+ */
+export function profileExtensions(
+  profile: OrganisationProfile,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): ExtensionVerdict {
+  const verdict: ExtensionVerdict = { understood: [], ignored: [], refused: [] };
+  const entries = profile.extensions ?? {};
+  for (const name of Object.keys(entries).sort()) {
+    const entry = entries[name] as ProfileExtension;
+    const known = registry.get(name);
+    const sha256 = extensionSha256(entry);
+    if (known === undefined) {
+      const item = { name, since: entry.since, reason: sinceReason(entry.since) };
+      if (entry.required) verdict.refused.push(item);
+      else verdict.ignored.push({ ...item, sha256 });
+      continue;
+    }
+    if (!known.ignorable && !entry.required) {
+      throw new CommsError(
+        'BAD_DATA',
+        `the organisation profile is not valid: extensions.${name}: "${name}" must be understood by every release that reads it, so it must be marked required: true`,
+        {
+          hint: 'A release that does not know it would skip it and do more than the organisation means. Ask your organisation to mark it required.',
+        },
+      );
+    }
+    const { required: _required, since: _since, ...own } = entry;
+    const parsed = known.schema.safeParse(own);
+    if (!parsed.success) {
+      throw new CommsError(
+        'BAD_DATA',
+        `the organisation profile is not valid: ${issuesText(
+          parsed.error.issues.map((issue) => ({ ...issue, path: ['extensions', name, ...issue.path] })),
+          'the extension has',
+        )}`,
+        { hint: 'Ask your organisation for its current profile.' },
+      );
+    }
+    verdict.understood.push({ name, value: parsed.data, sha256, extension: known });
+  }
+  return verdict;
+}
+
+/** The entries an organisation's record lists as not applied here, in name order, each with why (X3, X7). */
+export function ignoredOf(
+  record: OrganisationRecord | undefined,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): IgnoredExtension[] {
+  const listed = record?.ignoredExtensions ?? {};
+  return Object.keys(listed)
+    .sort()
+    .map((name) => {
+      const since = typeof listed[name]?.since === 'string' ? listed[name].since : '';
+      // A record is a file an older release or a hand can write: what it says is shown as untrusted text.
+      return {
+        name: shownText(name, 40),
+        since: shownText(since, 20),
+        reason: registry.has(name) ? ('pending' as const) : sinceReason(since),
+      };
+    });
+}
+
+/** One entry not applied here, in the words a preview, a result and `org show` use (X3). */
+export function notAppliedText(item: IgnoredExtension): string {
+  return `${item.reason === 'pending' ? 'not applied here yet' : 'not applied here'}: ${notAppliedDetail(item)}`;
+}
+
+/** The same without its first words, as `doctor` lists several on one line. */
+export function notAppliedDetail(item: IgnoredExtension): string {
+  const name = shownText(item.name, 40);
+  switch (item.reason) {
+    case 'needs-newer':
+      return `${name} (needs ${shownText(item.since, 20)} or later)`;
+    case 'unknown':
+      return `${name} is not an extension this release knows`;
+    default:
+      return `${name}, which this release knows: an org update applies it`;
+  }
+}
+
 /**
  * Parses a profile's text, or refuses it — naming each problem by where it is and what it should be, never by the value
  * found there. A key the schema does not know is named, neutralised and cut short: it came from the document too.
@@ -207,23 +436,68 @@ export function parseProfile(text: string): OrganisationProfile {
       hint: 'Ask your organisation for its profile again; it is one JSON document.',
     });
   }
+  refuseLaterVersion(raw);
   const parsed = organisationProfileSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
-  const problems = parsed.error.issues.slice(0, 6).map((issue) => {
-    const where = issue.path.length > 0 ? issue.path.map(String).join('.') : 'the profile';
-    if (issue.code === 'unrecognized_keys') {
-      return `${where}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} a profile has`;
-    }
-    // The secret's own messages are the schema's, which say what a secret looks like; any other wording zod might
-    // produce for it is replaced, so nothing about the value can reach a message.
-    if (issue.path.join('.') === 'gmail.clientSecret') {
-      return `${where}: the client secret is 1–256 printable ASCII characters`;
-    }
-    return `${where}: ${issue.message}`;
-  });
-  throw new CommsError('BAD_DATA', `the organisation profile is not valid: ${problems.join('; ')}`, {
-    hint: 'A profile has exactly the keys its organisation’s README describes. Ask your organisation for its current one.',
-  });
+  throw new CommsError(
+    'BAD_DATA',
+    `the organisation profile is not valid: ${issuesText(parsed.error.issues, 'a profile has')}`,
+    {
+      hint: 'A profile has exactly the keys its organisation’s README describes, and anything new goes under `extensions`. Ask your organisation for its current one.',
+    },
+  );
+}
+
+/**
+ * Up to six of a schema's issues, each by where it is and what it should be, never by the value found there. Where it
+ * is can be a key the document chose — an extension's name — so it is neutralised and put on one line too, as a key
+ * the schema does not know is.
+ */
+function issuesText(issues: readonly z.core.$ZodIssue[], has: string): string {
+  return issues
+    .slice(0, 6)
+    .map((issue) => {
+      const where = issue.path.length > 0 ? shownText(issue.path.map(String).join('.'), 120) : 'the profile';
+      if (issue.code === 'unrecognized_keys') {
+        return `${where}: ${issue.keys.map((key) => `"${shownText(key, 40)}"`).join(', ')} ${issue.keys.length === 1 ? 'is not a key' : 'are not keys'} ${has}`;
+      }
+      // A key `extensions` refuses: what a name should be — the key schema's message, not zod's "Invalid key".
+      if (issue.code === 'invalid_key') {
+        return `${where}: ${issue.issues[0]?.message ?? 'that is not a name an extension can have'}`;
+      }
+      // The secret's own messages are the schema's, which say what a secret looks like; any other wording zod might
+      // produce for it is replaced, so nothing about the value can reach a message.
+      if (issue.path.join('.') === 'gmail.clientSecret') {
+        return `${where}: the client secret is 1–256 printable ASCII characters`;
+      }
+      return `${where}: ${issue.message}`;
+    })
+    .join('; ');
+}
+
+/**
+ * A profile of a later version than 1 is one this release is too old for, not one the organisation got wrong (design
+ * 2026-10-19, X3): refused as a profile that needs a later release, with the hint to update first — never with zod's
+ * `expected 1`, and never by sending the member to ask the organisation for another. Only a whole number past 1 is a
+ * later version; any other `version` is wrong, and the schema says so as before.
+ */
+function refuseLaterVersion(raw: unknown): void {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
+  const { agentcomms, version, organisation } = raw as Record<string, unknown>;
+  if (agentcomms !== PROFILE_KIND || typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 1) {
+    return;
+  }
+  const named =
+    typeof organisation === 'string' && parseOrganisation(organisation, { max: PROFILE_ORGANISATION_MAX }) !== null;
+  const who = named ? `${organisation}'s profile` : 'the organisation’s profile';
+  throw new CommsError(
+    'NEEDS_NEWER_RELEASE',
+    `${who} is version ${version}, which needs a later agent-communications than this one (${VERSION}): nothing was changed`,
+    {
+      hint: `This agent-communications (${VERSION}) is older than the profile. Update it first, then add or update the profile again.`,
+      details: { version, ...(named ? { organisation } : {}) },
+    },
+  );
 }
 
 /**

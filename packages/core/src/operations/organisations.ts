@@ -31,15 +31,23 @@ import {
   accountsOfOrganisation,
   activeGeneration,
   capsText,
+  type ExtensionEffect,
+  type ExtensionRegistry,
+  type ExtensionVerdict,
   type GenerationState,
   generationState,
+  type IgnoredExtension,
+  ignoredOf,
+  KNOWN_EXTENSIONS,
   mailboxesOn,
+  notAppliedText,
   type OrganisationDrift,
   organisationDrift,
   organisationsOf,
   own,
   type ProfileFile,
   pathDigest,
+  profileExtensions,
   profileSourcePath,
   readProfileFile,
   recordOf,
@@ -54,6 +62,8 @@ import {
 } from '../organisations.ts';
 import { writeOutcome } from '../reconcile.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
+import { VERSION } from '../version.ts';
+import { compareVersions } from '../versions.ts';
 
 /**
  * `agentcomms org add | list | show | update | remove` and `comms_org_add`, `comms_orgs_list`, `comms_org_show`,
@@ -68,8 +78,9 @@ import type { KeyringModule, SecretStore } from '../secrets.ts';
  * the `organisations` record, made only if nothing it was planned from moved meanwhile.
  *
  * An update that only repairs drift — bringing the configuration back to what was already approved — applies at once
- * and asks nobody, as does turning `--for-other-addresses` off; any change to the profile's contents, a new source, or
- * turning it on is approved first (§D8).
+ * and asks nobody, as does turning `--for-other-addresses` off and anything that only tightens: a skipped extension a
+ * later release reads as tightening (design 2026-10-19, X4). Any other change to the profile's contents, a new source,
+ * or turning other addresses on is approved first (§D8).
  */
 
 export interface OrgOptions {
@@ -82,6 +93,11 @@ export interface OrgOptions {
   /** For a test: the keychain module probed when the keychain is chosen, so a test never touches the real one. */
   keyring?: KeyringModule | null | undefined;
   now?: (() => Date) | undefined;
+  /**
+   * For a test: the extensions this release knows (design 2026-10-19, X2), standing for a later release's. Left out,
+   * the release's own registry, which is empty in 0.21.0.
+   */
+  extensions?: ExtensionRegistry | undefined;
 }
 
 export interface OrgAddRequest {
@@ -150,6 +166,18 @@ export interface OrganisationView {
   accounts: string[];
   drift: OrganisationDrift[];
   notes: string[];
+  /** The profile's extensions here: those applied, and those not, with why (design 2026-10-19, X7). */
+  extensions: ExtensionsView;
+}
+
+/**
+ * What a profile's `extensions` came to here (design 2026-10-19, X7): the names applied — none in 0.21.0, whose registry
+ * is empty — and those not applied, each with the release it needs, and why: `needs-newer` for one a later release
+ * has, `unknown` for one this release should know and does not, `pending` for one it knows and has not applied yet.
+ */
+export interface ExtensionsView {
+  applied: string[];
+  ignored: IgnoredExtension[];
 }
 
 export interface SlackAppView {
@@ -173,6 +201,8 @@ export interface OrgChangeResult {
   gmail: { action: GmailAction | null; client: string | null };
   /** The store a client secret was written to, when one was. */
   store: StoreKind | null;
+  /** The profile's extensions here, as `profile.extensions` says them. */
+  extensions: ExtensionsView;
   profile: OrganisationView;
 }
 
@@ -385,6 +415,10 @@ interface PlanInput {
   commands: OrgHandoffs;
   /** The secret held under a reference now, in the store the configuration uses; null when none is stored. */
   readSecret: (ref: string) => Promise<string | null>;
+  /** The profile's extensions against the extensions this release knows (`profileExtensions`), refusals made. */
+  verdict: ExtensionVerdict;
+  /** The extensions this release knows. */
+  registry: ExtensionRegistry;
 }
 
 interface ProfilePlan {
@@ -398,11 +432,13 @@ interface ProfilePlan {
   secret: { name: string; ref: string } | null;
   /** What needs a person's approval, before → after. */
   changes: string[];
-  /** What applies at once whatever else does: `--for-other-addresses off`. */
+  /** What applies at once whatever else does: `--for-other-addresses off`, and what only tightens. */
   immediate: string[];
   /** Drift brought back to what was approved. */
   repairs: string[];
   reports: string[];
+  /** The profile's extensions not applied here, one line each, as a preview names them (design 2026-10-19, X3). */
+  notApplied: string[];
   needsApproval: boolean;
   gmail: { action: GmailAction | null; client: string | null };
 }
@@ -437,6 +473,30 @@ function named(generation: Pick<OrganisationGeneration, 'name' | 'clientId'>): s
 function sameServes(a: OrganisationGeneration['serves'], b: OrganisationGeneration['serves']): boolean {
   return canonical(a) === canonical(b);
 }
+
+/** What a known extension's change does, in a preview's words. */
+const EFFECT_WORDS: Readonly<Record<ExtensionEffect, string>> = {
+  tightens: 'tightens',
+  loosens: 'loosens',
+  'who-acts': 'changes who acts',
+};
+
+/**
+ * One known extension's change as a preview names it: before → after, in the extension's own words — neutralised and on
+ * one line all the same, since the values came from the profile — and what its classifier says the change does.
+ */
+function extensionLine(
+  name: string,
+  describe: (value: unknown) => string,
+  before: unknown,
+  after: unknown,
+  effect: ExtensionEffect,
+): string {
+  return `extension ${name}: ${shownText(describe(before), 120)} → ${shownText(describe(after), 120)} (${EFFECT_WORDS[effect]})`;
+}
+
+/** The extension a tightening line made at once names, when it is one: `extension <name>: … (tightens)`. */
+const TIGHTENED_EXTENSION = /^extension ([a-z][a-z0-9-]{1,39}): .* \(tightens\)$/;
 
 /**
  * The profile, planned into this configuration: the record it leaves, the rows it writes and unmarks, the one secret it
@@ -888,6 +948,70 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     }
     reports.push('for other addresses is on, but routes nothing until the profile names a Google client again');
   }
+  /*
+   * ── Extensions (design 2026-10-19) ──
+   *
+   * An extension this release knows is applied as its registry entry says, and a change of it is said before → after.
+   * One the record already holds is held to the profile like every other field: with the same bytes, a difference is
+   * drift, repaired below with the rest.
+   *
+   * **A skipped entry is never applied as a repair (X4).** One the record lists as skipped was never approved — the
+   * release that read it did not know it — so applying it now is a change, the same bytes or not: what its classifier
+   * says a tightening applies at once, and anything else is approved first. Kept out of `changes` until the same-bytes
+   * rule below has moved what is drift into `repairs`, which would otherwise take it too.
+   */
+  const { verdict, registry } = input;
+  const understood = new Set(verdict.understood.map((entry) => entry.name));
+  const listedIgnored = previous?.ignoredExtensions ?? {};
+  const skippedNowKnown: string[] = [];
+  let extensionChanged = false;
+  for (const entry of verdict.understood) {
+    const before = previous ? entry.extension.recorded(previous) : undefined;
+    const wasSkipped = input.mode === 'update' && Object.hasOwn(listedIgnored, entry.name);
+    if (!wasSkipped && canonical(before) === canonical(entry.value)) continue;
+    const effect = entry.extension.classify(before, entry.value);
+    const line = extensionLine(entry.name, (value) => entry.extension.describe(value), before, entry.value, effect);
+    if (!wasSkipped) changes.push(line);
+    else if (effect === 'tightens') immediate.push(line);
+    else {
+      skippedNowKnown.push(line);
+      extensionChanged = true;
+    }
+  }
+  // A known extension the record holds and the profile no longer names: taken away, as the profile now says.
+  const withdrawn = previous
+    ? [...registry.values()]
+        .filter((extension) => !understood.has(extension.name) && extension.recorded(previous) !== undefined)
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    : [];
+  for (const extension of withdrawn) {
+    const before = previous ? extension.recorded(previous) : undefined;
+    changes.push(
+      extensionLine(
+        extension.name,
+        (value) => extension.describe(value),
+        before,
+        undefined,
+        extension.classify(before, undefined),
+      ),
+    );
+  }
+  // What is skipped here, said wherever the profile is shown, and recorded with the SHA-256 of each entry (X3).
+  const notApplied = verdict.ignored.map((entry) => notAppliedText(entry));
+  reports.push(...notApplied);
+  const ignoredNow = Object.fromEntries(
+    verdict.ignored.map((entry) => [entry.name, { since: entry.since, sha256: entry.sha256 }]),
+  );
+  if (input.mode === 'update' && !shaChanged) {
+    // Only an edit made here can make the list differ from the same bytes: put back, as any other drift is.
+    const was = Object.fromEntries(Object.entries(listedIgnored).filter(([name]) => !understood.has(name)));
+    if (canonical(was) !== canonical(ignoredNow)) {
+      repairs.push(
+        `the extensions recorded as not applied here for ${organisation} were changed here; they are as the profile says again`,
+      );
+    }
+  }
+
   if (input.mode === 'update' && !shaChanged && !input.sourceGiven) {
     /*
      * The same bytes from the same place: whatever differs between the profile and the record is drift — a record
@@ -896,6 +1020,8 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
      */
     repairs.unshift(...changes.splice(0));
   }
+  // Never drift: an entry the record lists as skipped, read by a release that knows it (X4).
+  changes.push(...skippedNowKnown);
   /*
    * The update caps, from the file beside the profile (design 2026-10-16, U8): their own file and their own SHA-256,
    * so their own judgement. Another file — a new one, a changed one, one gone — is a change of what the organisation
@@ -928,7 +1054,7 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     if (shaChanged) changes.push(`profile SHA-256: ${previous?.sha256 ?? 'none'} → ${file.sha256}`);
   }
 
-  const next: OrganisationRecord = {
+  let next: OrganisationRecord = {
     ...(previous ?? {}),
     label: profile.label,
     source: { kind: 'file', path: file.path },
@@ -948,6 +1074,10 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
       sha256: capsNow.sha256,
     };
   } else delete next.updates;
+  for (const entry of verdict.understood) next = entry.extension.apply(next, entry.value);
+  for (const extension of withdrawn) next = extension.apply(next, undefined);
+  if (verdict.ignored.length > 0) next.ignoredExtensions = ignoredNow;
+  else delete next.ignoredExtensions;
 
   return {
     organisation,
@@ -959,8 +1089,15 @@ async function planProfile(config: Config, input: PlanInput): Promise<ProfilePla
     immediate,
     repairs,
     reports,
+    notApplied,
     needsApproval:
-      input.mode === 'add' || input.sourceGiven || shaChanged || turningOn || capsChanged || agentChange !== null,
+      input.mode === 'add' ||
+      input.sourceGiven ||
+      shaChanged ||
+      turningOn ||
+      capsChanged ||
+      agentChange !== null ||
+      extensionChanged,
     gmail,
   };
 }
@@ -1000,6 +1137,11 @@ interface Planned {
   now: string;
   /** Whether this call turned `forOtherAddresses` off before planning: written already, and reported with the rest. */
   narrowed: boolean;
+  /**
+   * What this change did at once before it planned, one line each, in the order the preview's `doneAtOnce` lists them:
+   * the narrowing, then what only tightened (`tightenAtOnce`). Written already, and reported first among what applied.
+   */
+  doneAtOnce: string[];
 }
 
 /**
@@ -1032,6 +1174,9 @@ function profileChange(
    * what the preparation did.
    */
   let narrowedEarlier = false;
+  /** The same for what only tightened: the lines an earlier call of this change wrote at once (`tightenAtOnce`). */
+  let tightenedEarlier: string[] = [];
+  const registry = options.extensions ?? KNOWN_EXTENSIONS;
   /*
    * The store a planned secret goes to — chosen only when an owned secret will be written — and the refusal of a
    * `--store` with nothing to write. A store chosen for the first time is a setting the person sees, even on a repair.
@@ -1052,7 +1197,12 @@ function profileChange(
     }
     return null;
   };
-  const plan = async (config: Config, file: ProfileFile, now: string): Promise<ProfilePlan> => {
+  const plan = async (
+    config: Config,
+    file: ProfileFile,
+    verdict: ExtensionVerdict,
+    now: string,
+  ): Promise<ProfilePlan> => {
     // Opened only when a stored secret is asked for: a plan that writes a new client reads nothing from the store.
     const committed = committedSecretsStore(config);
     return planProfile(config, {
@@ -1065,6 +1215,8 @@ function profileChange(
       now,
       commands,
       readSecret: async (ref) => (committed === null ? null : (await core.secrets(committed)).get(ref)),
+      verdict,
+      registry,
     });
   };
   return {
@@ -1096,24 +1248,63 @@ function profileChange(
         (narrowedEarlier || (await approvalRecordsNarrowing(core, spec.approvalId)));
       narrowedEarlier ||= narrowedNow;
       const narrowed = narrowedNow || narrowedBefore;
-      const file = spec.file ?? (await readProfileFile(spec.path(config)));
+      const file =
+        spec.file ?? (await readOrRefuse(spec.path(config), spec.mode, commands.handoffs, spec.organisation));
+      /*
+       * What this release cannot take at all is refused before anything of the profile is applied, the tightenings
+       * below included (design 2026-10-19, X3): an entry it does not know and must not skip, or one it knows marked in
+       * a way it cannot be held to. The record stays exactly as the last approval left it.
+       */
+      const verdict = profileExtensions(file.profile, registry);
+      if (verdict.refused.length > 0) {
+        throw needsNewerRelease(file.profile.organisation, verdict.refused, spec.mode, commands.handoffs);
+      }
+      /*
+       * What only tightens applies at once, as a narrowing does (design 2026-10-19, X4): written before the rest is
+       * planned, so it never waits for an approval the rest needs, and the preview marks it done. A claim plans from a
+       * record already tightened, and learns what was done from its own earlier call at a terminal, or from the
+       * approval it claims — each line held to the record it says it left.
+       */
+      let tightenedNow: string[] = [];
+      if (spec.mode === 'update' && !spec.sourceGiven && spec.organisation !== undefined) {
+        const outcome = await tightenAtOnce(core, options, spec.organisation, file, verdict, config);
+        config = outcome.config;
+        tightenedNow = outcome.done;
+      }
+      const tightenedBefore =
+        tightenedEarlier.length > 0
+          ? tightenedEarlier
+          : spec.mode === 'update' && spec.organisation !== undefined
+            ? stillTightened(
+                (await approvalDoneAtOnce(core, spec.approvalId)).filter((line) => line !== NARROWED_WHEN_PREPARED),
+                recordOf(config, spec.organisation),
+                verdict,
+              )
+            : [];
+      const tightened = [...tightenedBefore, ...tightenedNow.filter((line) => !tightenedBefore.includes(line))];
+      tightenedEarlier = tightened;
+      const doneAtOnce = [...(narrowed ? [NARROWED_WHEN_PREPARED] : []), ...tightened];
       await refuseChangedProfile(core, spec.approvalId, file, options.surface);
       const now = (options.now?.() ?? new Date()).toISOString();
-      const profilePlan = await plan(config, file, now);
+      const profilePlan = await plan(config, file, verdict, now);
       const store = await storeFor(config, profilePlan);
-      planned = { plan: profilePlan, file, inputs: inputsOf(config), store, now, narrowed };
+      planned = { plan: profilePlan, file, inputs: inputsOf(config), store, now, narrowed, doneAtOnce };
       const { organisation } = profilePlan;
       const label = shownText(file.profile.label, 64);
       const effects = profilePlan.needsApproval ? previewLines(spec.mode, profilePlan, file, store) : [];
+      const atOnce = [
+        ...(narrowed ? ['; for other addresses was turned off at once'] : []),
+        ...(tightened.length > 0 ? ['; what only tightens was applied at once'] : []),
+      ].join('');
       return {
         before: config,
         after: withPlan(config, profilePlan, store),
         summary:
           spec.mode === 'add'
             ? `Add the organisation profile "${organisation}" (${label}): its apps beside what you have`
-            : `Update the organisation profile "${organisation}" (${label})${narrowed ? '; for other addresses was turned off at once' : ''}`,
+            : `Update the organisation profile "${organisation}" (${label})${atOnce}`,
         effects,
-        ...(narrowed && profilePlan.needsApproval ? { doneAtOnce: [NARROWED_WHEN_PREPARED] } : {}),
+        ...(doneAtOnce.length > 0 && profilePlan.needsApproval ? { doneAtOnce } : {}),
       };
     },
     apply: async (consent) => {
@@ -1133,10 +1324,184 @@ const NARROWED_WHEN_PREPARED = 'for other addresses: on → off';
 
 /** Whether the approval being claimed was prepared by a call that narrowed: its `doneAtOnce` says so. */
 async function approvalRecordsNarrowing(core: Core, approvalId: string | undefined): Promise<boolean> {
-  if (approvalId === undefined) return false;
-  // Only a valid version-2 change says what it did at once.
+  return (await approvalDoneAtOnce(core, approvalId)).includes(NARROWED_WHEN_PREPARED);
+}
+
+/** What the approval being claimed says its preparation did at once: none for anything but a valid version-2 change. */
+async function approvalDoneAtOnce(core: Core, approvalId: string | undefined): Promise<readonly string[]> {
+  if (approvalId === undefined) return [];
+  // Only a valid version-2 change says what it did at once; its record is bound, so the lines are what was prepared.
   const record = asV2(await core.approvals.get(approvalId).catch(() => null));
-  return record?.kind === 'change' && record.change?.doneAtOnce?.includes(NARROWED_WHEN_PREPARED) === true;
+  return record?.kind === 'change' ? (record.change?.doneAtOnce ?? []) : [];
+}
+
+/**
+ * Of the tightenings an approval says its preparation made, those the record still shows made, in the approval's order:
+ * an extension line whose entry the profile still names, the record no longer lists as skipped, and holds as the
+ * profile says. A line the record no longer bears out is left out, so the claim says otherwise than the approval and is
+ * refused — prepare it again.
+ */
+function stillTightened(
+  lines: readonly string[],
+  record: OrganisationRecord | undefined,
+  verdict: ExtensionVerdict,
+): string[] {
+  if (record === undefined) return [];
+  return lines.filter((line) => {
+    const name = TIGHTENED_EXTENSION.exec(line)?.[1];
+    const entry = verdict.understood.find((each) => each.name === name);
+    return (
+      entry !== undefined &&
+      !Object.hasOwn(record.ignoredExtensions ?? {}, entry.name) &&
+      canonical(entry.extension.recorded(record)) === canonical(entry.value)
+    );
+  });
+}
+
+/**
+ * What only tightens, written on its own under the credentials lock before the rest is planned (design 2026-10-19, X4)
+ * — as `narrowAtOnce` writes a narrowing — with a line for each **skipped extension this release now knows, whose
+ * classifier reads applying it as tightening**, its entry the same as when it was skipped: applied, and no longer listed
+ * as skipped. A changed entry is a changed profile, which is approved with the rest.
+ *
+ * Nothing else of the record moves. A record that is not there, or a profile for another organisation, is left alone:
+ * what is refused about it is the plan's to say.
+ */
+async function tightenAtOnce(
+  core: Core,
+  options: OrgOptions,
+  organisation: string,
+  file: ProfileFile,
+  verdict: ExtensionVerdict,
+  given: Config,
+): Promise<{ config: Config; done: string[] }> {
+  // Nothing to tighten in what the call was given: no lock taken, and nothing written — the common case.
+  if (tightenings(given, organisation, file, verdict).done.length === 0) return { config: given, done: [] };
+  return withCredentialsLock(core.paths.configDir, async () => {
+    let done: string[] = [];
+    const written = await core.config.update((current) => {
+      const tightened = tightenings(current, organisation, file, verdict);
+      done = tightened.done;
+      if (done.length === 0 || tightened.record === undefined) return current;
+      return { ...current, organisations: { ...organisationsOf(current), [organisation]: tightened.record } };
+    });
+    if (done.length > 0) {
+      await core.audit.append({
+        inboxId: '',
+        operation: 'org.update',
+        outcome: 'ok',
+        surface: options.surface,
+        reason: `${organisation}: what only tightens applied at once`,
+      });
+    }
+    return { config: written, done };
+  });
+}
+
+/** What `tightenAtOnce` writes into one configuration: the record it leaves, and a line for each tightening. */
+function tightenings(
+  config: Config,
+  organisation: string,
+  file: ProfileFile,
+  verdict: ExtensionVerdict,
+): { record: OrganisationRecord | undefined; done: string[] } {
+  const done: string[] = [];
+  const record = recordOf(config, organisation);
+  if (!hasNames(config) || !record || file.profile.organisation !== organisation) return { record: undefined, done };
+  let next: OrganisationRecord = { ...record };
+  for (const entry of verdict.understood) {
+    const skipped = own(record.ignoredExtensions, entry.name);
+    if (skipped?.sha256 !== entry.sha256) continue;
+    const before = entry.extension.recorded(record);
+    if (entry.extension.classify(before, entry.value) !== 'tightens') continue;
+    next = entry.extension.apply(next, entry.value);
+    const left = { ...(next.ignoredExtensions ?? {}) };
+    delete left[entry.name];
+    if (Object.keys(left).length > 0) next.ignoredExtensions = left;
+    else delete next.ignoredExtensions;
+    done.push(extensionLine(entry.name, (value) => entry.extension.describe(value), before, entry.value, 'tightens'));
+  }
+  return { record: next, done };
+}
+
+/**
+ * The profile read, a later version refused in words that name core's own commands, located (design 2026-10-19, X3):
+ * the profile's own refusal knows no commands, so the update and the command to run after it are said here.
+ */
+async function readOrRefuse(
+  path: string,
+  mode: 'add' | 'update',
+  handoffs: CliHandoffs,
+  organisation: string | undefined,
+): Promise<ProfileFile> {
+  try {
+    return await readProfileFile(path);
+  } catch (error) {
+    if (!(error instanceof CommsError) || error.code !== 'NEEDS_NEWER_RELEASE') throw error;
+    const named = typeof error.details?.organisation === 'string' ? error.details.organisation : organisation;
+    throw new CommsError(error.code, error.message, {
+      hint: updateFirst(mode, handoffs, named),
+      ...(error.details ? { details: error.details } : {}),
+    });
+  }
+}
+
+/**
+ * Update first, then run the command again — core's `update`, and `org update <organisation>` or the add again, each
+ * located for this shell (design 2026-10-19, X3), never a program's name in a string.
+ */
+function updateFirst(mode: 'add' | 'update', handoffs: CliHandoffs, organisation: string | undefined): string {
+  const older = `This agent-communications (${VERSION}) is older than the profile.`;
+  const again = (update: string) =>
+    mode === 'update' && organisation !== undefined
+      ? handoffSentence(
+          handoffs.core(['org', 'update', organisation]),
+          (command) => `${older} Update first with ${update}, then run ${command} again.`,
+          { instead: `${older} Update first with ${update}, then call comms_org_update from a chat again.` },
+        )
+      : `${older} Update first with ${update}, then add the profile again.`;
+  return handoffSentence(handoffs.core(['update']), (update) => again(update), {
+    instead: `${older} Update first — comms_update from a chat — then ${mode === 'update' ? 'update' : 'add'} the profile again.`,
+  });
+}
+
+/**
+ * The refusal of a profile with an entry this release does not know and must not skip (design 2026-10-19, X3): nothing
+ * of it is applied, and nothing else is stopped. Named by the release the entries need — the latest any of them names —
+ * or, when that release is this one or an earlier one, as entries this release should know and does not: a typo, or
+ * another build's, which updating does not mend.
+ */
+function needsNewerRelease(
+  organisation: string,
+  refused: readonly IgnoredExtension[],
+  mode: 'add' | 'update',
+  handoffs: CliHandoffs,
+): CommsError {
+  const names = refused.map((entry) => `"${shownText(entry.name, 40)}"`).join(', ');
+  const later = refused.filter((entry) => entry.reason === 'needs-newer');
+  const details = {
+    organisation,
+    extensions: refused.map((entry) => ({ name: entry.name, since: entry.since, reason: entry.reason })),
+  };
+  if (later.length === 0) {
+    const one = refused.length === 1;
+    return new CommsError(
+      'NEEDS_NEWER_RELEASE',
+      `${organisation}'s profile needs ${names}, which this release (${VERSION}) should know and does not: nothing was changed`,
+      {
+        hint: `The profile marks ${one ? 'it' : 'them'} required, and says ${one ? 'it is' : 'they are'} understood from ${refused.map((entry) => shownText(entry.since, 20)).join(', ')}, which this release is not older than: misspelt, perhaps, or from another build. Updating does not mend that; ask your organisation for its current profile.`,
+        details,
+      },
+    );
+  }
+  const since = later
+    .map((entry) => entry.since)
+    .reduce((latest, each) => ((compareVersions(each, latest) ?? 0) > 0 ? each : latest));
+  return new CommsError(
+    'NEEDS_NEWER_RELEASE',
+    `${organisation}'s profile needs agent-communications ${shownText(since, 20)} or later for ${names}: nothing was changed`,
+    { hint: updateFirst(mode, handoffs, organisation), details: { ...details, since } },
+  );
 }
 
 /**
@@ -1227,6 +1592,8 @@ function previewLines(mode: 'add' | 'update', plan: ProfilePlan, file: ProfileFi
     }
   }
   lines.push(...plan.changes, ...plan.immediate, ...plan.repairs.map((repair) => `repairs: ${repair}`));
+  // What of the profile is not applied here, so the person approves it knowing (design 2026-10-19, X3).
+  lines.push(...plan.notApplied);
   if (plan.secret && store)
     lines.push(`keeps the client secret of "${plan.secret.name}" in the ${store} store on this machine`);
   return lines;
@@ -1243,7 +1610,6 @@ async function applyProfile(
   const { handoffs } = commands;
   const { plan, file, store } = planned;
   const { organisation } = plan;
-  const narrowing = planned.narrowed ? ['for other addresses: on → off'] : [];
   const done = async (changed: boolean): Promise<OrgChangeResult> => {
     if (changed) {
       await core.audit.append({
@@ -1255,14 +1621,21 @@ async function applyProfile(
       });
     }
     const after = await core.config.load();
+    const profile = viewOf(
+      after,
+      organisation,
+      await viewHandoffs(commands, after, [organisation]),
+      options.extensions,
+    );
     return {
       organisation,
-      changed: changed || planned.narrowed,
-      applied: [...narrowing, ...plan.changes, ...plan.immediate, ...plan.repairs],
+      changed: changed || planned.doneAtOnce.length > 0,
+      applied: [...planned.doneAtOnce, ...plan.changes, ...plan.immediate, ...plan.repairs],
       reported: plan.reports,
       gmail: plan.gmail,
       store: plan.secret ? store : null,
-      profile: viewOf(after, organisation, await viewHandoffs(commands, after, [organisation])),
+      extensions: profile.extensions,
+      profile,
     };
   };
   if (mode === 'update' && writesNothing(plan)) return done(false);
@@ -1596,20 +1969,32 @@ export function orgRemoveChange(
  * Every profile added here, as `org show` shows each. Reads only — the registrations too, once, when a profile has
  * drifted: a drift's fix can name Gmail's command, which is found among them (CUE-403).
  */
-export async function orgList(core: Core, platform: NodeJS.Platform): Promise<OrganisationView[]> {
+export async function orgList(
+  core: Core,
+  platform: NodeJS.Platform,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): Promise<OrganisationView[]> {
   const config = await core.config.load();
   const organisations = Object.keys(organisationsOf(config)).sort();
   const handoffs = await viewHandoffs(orgHandoffs(core, platform), config, organisations);
-  return organisations.map((organisation) => viewOf(config, organisation, handoffs));
+  return organisations.map((organisation) => viewOf(config, organisation, handoffs, registry));
 }
 
-/** One profile: its record, its generations and their mailboxes, its Slack apps, and any drift. Reads only. */
-export async function orgShow(core: Core, organisation: string, platform: NodeJS.Platform): Promise<OrganisationView> {
+/**
+ * One profile: its record, its generations and their mailboxes, its Slack apps, any drift, and what of its extensions
+ * is applied here. Reads only. `registry` is for a test, standing for a later release's.
+ */
+export async function orgShow(
+  core: Core,
+  organisation: string,
+  platform: NodeJS.Platform,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): Promise<OrganisationView> {
   const word = organisationArgument(organisation);
   const config = await core.config.load();
   const commands = orgHandoffs(core, platform);
   requireRecord(config, word, commands.handoffs);
-  return viewOf(config, word, await viewHandoffs(commands, config, [word]));
+  return viewOf(config, word, await viewHandoffs(commands, config, [word]), registry);
 }
 
 /**
@@ -1628,7 +2013,12 @@ async function viewHandoffs(
 }
 
 /** A record as it is shown: every string that came from a profile neutralised and on one line. */
-export function viewOf(config: Config, organisation: string, handoffs: CliHandoffs): OrganisationView {
+export function viewOf(
+  config: Config,
+  organisation: string,
+  handoffs: CliHandoffs,
+  registry: ExtensionRegistry = KNOWN_EXTENSIONS,
+): OrganisationView {
   const record = requireRecord(config, organisation, handoffs);
   const active = activeGeneration(record);
   const app = (role: 'read' | 'send'): SlackAppView | null => {
@@ -1641,6 +2031,13 @@ export function viewOf(config: Config, organisation: string, handoffs: CliHandof
   if (record.forOtherAddresses && !active) {
     notes.push('For other addresses is on, but routes nothing until the profile names a Google client again.');
   }
+  // The profile's extensions here (design 2026-10-19, X7): those this release applied, and those it did not, said.
+  const ignored = ignoredOf(record, registry);
+  notes.push(...ignored.map((entry) => notAppliedText(entry)));
+  const applied = [...registry.values()]
+    .filter((extension) => extension.recorded(record) !== undefined)
+    .map((extension) => extension.name)
+    .sort();
   return {
     organisation,
     label: shownText(record.label, 64),
@@ -1681,5 +2078,6 @@ export function viewOf(config: Config, organisation: string, handoffs: CliHandof
     accounts: accountsOfOrganisation(config, organisation),
     drift: organisationDrift(config, organisation, handoffs),
     notes,
+    extensions: { applied, ignored },
   };
 }

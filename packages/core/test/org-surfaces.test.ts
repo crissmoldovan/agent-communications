@@ -467,3 +467,82 @@ test('a project id a client file wrote is shown neutralised when a repair names 
   const json = cli(m, ['org', 'update', 'acme', '--json']);
   unsafe(json.stdout.replace(/\\n/g, '\n'), 'org update --json');
 });
+
+test('a profile this release is too old for is refused from both surfaces, with its own code and exit 1, and nothing written', async () => {
+  const m = machine();
+  // Added and approved, as it is today.
+  const asked = cli(m, ['org', 'add', m.profile, '--json']);
+  assert.equal(
+    cli(m, ['org', 'add', m.profile, '--approval', asked.json().error.details.approvalId, '--json']).status,
+    0,
+  );
+  const document = JSON.parse(readFileSync(m.profile, 'utf8'));
+  const configPath = join(m.configDir, 'config.json');
+  const paths = resolvePaths({ env: m.env, platform: process.platform });
+  const update = coreInline(paths, ['update'], process.platform);
+  const again = coreInline(paths, ['org', 'update', 'acme'], process.platform);
+  const { call, ok, close } = await connect(m);
+  try {
+    for (const [what, later, message] of [
+      [
+        'an unknown required extension',
+        { ...document, extensions: { 'must-have': { required: true, since: '99.0.0' } } },
+        `acme's profile needs agent-communications 99.0.0 or later for "must-have": nothing was changed`,
+      ],
+      [
+        'a later version',
+        { ...document, version: 2 },
+        /^acme's profile is version 2, which needs a later agent-communications than this one \(.+\): nothing was changed$/,
+      ],
+    ] as const) {
+      writeFileSync(m.profile, JSON.stringify(later));
+      const before = readFileSync(configPath, 'utf8');
+
+      const byCommand = cli(m, ['org', 'update', 'acme', '--json']);
+      assert.equal(byCommand.status, 1, `${what}: ${byCommand.stdout}${byCommand.stderr}`);
+      const commandError = byCommand.json().error;
+      assert.equal(commandError.code, 'NEEDS_NEWER_RELEASE', what);
+      if (typeof message === 'string') assert.equal(commandError.message, message, what);
+      else assert.match(commandError.message, message, what);
+      assert.ok(commandError.hint.includes(update), `${what}: ${commandError.hint}`);
+      assert.ok(commandError.hint.includes(again), `${what}: ${commandError.hint}`);
+      assert.doesNotMatch(commandError.hint, /[Aa]sk your organisation/, what);
+      assertNoBareCommand(commandError.hint);
+      assert.equal(readFileSync(configPath, 'utf8'), before, `${what}: the command wrote the configuration`);
+
+      const byTool = await call('comms_org_update', { organisation: 'acme' });
+      assert.equal(byTool.isError, true, what);
+      const toolError = (byTool.structuredContent as { error: { code: string; message: string; hint: string } }).error;
+      assert.equal(toolError.code, 'NEEDS_NEWER_RELEASE', what);
+      assert.equal(toolError.message, commandError.message, `${what}: both surfaces say the same`);
+      assert.ok(toolError.hint.includes(coreInline(m.core.paths, ['update'], process.platform)), toolError.hint);
+      assert.equal(readFileSync(configPath, 'utf8'), before, `${what}: the tool wrote the configuration`);
+    }
+
+    // An optional one is not applied, the rest is, and both surfaces show it in the same words.
+    writeFileSync(
+      m.profile,
+      JSON.stringify({
+        ...document,
+        label: 'Acme Later',
+        extensions: { 'future-thing': { required: false, since: '99.0.0' } },
+      }),
+    );
+    const first = await ok('comms_org_update', { organisation: 'acme' });
+    assert.match(String(first.preview), /not applied here: future-thing \(needs 99\.0\.0 or later\)/);
+    const done = await ok('comms_org_update', { organisation: 'acme', approvalId: first.approvalId });
+    const result = done.result as { extensions: unknown; reported: string[] };
+    assert.deepEqual(result.extensions, {
+      applied: [],
+      ignored: [{ name: 'future-thing', since: '99.0.0', reason: 'needs-newer' }],
+    });
+    const byTool = await ok('comms_org_show', { organisation: 'acme' });
+    const byCommand = cli(m, ['org', 'show', 'acme', '--json']);
+    assert.deepEqual(byCommand.json().data, byTool);
+    assert.deepEqual(byTool.extensions, result.extensions);
+    const plain = cli(m, ['org', 'show', 'acme']);
+    assert.match(plain.stdout, /not applied here: future-thing \(needs 99\.0\.0 or later\)/);
+  } finally {
+    await close();
+  }
+});

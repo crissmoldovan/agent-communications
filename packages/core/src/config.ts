@@ -370,6 +370,19 @@ export interface OrganisationRecord {
     | undefined;
   /** The organisation's update caps, from the file beside its profile; absent when it names none. */
   updates?: OrganisationUpdates | undefined;
+  /**
+   * The entries of the profile's `extensions` this release did not know and skipped, being optional (design 2026-10-19,
+   * X3): the release that first understands each, and the SHA-256 of the entry's canonical JSON. Kept in step with the
+   * profile, and read by a later release that understands one: applying it then is a change it classifies and, unless
+   * it tightens, approved first — never a repair of drift (X4). Absent when none was skipped.
+   */
+  ignoredExtensions?: Record<string, OrganisationIgnoredExtension> | undefined;
+}
+
+/** One skipped extension, as the record keeps it (design 2026-10-19, X3). */
+export interface OrganisationIgnoredExtension {
+  since: string;
+  sha256: string;
 }
 
 export interface ConfigV2 extends ConfigBody {
@@ -673,6 +686,7 @@ const organisationRecordSchema = z.looseObject({
   updates: z
     .looseObject({ max: z.string().min(1).optional(), background: z.boolean().optional(), sha256: z.string().min(1) })
     .optional(),
+  ignoredExtensions: z.record(z.string(), z.looseObject({ since: z.string(), sha256: z.string() })).optional(),
 });
 
 const formerNameSchema = z.looseObject({ name: nameSchema, id: z.string().min(1) });
