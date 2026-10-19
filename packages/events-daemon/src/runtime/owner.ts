@@ -102,7 +102,7 @@ import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
-import { LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
+import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -200,8 +200,10 @@ export interface EventOwnerOptions {
   readonly dataDir?: string | undefined;
   /**
    * Test seam only: strict-parsed synthetic reviewed Laya bytes, the content-free sandbox probe spawn, the sealed
-   * network the production fetcher dials, a free-space probe and artifact failpoints. Production uses the daemon's
-   * shipped assets, this process's platform and no failpoint.
+   * network the production fetcher dials, a free-space probe, artifact failpoints and the worker start (Task 7's
+   * frame-compatible stand-in behind the real boundary proof, as E2 Task 8's supervisor tests start it). Production
+   * uses the daemon's shipped assets, this process's platform, no failpoint, and launches only the shipped worker
+   * under the macOS sandbox.
    */
   readonly laya?:
     | {
@@ -210,6 +212,7 @@ export interface EventOwnerOptions {
         readonly network?: LayaArtifactNetwork | undefined;
         readonly freeBytes?: (() => Promise<number>) | undefined;
         readonly failpoint?: LayaArtifactFailpoint | undefined;
+        readonly startWorker?: LayaWorkerStart | undefined;
       }
     | undefined;
 }
@@ -1202,7 +1205,7 @@ async function startOwnerWithLock(
   // the same inputs as its activation path. The one isolated worker supervisor is E's coordinator's only Laya
   // executor; it proves and launches only the shipped worker entry.
   const unregisterLayaInputs = registerLayaEnablementInputs(database.database, layaInputs);
-  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts });
+  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: options.laya?.startWorker });
   const unregisterLayaWorker = registerLayaJudgeExecutor(database.database, layaWorker);
   onDatabase({
     close: () => {

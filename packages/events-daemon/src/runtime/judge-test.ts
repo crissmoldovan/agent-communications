@@ -2,8 +2,13 @@ import { CommsError, canonicalJson } from '@agentcomms/core';
 import { TEST_CLOUD_EVENT } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import type { CanonicalJudgeDocument, LayaJudgeDocument } from '../domain/judges.ts';
-import { JUDGE_KIND_LAYA, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import {
+  assertLayaJudgeKindAvailable,
+  type CanonicalJudgeDocument,
+  type LayaJudgeDocument,
+  layaEnablementInputsFor,
+} from '../domain/judges.ts';
+import { EventDomainError, JUDGE_KIND_LAYA, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
   assertPendingRuleJudgeTestAuthority,
@@ -101,6 +106,35 @@ function activeRuleAuthority(
   throw new JudgeBudgetError('JUDGE_AUTHORITY_CHANGED', 'no active rule grants this exact judge test');
 }
 
+/**
+ * A live Laya judge version where this release or platform does not offer Laya: Laya's own closed reason (the
+ * placeholder lock's `E2_EXTERNAL_REFERENCE_BLOCKED`, or the platform's or the sandbox's), read from the database's
+ * own Laya inputs as a rule naming one is (E2 Task 10a). Undefined for any other judge, and wherever Laya is offered.
+ */
+function unofferedLayaJudge(
+  database: EventDatabase['database'],
+  input: { readonly judgeId: string; readonly version: number },
+): string | undefined {
+  const row = database
+    .prepare('SELECT document FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+    .get(input.judgeId, input.version) as { document: string } | undefined;
+  if (row === undefined) return undefined;
+  let kind: unknown;
+  try {
+    kind = (JSON.parse(row.document) as { readonly kind?: unknown }).kind;
+  } catch {
+    return undefined;
+  }
+  if (kind !== JUDGE_KIND_LAYA) return undefined;
+  try {
+    assertLayaJudgeKindAvailable(layaEnablementInputsFor(database));
+    return undefined;
+  } catch (error) {
+    if (error instanceof EventDomainError) return error.code;
+    throw error;
+  }
+}
+
 function switchGeneration(database: EventDatabase['database']): number {
   const row = database.prepare('SELECT switch_generation FROM event_settings WHERE singleton = 1').get() as
     | { switch_generation: number }
@@ -159,6 +193,11 @@ export class JudgeTestControl {
       input.version < 1
     )
       throw new CommsError('USAGE', 'judge test needs one exact judge id and positive version');
+    // Where Laya is not offered, a Laya judge's test names that reason rather than the rule authority it could never
+    // be granted here; nothing is reserved and no worker starts either way.
+    const unoffered = unofferedLayaJudge(this.#store.database, input);
+    if (unoffered !== undefined)
+      return { kind: 'refused', judgeId: input.judgeId, version: input.version, code: unoffered };
     let authority: ActiveRuleAuthority;
     try {
       authority = activeRuleAuthority(this.#store.database, input.judgeId, input.version);

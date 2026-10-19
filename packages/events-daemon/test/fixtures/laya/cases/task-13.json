@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "task": 13,
+  "owners": [
+    {
+      "id": "task-13"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-synthetic-owner-to-packed-consumer-proof",
+      "owner": "task-13",
+      "test": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target"
+    },
+    {
+      "id": "e2-owner-hold-disable-and-remove-paths",
+      "owner": "task-13",
+      "test": "E2 end to end: a Laya value in the uncertain band is held, survives a restart, and the kind disable purges it and keeps the verified trees"
+    },
+    {
+      "id": "e2-owner-purge-of-in-flight-laya-work",
+      "owner": "task-13",
+      "test": "E2 end to end: disable-all kills the in-flight Laya worker, settles its reservation and keeps the verified trees"
+    },
+    {
+      "id": "e2-owner-crash-boundary-and-stop-paths",
+      "owner": "task-13",
+      "test": "E2 end to end: a failed boundary proof leaves Laya failed across a restart until its person disables and re-enables it"
+    },
+    {
+      "id": "e2-injected-stand-in-no-real-bundle-in-package",
+      "owner": "task-13",
+      "test": "E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model"
+    },
+    {
+      "id": "e2-packed-daemon-keeps-laya-held",
+      "owner": "task-13",
+      "test": "E2: the built daemon reads its shipped Laya assets and keeps Laya held, through its own CLI and owner"
+    },
+    {
+      "id": "e2-release-refusal-end-to-end",
+      "owner": "task-13",
+      "test": "E2 release end to end: the local release refuses a copied state shipping a real lock without gate evidence, before its verify and any publish"
+    },
+    {
+      "id": "e2-supplemental-real-mac-checklist",
+      "owner": "task-13",
+      "test": "E2 release gate: the owner's manual macOS checklist is supplemental: no release check reads it, and in the evidence's place it is refused"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "s4-2829-2833-end-to-end-held-path",
+      "owner": "task-13",
+      "test": "E2 end to end held path: with the shipped placeholder lock a Laya rule is configuration, every way to run it refuses, and a restart changes nothing"
+    },
+    {
+      "id": "d10-2035-2047-laya-judge-test-names-laya-reason",
+      "owner": "task-13",
+      "test": "E2 Laya judge test: where Laya is not offered, a Laya judge test names Laya’s own reason before any rule authority"
+    },
+    {
+      "id": "d5-1080-1096-owner-crash-settles-pessimistically",
+      "owner": "task-13",
+      "test": "E2 end to end: a crashed worker is no-match with its estimate charged, and the next call starts a freshly proved child"
+    },
+    {
+      "id": "d11-2279-2299-owner-install-after-claim-and-resume",
+      "owner": "task-13",
+      "test": "E2 end to end: a stop during the download resumes the install at the next start, and a disable during it deletes the partial"
+    },
+    {
+      "id": "d11-2153-2165-owner-stop-kills-worker",
+      "owner": "task-13",
+      "test": "E2 end to end: the owner’s stop kills its idle Laya worker and leaves no worker directory behind"
+    },
+    {
+      "id": "d11-2321-2335-packed-daemon-assets-and-no-runtime",
+      "owner": "task-13",
+      "test": "E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model"
+    },
+    {
+      "id": "d11-2337-2350-release-job-refuses-before-registry",
+      "owner": "task-13",
+      "test": "E2 release end to end: the release job's gate refuses a copied state shipping a real lock without gate evidence, before any registry request"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-13.json",
+      "owner": "task-13"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-t13-owner-installs-after-claim",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "testPattern": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "before": "      if (kind === JUDGE_KIND_LAYA) void layaArtifacts.ensureInstalled();",
+      "after": "      if (kind === JUDGE_KIND_LAYA) void 0;"
+    },
+    {
+      "id": "e2-t13-owner-resumes-install",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: a stop during the download resumes the install at the next start, and a disable during it deletes the partial",
+      "testPattern": "E2 end to end: a stop during the download resumes the install at the next start, and a disable during it deletes the partial",
+      "before": "    void layaArtifacts.resume().catch(() => undefined);",
+      "after": "    void 0;"
+    },
+    {
+      "id": "e2-t13-owner-registers-laya-executor",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "testPattern": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "before": "  const unregisterLayaWorker = registerLayaJudgeExecutor(database.database, layaWorker);",
+      "after": "  const unregisterLayaWorker = () => undefined;"
+    },
+    {
+      "id": "e2-t13-owner-registers-purge-listener",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: disable-all kills the in-flight Laya worker, settles its reservation and keeps the verified trees",
+      "testPattern": "E2 end to end: disable-all kills the in-flight Laya worker, settles its reservation and keeps the verified trees",
+      "before": "  const unregisterLayaPurge = registerJudgeWorkPurgeListener(database.database, layaArtifacts);",
+      "after": "  const unregisterLayaPurge = () => undefined;"
+    },
+    {
+      "id": "e2-t13-owner-registers-laya-inputs",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "testPattern": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "before": "  const unregisterLayaInputs = registerLayaEnablementInputs(database.database, layaInputs);",
+      "after": "  const unregisterLayaInputs = () => undefined;"
+    },
+    {
+      "id": "e2-t13-owner-b3-control-has-laya",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "testPattern": "E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target",
+      "before": "      laya: layaArtifacts,\n      now,\n    });\n  // Task 7 is a read-only projection",
+      "after": "      now,\n    });\n  // Task 7 is a read-only projection"
+    },
+    {
+      "id": "e2-t13-owner-stop-stops-laya",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-e2e.test.ts",
+      "testName": "E2 end to end: the owner’s stop kills its idle Laya worker and leaves no worker directory behind",
+      "testPattern": "E2 end to end: the owner’s stop kills its idle Laya worker and leaves no worker directory behind",
+      "before": "        await layaWorker.close();\n        await layaArtifacts.stop();\n",
+      "after": "        // e2-t13 mutant: the owner stops without stopping Laya\n"
+    },
+    {
+      "id": "e2-t13-judge-test-laya-reason-first",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "packages/events-daemon/src/runtime/judge-test.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge test: where Laya is not offered, a Laya judge test names Laya’s own reason before any rule authority",
+      "testPattern": "E2 Laya judge test: where Laya is not offered, a Laya judge test names Laya’s own reason before any rule authority",
+      "before": "    if (unoffered !== undefined)\n      return { kind: 'refused', judgeId: input.judgeId, version: input.version, code: unoffered };",
+      "after": "    if (unoffered === 'e2-t13-mutant')\n      return { kind: 'refused', judgeId: input.judgeId, version: input.version, code: unoffered };"
+    },
+    {
+      "id": "e2-t13-local-release-refuses-laya",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "scripts/release.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release end to end: the local release refuses a copied state shipping a real lock without gate evidence, before its verify and any publish",
+      "testPattern": "E2 release end to end: the local release refuses a copied state shipping a real lock without gate evidence, before its verify and any publish",
+      "before": "  refuse(\n    `the Laya release gate refused: ",
+      "after": "  console.error(\n    `the Laya release gate refused: "
+    },
+    {
+      "id": "e2-t13-gate-command-fails-the-job",
+      "kind": "production",
+      "owner": "task-13",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release end to end: the release job's gate refuses a copied state shipping a real lock without gate evidence, before any registry request",
+      "testPattern": "E2 release end to end: the release job's gate refuses a copied state shipping a real lock without gate evidence, before any registry request",
+      "before": "    process.exitCode = 1;",
+      "after": "    process.exitCode = 0;"
+    }
+  ],
+  "externalSources": []
+}

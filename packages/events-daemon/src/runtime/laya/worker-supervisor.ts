@@ -115,7 +115,7 @@ export type LayaWorkerStart = (options: {
 
 export interface LayaWorkerSupervisorOptions {
   readonly artifacts: LayaWorkerArtifacts;
-  /** Test seam only: the owner passes none. */
+  /** Test seam only: production passes none, so the owner launches only the shipped worker through Task 7. */
   readonly startWorker?: LayaWorkerStart | undefined;
   /** Test seams only: production uses D11's 30 seconds, ten idle minutes and the bounded load. */
   readonly requestDeadlineMs?: number | undefined;

@@ -20,6 +20,7 @@ import b3ControlV1Schema from '../src/operations/contracts/b3-control-v1.schema.
 import b3ControlV3Schema from '../src/operations/contracts/b3-control-v3.schema.json' with { type: 'json' };
 import doctorV1Schema from '../src/operations/contracts/doctor-v1.schema.json' with { type: 'json' };
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
+import { JudgeTestControl } from '../src/runtime/judge-test.ts';
 import { createOwnerB3ControlService, startEventOwner } from '../src/runtime/owner.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -228,6 +229,84 @@ test('E2 Laya judge creation: with the shipped placeholder lock, a Laya judge an
     );
   } finally {
     await running.stop();
+  }
+});
+
+test('E2 Laya judge test: where Laya is not offered, a Laya judge test names Laya’s own reason before any rule authority', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const running = await production('events-e2-t13-judge-test-');
+  try {
+    const { control } = running;
+    await control.request('addJudge', { document: layaJudge() });
+    assert.deepEqual(
+      await control.request('judgeTest', { judgeId: 'judge-laya-10a', version: 1 }),
+      { kind: 'refused', judgeId: 'judge-laya-10a', version: 1, code: 'E2_EXTERNAL_REFERENCE_BLOCKED' },
+      'the placeholder lock’s reason, not the rule authority no Laya judge can be granted on this release',
+    );
+    const viaCli = await cli(['judge', 'test', 'judge-laya-10a', '--version', '1'], running.stateDir);
+    assert.equal(viaCli.code, 0, viaCli.stderr);
+    assert.match(viaCli.stdout, /E2_EXTERNAL_REFERENCE_BLOCKED/u, 'the person’s terminal names it too');
+    // Any other judge keeps E's own order: a version no active rule references is refused for that.
+    await control.request('addJudge', {
+      document: {
+        judgeId: 'judge-local-13',
+        version: 1,
+        kind: 'local-endpoint',
+        provider: 'ollama',
+        model: 'synthetic-model',
+        // A bare loopback host: E2's checker refuses any other host, a port included, in a Laya test file.
+        endpoint: 'http://127.0.0.1/v1/systemone',
+        approvedAddressSet: ['127.0.0.1'],
+        promptTemplate: 'ollama-noul-v1',
+        protocol: 'noul',
+      },
+    });
+    assert.deepEqual(await control.request('judgeTest', { judgeId: 'judge-local-13', version: 1 }), {
+      kind: 'refused',
+      judgeId: 'judge-local-13',
+      version: 1,
+      code: 'JUDGE_AUTHORITY_CHANGED',
+    });
+    assert.deepEqual(
+      await running.counts(),
+      { judges: 2, rules: 0, layaKinds: 0, intents: 0, pointers: 0, models: 0 },
+      'a refused test reserves, enables and installs nothing',
+    );
+  } finally {
+    await running.stop();
+  }
+  // The database's own Laya inputs decide, as they do for a rule: a release that offers Laya, on a platform that
+  // does not, names that platform's reason.
+  const laya = await syntheticLaya();
+  const stateDir = await shortTempDir('events-e2-t13-judge-test-linux-');
+  const store = await openEventDatabase({ stateDir });
+  const unregister = registerLayaEnablementInputs(store.database, {
+    layaAssetSource: laya.assets,
+    layaPlatformProbe: { platform: 'linux', architecture: 'x64' },
+  });
+  try {
+    ImmutableVersions.forJudgeContract(store.database, 'b3-control-v3').createJudge(
+      layaJudge({ model: laya.manifestId }),
+    );
+    const tested = await new JudgeTestControl({
+      store,
+      taint: {
+        record: async () => {
+          throw new Error('a refused Laya judge test records no taint');
+        },
+      },
+    }).test({ judgeId: 'judge-laya-10a', version: 1 });
+    assert.deepEqual(tested, {
+      kind: 'refused',
+      judgeId: 'judge-laya-10a',
+      version: 1,
+      code: 'LAYA_PLATFORM_UNAVAILABLE',
+    });
+  } finally {
+    unregister();
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
   }
 });
 
