@@ -162,6 +162,10 @@ export interface WorldUser {
   readonly image_192?: string;
   readonly image_512?: string;
   readonly is_bot?: boolean;
+  /** The workspace they belong to: the world's own (`teamId`) when left out, another organisation's when set. */
+  readonly team_id?: string;
+  /** Slack's `is_stranger`: someone from another organisation this account shares a conversation with. */
+  readonly is_stranger?: boolean;
 }
 
 /** One conversation in a {@link SlackWorld}: what `conversations.info` says of it, and who is in it. */
@@ -171,10 +175,21 @@ export interface WorldRoom {
   readonly is_im?: boolean;
   readonly is_mpim?: boolean;
   readonly is_ext_shared?: boolean;
+  /** Shared with another organisation, the invitation not yet accepted. */
+  readonly is_pending_ext_shared?: boolean;
+  /** Shared across an Enterprise Grid's own workspaces: one organisation, not another. */
+  readonly is_org_shared?: boolean;
   /** For a DM: whose it is. */
   readonly user?: string;
   /** Everyone in it, the bot user included when it has joined: what `conversations.members` pages through. */
   members: string[];
+  /**
+   * What `conversations.info` says its `num_members` is: the members counted when left out, none at all for `null` —
+   * as Slack leaves it out of some answers, a group DM's among them.
+   */
+  num_members?: number | null;
+  /** `conversations.members` refuses, so nobody in it can be counted one by one. */
+  members_unreadable?: boolean;
 }
 
 /** A message the world holds: one posted through it, or one planted to be edited or deleted. */
@@ -202,6 +217,8 @@ export interface WorldMessage {
  * to a DM or group DM `channel_not_found`; an app message carries `bot_id`, the bot user and any `username` and icon.
  */
 export interface SlackWorld {
+  /** The workspace's own team id, which each user's `team_id` is unless they say otherwise. */
+  readonly teamId: string;
   readonly userToken: string;
   readonly botToken: string;
   readonly self: string;
@@ -429,6 +446,7 @@ function installEventPages(fake: FakeSlack, pages: SlackEventPages): void {
 /** Scripts `fake` as a workspace with state: see {@link SlackWorld}. */
 function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
   const world: SlackWorld = {
+    teamId: 'T0001',
     userToken: 'fake-user-token-0',
     botToken: 'fake-bot-token-0',
     self: 'U0001',
@@ -471,10 +489,12 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
         is_im: target.is_im === true,
         is_mpim: target.is_mpim === true,
         is_ext_shared: target.is_ext_shared === true,
+        is_pending_ext_shared: target.is_pending_ext_shared === true,
+        is_org_shared: target.is_org_shared === true,
         ...(target.user === undefined ? {} : { user: target.user }),
         // A DM's answer has no `is_member`, as Slack's has none.
         ...(target.is_im ? {} : { is_member: target.members.includes(world.self) }),
-        num_members: target.members.length,
+        ...(target.num_members === null ? {} : { num_members: target.num_members ?? target.members.length }),
       },
     };
   };
@@ -482,6 +502,7 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
     if (tokenOf(request) !== 'user') return { ok: false, error: 'invalid_auth' };
     const [, target] = room(request);
     if (target === undefined) return { ok: false, error: 'channel_not_found' };
+    if (target.members_unreadable === true) return { ok: false, error: 'missing_scope' };
     const size = world.pageSize ?? 100;
     const start = Number(request.params.get('cursor') || '0');
     const page = target.members.slice(start, start + size);
@@ -498,7 +519,9 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
         id,
         name: id.toLowerCase(),
         ...(user.real_name === undefined ? {} : { real_name: user.real_name }),
+        team_id: user.team_id ?? world.teamId,
         is_bot: user.is_bot === true,
+        ...(user.is_stranger === true ? { is_stranger: true } : {}),
         profile: {
           display_name: user.display_name ?? '',
           real_name: user.real_name ?? '',

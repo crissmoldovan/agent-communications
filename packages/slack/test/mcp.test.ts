@@ -591,6 +591,8 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       'slack_post_send',
       'slack_react',
       'slack_react_send',
+      // It writes a standing approval's pending record on this machine, for the person to approve at a terminal.
+      'slack_standing_add',
       'slack_workspace_add',
       'slack_workspace_finish',
       'slack_workspace_policy',
@@ -770,6 +772,7 @@ test('a pinned server refuses another workspace on every tool that takes one', a
     emoji: 'eyes',
     mode: 'send',
     flowId: 'sfl_AAAAAAAAAAAAAAAAAAAAAA',
+    places: 'threads-i-am-in',
   };
   try {
     const tools = (await client.listTools()).tools;

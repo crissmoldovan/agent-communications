@@ -29,6 +29,13 @@ export interface Person {
   readonly statusEmoji?: SenderField | undefined;
   /** Slack's own `is_admin`/`is_owner`, untouched — they come from Slack, not from the person. */
   readonly isAdmin?: boolean | undefined;
+  /**
+   * The workspace they belong to (`team_id`), as Slack says it — another organisation's for someone a shared channel
+   * brings in (design 2026-10-19-standing-approvals, S5). Absent when Slack named none, which is never this one's.
+   */
+  readonly teamId?: string | undefined;
+  /** Slack's `is_stranger`: someone from another organisation, seen through a conversation shared with it (S5). */
+  readonly isStranger: boolean;
 }
 
 export interface Channel {
@@ -44,6 +51,15 @@ export interface Channel {
    * pending). The app posts in one only once it is a member (design 2026-10-15 S2).
    */
   readonly isShared: boolean;
+  /**
+   * The three parts of {@link isShared} that a standing approval tells apart (design 2026-10-19-standing-approvals,
+   * S5): shared with another organisation (`is_ext_shared`), an invitation to that still pending
+   * (`is_pending_ext_shared`), and shared across an Enterprise Grid's own workspaces (`is_org_shared`) — one
+   * organisation, which is not another.
+   */
+  readonly isExtShared: boolean;
+  readonly isPendingExtShared: boolean;
+  readonly isOrgShared: boolean;
   readonly topic?: SenderField | undefined;
   readonly purpose?: SenderField | undefined;
   readonly memberCount?: number | undefined;
@@ -72,6 +88,8 @@ export function personOf(raw: Raw): Person {
     statusText: senderField(str(profile.status_text)),
     statusEmoji: senderField(str(profile.status_emoji)),
     ...(typeof raw.is_admin === 'boolean' ? { isAdmin: raw.is_admin } : {}),
+    ...(str(raw.team_id) === undefined ? {} : { teamId: str(raw.team_id) }),
+    isStranger: raw.is_stranger === true,
   };
 }
 
@@ -91,6 +109,9 @@ export function channelOf(raw: Raw): Channel {
       raw.is_ext_shared === true ||
       raw.is_org_shared === true ||
       raw.is_pending_ext_shared === true,
+    isExtShared: raw.is_ext_shared === true,
+    isPendingExtShared: raw.is_pending_ext_shared === true,
+    isOrgShared: raw.is_org_shared === true,
     topic: senderField(str(topic)),
     purpose: senderField(str(purpose)),
     memberCount: num(raw.num_members),

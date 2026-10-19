@@ -63,7 +63,9 @@ import {
 } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
+import { prepareStandingAdd } from '../operations/standing.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
+import { standingNarrowedView, standingPreparedView } from '../standing-views.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -1054,6 +1056,61 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         const name = await resolve(args.workspace);
         await ownApproval(args.approvalId, 'send');
         return reply(await react(context, name, reactionOf(args), args.approvalId, slackDeps));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Standing approvals (design 2026-10-19-standing-approvals, S8 and §8.1): `agent-slack standing add`. It only
+   * prepares — it takes no `approvalId` — because a standing approval lets acts happen with nobody asked, so it is
+   * approved only by the person, at their own terminal, with its code: never in a chat, never through a client's form.
+   */
+  server.registerTool(
+    'slack_standing_add',
+    {
+      title: 'Prepare a standing approval',
+      description:
+        'Prepare a standing approval — acknowledgements your agent may later send without asking — for the person to approve at their own terminal with its code. Only when the person asked for one. **Nothing is sent, and nothing is approved here**: it returns `approvalRequired` with a preview that says an agent proposed it, each content in full with its digest, each place with its member count and sharing, the limits and the expiry. Show it in full, then tell the person to run the approve command `next` names in their terminal — you cannot approve it yourself, and their yes in this chat does not approve it. `reactions` are standard emoji names (eyes alone when no content is given); `replies` fixed plain texts of at most 200 characters; `places` is `threads-i-am-in` or channel and DM ids. With `replaces`, one that only narrows that standing approval applies at once; anything wider asks again. The same as the command line’s `standing add`.',
+      inputSchema: {
+        ...workspaceArg,
+        reactions: z.array(z.string()).optional().describe('standard emoji names, without colons, at most 5'),
+        replies: z.array(z.string()).optional().describe('fixed replies, plain text on one line, at most 5'),
+        places: z
+          .union([z.literal('threads-i-am-in'), z.array(z.string())])
+          .describe('`threads-i-am-in`, or channel and DM ids: C…, G…, D…'),
+        perThread: z.number().optional().describe('acts per thread, across every standing approval: 1 to 3'),
+        perHour: z.number().optional().describe('acts an hour: 1 to 30'),
+        perDay: z.number().optional().describe('acts a day: 1 to 100'),
+        expiresDays: z.number().optional().describe('days it lasts once approved: 1 to 30'),
+        replaces: z.string().optional().describe('the standing approval this replaces'),
+      },
+      // It writes a pending record on this machine and reads Slack for the places; nothing reaches anyone.
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        // The operation `standing add` runs: see `prepareStandingAdd`. An agent proposes it, always, from here.
+        const outcome = await prepareStandingAdd(
+          context,
+          await resolve(args.workspace),
+          {
+            reactions: args.reactions,
+            replies: args.replies,
+            places: args.places,
+            perThread: args.perThread,
+            perHour: args.perHour,
+            perDay: args.perDay,
+            expiresDays: args.expiresDays,
+            replaces: args.replaces,
+          },
+          slackDeps,
+          { proposedBy: 'agent' },
+        );
+        return reply(
+          outcome.status === 'narrowed' ? standingNarrowedView(outcome.record) : standingPreparedView(outcome.prepared),
+        );
       } catch (error) {
         return fail(error);
       }
