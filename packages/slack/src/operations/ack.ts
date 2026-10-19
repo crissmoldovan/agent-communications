@@ -1,6 +1,7 @@
 import {
   type ApprovalObject,
   type ApprovalRecord,
+  ackNotice,
   CommsError,
   canonicalJson,
   type ExactPlace,
@@ -29,7 +30,7 @@ import { openDraftStore, type SlackDraft } from '../compose/drafts.ts';
 import type { SlackContext } from '../context.ts';
 import { actRefusal, requireAllowed } from './behaviour.ts';
 import { type GateDeps, gateDepsFor } from './gate.ts';
-import { AS_AGENT, decideLabel, REACTS_AS_APP, reactionLine } from './label.ts';
+import { AS_AGENT, botIsMember, decideLabel, REACTS_AS_APP, reactionLine } from './label.ts';
 import { requireMessageAt } from './message.ts';
 import { NameBook } from './people.ts';
 import { type PlaceFacts, readPlace } from './places.ts';
@@ -60,9 +61,10 @@ import { requireWorkspace } from './workspaces.ts';
  * In order (S9):
  * 1. **Before anything is read:** the content is a digest; the workspace's send policy is not `never`; the standing
  *    approval is this workspace's, approved, and holds that content.
- * 2. **The Slack reads, with no lock held:** the message and its thread (S4) — from a person, by allow-list, on the
- *    message and on its thread's parent; nothing to press; fresh; the newest from someone else — the place and its
- *    members (S5), who the act goes as (S7), and spec 2's rules (`allowedAct`).
+ * 2. **The Slack reads, with no lock held:** the message and its thread (S4) — the message from another person, by
+ *    allow-list, and its thread's parent from another person too, or the person's own when they posted it themselves;
+ *    nothing to press; fresh; the newest from someone else — the place and its members (S5), who the act goes as (S7),
+ *    and spec 2's rules (`allowedAct`).
  * 3. **The mint** (`mintStandingUse`), under the account's acknowledgement ledger lock and then the standing record's:
  *    the count is spent there, never refunded, and a one-shot child minted.
  * 4. **The newest-message read again**, since it is one call: refused now, the child is revoked and the count stays
@@ -362,6 +364,9 @@ function interactive(message: Raw): boolean {
   return holdsInteractive(message.blocks, 0) || holdsInteractive(message.attachments, 0);
 }
 
+/** What a message a person typed never carries: any of these, and a bot, an app, a workflow or Slack made it. */
+const NOT_TYPED = ['bot_id', 'app_id', 'bot_profile', 'subtype'] as const;
+
 /**
  * From another human, by allow-list (S4): a `user` that is a person's id, not Slackbot, not this account; no `bot_id`,
  * `app_id`, `bot_profile` or `subtype` at all; not in this account's app-posts record; and not a bot or an app's user
@@ -370,7 +375,7 @@ function interactive(message: Raw): boolean {
 async function human(gate: GateDeps, channel: string, message: Raw): Promise<boolean> {
   const user = message.user;
   if (typeof user !== 'string' || !PERSON.test(user) || user === SLACKBOT || user === gate.postingAs) return false;
-  for (const field of ['bot_id', 'app_id', 'bot_profile', 'subtype']) if (Object.hasOwn(message, field)) return false;
+  for (const field of NOT_TYPED) if (Object.hasOwn(message, field)) return false;
   const ts = str(message.ts);
   if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
   let person: Raw;
@@ -382,14 +387,17 @@ async function human(gate: GateDeps, channel: string, message: Raw): Promise<boo
   return person.id === user && person.is_bot !== true && person.is_app_user !== true && person.is_workflow_bot !== true;
 }
 
-/** The ts of every message this product sent in `channel` in the lookback, by the audit's record of what was sent. */
+/**
+ * The ts of every message this product sent in `channel` since `from`, by the audit's record of what was sent: read
+ * from a day before it, so a clock a little behind Slack's misses nothing.
+ */
 async function sentByThisProduct(
   context: SlackContext,
   accountId: string,
   channel: string,
-  now: number,
+  from: number,
 ): Promise<Set<string>> {
-  const since = new Date(now - STANDING_THREAD_LOOKBACK_MS - DAY_MS).toISOString();
+  const since = new Date(from - DAY_MS).toISOString();
   const records = await context.core.audit.tail({ inbox: accountId, since, limit: Number.MAX_SAFE_INTEGER });
   const sent = new Set<string>();
   for (const record of records) {
@@ -417,10 +425,25 @@ async function personPostedIn(
     if (ts === undefined || message.user !== gate.postingAs || Object.hasOwn(message, 'bot_id')) continue;
     if (msOf(ts) < now - STANDING_THREAD_LOOKBACK_MS) continue;
     if (gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) continue;
-    sent ??= await sentByThisProduct(context, gate.accountId, channel, now);
+    sent ??= await sentByThisProduct(context, gate.accountId, channel, now - STANDING_THREAD_LOOKBACK_MS);
     if (!sent.has(ts)) return true;
   }
   return false;
+}
+
+/**
+ * Whether a thread's parent is the person's own message, which they posted themselves (S4, the lead's call after
+ * build): their user id, none of `bot_id`, `app_id`, `bot_profile` or `subtype`, and not one this product sent — not
+ * in the app-posts record, nor in the audit's record of what was sent, the test `threads-i-am-in` makes of their posts.
+ * The audit is read as far back as the parent, however old the thread. A parent from a bot, an app, Slackbot or this
+ * account's app is never this; and the message acknowledged is always another person's, never the person's own.
+ */
+async function startedByPerson(context: SlackContext, gate: GateDeps, channel: string, parent: Raw): Promise<boolean> {
+  if (parent.user !== gate.postingAs) return false;
+  for (const field of NOT_TYPED) if (Object.hasOwn(parent, field)) return false;
+  const ts = str(parent.ts);
+  if (ts === undefined || gate.appPosts === undefined || (await gate.appPosts.holds({ channel, ts }))) return false;
+  return !(await sentByThisProduct(context, gate.accountId, channel, msOf(ts))).has(ts);
 }
 
 /** How a place is named on the person's screen: `#name`, the DM with someone, or its id. Someone in Slack chose it. */
@@ -428,18 +451,6 @@ function placeName(facts: PlaceFacts): string {
   if (facts.isIm)
     return facts.name === null ? `the direct message ${facts.id}` : `the direct message with ${facts.name}`;
   return facts.name === null ? facts.id : `#${facts.name}`;
-}
-
-/**
- * The notice on the person's screen for one act (S10): what was sent, where, and under which standing approval — in
- * the words of the design, with the place flattened and cut to 80 characters.
- */
-function noticeOf(act: StandingAct, text: string, place: string, standingId: string): StandingNotice {
-  const what = act === 'reaction' ? `:${text}:` : `"${text}"`;
-  return {
-    title: 'agent-communications',
-    body: `Your agent sent ${what} in ${truncateDisplay(place, 80)} (standing approval ${standingId})`,
-  };
 }
 
 /** Raises the notice, best effort: what became of it, never a failure of the act. */
@@ -509,8 +520,14 @@ export async function ack(
     // 2. The Slack reads, with no lock held (S9 step 1). The message and its thread first (S4).
     const target = await readTarget(context, gate.call, channel, ts);
     for (const message of [target.message, target.parent]) if (interactive(message)) throw refuse('interactive');
-    for (const message of [target.message, target.parent]) {
-      if (!(await human(gate, channel, message))) throw refuse('not-human');
+    // The message from another person; its thread's parent from another person too, or the person's own (S4).
+    if (!(await human(gate, channel, target.message))) throw refuse('not-human');
+    if (
+      target.parent !== target.message &&
+      !(await human(gate, channel, target.parent)) &&
+      !(await startedByPerson(context, gate, channel, target.parent))
+    ) {
+      throw refuse('not-human');
     }
     const arrived = msOf(ts);
     if (arrived < Date.parse(record.createdAt) || now - arrived > STANDING_FRESH_MS) throw refuse('not-fresh');
@@ -579,6 +596,15 @@ export async function ack(
             );
       // Only as the workspace's agent app: wherever it would go as the person, unlabelled, it does not go at all.
       if (decided?.identity !== 'agent' || decided.route !== 'app') throw refuse('reaction-as-person');
+      /*
+       * And only where the app is a member (the lead's call, after build): an app post may go to a public channel the
+       * app has not joined, but a reaction there would fail after the count is spent. Read before the mint, and a
+       * membership that cannot be settled refuses, as one that is known to be missing does.
+       */
+      const botUserId = decided.botUserId ?? gate.label?.app?.userId;
+      if (botUserId === undefined || (await botIsMember(gate.call, channel, botUserId)) !== true) {
+        throw refuse('app-not-member');
+      }
       const fields = await reactionApprovalFields(gate, { channel, ts, name: content.text }, decided);
       await requireAllowed(gate, fields.check);
       label = labelView(decided, reactionLine(decided));
@@ -644,7 +670,9 @@ export async function ack(
         outcome: unknown ? 'unknown' : 'failed',
         childId,
         ids,
-        notice: unknown ? noticeOf(act, content.text, placeName(facts), request.standingId) : undefined,
+        notice: unknown
+          ? ackNotice({ act, text: content.text, place: placeName(facts), standingId: request.standingId })
+          : undefined,
         reason: messageOf(error),
       });
       throw error;
@@ -655,7 +683,7 @@ export async function ack(
       outcome: 'sent',
       childId,
       ids,
-      notice: noticeOf(act, content.text, placeName(facts), request.standingId),
+      notice: ackNotice({ act, text: content.text, place: placeName(facts), standingId: request.standingId }),
     });
     return {
       act,

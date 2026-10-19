@@ -3,6 +3,8 @@ import {
   CommsError,
   type Config,
   type Core,
+  makeNotifier,
+  type NoticeRunner,
   type Notifier,
   openCore,
   type PathOverrides,
@@ -64,9 +66,12 @@ export interface SlackContextOptions {
   /**
    * What raises a notification on the person's screen for each standing act (design 2026-10-19-standing-approvals,
    * S10). Best effort, never through the agent: a notice that could not be raised never fails the act, and the audit
-   * says so. A test injects one; none is raised when it is left out.
+   * says so. Left out, it is core's notifier for this platform (`makeNotifier`); `null` raises none at all. A test
+   * injects one, or `noticeRunner`, so no test ever shows a real notification.
    */
-  notify?: Notifier | undefined;
+  notify?: Notifier | null | undefined;
+  /** How the default notifier starts its program: `execFile`, with no shell, unless a test injects one. */
+  noticeRunner?: NoticeRunner | undefined;
 }
 
 /**
@@ -142,7 +147,7 @@ export class SlackContext {
   readonly slackBaseUrl: string | undefined;
   readonly persist: PersistPolicy | undefined;
   readonly foregroundSignIn: SlackContextOptions['foregroundSignIn'];
-  /** What raises each standing act's notification on the person's screen (S10), when this context has one. */
+  /** What raises each standing act's notification on the person's screen (S10): none only when `null` was given. */
   readonly notify: Notifier | undefined;
 
   constructor(options: SlackContextOptions = {}) {
@@ -167,7 +172,16 @@ export class SlackContext {
     this.fetch = options.fetch;
     this.slackBaseUrl = options.slackBaseUrl;
     this.persist = options.persist;
-    this.notify = options.notify;
+    // The platform's own notifier unless one is given, as `sendPacing` is core's unless a test injects one (S10).
+    this.notify =
+      options.notify === null
+        ? undefined
+        : (options.notify ??
+          makeNotifier({
+            platform: this.platform,
+            env: this.env,
+            ...(options.noticeRunner === undefined ? {} : { run: options.noticeRunner }),
+          }));
   }
 
   /**

@@ -2,7 +2,7 @@
 
 Status: **written 2026-10-19**, for 0.23.0, after spec 2
 ([agent behaviour rules](2026-10-19-agent-behaviour-rules-design.md)); **revised 2026-10-19 after an independent
-security review.**
+security review,** and settled again after build (§9).
 
 **What the owner asked:**
 - On 2026-10-15: that some messages go without asking each time, acknowledgements especially.
@@ -167,6 +167,15 @@ among many messages is a covert channel. So what just happened fixes the target;
 
 Whatever can't be read is refused.
 
+**Threads the person started (lead's call, after build).** The thread's parent may instead be the person's own
+message, when this product did not send it:
+- their own user id, with none of `bot_id`, `app_id`, `bot_profile` or `subtype`;
+- not in the app-posts record, and not in the audit's record of what was sent: the same test `threads-i-am-in` makes
+  of the person's posts (S5). The audit is read as far back as the parent, however old the thread.
+
+A parent from a bot, an app, Slackbot or this account's app, or one this product sent, is still refused. The message
+acknowledged must still be from another human: never the person's own.
+
 **Nothing to press (lead's call).** A message with interactive blocks (buttons, selects), or from a workflow, is
 refused. A reaction on a form or an approval request can read as an answer to it.
 
@@ -216,6 +225,11 @@ app is a member; otherwise labelled, "Name (agent): …".
 
 **A reaction goes only as the workspace's agent app (lead's call):** bot token present, style `app`, app a member.
 Wherever the label would send it as the person, unlabelled (§3), it is refused, so it never goes in a DM.
+
+**The app's membership is read for every reaction (lead's call, after build).** An app post may go to a public channel
+the app has not joined, so the label's route alone does not settle it. Before the mint, so that no count is spent, the
+app's bot user must be found among the conversation's members (`conversations.members`). One not found, or a membership
+that can't be settled, refuses with `STANDING_REFUSED`, reason `app-not-member`.
 
 **What overrides what:** this overrides any `me` label rule. A message sent without the person's yes must never look
 like the person's own. **(lead's call)**
@@ -317,6 +331,9 @@ standing path refuses what S4 to S6 refuse.
   not beginning `U` or `W`, `users.info` saying bot, `USLACKBOT`, this account, the app-posts record;
 - a message with a button or a select, or from a workflow.
 
+A thread the person started may be acknowledged; one whose parent this product sent as them (in the audit, however
+old, or in the app-posts record), or an app made with their token, may not.
+
 **Places (S5):**
 - A top-level reply is refused.
 - Under `threads-i-am-in`, a thread doesn't count when the person's only message there was this product's (app-posts
@@ -345,7 +362,9 @@ standing path refuses what S4 to S6 refuse.
 - Widening asks again, as does replacing a text or a place with one outside the old set. Narrowing applies at once.
 
 **Identity (S7):** a reply goes as the app or labelled, overriding a `me` rule. A reaction is refused wherever it would
-go as the person (a DM, a group DM, a room the app isn't in, `labelled` style, no bot token), and so is a removal.
+go as the person (a DM, a group DM, a room the app isn't in, `labelled` style, no bot token), and so is a removal. A
+reaction in a public channel the app has not joined, or whose membership can't be read, is refused before the mint,
+`app-not-member`, with nothing counted.
 
 **Spec 2 (T9):** a rule that forbids `reply` or `reaction` refuses the standing act, before the mint and at execute.
 
@@ -385,3 +404,17 @@ Each is settled here, and where this section and S1 to S11 differ, this section 
    approval, revoke its unused children.
 6. **The notification text on Windows goes in through environment variables,** read by a fixed script, because
    PowerShell's `-Command` joins trailing arguments into the script. It is never spliced in.
+
+## 9. Settled after build (2026-10-19)
+
+Integrating the build turned up three more points. Each is the lead's call, and where this section and the ones above
+differ, this section is the later word.
+
+1. **A thread the person started may be acknowledged** (S4). Its parent may be the person's own message when this
+   product did not send it; the message acknowledged is still another person's.
+2. **A standing reaction needs the app in the conversation** (S7). Its membership is read before the mint, and a
+   membership not found or not settled refuses with `app-not-member`, so nothing is counted for a reaction that could
+   not have gone.
+3. **The notice is core's** (S10). Its words are `ackNotice`'s alone, and a Slack context raises it with core's
+   notifier for its platform (`makeNotifier`) unless it is given one. Tests inject a notifier or a runner, so none shows
+   a real notification.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
-import { type CommsError, EXIT_CODES, fallbackTextPrefix, sha256Hex } from '@agentcomms/core';
+import { ackNotice, type CommsError, EXIT_CODES, fallbackTextPrefix, sha256Hex } from '@agentcomms/core';
 import { escapeForSlack } from '../src/compose/blocks.ts';
 import { appPostRecordFor } from '../src/operations/app-posts.ts';
 import { createDraft } from '../src/operations/drafts.ts';
@@ -232,6 +232,11 @@ interface Flaw {
   readonly message: Partial<WorldMessage>;
   /** The message is in this account's own record of what its app posted. */
   readonly appPost?: boolean;
+  /**
+   * Refused on the acknowledged message only: a thread's parent may be the person's own, which the tests of threads
+   * the person started try on their own.
+   */
+  readonly messageOnly?: boolean;
 }
 
 /** Each way S4's allow-list refuses a message, tried on the message and on its thread's parent. */
@@ -243,7 +248,7 @@ const FLAWS: readonly Flaw[] = [
   { name: 'a user starting B', reason: 'not-human', message: { user: 'B0HELPER' } },
   { name: 'a user users.info calls a bot', reason: 'not-human', message: { user: HELPER } },
   { name: 'Slackbot', reason: 'not-human', message: { user: 'USLACKBOT' } },
-  { name: 'this account', reason: 'not-human', message: { user: SELF } },
+  { name: 'this account', reason: 'not-human', message: { user: SELF }, messageOnly: true },
   { name: "a message in this account's app-posts record", reason: 'not-human', message: {}, appPost: true },
   {
     name: 'a button',
@@ -278,7 +283,7 @@ const FLAWS: readonly Flaw[] = [
 ];
 
 for (const flaw of FLAWS) {
-  for (const where of ['message', 'parent'] as const) {
+  for (const where of flaw.messageOnly === true ? (['message'] as const) : (['message', 'parent'] as const)) {
     const on = where === 'message' ? 'the message' : "its thread's parent";
     test(`${flaw.name} on ${on} is refused: ${flaw.reason}`, async (t) => {
       const w = await world(t);
@@ -322,6 +327,90 @@ test('a U user with a bot_profile is not human', async (t) => {
   });
   assertRefused(await refused(acknowledge(w, withReply(s, ENG, ts)), 'other agent'), 'not-human', 'a U user bot');
   nothingSent(w, 'another agent');
+});
+
+// ── Threads the person started (S4, the lead's call after build) ────────────────────────────────────────────────
+
+const DAY = 86_400_000;
+
+test('a thread the person started may be acknowledged', async (t) => {
+  // The thread's parent is the person's own, posted by them: the message acknowledged is still another person's.
+  const w = await world(t);
+  const s = await inEng(w);
+  const started = say(w, { channel: ENG, user: SELF, ago: 120_000, text: 'deploying at noon, shout if not' });
+  const answer = say(w, { channel: ENG, thread_ts: started, ago: 20_000 });
+  assert.equal((await acknowledge(w, withEyes(s, ENG, answer))).act, 'reaction');
+  const other = say(w, { channel: ENG, user: SELF, ago: 90_000, text: 'the new build is out' });
+  const question = say(w, { channel: ENG, user: ANA, thread_ts: other, ago: 10_000 });
+  assert.equal((await acknowledge(w, withReply(s, ENG, question))).act, 'reply');
+  assert.equal(w.requests('chat.postMessage').at(-1)?.params.get('thread_ts'), other);
+  assert.equal(w.world.reactions.length, 1);
+});
+
+test('a thread this product started for the person, or an app with their token, is not theirs', async (t) => {
+  const w = await world(t);
+  const s = await standing(w, { reactions: ['eyes'], replies: [REPLY], places: [ENG, PRIVATE] });
+  // Posted by this product as the person, labelled — the app is not in #private — so in the audit, not in app-posts.
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
+  await sendPost(
+    w.context,
+    'acme',
+    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+    w.slack,
+  );
+  const sent = w.world.messages.at(-1);
+  assert.equal(sent?.user, SELF, 'the product posted as the person');
+  assert.equal(sent?.bot_id, undefined);
+  w.clock.now += 1_000;
+  const onSent = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 500 });
+
+  // The person's message in this account's own app-posts record.
+  const recorded = say(w, { channel: ENG, user: SELF, ago: 120_000, text: 'On it' });
+  await appPostRecordFor(w.core.paths.stateDir, await accountId(w)).add({
+    channel: ENG,
+    ts: recorded,
+    approvalId: `ap_${'5'.repeat(26)}`,
+    at: new Date(w.clock.now).toISOString(),
+  });
+  const onRecorded = say(w, { channel: ENG, thread_ts: recorded, ago: 400 });
+  // The person's user id on a message an app made with their token: Slack marks it with a bot_id.
+  const appMade = say(w, { channel: ENG, user: SELF, bot_id: 'B0OTHERAPP', ago: 100_000, text: 'Logged' });
+  const onAppMade = say(w, { channel: ENG, thread_ts: appMade, ago: 300 });
+
+  const posts = w.requests('chat.postMessage').length;
+  for (const [what, request] of [
+    ['a parent this product sent as the person', withReply(s, PRIVATE, onSent)],
+    ['a parent in the app-posts record', withEyes(s, ENG, onRecorded)],
+    ['a parent in the app-posts record, replied to', withReply(s, ENG, onRecorded)],
+    ['a parent an app made with their token', withEyes(s, ENG, onAppMade)],
+  ] as const) {
+    assertRefused(await refused(acknowledge(w, request), what), 'not-human', what);
+  }
+  assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
+  assert.equal(w.world.reactions.length, 0, 'a refused act reacted');
+  assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
+});
+
+test('a thread this product started for the person weeks ago is still not theirs', async (t) => {
+  // Older than threads-i-am-in looks back: what this product sent is read from the audit as far back as the parent.
+  const w = await world(t);
+  w.clock.now -= 20 * DAY;
+  const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
+  await sendPost(
+    w.context,
+    'acme',
+    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+    w.slack,
+  );
+  const sent = w.world.messages.at(-1);
+  assert.equal(sent?.user, SELF, 'the product posted as the person');
+  w.clock.now += 20 * DAY;
+  const s = await standing(w, { replies: [REPLY], places: [PRIVATE] });
+  const late = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 10_000 });
+  const posts = w.requests('chat.postMessage').length;
+  assertRefused(await refused(acknowledge(w, withReply(s, PRIVATE, late)), 'weeks ago'), 'not-human', 'weeks ago');
+  assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
+  assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
 });
 
 test('a thread already acknowledged under another standing approval', async (t) => {
@@ -628,6 +717,37 @@ test('a reaction is refused wherever it would go as the person', async (t) => {
   }
 });
 
+test('a reaction where the app is not a member is refused before anything is counted', async (t) => {
+  // A public channel the app has not joined: an app post may go there, but the app does not react where it is not.
+  const QUIET = 'C0QUIET';
+  const w = await world(t);
+  w.world.rooms[QUIET] = { name: 'quiet', members: [SELF, SAM, ANA] };
+  const s = await standing(w, { reactions: ['eyes'], places: [QUIET] });
+  const ts = say(w, { channel: QUIET });
+  const error = await refused(acknowledge(w, withEyes(s, QUIET, ts)), 'not a member');
+  assertRefused(error, 'app-not-member', 'quiet');
+  assert.equal(
+    error.message,
+    'nothing was sent: the agent app is not a member of this place, or whether it is could not be read',
+  );
+  nothingSent(w, 'the app not a member');
+  assert.equal((await ledger(w)).uses.length, 0, 'a refused reaction was counted');
+  assert.equal((await children(w)).length, 0, 'a child was minted');
+});
+
+test('a reaction where whether the app is a member cannot be read is refused', async (t) => {
+  // A room of sixty, approved with its count, whose members cannot be paged: nobody can say the app is in it.
+  const HALL = 'C0HALL';
+  const w = await world(t);
+  const crowd = Array.from({ length: 60 }, (_, index) => `U0H${String(index).padStart(3, '0')}`);
+  w.world.rooms[HALL] = { name: 'hall', num_members: 60, members_unreadable: true, members: [SELF, ...crowd, BOT] };
+  const s = await standing(w, { reactions: ['eyes'], places: [HALL] });
+  const ts = say(w, { channel: HALL });
+  assertRefused(await refused(acknowledge(w, withEyes(s, HALL, ts)), 'unsettled'), 'app-not-member', 'hall');
+  nothingSent(w, 'membership unsettled');
+  assert.equal((await ledger(w)).uses.length, 0, 'a refused reaction was counted');
+});
+
 test('slack_ack takes no remove and no draftId', async (t) => {
   const w = await world(t);
   const s = await inEng(w);
@@ -892,6 +1012,11 @@ test('each act raises a notice saying what was sent, where, and under which stan
   assert.deepEqual(w.notices, [
     { title: 'agent-communications', body: `Your agent sent :eyes: in #eng (standing approval ${s.id})` },
     { title: 'agent-communications', body: `Your agent sent "${REPLY}" in #eng (standing approval ${s.id})` },
+  ]);
+  // Core's words, made by core's own function: the Slack package writes no notice of its own.
+  assert.deepEqual(w.notices, [
+    ackNotice({ act: 'reaction', text: 'eyes', place: '#eng', standingId: s.id }),
+    ackNotice({ act: 'reply', text: REPLY, place: '#eng', standingId: s.id }),
   ]);
 });
 

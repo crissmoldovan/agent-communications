@@ -380,6 +380,7 @@ test('STANDING_REFUSED and STANDING_LIMIT: exit 10, not retryable, their message
     external: 'someone from another organisation is in this place',
     'shared-state-changed': 'who shares this place changed since it was approved',
     'reaction-as-person': 'a standing reaction goes only as the agent app, and here it would go as you',
+    'app-not-member': 'the agent app is not a member of this place, or whether it is could not be read',
     'content-not-held': 'this standing approval holds no such content',
     'clock-behind': "the clock is earlier than this account's last standing act",
     unreadable: 'the message or its thread could not be read',

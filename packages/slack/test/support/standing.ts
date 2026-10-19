@@ -132,7 +132,10 @@ export interface StandingWorldOptions {
   readonly bot?: boolean;
   readonly rooms?: Record<string, WorldRoom>;
   readonly messages?: WorldMessage[];
-  /** What raises a standing act's notice: one that records into `notices` when left out, none at all for `null`. */
+  /**
+   * What raises a standing act's notice: one that records into `notices` when left out, none at all for `null`. Never
+   * the platform's real notifier: no test shows a notification.
+   */
   readonly notify?: Notifier | null;
 }
 
@@ -164,7 +167,8 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     notices.push(notice);
     return { raised: true };
   };
-  const notify = options.notify === null ? undefined : (options.notify ?? recording);
+  // `null` reaches the context as it is: left out, the context would take the platform's real notifier.
+  const notify = options.notify === null ? null : (options.notify ?? recording);
   const context = new SlackContext({
     core,
     env: harness.env,
@@ -172,7 +176,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     now,
     platform: 'darwin',
     surface: 'mcp',
-    ...(notify === undefined ? {} : { notify }),
+    notify,
   });
   return {
     harness,
@@ -263,7 +267,8 @@ export async function cli(
     openBrowser: () => undefined,
     probe: (input, init) => w.harness.probe(input, init),
     read: w.fake.fetch,
-    ...(w.context.notify === undefined ? {} : { notify: w.context.notify }),
+    // The world's notifier, or none: never the platform's real one.
+    notify: w.context.notify ?? null,
   });
   const stdout = options.streams === undefined ? fallback.out() : (options.streams.said?.() ?? '');
   const stderr = options.streams === undefined ? fallback.err() : '';
@@ -289,7 +294,8 @@ export async function mcp(w: StandingWorld, t: TestContext): Promise<McpClient> 
     fetch: w.fake.fetch,
     platform: 'darwin',
     now: () => new Date(w.clock.now),
-    ...(w.context.notify === undefined ? {} : { notify: w.context.notify }),
+    // The world's notifier, or none: never the platform's real one.
+    notify: w.context.notify ?? null,
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
