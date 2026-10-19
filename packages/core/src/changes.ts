@@ -538,6 +538,7 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'agentLabel.rules': 'who each kind of message appears to come from',
   'agentLabel.slackIcons': 'the icon of the agent’s Slack posts',
   'agentLabel.slackStyles': 'how the agent’s Slack messages look',
+  'behaviour.rules': 'what an agent may do',
 };
 
 /**
@@ -602,6 +603,8 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
     case 'agentLabel.slackStyles':
       // Only app → labelled waits (the owner's decision, 2026-10-17): back to app tightens, and is never described here.
       return 'every agent message there goes out as you, labelled in its words, even where the app could post: it trades Slack’s own APP tag, which no one can fake, for words in the message';
+    case 'behaviour.rules':
+      return 'where it allows more, an agent may start those acts; each one still waits for your yes';
     default:
       return '';
   }
@@ -652,6 +655,21 @@ function perWorkspace(field: string, before: SettingValue, after: SettingValue):
   return moved.map((name) => `in ${name}: ${value(was, name)} → ${value(now, name)}`).join(', and ');
 }
 
+/**
+ * The behaviour rules' levels (`behaviourLevels` in config.ts), as the person reads them: each level the change moves,
+ * `acme/slack C0GENERAL: reply → post, reply`, in order, apart with semicolons since a level's acts are listed with
+ * commas. A level one side does not list allows everything there. Undefined for a value of another shape.
+ */
+function perLevel(field: string, before: SettingValue, after: SettingValue): string | undefined {
+  const [was, now] = [recordOf(before ?? {}), recordOf(after ?? {})];
+  if (field !== 'behaviour.rules' || was === undefined || now === undefined) return undefined;
+  const value = (record: Readonly<Record<string, unknown>>, level: string) =>
+    Object.hasOwn(record, level) ? String(record[level]) : 'everything';
+  const levels = [...new Set([...Object.keys(was), ...Object.keys(now)])].sort();
+  if (levels.length === 0) return undefined;
+  return levels.map((level) => `${level}: ${value(was, level)} → ${value(now, level)}`).join('; ');
+}
+
 /** One loosening as a line a person reads: what, from, to, and what that means. */
 function describeLoosening(loosening: Loosening): string {
   const scoped = /^(inboxes|accounts)\.([^.]+)\.(.+)$/.exec(loosening.path);
@@ -662,10 +680,13 @@ function describeLoosening(loosening: Loosening): string {
     : label;
   const words = meaning(field, loosening.after, scoped ? (scoped[1] as 'inboxes' | 'accounts') : undefined);
   const workspaces = scoped ? undefined : perWorkspace(field, loosening.before, loosening.after);
+  const levels = scoped ? undefined : perLevel(field, loosening.before, loosening.after);
   const moved =
-    workspaces === undefined
-      ? `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}`
-      : `${what} ${workspaces}`;
+    levels !== undefined
+      ? `${what}: ${levels}`
+      : workspaces === undefined
+        ? `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}`
+        : `${what} ${workspaces}`;
   const line = `${moved}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.

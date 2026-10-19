@@ -1161,3 +1161,61 @@ test('a Slack rename and an id rotation in one write is still the same account',
   const unrelated = v2({ accounts: { 'cue/slack': account(ACC_B, { workspace: 'T_ELSE', mode: 'send' }) } });
   assert.deepEqual(classifyChange(before, unrelated).loosened, ['accounts.cue/slack.mode']);
 });
+
+/*
+ * A names migration renames every account at once, and the behaviour rules that hold an account by its name have to go
+ * with it, as a single rename takes them (`renameEntry`): left under `cue`, a rule would name an account no account can
+ * have after `cue` became `cue/gmail` — a restriction shed by an approval that was only about names. Rules bound by id
+ * hold the account whatever it is called, and are renamed so they read as it is called now.
+ */
+test('the migration renames the behaviour rules that hold an account, and every one still holds it', async () => {
+  const { allowedAct, readBehaviourSettings } = await import('../src/behaviour.ts');
+  const CUE = 'ibx_CCCCCCCCCCCCCCCC';
+  const rules = [
+    { account: 'cue', accountId: CUE, acts: ['reply'] },
+    // An orphan: its id no account holds, so it holds `cue` by name.
+    { account: 'cue', accountId: 'ibx_GONEGONEGONEGONE', conversation: '@client.test', acts: [] },
+    // One with no id at all, and one this release cannot read: both hold `cue` by name.
+    { account: 'cue', conversation: 'boss@client.test', acts: [] },
+    { account: 'cue', acts: 'reply' },
+    // Bound to another account's id, whatever name it carries: renamed with that account, never with `cue`.
+    { account: 'cue', accountId: ACC_A, acts: ['reaction'] },
+    { account: 'live', accountId: ACC_A, acts: ['reply', 'reaction'] },
+  ];
+  const store = storeWith({ ...machine(), behaviour: { rules, note: 'a key a later release added' } });
+  const plan = ready(planNamesMigration(await store.load()));
+  const result = await migrateNames(store, plan);
+  assert.equal(result.status, 'migrated');
+  const written = JSON.parse(readFileSync(store.path, 'utf8')) as { behaviour: { rules: unknown[]; note: string } };
+  assert.equal(written.behaviour.note, 'a key a later release added');
+  assert.deepEqual(
+    written.behaviour.rules.map((rule) => (rule as { account: string }).account),
+    ['cue/gmail', 'cue/gmail', 'cue/gmail', 'cue/gmail', 'live/slack', 'live/slack'],
+  );
+  const config = await store.load();
+  const settings = readBehaviourSettings(config);
+  assert.deepEqual(
+    settings.unreadable.map((entry) => entry.account),
+    ['cue/gmail'],
+    'the one this release cannot read still holds the mailbox, by its new name',
+  );
+  // Every restriction on the mailbox holds, under its new name.
+  const mail = (to: string) =>
+    allowedAct(config, { accountId: CUE, account: 'cue/gmail', places: [[to]], acts: ['send'] }).allowed;
+  assert.equal(mail('ann@elsewhere.test'), false);
+  assert.equal(mail('bob@client.test'), false);
+  // The migration is recognised as done, and a second run changes nothing.
+  assert.equal((await migrateNames(store, plan)).status, 'already-migrated');
+});
+
+test('a migration that changes a behaviour rule beyond its name is refused', async () => {
+  const store = storeWith({ ...machine(), behaviour: { rules: [{ account: 'cue', acts: ['reply'] }] } });
+  const plan = ready(planNamesMigration(await store.load()));
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.rows, (current) => {
+      const built = applyNamesMigration(current, plan.rows);
+      return { ...built, behaviour: { rules: [{ account: 'cue/gmail', acts: ['reply', 'send'] }] } };
+    }),
+    isError('CONFIG', /behaviour rules changed/),
+  );
+});

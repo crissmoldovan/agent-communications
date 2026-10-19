@@ -46,9 +46,10 @@ Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data
 
 A command that loosens something or cannot be undone — `policy chat`, `attach roots add`, `attach deny remove`,
 `label word`, `label name`, `label icon`, `label rule add --as me`, `label rule remove --as agent`,
-`label style … labelled`, `mcp install`, `mcp prune`, `update`, `secrets migrate`, `names migrate` — shows the change
-first (`policy confirm`, `attach roots remove`, `attach deny add`, `label rule add --as agent`,
-`label rule remove --as me` and `label style … app` tighten, so they apply at once). At a terminal you approve it there; anything else gets the preview and an
+`label style … labelled`, a `behaviour allow` or `behaviour clear` that lets an agent do more, `mcp install`,
+`mcp prune`, `update`, `secrets migrate`, `names migrate` — shows the change first (`policy confirm`,
+`attach roots remove`, `attach deny add`, `label rule add --as agent`, `label rule remove --as me`,
+`label style … app` and a `behaviour allow` that only narrows tighten, so they apply at once). At a terminal you approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
 Every channel CLI, and the declared events service through core, registers and prunes its server through the same change, so an approval
 `comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
@@ -67,6 +68,51 @@ not on `PATH`, the install result shows how to prepend it for the current shell 
 shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse caller arguments; use the full-path
 command or the labelled PowerShell `&` line the result provides.
 
+## What an agent may do, and how it writes
+
+**What an agent may do is enforced.** A behaviour rule lets an agent start only some acts on an account, or in one
+conversation — `post`, `reply`, `reaction`, `edit`, `delete` and `file` on Slack; `send` and `reply` on Gmail; `send`
+on Resend — and the tools refuse any other before a preview, an approval or a send, and again at send if the rule was
+narrowed after the person's yes: `ACT_NOT_ALLOWED`, exit `10`. With no rule, everything is allowed, as before. The
+most specific rule wins — a conversation over its account, and for mail an address over the longest `@domain` that
+covers it — and every recipient of a message is held to the rule for them. An address rule holds the address with any
+`+tag` (`ceo+x@client.test` is `ceo@client.test`), and at Gmail with or without dots and at `gmail.com` or
+`googlemail.com` alike; an `@domain` rule holds its subdomains too, and a rule for a subdomain wins over its parent's
+(`@eu.client.test` over `@client.test`). A Gmail message is a `reply` only to the people on the message it answers —
+its From, Reply-To, To and Cc, held in this mailbox outside Spam and Trash — and a `send` to anyone else. A Slack
+destination must be a conversation id (`C…`, `G…`, `D…`); beneath that check, a place that is not one is held to every
+rule of its account. Every preview says what holds, in a line such as
+`Allowed here: reply, reaction (rule: acme/slack, #general)`.
+
+```sh
+npx @agentcomms/core behaviour     # every rule, and what each account allows, per conversation too
+npx @agentcomms/core behaviour allow acme/slack reply,reaction  # only reply and react there (narrowing applies at once)
+npx @agentcomms/core behaviour allow acme/gmail none --conversation @client.test  # never send to anyone there
+npx @agentcomms/core behaviour clear acme/slack  # take the rule away, so the wider one holds (you approve it)
+```
+
+A rule that only narrows applies at once; one that lets an agent do more — an act added, a rule removed whose fallback
+is wider, a conversation allowed more than its account — is approved first. A rule binds to its account's id, so a
+rename keeps it — and so does `names migrate` — and one this release cannot read makes its account allow nothing. One
+naming an account no account here could ever have (`*`, a name in capitals, a former name whose account is gone) makes
+every account allow nothing; one naming a former name holds the account it names now. A server started before 0.22.0
+holds no rule until its client restarts it: the first rule's result says so, and `doctor` names any such server.
+
+**How it writes is guidance.** A writing profile is Markdown the person keeps in `compose/` in the config directory, in
+five layers, each refining the one before: `default.md`, `user.md`, the platform's (`gmail.md`, `slack.md`,
+`resend.md`), the account's (`inbox-acme__slack.md`) and each conversation's (`conversation-acme__slack__C0123ABC.md`,
+`conversation-acme__gmail__@client.test.md`). An agent reads it before it writes, so the first preview is already
+written to it. Nothing in it is ever sent, and nothing checks a message against it.
+
+```sh
+npx @agentcomms/core profile acme/slack --conversation C0123ABC  # the joined profile for there, and every file it reads
+npx @agentcomms/core profile init acme/slack  # start that account's file from a starter; never overwrites one
+```
+
+Over MCP, `comms_behaviour` is `behaviour` — with no change it only reports; `setRule` and `removeRule` change it —
+and `comms_profile` is `profile`, and only reads. No tool writes a profile: `profile init` is the person's, at a
+terminal, because something an agent read could otherwise change how every later message is written.
+
 ## The core MCP server
 
 `agentcomms mcp` runs it on stdio; `agentcomms mcp install --client <client>` registers it, from a terminal, since it
@@ -81,6 +127,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
 | `comms_label` | how what an agent sends is labelled, as `label`, with each Slack workspace's style; `word`, `name`, `icon`, `addRule` with `as: "me"`, `removeRule` of an `agent` rule and `style` set to `labelled` are approved first, and the other rule changes and `style` back to `app` apply at once |
+| `comms_behaviour`, `comms_profile` | what an agent may do, and how it writes: see above |
 | `comms_names_migrate` | rename every account to `organisation/platform`; `dryRun` shows the mapping |
 | `comms_secrets_migrate` | move every credential between the keychain and files |
 | `comms_paths`, `comms_doctor`, `comms_audit_tail` | as `paths`, `doctor` and `audit tail` |

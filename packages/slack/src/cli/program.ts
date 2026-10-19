@@ -27,7 +27,6 @@ import {
   refuseRetiredOut,
   refuseUnclaimedApproval,
   renderApprovalWait,
-  renderChannelPreview,
   renderPrune,
   resolvePaths,
   runCommand,
@@ -56,6 +55,7 @@ import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
+import { renderSlackPreview } from '../operations/behaviour.ts';
 import { storeBotToken } from '../operations/bot-token.ts';
 import {
   connectWorkspace,
@@ -1441,7 +1441,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           { draftId: String(flags.draft), ...(flags.as === undefined ? {} : { as: flags.as }) },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
-        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+        writeResult(prepared, output(), (data) => renderSlackPreview(data.preview), streams);
       }),
     );
 
@@ -1546,7 +1546,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
-        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+        writeResult(prepared, output(), (data) => renderSlackPreview(data.preview), streams);
       }),
     );
 

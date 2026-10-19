@@ -24,6 +24,7 @@ import { checkFileCount, recordFiles, type SlackDraftFile } from '../compose/fil
 import type { SlackContext } from '../context.ts';
 import { decodeSlackText } from '../text/decode.ts';
 import { requireConversation } from './destination.ts';
+import { requireMessageTs } from './message.ts';
 import { changedOutsideHint, postedPayload } from './send.ts';
 import { requireWorkspace } from './workspaces.ts';
 
@@ -60,6 +61,8 @@ export interface DraftInput {
  * words are escaped, so a `<!here>` typed into them is shown as those characters and notifies nobody.
  */
 export function draftPayload(input: DraftInput): ComposedPayload {
+  // A thread no message ts names is refused: Slack would post the reply as a new message instead (spec 2, finding 9).
+  if (input.threadTs !== undefined) requireMessageTs(input.threadTs);
   const mentions: Mention[] = [
     ...(input.mentionUsers ?? []).map((id) => ({ kind: 'user' as const, id })),
     ...(input.broadcast === undefined ? [] : [{ kind: 'broadcast' as const, who: input.broadcast as Broadcast }]),

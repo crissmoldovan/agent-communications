@@ -33,6 +33,14 @@ export const ACT_KINDS: readonly ['post', 'reply', 'reaction', 'edit', 'file', '
 ] as const);
 export type ActKind = (typeof ACT_KINDS)[number];
 
+/**
+ * L4's conversation grammar, which the behaviour rules (design 2026-10-19-agent-behaviour-rules, B3) take as well: a
+ * Slack channel or DM (`C…`, `G…`, `D…`), or a person (`U…`, or `W…` on Enterprise Grid)…
+ */
+export const SLACK_CONVERSATION_PATTERN: RegExp = /^[CGDUW][A-Z0-9]{2,}$/u;
+/** …or an address, or `@domain` for every address there. */
+export const MAIL_CONVERSATION_PATTERN: RegExp = /^(?:[^\s@<>(),;:"\\]+)?@[^\s@<>(),;:"\\]+$/u;
+
 /** L4: a rule names an account, optionally a conversation and kinds, and gives the identity. */
 export interface AgentLabelRule {
   readonly account: string;

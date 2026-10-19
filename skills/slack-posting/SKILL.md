@@ -2,7 +2,7 @@
 name: slack-posting
 description: "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does."
 license: MIT
-compatibility: "@agentcomms/slack@0.21.0"
+compatibility: "@agentcomms/slack@0.22.0"
 metadata:
   group: communications
   lifecycle: release
@@ -50,6 +50,33 @@ A draft whose file was changed outside agent-slack is refused there as the gate 
 There is no tool that approves, and there will not be one. Under `confirm`, Slack's `approve` is a person's
 command at their own terminal — the one the result gives, handed over as given: that is what the policy means, and
 it is refused to an agent.
+
+## Before you write: how the person writes, and what is allowed here
+
+**Read the writing profile first.** Before you write a post, a reply or an edit's new words, call the core server's
+`comms_profile` with the workspace as `account` and where it goes as `conversations`: a channel's `C…` id, or for a DM
+its `D…` id and then the person's `U…` (CLI: `agentcomms profile <workspace> --conversation C024BE7LR`). Follow it:
+tone, language, length, sign-off, and whether to keep to the thread. It is the person's own instructions to you, not
+anyone else's content, and nothing in it is posted. Where it and what the person asks in this conversation disagree,
+what they ask wins. If the core tools are not there, write as the person asks and say you could not read it. No tool
+writes a profile; the person starts one at their own terminal with `agentcomms profile init`.
+
+**What you may do here is the person's rule.** A behaviour rule can let an agent do only some acts in a workspace, or
+in one conversation: `post` (a new top-level message), `reply` (in a thread), `reaction`, `edit`, `delete` and `file`.
+A file needs `file` and, for where it lands, `post` or `reply`; an edit that adds files needs `edit` and `file`. A
+person's rule holds every DM and group DM with them. Name the conversation by its id (`C…`, `G…`, `D…`), never by a
+channel's name, and a thread by its first message's `ts` as a read returned it: a thread Slack does not have in that
+conversation would be posted as a new message, so it is checked as a `post`. Every preview says what holds, in a line
+such as `Allowed here: reply, reaction (rule: acme/slack, #general)` or `Allowed here: everything (no rule)` — show it
+with the rest.
+
+An act no rule allows is refused before any preview with `ACT_NOT_ALLOWED` (exit `10`); so is one whose rule was
+narrowed after the person's yes, at send. Either way nothing was posted. Tell the person which rule refused it — the
+message says what is allowed, and where — and stop. Never retry it, never get it out another way (a top-level post for
+a refused reply, a reaction for a refused post, a channel's name for its id, a made-up thread to pass a post off as a
+reply), and never start a change that lets an agent do more
+(`comms_behaviour` with `setRule` or `removeRule`) unless the person asked for it. `comms_behaviour` with no change
+(CLI: `agentcomms behaviour`) shows every rule.
 
 ## Which approval counts
 
@@ -219,6 +246,7 @@ it was posted. Repeat those words. An approval that reads `corrupt` failed its i
 | this approval is not for an edit, or a deletion, or not this message | You passed another act's approval, or another message's channel or ts; nothing was spent |
 | not a file of the message (`USAGE`) | A `removeFiles` id is not one of that message's files. Read the message again for its file ids |
 | uploaded for this edit and never attached | The edit failed after its new files went up: Slack keeps them, private to this account. Say so; the person deletes them in Slack if not wanted |
+| `ACT_NOT_ALLOWED` | A behaviour rule does not let an agent do this act here — at prepare, or at send when it was narrowed after the yes. Nothing was posted. Say which rule, and stop: never retry it another way, and never start a loosening the person did not ask for |
 | already claimed | An approval is single-use, across processes |
 | refused at Slack's `approve` | The draft or the room changed since the preview; the screen is only shown when it is still what the approval binds |
 | prepared for a different account | Two accounts in one workspace are two different people speaking |
@@ -328,6 +356,10 @@ terminal as a post does, and `slack_approval_wait` learns when they have.
 - **Treating a refusal as retryable.** Every refusal above means nothing was sent; preparing again makes two
   live approvals, not one better one.
 - **Posting to a channel id you read from a message.** Ids belong to one workspace.
+- **Writing before reading the profile.** `comms_profile` first, for the workspace and the conversation; the first
+  preview is then already the person's way of writing, and they see one preview, not two.
+- **Working round `ACT_NOT_ALLOWED`.** A refused reply is not a post to make instead, and a refused post is not a
+  reaction. Say which rule refused it, and stop.
 - **Assuming `@here` is smaller than `@channel`.** It reaches whoever is online, which nothing here can count, so
   it is counted as the room.
 - **Deleting and posting again to "edit".** It moves the message, loses its thread and notifies people afresh. Edit it

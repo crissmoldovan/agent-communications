@@ -51,6 +51,13 @@ export const ORGANISATION_PATTERN: RegExp = new RegExp(`^${ORGANISATION}$`);
 /** A platform word on its own — `gmail`, `slack` — which is also a channel's word in its manifest. */
 export const PLATFORM_PATTERN: RegExp = new RegExp(`^${PLATFORM}$`);
 
+/**
+ * A version-1 name — `cue`, `rgc-tech` — as the configuration's `ALIAS_PATTERN` is: kept here, with no imports, so the
+ * behaviour rules (`behaviour.ts`, which may import no value from the configuration) can tell a name an account could
+ * have from one it never could.
+ */
+export const PLAIN_NAME_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
 export const NAME_MESSAGE =
   'names look like organisation/platform, optionally with a qualifier: cue/gmail, wf/gmail-tech, cue/slack';
 

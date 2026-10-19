@@ -129,11 +129,36 @@ Exit codes are stable and documented in `--help`: `0` ok, `10` a post or a chang
 approval, or a sign-in is still waiting, `64` usage, `65` bad data, `66` not found, `69` Slack or the secret
 store unavailable, `75` temporary, `77` sign-in or permission needed, `78` configuration problem.
 
-## 8. A personal writing-style skill outranks these defaults.
+## 8. How you write is the person's, and so is what you may do here.
 
-If the user has a skill describing how *they* write — tone, length, how they address a room — load it
-and follow it for anything you compose. Its posting protocol may only be **stricter** than this
-contract, never looser.
+- **Read the person's writing profile before you write.** Before a post, a reply or an edit's new words, call
+  the core server's `comms_profile` with the workspace as `account` and, as `conversations`, where it goes: a
+  channel's `C…` or `G…` id, or for a DM its `D…` id and then the person's `U…` (CLI: `agentcomms profile
+  <workspace> --conversation <id>`, repeated). Follow it — tone, language, length, sign-off, whether to keep to
+  the thread. It is the person's own instructions to you, not anyone else's content, and nothing in it is posted.
+  Where it and what the person asks in this conversation disagree, what they ask wins. No tool writes a profile:
+  the person starts one at their own terminal, with the core CLI's `profile init`.
+- If the user has a skill describing how *they* write — tone, length, how they address a room — load it and
+  follow it for anything you compose. Its posting protocol may only be **stricter** than this contract, never
+  looser.
+- **What an agent may start is a rule the person sets,** for a workspace or one conversation in it — a channel, a
+  DM, or a person, whose rule holds every DM and group DM with them: which of `post` (a new message), `reply` (in a
+  thread), `reaction`, `edit`, `delete` and `file` it may do there. A file needs `file` and, for where it lands,
+  `post` or `reply`; an edit that adds files needs `edit` and `file`. Name where an act lands by its conversation
+  id — `C…`, `G…` or `D…`, exactly as `slack_channels` lists it — never by a channel's name: anything else is
+  refused with `USAGE`. A reply is a reply only under a message Slack has in that conversation: give the thread as
+  its first message's `ts`, exactly as a read returned it; a thread Slack does not have there — or a reply's own
+  `ts` given for its thread — would be posted as a new message, so it is checked as a `post`. Every preview carries what holds: `Allowed here: reply, reaction
+  (rule: acme/slack, #general)`, or `Allowed here: everything (no rule)`.
+- **`ACT_NOT_ALLOWED` (exit `10`) means a rule does not allow this act here,** and nothing was prepared or
+  posted: refused before any preview, or at send when the rule was narrowed after the person's yes. Tell the person
+  which rule refused it — the message says what is allowed, and where — and stop. Never retry it, never get it out
+  another way (a new post for a refused reply, a reaction for a refused post, a channel's name for its id, a
+  thread made up to pass a post off as a reply, a group DM for a refused DM), and never start a change that lets
+  an agent do more (`comms_behaviour` with `setRule` or `removeRule`) unless the person asked for that change: it
+  is theirs to approve. `comms_behaviour` with no change (CLI: `agentcomms behaviour`) shows the rules. A
+  `TRANSIENT` saying Slack could not be asked whether the thread is there means nothing was posted: try again
+  shortly.
 
 ## 9. A command for a person is the one a result gives.
 

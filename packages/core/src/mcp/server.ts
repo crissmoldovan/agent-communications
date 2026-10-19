@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
+import { BEHAVIOUR_ACTS } from '../behaviour.ts';
 import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApproval } from '../change-flow.ts';
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
@@ -13,6 +14,12 @@ import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
 import {
+  BEHAVIOUR_CHANGE_KINDS,
+  type BehaviourChangeRequest,
+  behaviourChange,
+  behaviourReport,
+} from '../operations/behaviour.ts';
+import {
   CHANGE_POLICIES,
   changePolicyChange,
   changePolicyReport,
@@ -22,6 +29,7 @@ import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport }
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
 import { orgAddChange, orgList, orgRemoveChange, orgShow, orgUpdateChange } from '../operations/organisations.ts';
+import { profileView } from '../operations/profile.ts';
 import { migrationLeftoversError, secretsMigration } from '../operations/secrets-migrate.ts';
 import {
   CLIENTS,
@@ -120,13 +128,13 @@ async function buildInstructions(core: Core): Promise<string> {
     `agent-communications core: install and manage the ${listed(CHANNEL_LABELS_LISTED, 'and')} servers, and look after this machine.`,
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
-    'comms_channels_available, comms_orgs_list, comms_org_show, comms_attach, comms_change_policy and comms_label',
-    'with no change, and comms_update with `check`.',
+    'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
+    'comms_label and comms_behaviour with no change, and comms_update with `check`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
-    '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label) — is shown to the',
-    'person before it happens. The first call',
+    '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label), letting an agent',
+    'do more (comms_behaviour) — is shown to the person before it happens. The first call',
     'returns `approvalRequired` with a `preview` and an `approvalId`: show the preview in full and ask. Then call the',
     'same tool again, with the same arguments and the `approvalId`. Under the `chat` change policy the person’s yes in',
     'this conversation is the approval; under `confirm` they first run the approve command the result gives, in their',
@@ -529,6 +537,96 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as LabelChangeRequest;
       return change(() => labelChange(core, request, 'mcp'), args.approvalId);
     },
+  );
+
+  // ── What an agent may do ─────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Which acts an agent may start at all, per account and per conversation (design 2026-10-19-agent-behaviour-rules,
+   * B5): `agentcomms behaviour` and this, one operation. A rule's object is strict, as the label's are: a `conversaton`
+   * lost on the way would turn a rule for one channel into one for the whole account.
+   */
+  const placeArgs = {
+    account: z.string().describe('the account it is for, by its name: `organisation/platform`'),
+    conversation: z
+      .string()
+      .optional()
+      .describe(
+        'only here — Slack: a channel or DM id (C…, G…, D…) or a person (U…); mail: an address, or @domain. Leave out for the whole account',
+      ),
+  };
+
+  server.registerTool(
+    'comms_behaviour',
+    {
+      title: 'What an agent may do',
+      description: `Report or change which acts an agent may start at all — ${BEHAVIOUR_ACTS.join(', ')} — on each account and in each conversation; every act it may start still waits for the person's yes to its exact content. With no change it only reports: every rule, and for each account what is allowed across it and in each conversation a rule names. Otherwise exactly one of \`setRule\` — only these acts there, replacing the rule at that level; \`acts: []\` allows nothing — or \`removeRule\`. A change that only narrows what is allowed applies at once. One that allows more anywhere — an act added, a rule removed whose fallback is wider, a conversation allowed more than its account — is a change the person approves: the first call returns the preview, each level before → after, and an approvalId; call again with it once they agree. Start one that allows more only when the person asked for it.`,
+      inputSchema: {
+        setRule: z
+          .strictObject({
+            ...placeArgs,
+            acts: z
+              .array(z.enum(BEHAVIOUR_ACTS as unknown as [string, ...string[]]))
+              .describe('the acts an agent may start there, and only these; empty for none'),
+          })
+          .optional()
+          .describe('what an agent may do in one place: the rule for it, added or replaced'),
+        removeRule: z
+          .strictObject(placeArgs)
+          .optional()
+          .describe('a rule to take away, by its account and conversation, so the wider one holds there'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = BEHAVIOUR_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `setRule` or `removeRule` — with it.',
+          });
+          return behaviourReport(core);
+        });
+      }
+      const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
+      return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── How the person writes ────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * The writing profile (design 2026-10-19-agent-behaviour-rules, B6), read before a message is written so the first
+   * preview is already written to it. Reading only, on purpose: a profile is the person's own instructions to their
+   * agents, and a tool that wrote one would let something an agent read change how every later message is written.
+   * Starting a missing file is the person's, at their terminal (`profile init`), and is no tool here.
+   */
+  server.registerTool(
+    'comms_profile',
+    {
+      title: 'The writing profile',
+      description:
+        'How the person wants a message written in one place — tone, language, length, sign-off, threads — from the Markdown files they keep: their own instructions to you, not content from anyone else. Call it before writing a message, for the account it goes from and the conversations it goes to, and follow it; where it and what the person asks in this conversation disagree, what they ask wins. For mail pass each recipient’s address and then its `@domain`, in recipient order; for a Slack DM its `D…` id and then the person’s `U…` id; for a channel its `C…` id. Returns the joined text, each part marked with the file it came from, and every file it would read, written or not. It only reads, and needs no approval. No tool writes a profile: the person starts a missing file at their own terminal, with the core CLI’s `profile init`.',
+      inputSchema: {
+        account: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'the account the message goes from: `acme/slack`, `acme/gmail`; left out, only the layers every message shares',
+          ),
+        conversations: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'the conversations it goes to, in order: for mail each address then its `@domain`; for a Slack DM the `D…` then the `U…`; for a channel its `C…`',
+          ),
+      },
+      annotations: readsLocal,
+    },
+    async (args) => read(() => profileView(core, { account: args.account, conversations: args.conversations })),
   );
 
   // ── Organisation profiles ────────────────────────────────────────────────────────────────────────────────────

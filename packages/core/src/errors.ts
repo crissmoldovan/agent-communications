@@ -35,6 +35,7 @@ export type ErrorCode =
   | 'SEND_OUTCOME_UNKNOWN'
   | 'SEND_REFUSED'
   | 'POLICY_NEVER'
+  | 'ACT_NOT_ALLOWED'
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
   | 'LOOSENING_REFUSED'
@@ -88,6 +89,17 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     summary: 'a send was attempted outside the one approved path',
   },
   POLICY_NEVER: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'sending is turned off for this inbox' },
+  /*
+   * A behaviour rule (design 2026-10-19-agent-behaviour-rules, B4) does not allow this act — a post, a reply, a reaction,
+   * an edit, a deletion, a file or a send — where it would land. Refused at prepare, before any preview or approval,
+   * and again at send if the rule was tightened after the yes. The refusal class of POLICY_NEVER: nothing to retry, and
+   * the rule is the person's to change.
+   */
+  ACT_NOT_ALLOWED: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'a behaviour rule does not allow this act here',
+  },
   RATE_CAPPED: { exit: EXIT_CODES.APPROVAL, retryable: true, summary: 'the send limit for this inbox is reached' },
   UNSENDABLE_HTML: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the draft has HTML an agent may not send' },
   LOOSENING_REFUSED: {

@@ -245,10 +245,12 @@ const READING = [
   'comms_channels_available',
   'comms_orgs_list',
   'comms_org_show',
+  'comms_profile',
 ];
 const CHANGING = [
   'comms_attach',
   'comms_label',
+  'comms_behaviour',
   'comms_org_add',
   'comms_org_update',
   'comms_org_remove',

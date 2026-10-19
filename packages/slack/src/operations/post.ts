@@ -203,6 +203,8 @@ export async function react(
   as?: unknown,
 ): Promise<ReactionResult & LegacyDrainNote> {
   const requested = checkedIdentity(as);
+  // A channel's name, or anything else that is no conversation id, is refused before the workspace is opened.
+  requireConversation(wanted.channel, alias, context.handoffs);
   // First — it prepares, or claims, or both: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const gate = await gateDepsFor(context, alias, slack);
