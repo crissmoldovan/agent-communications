@@ -1,0 +1,92 @@
+name: Desktop
+
+# The desktop app's checks (desktop design DA8), on every pull request that touches it and every push to main that
+# does: the UI's typecheck, tests, build and bundle check, the end-to-end tests against the built UI, the Rust gates,
+# the licence notices, and an unsigned bundle, on macOS (Apple silicon and Intel), Windows and Linux.
+#
+# **Nothing secret runs here.** These builds are unsigned and their updater is off: no signing identity, no updater
+# key and no token reaches them. The signed macOS release is built on the owner's Mac by
+# `apps/desktop/scripts/release-desktop.sh`; see docs/RELEASING.md. `desktop-release.yml` calls this workflow on a
+# `desktop-v*` tag before it attaches the Windows and Linux files.
+#
+# Actions are pinned to the commit of the tag in each comment.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop*.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop*.yml'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: desktop (${{ matrix.os }}, ${{ matrix.bundles }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every leg finishes, so one failing platform does not hide the others' results.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, bundles: app }
+          - { os: macos-15-intel, bundles: app }
+          - { os: windows-latest, bundles: nsis }
+          - { os: ubuntu-22.04, bundles: deb }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Linux system packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: UI typecheck, tests, build and bundle check
+        run: |
+          pnpm --filter @agentcomms/desktop typecheck
+          pnpm --filter @agentcomms/desktop test
+          pnpm --filter @agentcomms/desktop build
+          pnpm --filter @agentcomms/desktop check:bundle
+      - name: End-to-end tests against the built UI
+        run: |
+          pnpm --filter @agentcomms/desktop exec playwright install --with-deps chromium
+          pnpm --filter @agentcomms/desktop test:e2e
+      - name: Rust format, lints and tests
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+      # THIRD_PARTY_LICENSES must name what this commit's build is made of: every package the web bundle includes and
+      # every crate cargo resolves for the four targets. It fails, naming each one, when the file is out of step.
+      - name: Licence notices
+        run: pnpm --filter @agentcomms/desktop check:licenses
+      - name: Unsigned bundle
+        run: pnpm --filter @agentcomms/desktop tauri build --ci --no-sign --bundles ${{ matrix.bundles }}
