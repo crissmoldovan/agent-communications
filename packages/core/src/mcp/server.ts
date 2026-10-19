@@ -342,7 +342,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_approval_wait',
     {
       title: 'Wait for an approval',
-      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
+      description: `Wait for an approval — a send, a post, a change or a download’s question — to be usable or finished, and say where it stands: pending (with \`claimable\` true when a yes in the chat can use it), approved, being sent, used, failed, unknown, expired, revoked, corrupt, or answered for a question. A standing approval's wait ends \`active\` once the person has approved it — it is used through its channel's acknowledgement, never claimed — and \`standing\` says pending, active or ended, with why. \`waitSeconds\` is 30 when left out, ${MAX_WAIT_SECONDS} at most, and 0 for its status now. It only looks: it never approves, claims or sends. Ended still waiting, wait again — never prepare it again while it is pending or being sent.`,
       inputSchema: {
         approvalId: z.string().describe('the approval to wait for'),
         waitSeconds: z

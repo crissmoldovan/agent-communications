@@ -411,6 +411,37 @@ test('a pending standing record is reported by comms_approval_wait', async () =>
   assert.equal(after.claimable, false);
 });
 
+test('a wait reads a standing approval as pending, then active once approved, then ended with its reason — never blocked', async () => {
+  const { core } = machine();
+  const { approvalId } = await prepared(core);
+  // A clock of the test's own: each sleep moves it, so a wait of many seconds takes none.
+  let at = 0;
+  const clock = {
+    now: () => at,
+    sleep: async (ms: number) => {
+      at += ms;
+    },
+  };
+  const waiting = await waitForApproval(core, approvalId, { waitSeconds: 3, clock });
+  assert.equal(waiting.ended, 'timeout', 'it still waits for the person');
+  assert.deepEqual(waiting.standing, { state: 'pending' });
+
+  await approveStandingAtTerminal(core, approvalId, {}, { color: false }, terminal((code) => code).streams);
+  const started = at;
+  const active = await waitForApproval(core, approvalId, { waitSeconds: 30, clock });
+  assert.equal(active.ended, 'active', 'in force: not blocked, and nothing to claim');
+  assert.notEqual(active.ended, 'blocked');
+  assert.equal(active.state, 'approved');
+  assert.equal(active.claimable, false);
+  assert.deepEqual(active.standing, { state: 'active' });
+  assert.equal(at, started, 'it did not wait: there is nothing more to wait for');
+
+  await endStanding(core, approvalId, 'revoked by the person');
+  const ended = await waitForApproval(core, approvalId, { waitSeconds: 30, clock });
+  assert.equal(ended.ended, 'final');
+  assert.deepEqual(ended.standing, { state: 'ended', reason: 'revoked by the person' });
+});
+
 test('a request for an account that is not the one named is refused before anything is prepared', async () => {
   const { core } = machine();
   await assert.rejects(

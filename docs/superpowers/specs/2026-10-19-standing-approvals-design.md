@@ -463,3 +463,9 @@ word.
    characters, wrapped with `wrapUntrusted` (field `place-name`, the place's id), one boundary per report.
    `standing list` prints each envelope on lines of its own, as it is, so an agent reading the command's output reads
    it as quoted data too. **(lead's call, after review)**
+7. **A wait reads a standing approval in its own words** (S8; core review C8). `comms_approval_wait` and
+   `slack_approval_wait` called an approved standing record `blocked`, as if a policy kept it from being claimed; but
+   nothing claims one. A wait on one now ends `active` once the person has approved it, and carries
+   `standing: { state: 'pending' | 'active' | 'ended', reason? }`, read as `standing list` reads it (a live `never`
+   ends it at a look). A pending one is waited on as before; an ended one ends `final`, with the store's reason.
+   **(lead's call, after review)**
