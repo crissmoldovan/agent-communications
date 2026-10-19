@@ -54,11 +54,11 @@ before anything is prepared. Report that state.
   rule's judge goes in its `agentic` part, with only the fields the question needs in `inputs`.
 - **A Laya judge is configuration.** Add one with `events_judge_add` and exactly `judgeId`, `version`,
   `"kind": "laya"`, `"provider": "laya"`, the `manifestId` that `events_judge_model_status` reports as `model`, and
-  `"promptTemplate": "laya-noul-v1"`; it has no endpoint or key. It answers only after a person enables Laya at their
-  terminal (`agent-events judge kind enable laya`) and its model is ready, so until then `events_rule_enable` refuses a
-  rule naming it with Laya's reason (`E2_EXTERNAL_REFERENCE_BLOCKED` in this release): report that reason and never
-  call the rule active. Another model (`LAYA_MANIFEST_NOT_REVIEWED`) and the template `laya-choice2-v1`
-  (`LAYA_TEMPLATE_BLOCKED`) are refused.
+  `"promptTemplate": "laya-noul-v1"`; it has no endpoint or key. It answers only after a person has approved Laya's
+  enablement at their terminal and its model is ready, so until then `events_rule_enable` refuses a rule naming it with
+  Laya's reason (`E2_EXTERNAL_REFERENCE_BLOCKED` in this release): report that reason and never call the rule active.
+  Another model (`LAYA_MANIFEST_NOT_REVIEWED`) and the template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) are
+  refused.
 - **Test only with the daemon's event.** `events_judge_test` asks one active judge version about the daemon's own
   fixed synthetic event, never caller content, at most ten times an hour per version. Its answer is not a rule's
   decision.
