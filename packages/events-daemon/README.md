@@ -155,12 +155,20 @@ Two kinds of judge are available:
   `scorePointer`, and that number is labelled an uncalibrated score. Nothing leaves this machine.
 
 The third kind, **`laya`**, will run the Laya model on this machine, in an isolated worker. This release does not offer
-it yet: it ships no reviewed runtime lock, so `agent-events judge kinds list` and `agent-events judge model status` show
-Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`, `agent-events judge kind enable laya` refuses before
-anything is prepared, and a judge naming it is refused. On a release that offers it, `judge model status` reports the
-runtime and model installation (`idle`, `installing`, `downloading`, `verifying`, `ready`, `failed` or `unavailable`),
-its byte progress and any failure or unavailable reason; `judge kind disable laya` cancels a download and keeps the
-verified files; and `judge model remove` deletes them, only while Laya is disabled.
+it yet: a release offers Laya only once its exact runtime, model and prompt template have passed the owner's labelled
+quality gate on real Gmail and Slack messages, and its worker boundary has been proved on a real Mac. Neither has run
+yet, so this release ships no reviewed runtime lock. `agent-events judge kinds list` and
+`agent-events judge model status` show Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`,
+`agent-events judge kind enable laya` refuses before anything is prepared, and a judge naming it is refused. The first
+release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a 512-token
+context, on the CPU, one call at a time, in a worker that a `sandbox-exec` profile keeps off the network, so what a rule
+asks it never leaves the machine. Linux and Windows show Laya as not available. Once you enable it there, the daemon
+downloads the runtime (about 300 MB) and the model (about 1.69 GB) — ordinary network traffic, and the only network
+traffic Laya has — and checks every file against the release's lock and manifest before each start.
+`judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,
+`ready`, `failed` or `unavailable`), its byte progress and any failure or unavailable reason;
+`judge kind disable laya` cancels a download and keeps the verified files; and `judge model remove` deletes them, only
+while Laya is disabled.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing

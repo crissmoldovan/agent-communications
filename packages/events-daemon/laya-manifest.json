@@ -48,5 +48,5 @@
     "maxTokens": 512,
     "language": "en"
   },
-  "promptTemplates": ["laya-choice2-v1", "laya-noul-v1"]
+  "promptTemplates": ["laya-noul-v1"]
 }

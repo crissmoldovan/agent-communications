@@ -3,6 +3,31 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Laya, a judge that runs on your own Mac, is built, and not offered yet: nothing changes when you update.** A rule
+can already ask TypeSafe's hosted Jev, or a model server you run, one yes/no question about an event. Laya is the third
+kind: a small English model that runs on your Mac's CPU, in a worker the operating system keeps off the network, so what
+a rule asks it never leaves your Mac. This release ships it switched off everywhere:
+`agent-events judge kinds list` shows it unavailable with `E2_EXTERNAL_REFERENCE_BLOCKED`, and
+`agent-events judge kind enable laya` refuses before anything is prepared. A release offers it only once its exact
+runtime, model and prompt have passed a labelled quality test on real Gmail and Slack messages, and its boundary has
+been proved on a real Mac.
+
+When a release does offer it:
+- **macOS only.** A `sandbox-exec` profile denies the worker every network connection, Unix-domain sockets included,
+  and each worker proves that before it loads anything. Linux and Windows show Laya as not available.
+- **Its limits:** English only, a 512-token context, CPU only, one call at a time, about 1.69 GB on disk and about 2 GB
+  of memory while it runs, and one prompt template, `laya-noul-v1`.
+- **You turn it on, at your terminal.** Nothing downloads before you approve it. Then the daemon fetches the runtime and
+  the model, ordinary downloads that are Laya's only network traffic, and checks every file against the release's lock
+  and manifest before each start.
+
+Every release now checks Laya before it publishes: one that ships the placeholder lock proves Laya is unavailable, and
+one that ships the real lock must rebuild it from the registry and carry passing quality and real-Mac boundary evidence
+([Releasing](docs/RELEASING.md#laya-the-local-model-judge)). `SECURITY.md` says what counts as a Laya vulnerability,
+and what its boundary does not protect against.
+
 ## 0.24.0
 
 **There is a desktop app: Agent Comms, a tray app that shows what your agents are doing and waiting for, and lets you

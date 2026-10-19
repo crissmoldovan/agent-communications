@@ -393,6 +393,43 @@ test('E2 contract: definition construction accepts only canonical reviewed asset
   );
 });
 
+/** The fixture manifest with another template list, written in the manifest's canonical layout (the list on one line). */
+function manifestWithTemplates(assets: LayaReviewedAssets, templates: readonly unknown[]): LayaReviewedAssets {
+  const manifest = JSON.parse(Buffer.from(assets.manifestBytes).toString('utf8')) as Record<string, unknown>;
+  const source = `${JSON.stringify({ ...manifest, promptTemplates: templates }, null, 2)}\n`;
+  const multiline = `  "promptTemplates": ${JSON.stringify(templates, null, 2).split('\n').join('\n  ')}`;
+  const compact = `  "promptTemplates": [${templates.map((id) => JSON.stringify(id)).join(', ')}]`;
+  return { ...assets, manifestBytes: Buffer.from(source.replace(multiline, compact)) };
+}
+
+test('E2 contract: the manifest offers a sorted list of templates the worker implements, and nothing else', async () => {
+  const assets = await fixtureAssets();
+  // E2 Task 10: the release offers `laya-noul-v1` alone, so a single-template manifest is a reviewed one.
+  const noulOnly = createLayaJudgeKindDefinition({
+    assets: manifestWithTemplates(assets, ['laya-noul-v1']),
+    platform: availablePlatform(),
+  });
+  assert.deepEqual(noulOnly.prepareEnablement({ version: 1 }).manifest.promptTemplates, ['laya-noul-v1']);
+  for (const [name, templates] of [
+    ['empty', []],
+    ['not implemented by the worker', ['laya-noul-v2']],
+    ['implemented, beside one that is not', ['laya-noul-v1', 'laya-unreviewed-v1']],
+    ['unsorted', ['laya-noul-v1', 'laya-choice2-v1']],
+    ['duplicated', ['laya-noul-v1', 'laya-noul-v1']],
+    ['not text', [1]],
+  ] as const) {
+    assert.throws(
+      () =>
+        createLayaJudgeKindDefinition({
+          assets: manifestWithTemplates(assets, templates),
+          platform: availablePlatform(),
+        }),
+      (error: unknown) => error instanceof LayaContractError && error.code === 'LAYA_ASSET_INVALID',
+      name,
+    );
+  }
+});
+
 test('E2 contract: Laya provider concurrency greater than one is refused', () => {
   assert.throws(
     () =>

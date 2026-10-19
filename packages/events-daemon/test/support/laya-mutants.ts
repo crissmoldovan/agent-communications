@@ -165,6 +165,9 @@ async function copyDependencyClosure(root: string, entry: string): Promise<void>
     for (const specifier of localImports(source)) {
       const target = relative(repositoryRoot, resolve(dirname(join(repositoryRoot, file)), specifier));
       if (target.startsWith('..')) throw new Error(`local import escapes the repository: ${file} -> ${specifier}`);
+      // An installed module reached by a relative path (Phase E's prerequisite gate imports the daemon's own ajv) is
+      // linked with the rest of `node_modules` below, never copied: a copied file there would block that link.
+      if (target.split(/[\\/]/).includes('node_modules')) continue;
       pending.push(target);
     }
   }
@@ -205,6 +208,16 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/src/runtime/laya/worker-main.ts',
     'packages/events-daemon/test/support/laya-worker-standin.ts',
     'test/helpers/loopback-seal-preload.mjs',
+    // E2 Task 10's oracles read these as text or copy them into their own disposable release roots.
+    'SECURITY.md',
+    'CHANGELOG.md',
+    'docs/superpowers/specs/2026-10-05-local-event-emission-design.md',
+    '.github/workflows/laya-quality-gate.yml',
+    'scripts/release.mjs',
+    'packages/events-daemon/README.md',
+    'packages/events-laya-runtime/README.md',
+    'packages/events-laya-runtime/gate/macos-boundary-v1.schema.json',
+    'packages/events-daemon/test/fixtures/laya/quality/metrics-v1.json',
   ];
   for (const file of files) await copyFile(root, file);
   // A test spawns these entries rather than importing them, so their own relative imports are copied too: the shipped

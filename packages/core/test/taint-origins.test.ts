@@ -182,7 +182,7 @@ test('origins sidecar keys are the canonical address, domain and handle keys', a
   assert.ok(origins.handles[canonicalHandle(handle)]);
 });
 
-test('SECURITY.md states exactly the two B1 disclosure bullets and no deferred Laya wording', () => {
+test('SECURITY.md states exactly the two B1 disclosure bullets', () => {
   const security = readFileSync(new URL('../../../SECURITY.md', import.meta.url), 'utf8');
   const disclosure =
     "- **Disclosure without a standing authorisation** — any webhook or subscriber stream receiving event-derived content, or any hosted or local judge being invoked with it, without an active, digest-bound standing disclosure authorisation for exact approved versions, or versions derived from them by a whitelisted tightening, including the complete validated derivation lineage for the exact effective rule, target, subscriber and judge versions; after that authorisation is revoked; while the judge's kind is not enabled; outside its approved mapping, retention or delivery rate cap; or without successful taint recording before disclosure.";
@@ -190,5 +190,5 @@ test('SECURITY.md states exactly the two B1 disclosure bullets and no deferred L
     '- **A standing disclosure authorisation is not approval of each event.** Once a person enables one at the terminal or in the app, future unseen content that matches its approved rule may leave automatically through its approved target or be evaluated by its approved judge. agent-events doctor and the app list every active authorisation. Disabling or removing any bound rule, target, subscriber or judge, or disabling a judge kind, revokes it immediately; content already in a network operation cannot be recalled.';
   assert.equal(security.split(disclosure).length - 1, 1);
   assert.equal(security.split(standing).length - 1, 1);
-  assert.doesNotMatch(security, /\bLaya\b/);
+  // Phase E2 added D2's two Laya bullets with Laya; `test/laya-security-doc.test.mjs` holds them to their exact words.
 });
