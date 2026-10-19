@@ -902,8 +902,7 @@ export async function prepareSend(
   const fitted = await fitFrom(context, resolved, draftId, first, requested);
   const { analysis, draftMessageId } = fitted.read;
   // The draft as it is bound, after any relabelling, checked as what it is: proven again only if what it answers moved.
-  const proof =
-    analysis.inReplyTo === first.analysis.inReplyTo ? firstProof : await replyProofOf(transport, analysis);
+  const proof = analysis.inReplyTo === first.analysis.inReplyTo ? firstProof : await replyProofOf(transport, analysis);
   const acts = placeActs(analysis, proof);
   const allowed = requireMailActs(context, config, resolved, acts, analysis);
 
