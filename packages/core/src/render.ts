@@ -592,6 +592,7 @@ export function renderUpdateStatus(status: UpdateStatus): string {
     ['job.installedAt', status.job.installedAt],
     ['job.lastRun', status.job.lastRun],
     ['job.working', status.job.working],
+    ...(status.job.reason === undefined ? [] : ([['job.reason', status.job.reason]] as [string, string][])),
   ];
   return rows.map(([key, value]) => `${key.padEnd(15)} ${shown(value)}`).join('\n');
 }

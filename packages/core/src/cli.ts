@@ -1243,7 +1243,8 @@ export async function main(
           values.background,
         ];
         const modes = [values.check, values.status, ...settings].filter(Boolean).length;
-        if (modes > 1 || (values['no-verify'] && settings.some(Boolean))) {
+        // `--status` only reads, so --no-verify has no update to be about there either.
+        if (modes > 1 || (values['no-verify'] && (settings.some(Boolean) || values.status))) {
           throw usage(
             '--check, --status, --level, --pause, --resume, --rollback, --background-job and --background are one at a time, and --no-verify is for the update itself',
           );

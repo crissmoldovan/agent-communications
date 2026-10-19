@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { test } from 'node:test';
 import { updateStatus } from '../src/operations/update-status.ts';
@@ -11,6 +11,7 @@ import {
   type UpdateJobDeps,
   updateJobContext,
 } from '../src/update-job.ts';
+import { updateCheckPath } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import { recordingRunner } from './helpers/recording-runner.ts';
@@ -114,8 +115,10 @@ test('an organisation’s cap is said by its organisation and level alone, with 
 
 test('status asks npm nothing', async () => {
   const m = machine();
-  // Checked an hour ago, so the server's own daily check is not due either: anything asked was asked by the status.
-  await seed(m, { latest: LATEST }, at(-HOUR));
+  // Checked three days ago, so the daily check is due: the status, by command or by tool, still asks nothing, and the
+  // server's own background check does not start for it either.
+  await seed(m, { latest: LATEST }, at(-3 * DAY));
+  const recorded = readFileSync(updateCheckPath(m.stateDir), 'utf8');
   const npm = refusingNpm(() => FIXED);
 
   const byCommand = await runMain(['update', '--status', '--json'], m.env, 'linux', { update: npm.deps });
@@ -133,10 +136,13 @@ test('status asks npm nothing', async () => {
     const byTool = await call('comms_update', { status: true });
     assert.notEqual(byTool.isError, true, JSON.stringify(byTool.structuredContent));
     assert.equal(byTool.structuredContent?.latest, LATEST);
+    // A check started in the background would have asked by now, and written down that it did.
+    await new Promise((settled) => setTimeout(settled, 300));
   } finally {
     await close();
   }
   assert.deepEqual(npm.asked, [], 'nothing asked npm, the registry or the verifier');
+  assert.equal(readFileSync(updateCheckPath(m.stateDir), 'utf8'), recorded, 'update-check.json is as it was');
 });
 
 test('status says where the background job stands', async () => {
@@ -168,6 +174,35 @@ test('status says where the background job stands', async () => {
   assert.deepEqual(other.job, { state: 'unsupported', where: null, installedAt: null, lastRun: null, working: null });
 });
 
+test('a background job that cannot be read is said to be unreadable, with why, and the rest is still read', async () => {
+  const m = machine();
+  await seed(m, { latest: LATEST }, at(-HOUR));
+  // The job's file is a folder: reading it fails with something other than "not there".
+  mkdirSync(launchAgentPath(m.home), { recursive: true });
+  const status = await updateStatus(m.core, m.env, { platform: 'darwin', now: () => FIXED });
+  assert.equal(status.latest, LATEST, 'everything else is still read');
+  assert.equal(status.job.state, 'unreadable');
+  assert.deepEqual(
+    [status.job.where, status.job.installedAt, status.job.lastRun, status.job.working],
+    [null, null, null, null],
+  );
+  assert.match(status.job.reason ?? '', /could not be read/);
+  assert.match(status.job.reason ?? '', /EISDIR|illegal operation|directory/i);
+
+  // The command says so too, rather than failing, in both its shapes.
+  const npm = refusingNpm(() => FIXED);
+  const byCommand = await runMain(['update', '--status', '--json'], m.env, 'darwin', { update: npm.deps });
+  assert.equal(byCommand.code, 0, byCommand.stdout + byCommand.stderr);
+  const job = (byCommand.json().data as { job: { state: string; reason: string } }).job;
+  assert.equal(job.state, 'unreadable');
+  assert.equal(job.reason, status.job.reason);
+  const shown = await runMain(['update', '--status'], m.env, 'darwin', { update: npm.deps });
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(shown.stdout, /^job\.state +unreadable$/m);
+  assert.match(shown.stdout, /^job\.reason +.*could not be read/m);
+  assert.deepEqual(npm.asked, []);
+});
+
 test('an environment switch is what decided the level', async () => {
   for (const [variable, value] of [
     ['AGENT_COMMS_UPDATES', 'never'],
@@ -190,6 +225,8 @@ test('--status is one mode at a time and takes no approval', async () => {
     ['--status', '--level', 'never'],
     ['--status', '--pause'],
     ['--status', '--background-job', 'off'],
+    // It only reads, so there is no update for --no-verify to be about.
+    ['--status', '--no-verify'],
   ]) {
     const run = await runMain(['update', ...words, '--json'], m.env, 'linux', { update: npm.deps });
     assert.equal(run.code, 64, `${words.join(' ')}: ${run.stdout}`);

@@ -221,6 +221,12 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       running: VERSION,
       // Each says what is behind in its own words already.
       exempt: ['comms_update', 'comms_doctor', 'comms_paths'],
+      // `status: true` reads where updates stand and promises to ask npm nothing (desktop design DA13).
+      quiet: (tool, args) =>
+        tool === 'comms_update' &&
+        typeof args === 'object' &&
+        args !== null &&
+        (args as { status?: unknown }).status === true,
       refresh: () => checkForUpdates(core, env, { deps: updateDeps, now: updateDeps.now }),
       now: updateDeps.now,
     }),

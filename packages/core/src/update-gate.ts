@@ -49,7 +49,7 @@ const PRODUCT = 'agent-communications';
  * What `strictToolArguments` asks once a tool has answered: the one line to carry beside that result, or null. It is
  * asked of every call, and answers a line at most once in the life of the process.
  */
-export type ToolNotice = (tool: string) => Promise<string | null>;
+export type ToolNotice = (tool: string, args?: unknown) => Promise<string | null>;
 
 export interface UpdateToolNoticeOptions {
   core: Core;
@@ -63,6 +63,12 @@ export interface UpdateToolNoticeOptions {
    * what is behind already, in its own words.
    */
   exempt: readonly string[];
+  /**
+   * Calls that only read where updates stand, and so neither carry the notice nor start the check: `comms_update` with
+   * `status: true`, which the desktop app polls every 15 seconds and which promises to ask npm nothing (desktop design
+   * DA13). Given the tool's name and its arguments, as its schema took them.
+   */
+  quiet?: ((tool: string, args: unknown) => boolean) | undefined;
   /**
    * The check, run in the background — never awaited by a call — whenever a call arrives and none is running. Absent
    * for WhatsApp, which reads the file as whatever else on the machine last left it.
@@ -85,9 +91,11 @@ export function updateToolNotice(options: UpdateToolNoticeOptions): ToolNotice {
   let given = false;
   // One decision at a time, so two calls answered together cannot both carry the line.
   let turn: Promise<unknown> = Promise.resolve();
-  return (tool) => {
+  return (tool, args) => {
     // Switched off by the environment: nothing — no check, no notice.
     if (updateCheckSwitchedOff(options.env) !== null) return Promise.resolve(null);
+    // A read of where updates stand starts no check of its own, however due one is.
+    if (options.quiet?.(tool, args)) return Promise.resolve(null);
     if (options.refresh && running === null) {
       running = options
         .refresh()

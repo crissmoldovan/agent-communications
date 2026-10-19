@@ -49,10 +49,13 @@ this machine's own files and say all of it at once:
 - the release running, and a security fix waiting;
 - the background job: where it is, when it was set up, when it last ran and whether it works.
 
-It runs no check, however due, and prints no notice. On Windows the scheduler is asked about the job only when this
-installation recorded one, as `doctor` asks it. With `--json` the fields are `level`, `set`, `by`, `cap`,
-`pausedUntil`, `lastChecked`, `latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known
-of it; [Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
+It runs no check, however due, and prints no notice — and over MCP, `status: true` does not start the server's own
+background check either, so the app's poll every 15 seconds never reaches npm. On Windows the scheduler is asked about
+the job only when this installation recorded one, as `doctor` asks it. A job whose files or record cannot be read is
+`unreadable`, with a `reason`, and the rest is read all the same. `--status` takes no `--approval` and no
+`--no-verify`: it only reads. With `--json` the fields are `level`, `set`, `by`, `cap`, `pausedUntil`, `lastChecked`,
+`latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known of it;
+[Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
 
 **`agentcomms doctor --json` prints one envelope when a check fails, as Gmail's and Slack's doctors do.** It printed
 the report and then an error envelope after it — two documents on stdout, where `--json` promises one — so a script

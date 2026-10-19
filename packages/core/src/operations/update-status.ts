@@ -49,8 +49,11 @@ export interface UpdateStatus {
   lastError: string | null;
   /** The background update job. */
   job: {
-    /** Where it stands, as the doctor reads it — or `unsupported` on a platform it is not offered on. */
-    state: UpdateJobState | 'unsupported';
+    /**
+     * Where it stands, as the doctor reads it — or `unsupported` on a platform it is not offered on, or `unreadable`
+     * when its files, its record or the scheduler could not be read; then `reason` says why, and the rest is null.
+     */
+    state: UpdateJobState | 'unsupported' | 'unreadable';
     /** Its file — the service, on Linux — or on Windows its task. Null when nothing is set up or recorded there. */
     where: string | null;
     /** When this installation set it up, from its record. */
@@ -59,6 +62,8 @@ export interface UpdateStatus {
     lastRun: string | null;
     /** Whether it ran in the last 48 hours, or was set up less than 48 hours ago; null with no record. */
     working: boolean | null;
+    /** Why the job could not be read: only with `unreadable`. */
+    reason?: string;
   };
 }
 
@@ -99,8 +104,24 @@ async function jobStatus(
   if (!updateJobSupported(platform)) {
     return { state: 'unsupported', where: null, installedAt: null, lastRun: null, working: null };
   }
-  const seen = await inspectUpdateJob(updateJobContext(core, env, { platform, deps }), { query: 'when-recorded' });
-  const health = await updateJobHealth(core.paths.stateDir, now);
+  let seen: Awaited<ReturnType<typeof inspectUpdateJob>>;
+  let health: Awaited<ReturnType<typeof updateJobHealth>>;
+  try {
+    seen = await inspectUpdateJob(updateJobContext(core, env, { platform, deps }), { query: 'when-recorded' });
+    health = await updateJobHealth(core.paths.stateDir, now);
+  } catch (error) {
+    // One part that cannot be read does not take the rest of the status with it: the app polls this, and a level, a
+    // pause or a security fix waiting is still worth saying. The job says it could not be read, and why.
+    const why = error instanceof Error ? error.message : String(error);
+    return {
+      state: 'unreadable',
+      where: null,
+      installedAt: null,
+      lastRun: null,
+      working: null,
+      reason: `the background job could not be read: ${why}`,
+    };
+  }
   return {
     state: seen.state,
     where: seen.state === 'not-set-up' ? null : seen.where,
