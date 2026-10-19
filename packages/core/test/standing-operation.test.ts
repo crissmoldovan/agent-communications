@@ -850,3 +850,25 @@ test('doctor names an acknowledgement ledger line that cannot be read, and how t
   renameSync(path, `${path}.aside`);
   assert.deepEqual(await rows(), []);
 });
+
+test('an act’s own time, after its pause, is in the report and in standing list beside when it was decided', async () => {
+  const m = machine({ real: true });
+  const record = await standing(m.core);
+  const { child } = await mintStandingUse(m.core, use(record, '16.000001'));
+  const decided = (await m.core.acks.entries(ACME)).find((entry) => entry.kind === 'use')?.at as string;
+  const actAt = new Date(Date.parse(decided) + 17_000).toISOString();
+  await m.core.acks.recordOutcome(ACME, {
+    kind: 'outcome',
+    at: new Date(Date.parse(actAt) + 500).toISOString(),
+    actAt,
+    childId: child.approvalId,
+    outcome: 'sent',
+    notice: 'raised',
+  });
+  const [act] = (await viewOf(m.core, record.approvalId))?.lastActs ?? [];
+  assert.equal(act?.at, decided);
+  assert.equal(act?.actAt, actAt);
+  const text = cli(m, ['standing', 'list']);
+  assert.equal(text.status, 0, text.stderr);
+  assert.ok(text.stdout.includes(`${decided} (went ${actAt})`), text.stdout);
+});

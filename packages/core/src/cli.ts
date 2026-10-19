@@ -1493,8 +1493,9 @@ function renderStandingView(view: StandingView): string {
   );
   lines.push(`  ${view.usesToday} ${view.usesToday === 1 ? 'use' : 'uses'} in the last day`);
   for (const act of view.lastActs) {
+    // When it was decided, and — after the pause that follows — when it went, where that was recorded.
     lines.push(
-      `    ${act.at}  ${act.act}  ${act.contentDigest.slice(0, 12)}  ${act.channel} ${act.ts}  ${act.outcome}${
+      `    ${act.at}${act.actAt === undefined ? '' : ` (went ${act.actAt})`}  ${act.act}  ${act.contentDigest.slice(0, 12)}  ${act.channel} ${act.ts}  ${act.outcome}${
         act.link === undefined ? '' : `  ${shownWords(act.link, 200)}`
       }`,
     );
