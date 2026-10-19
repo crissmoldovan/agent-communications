@@ -32,6 +32,13 @@ and the consent screen is the person's (§2).
   other. Start one only when the person asked for that change, never to get past an `ACT_NOT_ALLOWED` refusal.
   `comms_profile` only reads the person's writing profile; no tool writes one, and the person starts a missing file
   at their own terminal with `agentcomms profile init`.
+- **Standing approvals are the person's, made only at their own terminal.** One lets an agent acknowledge a message
+  that has just arrived without asking, with a reaction or a short reply the person wrote, in places and counts they
+  set. `comms_standing` with no change (CLI: `agentcomms standing list`) reports each, with its uses and last acts;
+  with `narrow`, `revoke` or `off` it narrows or ends them at once, asking nobody — do it whenever the person asks.
+  Nothing here creates or widens one: Slack's `slack_standing_add` only prepares one the person asked for, and they
+  approve it with its code at their own terminal, never by a yes in chat. Never ask them to make one in chat, and
+  never propose one on your own.
 - A refusal means nothing was changed. Do not retry it; say what it said.
 - A command that composes two changes keeps their approvals separate. In Gmail setup, adding an
   organisation profile uses MCP `orgApproval` or CLI `--org-approval`; registering an OAuth client uses

@@ -478,6 +478,40 @@ in Slack, shared nowhere — delete it there if it should go. Changing files nee
 are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch to stop it. A deletion
 cannot be undone.
 
+### Messages sent without asking
+
+A standing approval is your yes given in advance to a few acknowledgements: standard emoji reactions (`eyes` when you
+name none; custom workspace emoji never), or short fixed replies you write, one a line, at most 200 characters, with
+no links, mentions or formatting. With one, an agent may acknowledge a message that has just arrived from another
+person without asking — and only that: the newest message from someone else in its thread or channel, within 15
+minutes, in a place the approval names, and not one already acknowledged. It never writes the words, and it cannot
+pick an old message, one among many, or a new place.
+
+```sh
+agent-slack standing add --workspace acme/slack --reactions eyes --replies-file ~/acks.txt --places C024BE7LR --expires 7d
+agent-slack approve <approvalId>    # the command the result gives, and the code it shows: never a typed yes
+agent-slack ack --workspace acme/slack --standing <id> --channel C024BE7LR --ts <ts> --content <digest>
+```
+
+`--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in yourself in the last 14 days,
+where a message this product sent for you does not count. The preview shows each content in full with its digest,
+warning for an emoji that can read as approval, such as ✅; each place with its member count and whether another
+organisation shares it; the limits (`--per-thread`, `--per-hour`, `--per-day`); and the expiry. A place of 50 members
+or more, or one with someone from another organisation in it, is allowed only when named exactly, and one that has
+grown to 50 or changed who shares it since is refused until you approve it again. `--replaces <id>` widens one, and
+asks again; a replacement that only narrows applies at once.
+
+Every act goes out as your agent: a reply in the thread, as the app or labelled `Jo Example (agent):`, even under a
+`me` rule; a reaction only as the app, and only where the app is a member, so never in a DM, a group DM, a room the
+app is not in, or a `labelled` workspace. Each act raises a notification on your screen — what was sent, where, and
+under which standing approval — and goes in the audit, with the acknowledged message's digest and whether it had been
+edited. A refusal is `STANDING_REFUSED` with its reason, or `STANDING_LIMIT` with when the limit frees (exit `10`):
+nothing was sent.
+
+The core lists, narrows and ends them: `agentcomms standing list`, `agentcomms standing revoke <id>`, and
+`agentcomms standing off`, which ends every one at once. What a standing approval does not defend — an agent with a
+shell, running as you — is in the core's README and the repository's SECURITY.md.
+
 ## Your agent's emoji
 
 When your agent posts as the Slack app, its messages can carry your own picture with a small robot badge on it, so

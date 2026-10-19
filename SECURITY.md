@@ -64,6 +64,41 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
   browser opener hands to a shell.
 - **Installation and supply chain** — unsafe installation instructions, CI compromise, or published packages that do
   not match the repository.
+- **Acting beyond a standing approval** — any way to make a standing approval send words or an emoji it does not hold,
+  acknowledge a message it does not allow (not fresh, not the newest, not from another person, interactive, already
+  acknowledged) or in a place it does not cover, exceed or refund its counts, go out as the person unlabelled, outlive
+  its revocation, its expiry or `standing off`, or be created or widened without the code typed at a terminal (below).
+
+## Standing approvals
+
+A standing approval is the one way a Slack message goes without the person's yes to its exact content: their yes in
+advance, approved only with a code typed at a terminal, to a few acknowledgements — standard emoji reactions, or short
+fixed replies they wrote — on a message that has just arrived from another person, within places, counts and days
+they set ([design](docs/superpowers/specs/2026-10-19-standing-approvals-design.md), §4). In short:
+
+- **Injected text cannot choose the words, the message or the place.** There is no free text: the gate builds the post
+  from the person's own content, named by digest. The target is fixed by what just happened — the newest message from
+  someone else, at most 15 minutes old, not yet acknowledged — and the places are the ones named, or threads the
+  person posted in themselves. What is left is about one bit per act, within the counts.
+- **No loops, no floods, no false yes.** Only messages from people, by an allow-list that refuses bots, apps,
+  workflows, Slackbot and this account's own posts; nothing with buttons or menus; once a thread across every standing
+  approval, with hourly and daily caps spent at the moment of use and never refunded; `eyes` by default, and a warning
+  for an emoji that reads as approval.
+- **It never looks like the person.** A reply goes as the app or labelled; a reaction only as the app, where the app
+  is a member.
+- **Nothing creates or widens one but a person at a terminal.** It is a change approval forced to `confirm` whatever
+  the change policy — no typed `yes`, no client's form, no answer in chat — and an agent's proposal says so in the
+  preview. Revoking one, `standing off`, tightening the change policy, a send policy of `never` and removing the
+  account each end them, and loosening again revives none.
+- **Visibility does not rest on the agent.** Every act raises an operating-system notification and is audited with
+  the acknowledged message's digest and whether it had been edited; `standing list` and `doctor` show them.
+
+**What it does not defend.** It defends against an agent acting through this project's MCP tools. **An agent with an
+unrestricted shell, running as the person, is out of reach:** it can already get past the terminal check (below), edit
+the configuration and run the CLI as the person — and so can anyone who can write to the configuration directory. An
+operating-system user-presence check (Touch ID, Windows Hello) for creating one would reach further, and is future
+work. Under the `chat` send policy the tools already act on an agent's word, so there a standing approval adds limits,
+not freedom, and an agent that ignores the skills and takes the ordinary path is today's risk, unchanged.
 
 ## What the safety model does not claim
 

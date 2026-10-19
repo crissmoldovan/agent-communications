@@ -5,6 +5,70 @@ together under one version.
 
 ## Unreleased
 
+**You can let an agent acknowledge a Slack message without asking you — with words or an emoji you wrote, where and
+as often as you said.** Until now nothing posted without your yes to that exact message, so an agent that read a
+question in Slack had to stop and ask before it could even say "Got it". Now you can say yes in advance, at your own
+terminal with a code, to a few acknowledgements — a standard emoji such as `eyes`, or a short reply such as "Got it,
+I'll look at this and come back to you" — on a message that has just arrived from another person, in the places,
+counts and days you set. That is a **standing approval**. The agent chooses only whether to acknowledge, and with which
+of your contents; it never writes the words, and it cannot pick an old message, one among many, or a new place.
+
+**Making one: `agent-slack standing add`, approved only with its code.**
+
+- `agent-slack standing add --workspace cue/slack --reactions eyes --replies-file ~/acks.txt --places C0123ABC
+  --expires 7d` prepares one. `--places` takes exact channel and DM ids, or `threads-i-am-in`: threads you posted in
+  yourself in the last 14 days, where a message this product sent for you does not count. With no content, it holds
+  `eyes` alone. The limits are once a thread, 10 an hour and 30 a day by default (3, 30 and 100 at most), and it ends
+  7 days after you approve it, 30 at most.
+- **Its preview shows everything you are agreeing to:** each content in full with its digest, and a warning for an
+  emoji that can read as approval, such as ✅; each place with its member count and whether another organisation
+  shares it; the limits; and the expiry. One an agent prepared over MCP, with `slack_standing_add`, opens "An agent
+  proposed these contents and places. Check each one."
+- **Only the code typed at a terminal approves it,** with `approve` as the result gives it, from either CLI — never a
+  typed `yes`, a client's form or a yes in chat, whatever your change policy. `--replaces <id>` widens one, and asks
+  again; a replacement that only narrows applies at once.
+- Only standard emoji, from a list shipped with the release, and replies of at most 200 characters on one line, with no
+  links, mentions or formatting.
+
+**Using one: `agent-slack ack`, and `slack_ack`.** One call names the standing approval, the message and the content by
+its digest, and nothing else. It is refused, with `STANDING_REFUSED` and its reason, unless the message:
+
+- arrived after the standing approval, within the last 15 minutes, and is the newest from someone else in its thread
+  or channel, not yet acknowledged under any standing approval;
+- and its thread's first message are from people, by an allow-list that refuses bots, apps, workflows, Slackbot and
+  this account's own posts — though a thread you started yourself counts — and carry no buttons or menus;
+- is in a place it covers, which has not grown to 50 members or more, or changed who shares it, since you approved it.
+
+A limit reached is `STANDING_LIMIT`, saying which and when it frees. A count is spent when the act is about to go and
+never refunded, even when the act then fails. Either refusal says nothing was sent, and tells the agent to stop and ask
+you.
+
+**It always goes as your agent, and you see every act.** A reply goes in the thread, as the app or labelled
+"Jo Example (agent):", even under a rule that would send your posts as you; a reaction goes only as the app, and only
+where the app is a member — never in a DM, a group DM or a `labelled` workspace. Each act raises a notification on your
+screen — on macOS and Windows, and on Linux where `notify-send` is installed — saying what was sent, where and under
+which standing approval, and is in the audit with the acknowledged message's digest and whether it had been edited.
+Mail, top-level posts, edits, deletions, files and removing a reaction are never sent this way.
+
+**Seeing and ending them: `agentcomms standing`, and `comms_standing`.** `agentcomms standing list` shows each one, its
+contents by digest, its uses today and its last 10 acts with links; `agentcomms standing narrow <id>` keeps less of
+one, `agentcomms standing revoke <id>` ends one, and `agentcomms standing off` ends every one — each at once, asking
+nobody. Tightening your change policy ends every one too; a send policy of `never`, or removing the account, ends that
+account's; loosening again revives none. `agentcomms doctor` lists the active ones and when each ends.
+
+Why: agents that listen in Slack were stopping to ask before sending even "Got it", or sending it as you. A
+standing approval keeps your yes on the exact words while letting the moment go, inside limits you set, and it is
+built for what an agent might be told by something it read: no free text, a target fixed by what just happened, low
+counts, and nothing that looks like you. It holds against an agent acting through the tools; an agent with a shell
+running as you is out of its reach, as SECURITY.md says.
+
+**Upgrading.**
+- Nothing changes until you create a standing approval, at your terminal. Until then every reaction and reply still
+  needs your yes to it, as before.
+- Two new error codes, `STANDING_REFUSED` and `STANDING_LIMIT` (exit 10, the refusal class of `POLICY_NEVER`), and a
+  `standing approvals` line in `agentcomms doctor`.
+- **Restart your MCP clients after updating** to get `slack_ack`, `slack_standing_add` and `comms_standing`.
+
 **You can decide what an agent may do at all, on each account and in each conversation, and how it writes there.**
 Until now the only boundary was the send policy and your yes to each message: in a workspace that could post, every act
 was open to the agent, and nothing said "this account may reply but never start a conversation". Now a rule can say

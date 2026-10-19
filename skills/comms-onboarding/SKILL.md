@@ -159,6 +159,14 @@ their own terminal with `agentcomms profile init <account>`. Before you write an
 `comms_profile` for the account and the conversation, and follow it; what they ask in this conversation wins. On
 `ACT_NOT_ALLOWED`, tell them which rule refused it and stop: never retry it another way.
 
+**Acknowledging without asking** is a standing approval, and only ever the person's. With one, an agent may answer a
+Slack message that has just arrived from someone else with a reaction or a short reply the person wrote in advance,
+in places, counts and days they set; every use goes out as the agent and is shown on their screen. Nothing changes
+until they create one, at their own terminal with a code. Do not offer one during setup, and never ask them to make
+one in chat. If they ask, the slack-posting skill prepares it with `slack_standing_add`, which only prepares: they
+approve it at their terminal with the approve command the result gives. `comms_standing` with no change shows them;
+with `revoke`, `narrow` or `off` it narrows or ends them at once, whenever they ask.
+
 ## 5. Check, and hand over
 
 - `comms_doctor`, `gmail_doctor`, `slack_doctor`, `resend_doctor` and `whatsapp_status`, for the
@@ -191,6 +199,7 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | The agent label | `agentcomms label`; `agentcomms label word <word>`, `agentcomms label name "<name>"` |
 | What an agent may do | `agentcomms behaviour`; `agentcomms behaviour allow <account> <act,…\|none> [--conversation <id>]`, `agentcomms behaviour clear <account> [--conversation <id>]` |
 | The writing profile | `agentcomms profile [<account>] [--conversation <id>…]`; `agentcomms profile init [<account>] [--conversation <id>]`, the person's, at their terminal |
+| Standing approvals | `agentcomms standing list`; `agentcomms standing revoke <id>`, `agentcomms standing off`; `agent-slack standing add --workspace <name> …` only prepares one the person asked for |
 | Check | `agentcomms doctor`, `agent-gmail doctor`, `agent-slack doctor`, `agent-resend doctor`, `agent-whatsapp status` |
 
 A change stops with exit `10`, its preview and an approval id, and changes nothing — with one
@@ -214,5 +223,7 @@ once. A person running a command at a terminal approves there and then: `yes`, o
 - **Promising the tools before the restart.** Registered servers start in the next session.
 - **Setting a behaviour rule nobody asked for,** or loosening one to get past `ACT_NOT_ALLOWED`. The rules are the
   person's; offer, and let them choose.
+- **Proposing a standing approval during setup,** or asking the person to make one in chat. It is theirs to ask for,
+  and theirs to approve at their terminal.
 - **A token in chat.** Never ask for one, never accept one. `agent-slack app update` reads the
   configuration token from a hidden prompt in the person's own terminal.

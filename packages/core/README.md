@@ -105,6 +105,37 @@ Over MCP, `comms_behaviour` is `behaviour` — with no change it only reports; `
 and `comms_profile` is `profile`, and only reads. No tool writes a profile: `profile init` is the person's, at a
 terminal, because something an agent read could otherwise change how every later message is written.
 
+## Messages sent without asking
+
+**A standing approval is your yes given in advance, for acknowledgements only.** With one, an agent may answer a Slack
+message that has just arrived from another person — the newest from someone else in its thread or channel, within 15
+minutes — with one of the contents you wrote: a standard emoji reaction (`eyes` when you name none), or a short fixed
+reply of at most 200 characters. It covers the places you named, or the threads you posted in yourself in the last 14
+days; by default once a thread, 10 an hour and 30 a day (3, 30 and 100 at most); and it ends 7 days after you approve
+it, 30 at most. A reply goes in the thread as the app or labelled, a reaction only as the app, and every act raises a
+notification on your screen, goes in the audit and shows in `standing list`. Mail, top-level posts, edits, deletions,
+files and removing a reaction are never sent this way.
+
+Slack's `agent-slack standing add` makes one, and it is approved only with the code it shows, typed at a terminal:
+never a typed `yes`, a client's form or a yes in chat, whatever the change policy. An agent can prepare one, and its
+preview then says so; nothing changes until you approve it.
+
+```sh
+npx @agentcomms/core standing list    # each one: its contents by digest, places, limits, uses today and its last 10 acts
+npx @agentcomms/core standing narrow <id> --keep <digest> --per-hour 5   # keep less of it (applies at once)
+npx @agentcomms/core standing revoke <id>   # end one, at once
+npx @agentcomms/core standing off           # end every one, at once
+```
+
+Tightening the change policy ends every one too, and a send policy of `never`, or removing the account, ends that
+account's; loosening again revives none. `doctor` lists the active ones and when each ends. Over MCP, `comms_standing`
+reports them, and with `narrow`, `revoke` or `off` changes them; nothing in core creates or widens one.
+
+**What it does not defend.** It holds against an agent acting through the MCP tools. An agent with an unrestricted
+shell, running as you, is out of its reach: it can already get past the terminal check, edit the configuration and run
+these commands as you — and so can anyone who can write to the configuration directory. Under the `chat` send policy
+the tools already act on an agent's word, so there a standing approval adds limits rather than freedom.
+
 ## The core MCP server
 
 `agentcomms mcp` runs it on stdio; `agentcomms mcp install --client <client>` registers it, from a terminal, since it
