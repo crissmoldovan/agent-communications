@@ -1197,7 +1197,9 @@ function renderLabel(report: LabelReport): string {
       lines.push(
         account.style === 'labelled'
           ? '  style    labelled — every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
-          : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
+          : account.appRoute === false
+            ? '  style    app — but its app cannot post from this machine, so every agent message goes out as you, labelled in its words; reactions as you, unlabelled'
+            : '  style    app — the app posts where it can, with Slack’s APP tag; elsewhere as you, labelled',
       );
     }
   }

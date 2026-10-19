@@ -46,10 +46,15 @@ written.
 **`agentcomms label` says what a Slack workspace's style does to each kind of message.** For a workspace whose style
 is `labelled`, the report (and `comms_label` with no change) still said every kind went out "as your agent", even a
 reaction. It now says what the Slack route does there: a post, reply or file goes out as you, beginning
-"<your name in Slack> (agent):" in its words and its notification, with no APP tag; an edit's new words begin the same
-way; and a reaction is made as you, with no label, since a reaction carries no words. Under `app`, the default, a
-reaction is now said to be the app's where it can post, and yours, with no label, elsewhere; posts, replies, files and
-edits read as before.
+"<your name in Slack> (agent):" in its words and its notification, with no APP tag; and a reaction is made as you, with
+no label, since a reaction carries no words. Under `app`, the default, a reaction is now said to be the app's where it
+can post, and yours, with no label, elsewhere; posts, replies and files read as before. Under either style, an edit is
+said as Slack makes it: an edit of your own message goes out as you, its new words beginning with the label, and an
+edit of a message the app posted stays the app's. And for a workspace whose agent app cannot post from this machine —
+connected through an organisation with no agent app, signed in before the app, connected to read, or with its app token
+revoked — the report no longer promises the app: it says every agent message there goes out as you, labelled, and every
+reaction as you, unlabelled, with the reason beside it, and `label` prints "style app — but its app cannot post from
+this machine". `comms_label` gives each Slack workspace `appRoute: true` or `false`.
 
 **Slack doctor no longer says organisations cannot post as an app.** For a workspace connected through an
 organisation's profile that names no agent app, `agent-slack doctor` said posting as the app "is not available through

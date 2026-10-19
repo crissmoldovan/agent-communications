@@ -16,6 +16,7 @@ import {
   resolveProfileSlackTarget,
   secretsStoreOf,
   shownText,
+  slackBotUserIdOf,
 } from '@agentcomms/core';
 import {
   type ExchangedBot,
@@ -60,8 +61,7 @@ export function clientSecretRefOf(account: AccountConfig): string | undefined {
 
 /** The bot user this account's app posts as, when one was recorded and looks like a Slack user id. */
 export function botUserIdOf(account: AccountConfig): string | undefined {
-  const value = (account as SlackAccount).botUserId;
-  return typeof value === 'string' && /^[UW][A-Z0-9]{2,39}$/.test(value) ? value : undefined;
+  return slackBotUserIdOf(account);
 }
 
 export interface WorkspaceView {

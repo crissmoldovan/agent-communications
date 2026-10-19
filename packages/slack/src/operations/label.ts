@@ -10,6 +10,8 @@ import {
   type MessageIdentity,
   neutralise,
   resolveIdentity,
+  SLACK_REVOKED_APP_REASON,
+  slackNoAppReason,
   slackStyleOf,
   truncateDisplay,
   UNLABELLED_PREVIEW_LINE,
@@ -101,11 +103,12 @@ export const FALLBACK_REASONS = {
   labelled: 'you chose labelled posts for this workspace',
 } as const;
 
-/** The reason a workspace with no app takes the fallback: one signed in before this release, or connected to read. */
+/**
+ * The reason a workspace with no app takes the fallback: one signed in before this release, or connected to read. Core's
+ * words (`slackNoAppReason`), which its label report says too.
+ */
 export function noAppReason(mode: string | undefined): string {
-  return mode === 'send'
-    ? "this workspace's app has no bot token on this machine yet"
-    : 'this workspace is connected to read';
+  return slackNoAppReason(mode);
 }
 
 /**
@@ -114,7 +117,7 @@ export function noAppReason(mode: string | undefined): string {
  * A fixed string, as every reason is: it is bound.
  */
 export function revokedAppReason(): string {
-  return "this workspace's app token was revoked, and no new one is on this machine yet";
+  return SLACK_REVOKED_APP_REASON;
 }
 
 /** A request for one act's identity, as the message carries it (L3 step 1). */
