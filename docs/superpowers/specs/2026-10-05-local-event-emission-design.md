@@ -2586,7 +2586,7 @@ The `agentcomms.*` operational records in D3 are displayed by the app and `docto
 source events and can never create ingest, decisions or deliveries; dead-letter recording therefore has
 no recursive delivery case.
 
-### D13. The desktop app
+### D13. The desktop app (replaced on 2026-10-19 by the desktop app design, DA1–DA16; Laya there: DA16)
 
 **Shape:** Tauri v2, React, Vite, `@cueplusplus/ui` with `@cueplusplus/tokens` and
 `@cueplusplus/theme-cue`, a tray icon, the ordinary `settings` window and a separately labelled privileged

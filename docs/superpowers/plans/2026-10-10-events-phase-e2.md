@@ -4,7 +4,7 @@
 
 **Goal.** Make the existing, disabled-by-default `laya` judge kind usable only on macOS and only for the reviewed English ONNX bundle: install an integrity-pinned runtime and model after a human approves enablement, run it in a network-denied isolated worker, and make a release offer it only after the exact manifest/runtime/template has passed D11's labelled Gmail and Slack quality gate.
 
-**Starting point and dependencies.** This plan starts on `feat/events-e` at `5cab45c6`, the converged B2 + Phase D tree with Phase E's revised plan. It is blocked on Phase E's implemented/reviewed contracts, including its `Plan review decisions (2026-10-10)`: `laya` remains a typed `E2_REQUIRED` unavailable state until E2, and E's B3 hard gate must land before E2 registers a judge owner or operation. It also has a final contract join with Phase C. It preserves every B1, B2 and D build decision, especially: the shared `assertDisclosable` fence; no post-await write without an in-transaction recheck; raw account/source identity; re-added accounts staying dark until re-approved; B2's raw pinned connection and loopback seal; and all work-orphaning purges cancelling their work. It uses, rather than recreates, E's judge kinds, enablement pointers, JudgeCoordinator request/answer path, reservation ledger/budgets, holds, and JudgeWorkPurgeParticipant.
+**Starting point and dependencies.** This plan starts on `feat/events-e` at `5cab45c6`, the converged B2 + Phase D tree with Phase E's revised plan. It is blocked on Phase E's implemented/reviewed contracts, including its `Plan review decisions (2026-10-10)`: `laya` remains a typed `E2_REQUIRED` unavailable state until E2, and E's B3 hard gate must land before E2 registers a judge owner or operation. It also has a final contract join with the desktop app (`apps/desktop`), which replaced Phase C on 2026-10-19 (Task 11). It preserves every B1, B2 and D build decision, especially: the shared `assertDisclosable` fence; no post-await write without an in-transaction recheck; raw account/source identity; re-added accounts staying dark until re-approved; B2's raw pinned connection and loopback seal; and all work-orphaning purges cancelling their work. It uses, rather than recreates, E's judge kinds, enablement pointers, JudgeCoordinator request/answer path, reservation ledger/budgets, holds, and JudgeWorkPurgeParticipant.
 
 **Architecture.** The daemon carries one strict reviewed manifest and a release-built lock, but has no Laya dependency. A private, unpublished workspace package exists solely to pin the third-party dependency closure in pnpm's lockfile. After E's normal kind-enable claim, an artifact manager fetches only lock/manifest-pinned bytes, validates/extracts them into owner-only partial trees, atomically promotes verified trees, and verifies both whole trees before every worker start. The daemon launches a separate Node child under macOS `sandbox-exec`; a probe proves the boundary before that child imports the native runtime or opens a model. The child returns only E's bounded judge answer over framed stdin/stdout; it receives no daemon credential, database, control token, provider session, socket, or inherited descriptor.
 
@@ -68,6 +68,7 @@ The record is an input to implementation, not a substitute for the release evide
 | E2 Task 4 — what does D11's "no approved address set" mean for downloads? | No persistent host or CDN allowlist. Each hop's addresses are resolved, must all be global, and are pinned for that hop only, with B2 re-resolving to refuse drift. A runtime archive takes only the literal registry tarball URL and no redirect. Integrity comes only from the manifest SHA-256 and size (model files) or the exact SRI (runtime archives). | Hugging Face serves model bytes from CDN hosts that change. A fixed allowlist would break downloads or be widened by hand. Per-hop global-only pinning refuses private, loopback and metadata hops, and the content digests refuse any altered byte. |
 | E2 Task 4 — who implements the promotion lock? | Task 4's downloader requires an injected `LayaArtifactFence` (no default and no no-op) and promotes inside `withArtifactLock`, after a final `assertCurrent`. **Task 6** implements the artifact mutex, makes E's disable, purge, remove and update take that same lock, and proves through a real E disable that "final fence resolves → disable → rename" cannot promote. | Task 6 Step 3 owns the artifact mutex and E's lifecycle writes. Task 4 has no production caller, so the guarantee is proven where the lock is real (Task 4 review, 2026-10-12). |
 | E2 Task 4 — may Task 4 change B2's resolver and connect primitives? | Yes, narrowly. B2's resolver and its TCP/TLS primitives take an optional abort signal, so a download's deadline and cancellation reach DNS, connect and the handshake. The raw stream waits for its pending sink before it settles. Callers that pass no signal (B2's webhooks, E's sealed judge transports) are unchanged. B2's two socket-error-sink mutations now name the moved code and still fail the same lifecycle proofs. | Without the signal, a resolver that never answers or a peer that never completes TLS outlived disable, and a late chunk could be written after cleanup (two review findings). The plan's file list named only `pinned-connection.ts` and `address-policy.ts`. |
+| E2 Task 11 — what does the desktop app do with Laya, now that `apps/desktop` replaces phase C? | **(lead's call, 2026-10-19)** It shows the daemon's closed state, byte progress and stable reason codes as plain text, read through a new allow-listed `eventsJudgeModelStatus` call (`judge model status --json` via the events-daemon launcher). Enable opens the terminal with `judge kind enable laya`, where the approval happens; the app never approves. Disable applies at once through an allow-listed `eventsJudgeKindDisable` call, a tightening. No model, runtime, worker or Laya artifact ever enters the app bundle, and its bundle check refuses one. Task 11 now targets the app's allow-list, terminal shape, Events screen and bundle check. | The desktop design (DA1, DA10) never approves in the app and applies tightenings at once; the daemon owns Laya's state and its D11 preview, which the terminal already shows. Phase C's Judges screen, which approved in the app, is not merged. |
 
 ## Global constraints
 
@@ -280,7 +281,7 @@ There are **13 implementation tasks in eight ordered batches**. Task numbers are
 | 1 — strict parser and reviewed inputs | 5 → 2 → 1 | Serial. Task 5 delivers the synthetic strict parser API; after the fetched-source record exists, Task 2 builds reviewed assets through it; Task 1 then consumes those real daemon assets. One owner integrates lockfile/manifest/migration edits. |
 | 2 — artifacts and execution boundary | 4 and 7, then 6, then 8 | Tasks 4 and 7 may run in separate worktrees after Task 1, because each adds only its own immutable case fragment. Task 6 joins Task 4/5/1; Task 8 joins Task 6/7. |
 | 3 — quality/release gate | 9 → 10 | Serial. Task 9 is blocked on E2-H's source record; Task 10 joins its protocol, owns the runtime README and installs both protected machine gates. |
-| 4 — desktop/control join | 11 | Blocked until Phase C and B3 land; it changes no app-owned implementation beyond a shared daemon DTO/vector correction. |
+| 4 — desktop/control join | 11 | Joins Task 6 (the status answer) and the desktop app on main (0.24.0); it no longer waits for Phase C, which the app replaced (2026-10-19). On the daemon side it changes nothing beyond a shared DTO/vector correction. |
 | 5 — exhaustive safety proof | 12 | Serial audit of every prior E2 path and all E interfaces it invokes. |
 | 6 — final evidence | 13 | Serial after all joins; the checklist remains supplemental to Task 10's protected machine artifacts. |
 | 7 — split end-of-phase review | all completed tasks | The final area reviews run in parallel from isolated review worktrees after Task 13. |
@@ -453,7 +454,7 @@ The task headings below retain their original identifiers for traceability; exec
 
 **Consumes.** Tasks 1, 4 and 5 plus E's JudgeWorkPurgeParticipant, reservations/holds and laya_models state.
 
-**Produces.** One serial artifact manager registered at E's lifecycle seams; safe status/remove/update behavior for task 8 and C.
+**Produces.** One serial artifact manager registered at E's lifecycle seams; safe status/remove/update behavior for task 8 and the desktop app (Task 11).
 
 - [ ] **Step 1: Write failing lifecycle/race/doctor tests.** Through real E enable/disable/purge operations, prove no fetch before claim; claimed enable moves only through legal model states/progress; same manifest re-enable reuses verified trees; disable cancels partial download/kills work but keeps verified trees; remove refuses while enabled; account/rule/hold purge kills only matching request; and code-only change does not. Mutate only a lock package tarball URL, version or exact SRI while preserving the selected platform file-list digest and require start-up `runtime-changed`; mutate the manifest and require `model-changed`; downgrade behaves the same. Verify failure repairs once then fails. Freeze `doctor` vectors for ready, integrity failure, boundary failure, Linux and Windows: each contains manifest id, runtime-lock digest, runtime state, model state and active/unavailable boundary reason, while containing no path, input, request/response, key or token.
 - [ ] **Step 2: Run focused failures.** Run:
@@ -582,7 +583,7 @@ The task headings below retain their original identifiers for traceability; exec
   ~~~
 
 - [ ] **Step 3: Add the protected supply-chain and macOS gates.** When and only when `events-daemon` enters `PACKAGES`, release first invokes the owner-only raw-tarball acquirer, reconstructs/checks the lock, then validates exact aggregate and boundary evidence; any failure stops before OIDC preflight/publish. Add a protected macOS workflow with no PR trigger, no ref/branch/workflow-dispatch input and no npm/publish credential. It accepts only an immutable reviewed candidate tag/SHA from the protected release control, checks out with no persisted credential, verifies the candidate subject before mounting the corpus, uses a runner group unavailable to PR jobs with host egress denied, and runs the trusted gate driver with bounded/redacted logs. The driver writes two content-free artifacts: the sanitized aggregate and `macos-boundary-v1` pass/fail result for TCP/fetch/UDP/UDS (with zero UDP receiver datagrams), pipe liveness, native load, timeout/crash/idle restart and altered-tree repair. The normal release accepts only committed sanitized artifacts whose architecture and candidate subject match; an arm64 artifact never authorises x64.
-- [ ] **Step 4: Make packaging/security/documentation assertions mechanical.** Require daemon tarball assets, prohibit Laya/ONNX in daemon dependency closure and desktop bundle, preserve private runtime absence from publication, append exactly D2's Laya vulnerability/safety-model bullets, and make this task the sole owner of the private runtime README. It documents the written-consent, encrypted-external-retention, owner-controlled protected-runner, aggregate-only procedure from Task 9, the exact normal-CI exclusion, and that the packages remain held until the three supply-chain/quality/boundary evidence gates pass.
+- [ ] **Step 4: Make packaging/security/documentation assertions mechanical.** Require daemon tarball assets, prohibit Laya/ONNX in daemon dependency closure (Task 11 owns the desktop bundle's refusal), preserve private runtime absence from publication, append exactly D2's Laya vulnerability/safety-model bullets, and make this task the sole owner of the private runtime README. It documents the written-consent, encrypted-external-retention, owner-controlled protected-runner, aggregate-only procedure from Task 9, the exact normal-CI exclusion, and that the packages remain held until the three supply-chain/quality/boundary evidence gates pass.
 - [ ] **Step 5: Add paired mutants.** Skip release validation on daemon; accept an arbitrary report or checklist in place of boundary evidence; accept URL/SRI-only lock drift; permit a PR/ref input, ordinary runner, host egress or corpus mount before candidate verification; run quality in `pnpm verify`; publish runtime package; remove one SECURITY sentence; add ONNX dependency; or lift a hold. Each fails its named test.
 - [ ] **Step 6: Review and commit.** P1-only review: pre-publish placement, exact-origin/SRI and candidate-subject evidence provenance, actual real-mac boundary artifact, protected-runner/corpus trust boundary, no corpus/credential leak, held-release behavior, exact asset packing and security wording. Commit:
 
@@ -594,33 +595,102 @@ The task headings below retain their original identifiers for traceability; exec
 
 ## Detailed tasks — desktop and control join
 
-### Task 11 — Phase C Laya enablement/progress/status contract (blocked until C)
+### Task 11 — the desktop app's Laya status, enable and disable contract (replaces the Phase C join)
+
+**Amended 2026-10-19 (lead's call).** The desktop app at `apps/desktop` (design
+`docs/superpowers/specs/2026-10-19-desktop-app-design.md`, DA1–DA16, shipped in 0.24.0) replaces phase C, whose
+branches `feat/events-c` and `feat/events-c-t7fix` stay unmerged as reference. This task no longer waits for C, and
+nothing it needs comes from C. The app shows Laya, never approves it, and never holds a Laya artifact:
+
+- **Status, read-only.** A new allow-listed call, `eventsJudgeModelStatus`, runs `judge model status --json` through
+  the events-daemon launcher `<data>/launch/events-daemon` with the folder pins (DA4, DA12). The app shows, as plain
+  text, the daemon's closed `state` (`idle | installing | downloading | verifying | ready | failed | unavailable`),
+  the byte progress (`bytesVerified` of `totalBytes`), and the stable `reason` and `failureCode`. It adds no state,
+  estimate or reason of its own. Which button shows follows that state alone: Enable for `idle` (E2-1 maps a disabled
+  or removed kind to `idle`), Disable for `installing | downloading | verifying | ready | failed`, and neither for
+  `unavailable`, which shows its reason.
+- **Enable opens the terminal** (DA6) with `judge kind enable laya`, through the same launcher and pins. The daemon's
+  enablement preview, with every D11 disclosure from Task 1, and its approval happen there. The app does not prepare
+  that enablement, show or record its approval, or run anything with `--approval` (DA1, DA10). This is a new
+  terminal-only shape beside `signIn`; DA16's rule that a `change` opens only with an approval the app recorded is
+  unchanged, because this is not a `change`.
+- **Disable applies at once** through an allow-listed call, `eventsJudgeKindDisable`, which runs
+  `judge kind disable laya --json`: a tightening (DA1). The events CLI sends it to the owner with no terminal gate, so
+  it runs with stdin closed.
+- **No removal from the app.** `judge model remove` stays in the CLI and MCP, like everything else the Events screen
+  does not list (DA5).
+- **No model, runtime, worker or Laya artifact ever enters the app bundle,** and the app's bundle check refuses one.
 
 **Files.**
 
-- Modify Phase E's exact daemon contract files: `packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json`, `packages/events-daemon/test/judge-desktop-contract.test.ts`, `packages/events-daemon/src/operations/judges.ts`, and `packages/events-daemon/src/operations/doctor.ts`.
-- Modify after rebase onto C: `apps/desktop/src/control-contract.ts`, `apps/desktop/src/screens/judges.tsx`, `apps/desktop/test/control-contract.test.ts`, `apps/desktop/test/full-flow.test.mjs`, and `apps/desktop/test/mutations/manifest.json`.
-- Create: `packages/events-daemon/test/fixtures/laya/cases/task-11.json`.
+- Create, as the daemon side of this contract: `packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json`
+  and `packages/events-daemon/test/judge-desktop-contract.test.ts`. Phase E's Task 10 named them, but that task was
+  blocked on C, so neither file exists yet.
+- Modify only for a shared DTO or vector correction: `packages/events-daemon/src/operations/judges.ts`,
+  `packages/events-daemon/src/operations/doctor.ts`.
+- Modify in the app: `apps/desktop/src-tauri/src/allowlist.rs` (the two `Call` variants, their `samples()` rows and
+  their refusal tests), `apps/desktop/src-tauri/src/ipc.rs` and `apps/desktop/src-tauri/src/terminal.rs` (the Enable
+  terminal shape and its per-platform command-line tests), `apps/desktop/src/ipc.ts`,
+  `apps/desktop/src/screens/Events.tsx`, `apps/desktop/src/test/events.test.tsx`,
+  `apps/desktop/src/test/fake-bridge.ts`, and `apps/desktop/scripts/bundle-check.mjs`.
+- Create in the app: `apps/desktop/src/test/fixtures/events-judge-model-status.<state>.json`, one for each daemon
+  vector, copied from the daemon fixture; and `apps/desktop/src/test/bundle-check.test.ts`.
+- Create: `packages/events-daemon/test/fixtures/laya/cases/task-11.json`, in the task's commit only.
 
-**Consumes.** C's exact `idle | installing | downloading | verifying | ready | failed | unavailable` UI slot and no-Laya-bundle rule; B3/E existing shared judge operations.
+**Consumes.** Task 6's `judge model status` answer and E's `judge kind enable|disable`, both through B3's existing
+operations (`judgeModelStatus` is already `desktopCallable`); E2-1's closed presentation states and reason codes;
+the app's allow-list, terminal, polling and version gates (DA4, DA6, DA12, DA14, DA16); and its bundle check (DA7).
+It adds no daemon operation, CLI command, MCP tool or `capabilities.json` row.
 
-- [ ] **Step 1: Write failing cross-surface and approval-preview vectors.** Freeze daemon responses for disabled, approval-pending, macOS unavailable, installing/downloading byte progress, verifying, ready, failed/integrity, boundary-failed, removal-complete-as-`idle`, and Linux/Windows unavailable. Freeze the real C rendering of the same daemon-owned enablement preview: sources, sizes, licences, model/runtime disk estimates, roughly 2 GB memory, English-only, 512-token, CPU-only, macOS-only `sandbox-exec` limitation, one-at-a-time execution, download-after-approval and every unavailable/accuracy reason must appear without app inference. Require stable reason codes and no path/input/secret. Drive C's real Rust/TypeScript adapter with the sealed D12 peer, not a UI-local state model.
-- [ ] **Step 2: Run focused failures.** Run:
+- [ ] **Step 1: Write failing daemon and app vectors.** In the daemon fixture, freeze the `judge model status`
+  answer for disabled, approval pending, installing, downloading with byte progress, verifying, ready, failed with
+  `integrity`, `boundary-failed` and the other failure codes, removal complete as `idle`, macOS with no usable
+  sandbox, Linux and Windows `unavailable`, `E2_EXTERNAL_REFERENCE_BLOCKED` while the placeholder lock ships, and the
+  B3 `E2_REQUIRED` typed-unavailable answer that a CLI from before E2 gives. Every enabled-pointer state is not `idle`
+  and every disabled one is. Each has stable reason codes and no path, input, request, response, key or token. Drive
+  the real owner through the sealed control peer, not a test-local state model. In the app, the same vectors feed
+  the Events screen through the fake bridge: each renders its state, progress and reason as plain text, shows the one
+  button that state allows, and an unknown state or field is refused, not guessed at. In Rust, the two command lines are
+  exactly the launcher, `judge model status` or `judge kind disable laya`, `--json` and the pins; neither call takes an
+  argument, and any other kind or extra word is refused; neither call `prepares_change()`; `needs()` names the first release that
+  ships E2, so an older CLI shows "Update agent-communications to use this". The Enable terminal line is exactly the
+  launcher, `judge kind enable laya` and the pins, without `--json` or `--approval`, on macOS, Linux and Windows. The
+  bundle check refuses a planted `.onnx`, `.onnx.data`, tokenizer or `laya_config.json`, native `.node`, `.dylib`,
+  `.so` or `.dll`, a `laya-manifest.json`, `laya-runtime.json` or `laya-enablement-disclosures.json`, and a chunk
+  that holds the worker entry or names `@receptron/laya`, `onnxruntime` or `@huggingface/tokenizers`; and the app's
+  `package.json` may not depend on `@agentcomms/events-laya-runtime`, `@agentcomms/events-daemon` or any of the three.
+- [ ] **Step 2: Run the focused failures.** Run, from the repository root (the daemon form follows Task 3's decision):
 
   ~~~text
-  pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern='E10|desktop contract|E2 Laya contract'
-  pnpm --filter @agentcomms/desktop test -- --test-name-pattern='control-contract|full-flow'
+  node --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-name-pattern 'E2 desktop Laya contract' packages/events-daemon/test/judge-desktop-contract.test.ts
+  pnpm --filter @agentcomms/desktop exec vitest run src/test/events.test.tsx src/test/bundle-check.test.ts
+  cd apps/desktop/src-tauri && cargo test laya
   ~~~
 
-- [ ] **Step 3: Implement only shared contract corrections.** Map existing `judge kind enable|disable` and `judge model status|remove` to E2 status without adding a UI evaluator/downloader/secret route. C renders daemon-provided state/reason and opens existing approval/secrets surfaces; no app model/runtime/worker/Node code is added.
-- [ ] **Step 4: Add paired mutants.** Mark a model ready before tree verification; omit an unavailable/boundary reason or one preview disclosure; expose a path; let app infer enabled; or put a Laya artifact in the bundle. Each fails the exact daemon/C production adapter/bundle scan.
-- [ ] **Step 5: Review and commit.** P1-only review: daemon authority, DTO stability, app capability/CSP boundaries, no secret/no artifact, no extra capability row. Commit:
+- [ ] **Step 3: Implement only the contract, the two calls, one terminal shape and the screen.** Correct only a
+  shared daemon DTO or vector if Step 1 finds one wrong. Add `eventsJudgeModelStatus` and `eventsJudgeKindDisable` to
+  the Rust allow-list and to `ipc.ts`, and the Enable terminal shape to `ipc.rs`, `terminal.rs` and `ipc.ts`. The
+  Events screen gets a Laya section: the status is read when the screen opens and on its refresh, follows the
+  screen's poll while a download is in progress (DA14), and keeps only the latest-started read (DA16). Extend the
+  bundle check. Add no UI evaluator, downloader, model, runtime, worker or Node code, and no secret route.
+- [ ] **Step 4: Add paired mutants.** Mark a model ready before tree verification; omit an unavailable, boundary or
+  failure reason; expose a path; show Disable for `idle` or Enable for an enabled state; derive a state or progress the
+  daemon did not send; let the allow-list take a kind or an extra word, or `prepares_change()` for disable; put
+  `--approval` or `--json` in the Enable terminal line; or put a Laya artifact in the bundle. Each fails its one named
+  test. The strict runner runs `node:test` files only, so this task gives it a Vitest leg (`vitest run -t '<exact
+  name>'`) with the same rule, the named test run and failed, and a registered mutation no leg executes fails the
+  runner's self-test. Rust mutants run in `desktop.yml`'s `cargo test` legs, since `pnpm verify` builds no Rust; settle
+  that leg's runner shape in review and never weaken the strict rule.
+- [ ] **Step 5: Review and commit.** P1-only review: daemon authority, DTO stability, the allow-list and terminal
+  shapes, no approval path in the app, app capability and content-policy boundaries, no secret, no artifact, and no
+  extra capability row. Commit:
 
   ~~~text
-  test(events): prove desktop Laya status and progress contracts
+  feat(desktop): show the Laya judge's state, enable it in Terminal and disable it at once
   ~~~
 
-**Passing.** The app is only a safe presenter of E2 status and remains artifact-free. Run `pnpm verify`.
+**Passing.** The app presents E2 status safely, sends enablement to the terminal, applies only the disable tightening
+and stays artifact-free. Run `pnpm verify`; `desktop.yml`'s three-OS legs run the Rust tests and the bundle check.
 
 ## Detailed tasks — exhaustive safety proof
 
@@ -690,7 +760,7 @@ The task headings below retain their original identifiers for traceability; exec
 
 ## §5 coverage ownership
 
-Each E2-owned test clause has exactly one task owner. Existing E ownership of generic judge enablement, budgets, holds, TypeSafe/local-endpoint transport, B3 parity and C app security remains unchanged.
+Each E2-owned test clause has exactly one task owner. Existing E ownership of generic judge enablement, budgets, holds, TypeSafe/local-endpoint transport, B3 parity and the desktop app's own security (desktop design DA7, DA16) remains unchanged.
 
 | §5 row / E2-owned assertion | Sole task |
 | --- | ---: |
@@ -707,7 +777,7 @@ Each E2-owned test clause has exactly one task owner. Existing E ownership of ge
 | 2920: injected stand-in in ordinary tests; no real bundle in `pnpm verify` or normal CI install | 3, 13 |
 | 2921–2922: external-only aggregate harness, consent/data-rejection checks and exact manifest/template aggregate validity | 9 |
 | 2922: release refuses an offered template without exact passing evidence; held/package/SECURITY release guard | 10 |
-| 3326–3336: C presentation-only DTO/bundle contract and existing B3 CLI/MCP prepare-only contract join | 11 |
+| 3326–3336: desktop app presentation-only status DTO, terminal-only enable, immediate disable and artifact-free bundle (replacing C), and existing B3 CLI/MCP prepare-only contract join | 11 |
 | All E2 await fences, stable identity scope, purge closure, production-path/mutation pairing and loopback seal | 12 |
 | Synthetic owner-to-packed-consumer proof plus the supplemental owner-only real-mac checklist | 13 |
 
@@ -736,9 +806,9 @@ Every normative sentence implemented by E2 maps to one task and a named proof. A
 | D11 2279-2299 | Post-claim install; exact lock extraction; fixed model fetch/redirect/range/hash/retry/space/rename | 4, 5, 6 | `E2 model download matrix`, `E2 runtime installer matrix`, `E2 manager claim fence` |
 | D11 2301-2311 | Whole-tree verification/reinstall/failure and verified-tree retention/disable/remove rule | 5, 6 | `E2 tree verifier matrix`, `E2 verified artifact lifecycle` |
 | D11 2313-2319 | Complete-lock/model update and downgrade disable rule | 6 | `E2 complete-lock update matrix` |
-| D11 2321-2335 | No daemon dependency/installer/app artifact; app shows status/progress and every stated limit | 1, 2, 3, 10, 11 | `E2 preview vectors`, `E2 daemon dependency boundary`, `E2 cold-store install fence`, `E2 release asset guard`, `E2 desktop Laya contract` |
+| D11 2321-2335 | No daemon dependency/installer/app artifact; app shows status/progress/reason, and every stated limit reaches the person in the terminal's enablement preview (Task 11 amendment) | 1, 2, 3, 10, 11 | `E2 preview vectors`, `E2 daemon dependency boundary`, `E2 cold-store install fence`, `E2 release asset guard`, `E2 desktop Laya contract` |
 | D11 2337-2350 | Per-manifest/runtime/template Gmail+Slack labelled quality gate, immutable Python reference and architecture-bound release condition | 9, 10 | `E2 quality reference gate`, `E2 release rejects stale Laya evidence`, `E2 macOS boundary gate` |
-| D13 2608-2613 | Judges surface has enable/disable/status/progress/reason/removal, without app runtime | 11 | `E2 desktop Laya contract` |
+| D13 2608-2613, replaced by the desktop design DA1–DA16 | Events screen shows status/progress/reason; enable opens the terminal; disable applies at once; removal stays in the CLI and MCP; no app runtime | 11 | `E2 desktop Laya contract` |
 | D14 2677-2686, 2715-2719 | Private dependency-only runtime package; daemon carries worker/manifest/lock; no install script | 2, 10 | `E2 private runtime package`, `E2 daemon package boundary` |
 | §4 2829, 2832-2833 | E2 phase deliverable/dependency ordering; no kind callable pre-E/enablement | 1, 13 | `E2 laya contract`, `E2 end to end held path` |
 | §5 2884-2922 | Complete Laya install/download/tree/update/worker/boundary/gate acceptance matrix | 1–10, 12, 13 | §5 ownership table above and `verify-events-phase-e2-tests` |
@@ -758,7 +828,7 @@ Each task ends with its P1-only review before a dependent task starts. The end-o
 | macOS isolation reviewer | exact sandbox command/profile, fds/environment, same-child nonce/PID/pipes, UDP receiver proof, protected real-mac artifact, worker imports/frames/timeout |
 | Lifecycle/scope reviewer | every post-await recheck, E purge participant, account/source stable scope, disable/re-enable/remove/update/recovery races |
 | Quality/release reviewer | fetched Python-reference record, consent/data protocol, protected-runner workflow, metric math, aggregate privacy scan, gate-subject/architecture binding, release pre-publish refusal, holds/packaging/SECURITY |
-| C/test-integrity reviewer | daemon-to-C preview/status DTO, app artifact boundary, cold-store CI exclusion, real production paths, fixture seal, mutation pairing and structural verifier |
+| Desktop/test-integrity reviewer | daemon-to-app status DTO, the app's two allow-listed calls and terminal-only enable, app artifact boundary, cold-store CI exclusion, real production paths, fixture seal, mutation pairing and structural verifier |
 
 Any P1 is fixed by the task owner; rerun that task's focused tests, named mutants and `pnpm verify`. A new recurring defect class is not reviewer memory: add it to the automatic ledger/checker and map a mutant before approval.
 
@@ -770,7 +840,7 @@ The E2 PR proposes **`0.16.0-events-e2`** if main remains `0.15.2`: a minor prer
 2. the version and semver reason;
 3. focused test/mutation results, each batch's `pnpm verify`, final package/parity checks, and separately the owner-controlled protected real-mac aggregate and boundary artifacts when a release is contemplated (the checklist is supplemental only);
 4. docs/reference impact (no new capability), README, SECURITY, RELEASING, private runtime documentation and a user-facing CHANGELOG line; or `No changelog: <why>` only if the owner decides the held-only change is not user-noticeable;
-5. provenance: this local-event design and B1/B2/D/E/C plans read 2026-10-10; the coordinator-fetched external-source record with URL/date/revision for every external fact; any observed protected macOS gate; no live Gmail/Slack/provider testing by repository tests; and AI assistance;
+5. provenance: this local-event design and B1/B2/D/E/C plans read 2026-10-10, and the desktop app design read 2026-10-19; the coordinator-fetched external-source record with URL/date/revision for every external fact; any observed protected macOS gate; no live Gmail/Slack/provider testing by repository tests; and AI assistance;
 6. explicit confirmation that fixtures are synthetic, the consented quality corpus stays outside the repository, and no real address, message, token, key, secret or client data is committed.
 
 The events library and daemon remain held; E2 does not tag, publish, unhold, send or contact a model host. A future owner release first satisfies task 10's gate then follows `docs/RELEASING.md` to lift/publish events before daemon from one checked tag.
@@ -787,7 +857,7 @@ The events library and daemon remain held; E2 does not tag, publish, unhold, sen
 8. `feat(events): execute bounded Laya decisions in an isolated worker` (Task 8)
 9. `test(events): gate Laya probability labels on aggregate evidence`
 10. `ci(events): require Laya gate evidence before a daemon release`
-11. `test(events): prove desktop Laya status and progress contracts`
+11. `feat(desktop): show the Laya judge's state, enable it in Terminal and disable it at once`
 12. `test(events): exhaustively fence Phase E2 Laya lifecycle races`
 13. `test(events): prove the held Laya runtime end to end`
 
