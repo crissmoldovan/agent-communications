@@ -413,7 +413,7 @@ function threadMessage(
 
 function put(google: FakeGoogle, message: FakeMessage): void {
   const account = google.accounts.get('sub-1');
-  assert.ok(account?.messages);
+  assert.ok(account?.messages && message.id);
   account.messages[message.id] = message;
 }
 
