@@ -3,11 +3,10 @@ import { canonicalJson, sha256Hex } from '@agentcomms/core';
 import { JUDGE_KINDS } from '../../domain/lifecycle.ts';
 import type { JudgeReservation } from '../judge-budget.ts';
 import type { JudgeAnswer, JudgeExecutionRequest } from '../judge-coordinator.ts';
+import { LAYA_SANDBOX_EXECUTABLE, LAYA_SANDBOX_PROFILE } from './worker-boundary-probe.ts';
 
 const LAYA_KIND: (typeof JUDGE_KINDS)[1] = JUDGE_KINDS[1];
 const PLATFORM_PREFIX = 'darwin-';
-const SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
-const SANDBOX_PROFILE = '(version 1) (allow default) (deny network*)';
 const SANDBOX_TRIVIAL_PROGRAM = '/usr/bin/true';
 const SANDBOX_PROBE_TIMEOUT_MS = 250;
 
@@ -629,7 +628,8 @@ function completeRuntimeLock(lock: RuntimeLock, probe: LayaPlatformProbe): Canon
   };
 }
 
-function runsSandboxBoundary(probe: LayaPlatformProbe): boolean {
+/** The Task 1 availability probe is separate from Task 7's per-child proof and intentionally content-free. */
+export function sandboxExecAvailable(probe: LayaPlatformProbe): boolean {
   if (probe.platform !== 'darwin') return false;
   const options = {
     cwd: '/',
@@ -641,8 +641,8 @@ function runsSandboxBoundary(probe: LayaPlatformProbe): boolean {
   };
   try {
     const result =
-      probe.spawnSync?.(SANDBOX_EXECUTABLE, ['-p', SANDBOX_PROFILE, SANDBOX_TRIVIAL_PROGRAM], options) ??
-      spawnSync(SANDBOX_EXECUTABLE, ['-p', SANDBOX_PROFILE, SANDBOX_TRIVIAL_PROGRAM], options);
+      probe.spawnSync?.(LAYA_SANDBOX_EXECUTABLE, ['-p', LAYA_SANDBOX_PROFILE, SANDBOX_TRIVIAL_PROGRAM], options) ??
+      spawnSync(LAYA_SANDBOX_EXECUTABLE, ['-p', LAYA_SANDBOX_PROFILE, SANDBOX_TRIVIAL_PROGRAM], options);
     return result.status === 0 && result.signal === null && result.error === undefined;
   } catch {
     return false;
@@ -656,7 +656,7 @@ function available(
   const lock = assets.runtimeLock;
   if ('blocked' in lock) return { available: false, code: lock.blocked };
   if (probe.platform !== 'darwin') return { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' };
-  if (!runsSandboxBoundary(probe)) return { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' };
+  if (!sandboxExecAvailable(probe)) return { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' };
   try {
     selectedPlatform(lock, probe);
   } catch {

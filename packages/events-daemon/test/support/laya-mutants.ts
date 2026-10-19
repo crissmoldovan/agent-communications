@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
+import { WINDOWS_SKIP_REASON } from './short-temp.ts';
 import { runStrictMutationChild, type StrictMutationChildResult } from './strict-mutation-child.ts';
 
 export interface LayaMutation {
@@ -15,6 +16,20 @@ export interface LayaMutation {
   readonly testPattern: string;
   readonly before: string;
   readonly after: string;
+}
+
+export interface LayaMutationExecution {
+  readonly changedLine: number | null;
+  /** The exact named oracle's TAP output before the source mutation. */
+  readonly baselineOutput: string;
+  /** The exact named oracle's TAP output after the source mutation. */
+  readonly mutantOutput: string | null;
+  readonly platformSkipped: boolean;
+}
+
+export interface LayaMutationPlatformSkip {
+  readonly platform: NodeJS.Platform;
+  readonly baselineOutput: string;
 }
 
 /** A hung child is a runner failure, never mutant evidence; the bound only has to outlast one named oracle. */
@@ -152,6 +167,8 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/test/fixtures/laya/model-tiny-v1/laya_config.json',
     'packages/events-daemon/test/fixtures/laya/model-tiny-v1/tokenizer/tokenizer.json',
     'packages/events-daemon/test/fixtures/laya/model-tiny-v1/tokenizer/tokenizer_config.json',
+    'packages/events-daemon/src/runtime/laya/worker-main.ts',
+    'packages/events-daemon/test/support/laya-worker-standin.ts',
     'test/helpers/loopback-seal-preload.mjs',
   ];
   for (const file of files) await copyFile(root, file);
@@ -164,7 +181,9 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
 
 /**
  * A copied tree has no install of its own. Without these links every workspace or third-party import fails to load,
- * and node:test reports a file that fails to load as one failed test: a crash would then "kill" every mutant.
+ * and node:test reports a file that fails to load as one failed test: a crash would then "kill" every mutant. Only the
+ * oracle's mutable daemon source/test closure is copied; the installed modules and the sibling workspace packages keep
+ * the ordinary package-manager layout, so copied source and scripts resolve the same reviewed toolchain.
  */
 async function linkInstalledModules(root: string): Promise<void> {
   for (const directory of ['', 'packages/events-daemon']) {
@@ -175,15 +194,22 @@ async function linkInstalledModules(root: string): Promise<void> {
       throw new Error(`the mutation runner needs the installed ${directory || 'root'} modules`);
     const destination = join(root, directory, 'node_modules');
     await mkdir(dirname(destination), { recursive: true });
-    // Directory links on every platform, as the other mutation trees here: pnpm's workspace links resolve through them.
+    // 'dir' links on every platform, as the other mutation trees here: pnpm's workspace links do not resolve through
+    // a Windows junction.
     await symlink(installed, destination, 'dir');
   }
+  for (const packageName of ['core', 'events', 'gmail', 'resend', 'slack', 'whatsapp']) {
+    await symlink(join(repositoryRoot, 'packages', packageName), join(root, 'packages', packageName), 'dir');
+  }
+}
+
+function escapeExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Only the declared test, by its exact name, may produce the TAP result; a load failure is reported under the file. */
 function namedTapResult(output: string, state: 'ok' | 'not ok', name: string): boolean {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${state} \\d+ - ${escaped}(?:\\s|$)`, 'mu').test(output);
+  return new RegExp(`^${state} \\d+ - ${escapeExpression(name)}(?:\\s|$)`, 'mu').test(output);
 }
 
 function tapCount(output: string, label: 'tests' | 'pass' | 'fail'): number | undefined {
@@ -191,9 +217,45 @@ function tapCount(output: string, label: 'tests' | 'pass' | 'fail'): number | un
   return values.length === 1 ? values[0] : undefined;
 }
 
-/** The unmutated copy must pass exactly its named test, or a later failure would not be evidence about the mutant. */
+function hasTapSkip(output: string): boolean {
+  return /^# skipped [1-9]\d*$/m.test(output);
+}
+
+/** A Windows exemption is credit only for the exact named test and the shared B1-G reason. */
+export function isAllowedLayaMutationPlatformSkip(mutation: LayaMutation, skip: LayaMutationPlatformSkip): boolean {
+  if (skip.platform !== 'win32') return false;
+  const test = escapeExpression(mutation.testName);
+  const reason = escapeExpression(WINDOWS_SKIP_REASON);
+  return (
+    new RegExp(`^ok 1 - ${test} # SKIP ${reason}$`, 'm').test(skip.baselineOutput) &&
+    (skip.baselineOutput.match(/# SKIP /g) ?? []).length === 1 &&
+    /^# tests 1$/m.test(skip.baselineOutput) &&
+    /^# pass 0$/m.test(skip.baselineOutput) &&
+    /^# fail 0$/m.test(skip.baselineOutput) &&
+    /^# cancelled 0$/m.test(skip.baselineOutput) &&
+    /^# skipped 1$/m.test(skip.baselineOutput) &&
+    /^# todo 0$/m.test(skip.baselineOutput)
+  );
+}
+
+/** What each unmutated copy's named oracle showed, for its caller: a proven pass, or an accepted Windows skip. */
+const namedBaselines = new WeakMap<LayaMutation, { readonly output: string; readonly platformSkipped: boolean }>();
+
+/**
+ * The unmutated copy must pass exactly its named test, or a later failure would not be evidence about the mutant. The
+ * one other baseline accepted is a skip on Windows with B1-G's exact reason: that row is accounted for, never credited.
+ */
 function assertNamedBaselinePasses(mutation: LayaMutation, result: StrictMutationChildResult): void {
   const tail = result.output.slice(-2000);
+  if (hasTapSkip(result.output)) {
+    assert.equal(
+      isAllowedLayaMutationPlatformSkip(mutation, { platform: process.platform, baselineOutput: result.output }),
+      true,
+      `${mutation.id}: the unmutated copy reported an unapproved platform skip\n${tail}`,
+    );
+    namedBaselines.set(mutation, { output: result.output, platformSkipped: true });
+    return;
+  }
   assert.equal(result.code, 0, `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail}`);
   assert.equal(
     namedTapResult(result.output, 'ok', mutation.testName),
@@ -203,20 +265,39 @@ function assertNamedBaselinePasses(mutation: LayaMutation, result: StrictMutatio
   assert.equal(tapCount(result.output, 'tests'), 1, `${mutation.id}: the baseline ran exactly its named test\n${tail}`);
   assert.equal(tapCount(result.output, 'pass'), 1, `${mutation.id}: the baseline passed exactly once\n${tail}`);
   assert.equal(tapCount(result.output, 'fail'), 0, `${mutation.id}: the baseline reported no failure\n${tail}`);
+  namedBaselines.set(mutation, { output: result.output, platformSkipped: false });
+}
+
+/** Every mutation the runner was required to execute ran, and nothing else did. Task 5's fragment anchors this text. */
+function assertExactlyExecuted(mutations: readonly LayaMutation[], executed: ReadonlySet<string>): void {
+  const missing = mutations.find((mutation) => !executed.has(mutation.id));
+  if (missing !== undefined) throw new Error(`registered production mutant was never executed: ${missing.id}`);
+  assert.equal(executed.size, mutations.length, 'runner executed an unregistered production mutant');
 }
 
 /** Refuses a runner that loads a registered production mutation but does not run its exact oracle. */
 export function assertEveryLayaMutationExecuted(
   mutations: readonly LayaMutation[],
   executed: ReadonlySet<string>,
+  platformSkipped: ReadonlyMap<string, LayaMutationPlatformSkip> = new Map(),
 ): void {
-  const missing = mutations.find((mutation) => !executed.has(mutation.id));
-  if (missing !== undefined) throw new Error(`registered production mutant was never executed: ${missing.id}`);
-  assert.equal(executed.size, mutations.length, 'runner executed an unregistered production mutant');
+  for (const [id, skip] of platformSkipped) {
+    const mutation = mutations.find((candidate) => candidate.id === id);
+    if (mutation === undefined) throw new Error(`runner platform-skipped an unregistered production mutant: ${id}`);
+    if (executed.has(id)) throw new Error(`registered production mutant was both platform-skipped and executed: ${id}`);
+    if (!isAllowedLayaMutationPlatformSkip(mutation, skip)) {
+      throw new Error(`registered production mutant has an unapproved platform skip: ${id}`);
+    }
+  }
+  // A Windows-skipped row is accounted for above; every other registered row must have run.
+  assertExactlyExecuted(
+    mutations.filter((mutation) => !platformSkipped.has(mutation.id)),
+    executed,
+  );
 }
 
-/** Copies one production module, makes one exact destructive edit, and runs only its named sealed oracle. */
-export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<number> {
+/** Copies one production module, proves its oracle first, then makes one exact destructive edit. */
+export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
   const root = await mkdtemp(join(tmpdir(), `events-e2-mutant-${mutation.id}-`));
   try {
     await copyFixtureTree(root, mutation);
@@ -247,7 +328,13 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
       env: environment,
       timeoutMs: MUTATION_CHILD_TIMEOUT_MS,
     };
+    namedBaselines.delete(mutation);
     assertNamedBaselinePasses(mutation, await runStrictMutationChild(child));
+    // Recorded by the proof above; it is missing only if that proof was removed, which the runner self-tests refuse.
+    const baseline = namedBaselines.get(mutation) ?? { output: '', platformSkipped: false };
+    if (baseline.platformSkipped) {
+      return { changedLine: null, baselineOutput: baseline.output, mutantOutput: null, platformSkipped: true };
+    }
     await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const result = await runStrictMutationChild(child);
     assert.notEqual(
@@ -272,7 +359,7 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
       1,
       `${mutation.id}: its named test failed\n${result.output.slice(-2000)}`,
     );
-    return changedLine;
+    return { changedLine, baselineOutput: baseline.output, mutantOutput: result.output, platformSkipped: false };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -280,16 +367,21 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
 
 /** Runs every task fragment's production mutations and confirms none was skipped. */
 export async function expectEveryLayaMutationToFail(): Promise<
-  readonly { readonly mutation: LayaMutation; readonly changedLine: number }[]
+  readonly ({ readonly mutation: LayaMutation } & LayaMutationExecution)[]
 > {
   const mutations = await loadLayaMutations();
   const executed = new Set<string>();
-  const results: { readonly mutation: LayaMutation; readonly changedLine: number }[] = [];
+  const platformSkipped = new Map<string, LayaMutationPlatformSkip>();
+  const results: ({ readonly mutation: LayaMutation } & LayaMutationExecution)[] = [];
   for (const mutation of mutations) {
-    const changedLine = await expectLayaMutationToFail(mutation);
-    executed.add(mutation.id);
-    results.push({ mutation, changedLine });
+    const execution = await expectLayaMutationToFail(mutation);
+    if (execution.platformSkipped) {
+      platformSkipped.set(mutation.id, { platform: process.platform, baselineOutput: execution.baselineOutput });
+    } else {
+      executed.add(mutation.id);
+    }
+    results.push({ mutation, ...execution });
   }
-  assertEveryLayaMutationExecuted(mutations, executed);
+  assertEveryLayaMutationExecuted(mutations, executed, platformSkipped);
   return results;
 }

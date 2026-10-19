@@ -342,6 +342,7 @@ test('E2 contract: preview refuses a reviewed asset missing either D11 limitatio
           }),
           platform: availablePlatform(),
         }),
+      // The completeness guard itself must refuse it, not a later shape check that happens to trip as well.
       (error: unknown) =>
         error instanceof LayaContractError &&
         error.code === 'LAYA_ASSET_INVALID' &&

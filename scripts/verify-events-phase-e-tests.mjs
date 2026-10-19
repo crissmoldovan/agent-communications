@@ -626,13 +626,42 @@ function isSyntheticAuthorityEnumeration(statement) {
   );
 }
 
+/**
+ * E2 Task 7: the Laya worker's boundary probe calls `fetch` once, on purpose, to prove that the macOS sandbox denies
+ * it before the worker may load anything; the worker then seals `fetch` itself. That one loopback call, in that one
+ * file, is the only exception to the fetch rule. Elsewhere in the file the word may appear only on the four reviewed
+ * lines below, none of which can reach `fetch`; any other use (a second call, `?.(`, `['fetch']`, `.call`, an alias)
+ * is refused. Every other rule (no http(s) request or import, no computed specifier) still applies to the file.
+ */
+const LAYA_BOUNDARY_PROBE = 'packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
+const LAYA_BOUNDARY_FETCH_ATTEMPT = ['globalThis.fetch(`http://127.0.0.1:', '$', '{port}/laya-boundary-probe`'].join(
+  '',
+);
+const LAYA_BOUNDARY_FETCH_NAMES = new Set([
+  "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds'] as const;",
+  "result.fetch === 'denied' &&",
+  "['fetch', () => fetchProbe(input.tcpPort)],",
+  "seal(globalThis, 'fetch', async (): Promise<never> => sealedNetwork());",
+]);
+
+function layaBoundaryProbeFetchProblems(file, executableText) {
+  const named = executableText
+    .replace(LAYA_BOUNDARY_FETCH_ATTEMPT, '')
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /\bfetch\b/u.test(line));
+  const reviewed = named.every((line) => LAYA_BOUNDARY_FETCH_NAMES.has(line)) && new Set(named).size === named.length;
+  return reviewed ? [] : [`${file}: the Laya boundary probe may use fetch only in its one loopback attempt`];
+}
+
 /** Scan one production source file; exported so fixture-copy tests exercise the exact static rules. */
 export function verifyPhaseEJudgeSource({ file, source: text }) {
   const problems = [];
   const judgePath =
     file.startsWith('packages/events-daemon/src/') && file !== 'packages/events-daemon/src/runtime/sse-server.ts';
   const executableText = text.replace(/\/\*[\s\S]*?\*\/|^\s*\/\/[^\r\n]*$/gmu, '');
-  if (judgePath && /\bfetch\s*\(/u.test(executableText)) problems.push(`${file}: judge paths must not call fetch`);
+  if (judgePath && file === LAYA_BOUNDARY_PROBE) problems.push(...layaBoundaryProbeFetchProblems(file, executableText));
+  else if (judgePath && /\bfetch\s*\(/u.test(executableText)) problems.push(`${file}: judge paths must not call fetch`);
   else if (judgePath && /\bfetch\b/u.test(executableText))
     problems.push(`${file}: judge paths must not reference fetch`);
   if (judgePath && /\bhttp\s*\.\s*request\s*\(/u.test(executableText))
