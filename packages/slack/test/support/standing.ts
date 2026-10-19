@@ -145,6 +145,8 @@ export interface StandingWorldOptions {
    * the shortest pause, and returns at once: no test waits, and the clock is the test's to move.
    */
   readonly pause?: StandingPause;
+  /** What Slack marks a post made with the person's token with (`SlackWorld.userTokenMarks`): nothing when left out. */
+  readonly userTokenMarks?: { readonly bot_id?: string; readonly app_id?: string };
 }
 
 export async function standingWorld(t: TestContext, options: StandingWorldOptions = {}): Promise<StandingWorld> {
@@ -167,6 +169,7 @@ export async function standingWorld(t: TestContext, options: StandingWorldOption
     messages: options.messages ?? [],
     // What the gate posts is timed by the test's clock, so it reads as just posted.
     tsNow: () => clock.now,
+    ...(options.userTokenMarks === undefined ? {} : { userTokenMarks: options.userTokenMarks }),
   });
   const now = () => new Date(clock.now);
   const core = openCore({ env: harness.env, caller: SLACK_CALLER, now });

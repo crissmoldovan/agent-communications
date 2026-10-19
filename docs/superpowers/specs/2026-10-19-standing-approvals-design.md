@@ -540,3 +540,10 @@ word.
     - **All four marks in `threads-i-am-in`:** the person's post counts only with none of `bot_id`, `app_id`,
       `bot_profile` or `subtype`, as a thread they started already required.
     **(lead's call, after review)**
+15. **The tests no longer contradict themselves about Slack** (Slack review S4). Some said a post made with the
+    person's token through an app carries no `bot_id`, others that Slack marks one with it; nothing the design read
+    settles which Slack does for this app. The fake now models both (`userTokenMarks`: none, or the app's `bot_id` and
+    `app_id`), and every test of a post this product made as the person runs under each. With no mark, the audit's
+    record and the label at the start of the words (§10.14) are each enough on their own; only with both broken does
+    the unmarked case fail, which the tests were run to show. The comments now say what each fixture models.
+    **(lead's call, after review)**

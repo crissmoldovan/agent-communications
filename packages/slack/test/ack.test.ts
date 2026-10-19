@@ -57,6 +57,17 @@ const WRITES = ['chat.postMessage', 'reactions.add', 'reactions.remove', 'chat.u
 /** A user `users.info` calls a bot, though nothing on the message says so. */
 const HELPER = 'U0HELPER';
 
+/**
+ * The two ways Slack may mark a post this product made with the person's own token: not at all — `user` the person's,
+ * no `bot_id`, no `app_id` — or with its app's `bot_id` and `app_id`. What the design read did not settle which Slack
+ * does, so every test of such a post runs under both. Under the first, nothing on the message tells it apart: the
+ * audit's record of what was sent, the app-posts record and the label at the start of its words are what refuse it.
+ */
+const USER_TOKEN_POSTS = [
+  { shape: 'with no mark', marks: undefined },
+  { shape: "marked with its app's bot_id and app_id", marks: { bot_id: 'B0ACMEAPP', app_id: 'A0ACMEAPP' } },
+] as const;
+
 function nothingSent(w: StandingWorld, what: string): void {
   for (const method of WRITES) assert.equal(w.requests(method).length, 0, `${what}: Slack was asked ${method}`);
 }
@@ -481,49 +492,52 @@ test('a thread the person started may be acknowledged', async (t) => {
   assert.equal(w.world.reactions.length, 1);
 });
 
-test('a thread this product started for the person, or an app with their token, is not theirs', async (t) => {
-  const w = await world(t);
-  const s = await standing(w, { reactions: ['eyes'], replies: [REPLY], places: [ENG, PRIVATE] });
-  // Posted by this product as the person, labelled — the app is not in #private — so in the audit, not in app-posts.
-  const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
-  await sendPost(
-    w.context,
-    'acme',
-    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
-    w.slack,
-  );
-  const sent = w.world.messages.at(-1);
-  assert.equal(sent?.user, SELF, 'the product posted as the person');
-  assert.equal(sent?.bot_id, undefined);
-  w.clock.now += 1_000;
-  const onSent = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 500 });
+for (const { shape, marks } of USER_TOKEN_POSTS) {
+  test(`a thread this product started for the person, or an app with their token, is not theirs: ${shape}`, async (t) => {
+    const w = await world(t, marks === undefined ? {} : { userTokenMarks: marks });
+    const s = await standing(w, { reactions: ['eyes'], replies: [REPLY], places: [ENG, PRIVATE] });
+    // Posted by this product as the person, labelled — the app is not in #private — so in the audit, not in app-posts.
+    const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
+    await sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+      w.slack,
+    );
+    const sent = w.world.messages.at(-1);
+    assert.equal(sent?.user, SELF, 'the product posted as the person');
+    assert.equal(sent?.bot_id, marks?.bot_id, `the post is ${shape}`);
+    assert.equal(sent?.app_id, marks?.app_id, `the post is ${shape}`);
+    w.clock.now += 1_000;
+    const onSent = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 500 });
 
-  // The person's message in this account's own app-posts record.
-  const recorded = say(w, { channel: ENG, user: SELF, ago: 120_000, text: 'On it' });
-  await appPostRecordFor(w.core.paths.stateDir, await accountId(w)).add({
-    channel: ENG,
-    ts: recorded,
-    approvalId: `ap_${'5'.repeat(26)}`,
-    at: new Date(w.clock.now).toISOString(),
+    // The person's message in this account's own app-posts record.
+    const recorded = say(w, { channel: ENG, user: SELF, ago: 120_000, text: 'On it' });
+    await appPostRecordFor(w.core.paths.stateDir, await accountId(w)).add({
+      channel: ENG,
+      ts: recorded,
+      approvalId: `ap_${'5'.repeat(26)}`,
+      at: new Date(w.clock.now).toISOString(),
+    });
+    const onRecorded = say(w, { channel: ENG, thread_ts: recorded, ago: 400 });
+    // The person's user id on a message another app made with their token, which Slack marked with that app's bot_id.
+    const appMade = say(w, { channel: ENG, user: SELF, bot_id: 'B0OTHERAPP', ago: 100_000, text: 'Logged' });
+    const onAppMade = say(w, { channel: ENG, thread_ts: appMade, ago: 300 });
+
+    const posts = w.requests('chat.postMessage').length;
+    for (const [what, request] of [
+      ['a parent this product sent as the person', withReply(s, PRIVATE, onSent)],
+      ['a parent in the app-posts record', withEyes(s, ENG, onRecorded)],
+      ['a parent in the app-posts record, replied to', withReply(s, ENG, onRecorded)],
+      ['a parent an app made with their token', withEyes(s, ENG, onAppMade)],
+    ] as const) {
+      assertRefused(await refused(acknowledge(w, request), what), 'not-human', what);
+    }
+    assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
+    assert.equal(w.world.reactions.length, 0, 'a refused act reacted');
+    assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
   });
-  const onRecorded = say(w, { channel: ENG, thread_ts: recorded, ago: 400 });
-  // The person's user id on a message an app made with their token: Slack marks it with a bot_id.
-  const appMade = say(w, { channel: ENG, user: SELF, bot_id: 'B0OTHERAPP', ago: 100_000, text: 'Logged' });
-  const onAppMade = say(w, { channel: ENG, thread_ts: appMade, ago: 300 });
-
-  const posts = w.requests('chat.postMessage').length;
-  for (const [what, request] of [
-    ['a parent this product sent as the person', withReply(s, PRIVATE, onSent)],
-    ['a parent in the app-posts record', withEyes(s, ENG, onRecorded)],
-    ['a parent in the app-posts record, replied to', withReply(s, ENG, onRecorded)],
-    ['a parent an app made with their token', withEyes(s, ENG, onAppMade)],
-  ] as const) {
-    assertRefused(await refused(acknowledge(w, request), what), 'not-human', what);
-  }
-  assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
-  assert.equal(w.world.reactions.length, 0, 'a refused act reacted');
-  assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
-});
+}
 
 test('a message that begins as an agent’s labelled post is never a person’s, whoever’s agent it was', async (t) => {
   const w = await world(t);
@@ -630,27 +644,30 @@ test('a parent of the person’s whose ts cannot be read as a time is refused, n
   nothingSent(w, 'an unreadable ts');
 });
 
-test('a thread this product started for the person weeks ago is still not theirs', async (t) => {
-  // Older than threads-i-am-in looks back: what this product sent is read from the audit as far back as the parent.
-  const w = await world(t);
-  w.clock.now -= 20 * DAY;
-  const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
-  await sendPost(
-    w.context,
-    'acme',
-    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
-    w.slack,
-  );
-  const sent = w.world.messages.at(-1);
-  assert.equal(sent?.user, SELF, 'the product posted as the person');
-  w.clock.now += 20 * DAY;
-  const s = await standing(w, { replies: [REPLY], places: [PRIVATE] });
-  const late = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 10_000 });
-  const posts = w.requests('chat.postMessage').length;
-  assertRefused(await refused(acknowledge(w, withReply(s, PRIVATE, late)), 'weeks ago'), 'not-human', 'weeks ago');
-  assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
-  assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
-});
+for (const { shape, marks } of USER_TOKEN_POSTS) {
+  test(`a thread this product started for the person weeks ago is still not theirs: ${shape}`, async (t) => {
+    // Older than threads-i-am-in looks back: what this product sent is read from the audit as far back as the parent.
+    const w = await world(t, marks === undefined ? {} : { userTokenMarks: marks });
+    w.clock.now -= 20 * DAY;
+    const prepared = await prepareDraftPost(w.context, 'acme', { channel: PRIVATE, text: 'notes are up' }, w.slack);
+    await sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+      w.slack,
+    );
+    const sent = w.world.messages.at(-1);
+    assert.equal(sent?.user, SELF, 'the product posted as the person');
+    assert.equal(sent?.bot_id, marks?.bot_id, `the post is ${shape}`);
+    w.clock.now += 20 * DAY;
+    const s = await standing(w, { replies: [REPLY], places: [PRIVATE] });
+    const late = say(w, { channel: PRIVATE, thread_ts: sent?.ts, ago: 10_000 });
+    const posts = w.requests('chat.postMessage').length;
+    assertRefused(await refused(acknowledge(w, withReply(s, PRIVATE, late)), 'weeks ago'), 'not-human', 'weeks ago');
+    assert.equal(w.requests('chat.postMessage').length, posts, 'a refused act posted');
+    assert.equal((await ledger(w)).uses.length, 0, 'a refused act was counted');
+  });
+}
 
 test('a thread already acknowledged under another standing approval', async (t) => {
   const w = await world(t);
@@ -724,41 +741,44 @@ test('a reply always goes in a thread', async (t) => {
   );
 });
 
-test('a thread whose only message from the person this product sent does not count', async (t) => {
-  const w = await world(t, { sendPolicy: 'chat' });
-  const s = await standing(w, { replies: [REPLY], places: 'threads-i-am-in' });
-  // The person's only message in this thread is one this product sent as them, labelled — in the audit, not in the
-  // app-posts record: the app is not in #private, so it went with the person's token.
-  const parent = say(w, { channel: PRIVATE, user: ANA, ago: 3_600_000 });
-  const prepared = await prepareDraftPost(
-    w.context,
-    'acme',
-    { channel: PRIVATE, text: 'on it', threadTs: parent },
-    w.slack,
-  );
-  await sendPost(
-    w.context,
-    'acme',
-    { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
-    w.slack,
-  );
-  const sent = w.world.messages.at(-1);
-  assert.equal(sent?.user, SELF, 'the product posted as the person');
-  assert.equal(sent?.bot_id, undefined);
-  w.clock.now += 1_000;
-  const ts = say(w, { channel: PRIVATE, user: SAM, thread_ts: parent, ago: 500 });
-  assertRefused(
-    await refused(acknowledge(w, withReply(s, PRIVATE, ts)), 'product only'),
-    'place-not-covered',
-    'a thread the product posted in',
-  );
+for (const { shape, marks } of USER_TOKEN_POSTS) {
+  test(`a thread whose only message from the person this product sent does not count: ${shape}`, async (t) => {
+    const w = await world(t, { sendPolicy: 'chat', ...(marks === undefined ? {} : { userTokenMarks: marks }) });
+    const s = await standing(w, { replies: [REPLY], places: 'threads-i-am-in' });
+    // The person's only message in this thread is one this product sent as them, labelled — in the audit, not in the
+    // app-posts record: the app is not in #private, so it went with the person's token.
+    const parent = say(w, { channel: PRIVATE, user: ANA, ago: 3_600_000 });
+    const prepared = await prepareDraftPost(
+      w.context,
+      'acme',
+      { channel: PRIVATE, text: 'on it', threadTs: parent },
+      w.slack,
+    );
+    await sendPost(
+      w.context,
+      'acme',
+      { draftId: prepared.draftId, approvalId: prepared.approvalId, expectChannel: PRIVATE },
+      w.slack,
+    );
+    const sent = w.world.messages.at(-1);
+    assert.equal(sent?.user, SELF, 'the product posted as the person');
+    assert.equal(sent?.bot_id, marks?.bot_id, `the post is ${shape}`);
+    assert.equal(sent?.app_id, marks?.app_id, `the post is ${shape}`);
+    w.clock.now += 1_000;
+    const ts = say(w, { channel: PRIVATE, user: SAM, thread_ts: parent, ago: 500 });
+    assertRefused(
+      await refused(acknowledge(w, withReply(s, PRIVATE, ts)), 'product only'),
+      'place-not-covered',
+      'a thread the product posted in',
+    );
 
-  // A thread the person really posted in counts.
-  const theirs = myThread(w, PRIVATE);
-  const target = say(w, { channel: PRIVATE, thread_ts: theirs, ago: 400 });
-  const done = await acknowledge(w, withReply(s, PRIVATE, target));
-  assert.equal(done.act, 'reply');
-});
+    // A thread the person really posted in counts.
+    const theirs = myThread(w, PRIVATE);
+    const target = say(w, { channel: PRIVATE, thread_ts: theirs, ago: 400 });
+    const done = await acknowledge(w, withReply(s, PRIVATE, target));
+    assert.equal(done.act, 'reply');
+  });
+}
 
 test('a thread where the person is only mentioned, or posted more than 14 days ago, does not count', async (t) => {
   const w = await world(t);
@@ -779,7 +799,8 @@ test('a thread where the person is only mentioned, or posted more than 14 days a
     'place-not-covered',
     'posted 15 days ago',
   );
-  // The person's own user id, on a message an app made with their token (Slack marks it with a bot_id), is not them.
+  // The person's own user id, on a message another app made with their token and Slack marked with its bot_id, is not
+  // them. (Whether Slack marks one this product made is not settled: the tests above run both ways.)
   const appMade = say(w, { channel: ENG, user: ANA, ago: 500_000 });
   say(w, { channel: ENG, user: SELF, bot_id: 'B0OTHERAPP', thread_ts: appMade, ago: 400_000, text: 'Logged' });
   const inAppMade = say(w, { channel: ENG, thread_ts: appMade, ago: 15_000 });

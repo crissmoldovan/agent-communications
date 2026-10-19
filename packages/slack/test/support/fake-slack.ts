@@ -253,6 +253,13 @@ export interface SlackWorld {
    * out, posted messages count up from 1700000100, as they always did.
    */
   readonly tsNow?: (() => number) | undefined;
+  /**
+   * What Slack sets on a message an app posts with the person's own token: nothing when left out — the message reads
+   * as the person's, `user` and all — or, given, these marks too. Which one Slack does for every app was not settled
+   * by what the design read, so the tests of what this product sent as the person run under both: where neither mark
+   * is set, the audit, the app-posts record and the label at the start of the words are what tell it apart.
+   */
+  readonly userTokenMarks?: { readonly bot_id?: string; readonly app_id?: string } | undefined;
 }
 
 export interface FakeSlack {
@@ -600,6 +607,8 @@ function installWorld(fake: FakeSlack, given: Partial<SlackWorld>): SlackWorld {
       ...(field('blocks') ? { blocks: JSON.parse(field('blocks') as string) } : {}),
       user: via === 'bot' ? world.botUserId : world.self,
       ...(via === 'bot' ? { bot_id: 'B0BOT0001' } : {}),
+      ...(via === 'user' && world.userTokenMarks?.bot_id !== undefined ? { bot_id: world.userTokenMarks.bot_id } : {}),
+      ...(via === 'user' && world.userTokenMarks?.app_id !== undefined ? { app_id: world.userTokenMarks.app_id } : {}),
       ...(username === undefined ? {} : { username }),
       ...(icon_emoji === undefined ? {} : { icon_emoji }),
       ...(icon_url === undefined ? {} : { icon_url }),
