@@ -318,3 +318,82 @@ differs from DA1 to DA14, the plan is the later word.
 `scripts/third-party-licenses.mjs` reads the packages; and the Rust crates in the build, read from `cargo metadata`
 (name, version, licence expression), with the licence texts taken from each crate's own files. No new tool is
 installed. A check in CI fails when the file is out of step.
+
+### DA16. Settled after review (2026-10-19)
+
+Two independent reviewers read the app, its CI and core's additions before 0.24.0. Where this list and DA1 to DA15, or
+the plan, differ, this list is the later word.
+
+- **Folders are on this machine's own disks.** Settings refuse a network share for every folder, in any form:
+  `\\server\share`, `//server/share`, `\\?\UNC\…`, `\\.\UNC\…`, and an address such as `smb://…`; on Windows only a
+  drive's root starts a folder. A drive letter mapped to a share looks local, and is not told apart. **(lead's call,
+  after review)**
+- **A launcher runs only when it is safe to.** Never one on a network share, whatever named the folder. On macOS and
+  Linux, the launcher and its `launch` folder must belong to this user and be writable by nobody else, as core writes
+  them; otherwise the run and the terminal line are refused (`APP_UNSAFE_LAUNCHER`), saying `chmod go-w <path>`. The
+  data folder above it is not checked. Settings show `<data>/launch/core` and why the app would not run it.
+  **(lead's call, after review)**
+- **Windows Node:** the PATH fallback skips every entry that is not a full path. **(lead's call, after review)**
+- **What a child gets of the app's environment** — a CLI run, or the terminal — is an allow-list: `HOME`,
+  `USERPROFILE`, `PATH`, `LANG`, `LC_*`, `TMPDIR`, `TMP`, `TEMP`, `SystemRoot`, `SYSTEMDRIVE`, `APPDATA`,
+  `LOCALAPPDATA`, `XDG_*`, `USER`, `USERNAME`, `LOGNAME`, `SHELL` and `TERM`, as the review listed, and four it needs
+  besides: `WINDIR`, `COMSPEC` and `PATHEXT`, which Windows programs read, and `DBUS_SESSION_BUS_ADDRESS`, through which
+  Linux reaches the keyring and gnome-terminal its server. A terminal also gets `DISPLAY`, `WAYLAND_DISPLAY` and
+  `XAUTHORITY`, since it opens a window. Never, whatever else allows it: a name with `_AGENT` in it, `CI`,
+  `CLAUDECODE`, `CODEX_HOME`, `AGENT_*` (the pins name the folders), `NODE_*`, `LD_*`, `DYLD_*`, `GIO_*`. Names are
+  compared without case on Windows. **(lead's call, after review)**
+- **The updater finds its release through the tags.** It lists `desktop-v*` with `git/matching-refs/tags/desktop-v`,
+  takes only `refs/tags/desktop-v<major.minor.patch>`, and asks for the release of each by tag, highest first, at most
+  five; a release counts only when it is that tag's, published, and carries the `latest.json` this repository serves
+  for it. This replaces DA15's search of the releases list, which held 30 to a page, and so lost the app's release
+  once thirty CLI releases came after it. **(lead's call, after review)**
+- **A change opens only with the approval the app prepared for it.** `cli` records each `APPROVAL_PENDING` id a
+  change the app prepares comes back with, and its call; a `Change` is refused unless its `revoke` id was recorded for
+  an equal call, and takes it once. A fourteenth command, `revoke_preview`, revokes only such a recorded id, for a
+  preview that is cancelled or left behind, and keeps the record when the revoke did not happen. **(lead's call, after
+  review)**
+- **A preview left behind revokes its own approval** when it goes — the screen changed, or the next change replaced
+  it — unless Approve or Cancel already did, so the tray never counts an approval nobody will look at again. Cancel
+  says "Cancelled" only once the revoke worked, and otherwise shows why and keeps the preview. **(lead's call, after
+  review)**
+- **A word that starts with `=` or `~` is quoted** for a POSIX shell, by the app and by core: zsh reads `=ls` as a
+  command's path. **(lead's call, after review)**
+- **No single-instance plugin on macOS.** Launch Services keeps one copy and hands it each later link, which the
+  deep-link plugin's open-url takes; the plugin's socket in a shared temporary folder would let another local user stop
+  the app. It stays on Windows and Linux, where a second launch is how a later link arrives. **(lead's call, after
+  review)**
+- **Windows is tested on Windows.** `cfg(windows)` tests hand cmd.exe the line as the app does, with Node — the
+  program that runs a launcher there — printing its words. The folder parity fixture holds Windows cases recorded from
+  core's own `resolvePaths` with `node:path` answered by `path.win32`; they run on every host, since the port builds
+  paths for the platform it is given, and a vitest file re-checks them against core. **(lead's call, after review)**
+- **Open link takes three hosts, exactly:** `api.slack.com`, `myaccount.google.com` and `console.cloud.google.com`,
+  the pages doctor fixes, and the hints a failing check carries into one, send a person to. Never another host of
+  Slack's or Google's, and never a `/url` path, Google's redirect. This replaces DA7's "slack.com and google.com".
+  Copy is unchanged: it keeps line breaks and tabs, since a fix is often several lines, and refuses every other
+  control or format character; a line or paragraph separator is not refused there, as it is in a terminal line.
+  **(lead's call, after review)**
+- **A signed release may have its updater off.** With `plugins.updater.pubkey` empty, `release-desktop.sh` still
+  builds, signs and notarises the DMG, with no updater artefacts and no key in the build's environment, after the owner
+  types `off`; `publish-desktop.sh` then publishes without `latest.json`, and says the updater stays off until the key
+  is committed and the next version released. With a pubkey, the key must be there, mode 600 and the pubkey's, or the
+  release is refused — checked before the signing environment is read. **(lead's call, after review)**
+- **The DMG is notarised with a notarytool keychain profile** (`agentcomms-notary`, or `AGENTCOMMS_NOTARY_PROFILE`),
+  so no password is on a command line. Tauri still reads `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` from its
+  environment to notarise the app. **(lead's call, after review)**
+- **Only a draft is written to.** CI's bundle legs build with read-only access and hand their files on as artifacts;
+  one `attach` job, which checks nothing out, uploads them, and only while `isDraft` is true. The draft job, and
+  `publish-desktop.sh`, refuse a release already published. **(lead's call, after review)**
+- **npm's publish job builds the packages alone** (`pnpm -r --filter "./packages/**" run build`): the app is never
+  published, and is not built where npm's OIDC identity is held. **(lead's call, after review)**
+- **Rust is pinned** by `apps/desktop/src-tauri/rust-toolchain.toml`, at 1.94.1, the version used locally; both
+  workflows install it, and the signing Mac adds its targets to it. `desktop.yml` also runs for every file outside
+  `apps/desktop` that the app's checks read. **(lead's call, after review)**
+- **`update --status`:** a background job that cannot be read is `job.state: "unreadable"`, with a `reason`, and the
+  rest is read all the same; the app shows the reason. Over MCP, `status: true` neither carries the update notice nor
+  starts the server's own check. `--status --no-verify` is a usage error, as `--status --approval` is. **(lead's call,
+  after review)**
+- **Smaller things.** Only the latest-started read of the approvals, the update status or the events service is kept,
+  so a slow poll cannot put back a revoked approval. A rollback with nothing to go back to (`ok`, exit 69) shows what
+  the CLI said. Ending every standing approval shows core's `partial` notes. Base UI writes no `<style>` element
+  (`CSPProvider disableStyleElements`), and the scrollbar rule it would have written is in the app's stylesheet.
+  Playwright never reuses a server already on its port. **(lead's call, after review)**

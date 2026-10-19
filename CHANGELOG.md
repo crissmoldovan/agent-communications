@@ -27,7 +27,14 @@ handles a token. What a sender wrote shows as plain text in a block marked *From
 
 It runs this installation's own launchers, with no shell, every argument checked against the product's grammar, and
 all the folder pins on every call, so it and the CLI always agree on the folders; Settings takes the folders
-`AGENT_COMMS_*` would set, for an app started from the Dock or the Start menu. With nothing installed it shows the
+`AGENT_COMMS_*` would set, for an app started from the Dock or the Start menu. A launcher runs only from this machine's
+own disks — Settings refuse a network share for any folder — and, on macOS and Linux, only when it and its folder are
+yours and nobody else may change them, as the install leaves them; Settings show which launcher every call starts, and
+why the app would not run it. What it starts gets only the environment it needs: never an agent's markers, `CI`,
+`NODE_OPTIONS`, a loader variable or another `AGENT_COMMS_*` folder. A preview left without Approve or Cancel — the
+screen changed, or the next change replaced it — has its approval revoked as it goes, so the tray never counts it;
+Cancel says it cancelled only once the revoke worked. Open link takes only the three pages doctor fixes name
+(`api.slack.com`, `myaccount.google.com`, `console.cloud.google.com`), and never Google's `/url` redirect. With nothing installed it shows the
 install command, and installs nothing. A section that needs a newer release than yours says so: behaviour rules and
 profiles need 0.22.0, standing approvals 0.23.0, and the update status this release.
 
@@ -64,6 +71,10 @@ that read the last line lost the report. Now the report is the one envelope, `ok
 failing check in `data.checks`, and the exit status is still `78`. A script that read the error envelope's `CONFIG`
 should read `data.ok` instead. At a terminal nothing changes: the report, then `doctor found problems`. `comms_doctor`
 already returned the report alone.
+
+**A command printed for a POSIX shell quotes a word that starts with `=`.** zsh, the macOS default, reads a bare
+`=ls` as the path of `ls`, so such a word reached the program as something else. It is now in single quotes, as a word
+that starts with `~` already was; an `=` further in, as in `--name=x`, is left as it is.
 
 ## 0.23.0
 

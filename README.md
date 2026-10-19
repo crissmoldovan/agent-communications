@@ -168,16 +168,20 @@ install command and stops there; it installs nothing itself. What it offers foll
 rules and writing profiles need 0.22.0 or later, standing approvals 0.23.0, and the update status 0.24.0, and a
 section that needs a newer release says so. If you keep its folders elsewhere with `AGENT_COMMS_CONFIG_DIR`,
 `AGENT_COMMS_STATE_DIR` or `AGENT_COMMS_DATA_DIR`, set the same folders in its Settings: an app started from the Dock
-or the Start menu does not see your shell's variables.
+or the Start menu does not see your shell's variables. They must be on this machine's own disks, never a network
+share, and Settings show the launcher every call starts: the app runs it only when it is yours and nobody else may
+change it, as the install leaves it.
 
 **Install it from a GitHub release.** Desktop releases are tagged `desktop-vX.Y.Z`, beside the `vX.Y.Z` release they
 ship with, on [the Releases page](https://github.com/crissmoldovan/agent-communications/releases). A desktop release is
 never marked Latest — that is always the CLI's — so look for the newest `desktop-v` one.
 
 - **macOS:** the `.dmg`. Open it and drag Agent Comms to Applications. The macOS build is signed with a Developer ID
-  and notarised only when the owner builds and publishes the release on their Mac. That copy looks for later signed
-  releases itself, once a day and from Check for Updates… in the tray, and installs one when you choose Install and
-  restart in Settings, after checking its signature.
+  and notarised only when the owner builds and publishes the release on their Mac. When that release carries the
+  updater, its copy looks for later signed releases itself, once a day and from Check for Updates… in the tray, and
+  installs one when you choose Install and restart in Settings, after checking its signature. A release published
+  before the updater key was set up says so, and its copy's Settings say its updater is off: install a newer release
+  over it.
 - **Windows:** the `.exe`, which installs for your user alone. It is unsigned, so SmartScreen warns before it runs.
 - **Linux:** the `.AppImage` (make it executable, then run it) or the `.deb` (`sudo apt install ./` followed by its
   file name). Both are unsigned. The tray needs `libayatana-appindicator3-1`, which the `.deb` installs.
