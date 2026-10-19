@@ -205,6 +205,67 @@ describe('Updates', () => {
     expect(within(none).queryAllByRole('button')).toEqual([]);
   });
 
+  it('a preview replaced by an applied change, or left behind with its screen, revokes its own approval', async () => {
+    const OTHER = 'ap_ZZZZZZZZZZZZZZZZZZZZZZZZZZ';
+    const inner = createFakeBridge({}, { updateLevel: { level: 'auto', changed: true } });
+    const bridge = createFakeBridge({
+      cli: (call) => {
+        if (call.kind === 'updateLevel' && call.level === 'never') return Promise.resolve(pending('Never check'));
+        if (call.kind === 'updateRollback') {
+          return Promise.resolve({
+            status: 'approvalPending',
+            approvalId: OTHER,
+            preview: 'Roll back',
+            expiresAt: null,
+          });
+        }
+        return inner.cli(call);
+      },
+    });
+    const revokes = () => bridge.calls.filter((call) => call.command === 'revokePreview').map((call) => call.args);
+    renderApp(bridge, { screen: 'updates' });
+    const level = await screen.findByRole('group', { name: 'Update level' });
+    fireEvent.click(within(level).getByRole('button', { name: 'Never' }));
+    expect(await within(region('Level')).findByText('Never check')).toBeTruthy();
+    // Another change in its place, one that applies at once: the preview goes, and its approval with it.
+    fireEvent.click(within(level).getByRole('button', { name: 'Auto' }));
+    await waitFor(() => expect(within(region('Level')).queryByText('Never check')).toBeNull());
+    await waitFor(() => expect(revokes()).toEqual([ID]));
+
+    // A preview left showing when the screen changes: revoked as it goes.
+    fireEvent.click(within(region('Rollback')).getByRole('button', { name: 'Roll back to the release before' }));
+    expect(await within(region('Rollback')).findByText('Roll back')).toBeTruthy();
+    const navigation = screen.getByRole('navigation', { name: 'Sections' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Overview' }));
+    await waitFor(() => expect(revokes()).toEqual([ID, OTHER]));
+    // Never through a revoke of the app's own choosing, and never approved.
+    expect(count(bridge, 'approvalRevoke')).toBe(0);
+    expect(bridge.calls.filter((call) => call.command === 'openInTerminal')).toEqual([]);
+  });
+
+  it('a rollback with nothing to go back to says so, in the words the CLI uses', async () => {
+    const bridge = bridgeWith({
+      updateRollback: {
+        status: 'ok',
+        exit: 69,
+        data: {
+          status: 'nothing',
+          steps: [],
+          left: [{ channel: 'core', launcher: '/example/launch/core', reason: 'it has no release before' }],
+          ok: false,
+          next: null,
+        },
+      },
+    });
+    renderApp(bridge, { screen: 'updates' });
+    const rollback = await screen.findByRole('region', { name: 'Rollback' });
+    fireEvent.click(within(rollback).getByRole('button', { name: 'Roll back to the release before' }));
+    const said = await within(rollback).findByRole('status');
+    expect(said.textContent).toContain('Nothing was changed: no stable launcher here has a release before.');
+    expect(said.textContent).toContain('Left as it is: /example/launch/core: it has no release before.');
+    expect(within(rollback).queryByText(COPY.approveThisInTerminal)).toBeNull();
+  });
+
   it('rollback goes to Terminal, and a failure says what went wrong', async () => {
     const bridge = bridgeWith({
       updateRollback: pending('Roll back agent-communications from 0.24.0 to 0.23.0'),

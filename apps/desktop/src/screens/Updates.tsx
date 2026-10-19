@@ -43,19 +43,61 @@ const PAUSES: readonly { days: 1 | 7 | 14; label: string }[] = [
 ];
 
 /**
- * One part's change (DA10): run once through `useChange`. Applied at once, the status is read again; one that needs
- * the person's approval is kept, for `ChangePreview`; a refusal is kept, to say why.
+ * What a rollback that ran says, in the CLI's own words (core `renderRollback`): each launcher switched back or not,
+ * that nothing was changed when none could go back — which the CLI answers `ok`, with exit 69 — what was left as it is,
+ * and what to do next.
  */
-function usePartChange() {
+export function rollbackLine(data: unknown): string {
+  const result = (typeof data === 'object' && data !== null ? data : {}) as {
+    status?: unknown;
+    steps?: unknown;
+    left?: unknown;
+    next?: unknown;
+    holdFailed?: unknown;
+  };
+  const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
+  const lines: string[] = [];
+  for (const step of Array.isArray(result.steps) ? result.steps : []) {
+    const each = (typeof step === 'object' && step !== null ? step : {}) as Record<string, unknown>;
+    const launcher = text(each.launcher) ?? 'a launcher';
+    lines.push(
+      each.outcome === 'switched'
+        ? `Switched the stable launcher ${launcher} back from ${text(each.from) ?? 'its runtime'} to ${text(each.to) ?? text(each.runtime) ?? 'the release before'}: no client configuration was changed.`
+        : `Could not switch the stable launcher ${launcher} back: ${text(each.detail) ?? 'no reason given'}`,
+    );
+  }
+  if (result.status === 'nothing') lines.push('Nothing was changed: no stable launcher here has a release before.');
+  for (const left of Array.isArray(result.left) ? result.left : []) {
+    const each = (typeof left === 'object' && left !== null ? left : {}) as Record<string, unknown>;
+    lines.push(`Left as it is: ${text(each.launcher) ?? 'a launcher'}: ${text(each.reason) ?? 'no reason given'}.`);
+  }
+  if (text(result.next) !== null) lines.push(text(result.next) as string);
+  if (text(result.holdFailed) !== null) {
+    lines.push(
+      `The background update run was not told to hold this release back (${text(result.holdFailed)}): its next run may install it again.`,
+    );
+  }
+  return lines.length === 0 ? 'Done.' : lines.join('\n');
+}
+
+/**
+ * One part's change (DA10): run once through `useChange`. Applied at once, the status is read again, and `describe`,
+ * when given, says what it did; one that needs the person's approval is kept, for `ChangePreview`; a refusal is kept,
+ * to say why.
+ */
+function usePartChange(describe?: (data: unknown) => string) {
   const { run } = useChange();
   const { refresh } = useAppData();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ChangeOutcome | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
   const start = async (call: Call) => {
     setBusy(true);
     setOutcome(null);
+    setSaid(null);
     const result = await run(call);
     setOutcome(result.state === 'applied' ? null : result);
+    if (result.state === 'applied' && describe !== undefined) setSaid(describe(result.data));
     setBusy(false);
     if (result.state === 'applied') await refresh('updateStatus');
   };
@@ -64,7 +106,7 @@ function usePartChange() {
     if (result === 'cancelled') setOutcome(null);
     void refresh('approvals');
   };
-  return { busy, outcome, start, done };
+  return { busy, outcome, said, start, done };
 }
 
 /** What a change came to, when it did not simply apply: its preview, to approve in Terminal, or why it was refused. */
@@ -264,9 +306,12 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
   );
 }
 
-/** Going back to the release before: a change the person approves, in Terminal. */
+/**
+ * Going back to the release before: a change the person approves, in Terminal. With nothing to go back to, the CLI
+ * answers at once — `ok`, exit 69 — and what it said is shown.
+ */
 function Rollback() {
-  const change = usePartChange();
+  const change = usePartChange(rollbackLine);
   return (
     <SectionPanel title="Rollback">
       <p className="text-fg-muted">Puts back the release this machine ran before its last update.</p>
@@ -275,6 +320,11 @@ function Rollback() {
           Roll back to the release before
         </Button>
       </div>
+      {change.said === null ? null : (
+        <p role="status" className="text-fg">
+          <UntrustedText text={change.said} />
+        </p>
+      )}
       <ChangeResult outcome={change.outcome} onDone={change.done} />
     </SectionPanel>
   );

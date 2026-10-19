@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgeProvider } from '../bridge-context.tsx';
 import { ChangePreview } from '../components/ChangePreview.tsx';
@@ -271,7 +272,7 @@ describe('the components that keep text plain', () => {
   it('ChangePreview cancelled revokes its approval and opens nothing', async () => {
     const bridge = createFakeBridge();
     const done = vi.fn();
-    render(
+    const view = render(
       <BridgeProvider bridge={bridge}>
         <ChangePreview
           change={{ state: 'needsTerminal', call: { kind: 'updateRollback' }, approvalId: ID, preview: 'Roll back' }}
@@ -281,7 +282,101 @@ describe('the components that keep text plain', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: COPY.cancel }));
     await waitFor(() => expect(done).toHaveBeenCalledWith('cancelled'));
-    expect(bridge.calls).toEqual([{ command: 'cli', args: { kind: 'approvalRevoke', approvalId: ID } }]);
+    // Through the command that revokes only an approval one of the app's own previews waits on.
+    expect(bridge.calls).toEqual([{ command: 'revokePreview', args: ID }]);
+    // Once handled, leaving it revokes nothing more.
+    view.unmount();
+    await new Promise((settled) => setTimeout(settled, 20));
+    expect(bridge.calls).toHaveLength(1);
+  });
+
+  it('ChangePreview cancelled says so only when the revoke worked, and otherwise shows what went wrong', async () => {
+    const answers = [
+      { status: 'failed', exit: 75, code: 'TRANSIENT', message: 'the approvals store is busy', hint: 'Try again.' },
+    ] as const;
+    const bridge = createFakeBridge({ revokePreview: async () => answers[0] });
+    const done = vi.fn();
+    render(
+      <BridgeProvider bridge={bridge}>
+        <ChangePreview
+          change={{ state: 'needsTerminal', call: { kind: 'updateRollback' }, approvalId: ID, preview: 'Roll back' }}
+          onDone={done}
+        />
+      </BridgeProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: COPY.cancel }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('the approvals store is busy');
+    expect(alert.textContent).toContain('Try again.');
+    expect(done).not.toHaveBeenCalled();
+    // The preview stays, to try again.
+    expect(screen.getByRole('button', { name: COPY.cancel })).toBeTruthy();
+
+    // A refusal from the app itself says so too.
+    const refused = createFakeBridge({
+      revokePreview: async () => {
+        throw { code: 'APP_REFUSED', message: 'that approval is not one a preview of the app is waiting on' };
+      },
+    });
+    const elsewhere = vi.fn();
+    render(
+      <BridgeProvider bridge={refused}>
+        <ChangePreview
+          change={{ state: 'needsTerminal', call: { kind: 'updateRollback' }, approvalId: ID, preview: 'Roll back' }}
+          onDone={elsewhere}
+        />
+      </BridgeProvider>,
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: COPY.cancel })[1] as HTMLElement);
+    expect(await screen.findByText('that approval is not one a preview of the app is waiting on')).toBeTruthy();
+    expect(elsewhere).not.toHaveBeenCalled();
+  });
+
+  it('ChangePreview left without Approve or Cancel, or replaced, revokes its own approval once', async () => {
+    const OTHER = 'ap_ZZZZZZZZZZZZZZZZZZZZZZZZZZ';
+    const bridge = createFakeBridge();
+    const preview = (approvalId: string) => (
+      <BridgeProvider bridge={bridge}>
+        <StrictMode>
+          <ChangePreview
+            key={approvalId}
+            change={{ state: 'needsTerminal', call: { kind: 'updateRollback' }, approvalId, preview: 'Roll back' }}
+          />
+        </StrictMode>
+      </BridgeProvider>
+    );
+    const view = render(preview(ID));
+    // StrictMode's rehearsal of an unmount is not one: nothing is revoked while it shows.
+    await new Promise((settled) => setTimeout(settled, 20));
+    expect(bridge.calls).toEqual([]);
+    // Replaced by another preview: the first one's approval goes.
+    view.rerender(preview(OTHER));
+    await waitFor(() => expect(bridge.calls).toEqual([{ command: 'revokePreview', args: ID }]));
+    // Left: the second's goes too, once.
+    view.unmount();
+    await waitFor(() =>
+      expect(bridge.calls).toEqual([
+        { command: 'revokePreview', args: ID },
+        { command: 'revokePreview', args: OTHER },
+      ]),
+    );
+    await new Promise((settled) => setTimeout(settled, 20));
+    expect(bridge.calls).toHaveLength(2);
+
+    // Approved in Terminal: Rust revoked it there, so leaving revokes nothing.
+    const approved = createFakeBridge();
+    const done = render(
+      <BridgeProvider bridge={approved}>
+        <ChangePreview
+          change={{ state: 'needsTerminal', call: { kind: 'updateRollback' }, approvalId: ID, preview: 'Roll back' }}
+        />
+      </BridgeProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: COPY.approveInTerminal }));
+    expect(await screen.findByText('Opened in Terminal.')).toBeTruthy();
+    done.unmount();
+    await new Promise((settled) => setTimeout(settled, 20));
+    expect(approved.calls.map((call) => call.command)).toEqual(['openInTerminal']);
   });
 
   it('TerminalResult says the command was copied', () => {

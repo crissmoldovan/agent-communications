@@ -1,7 +1,7 @@
-//! The thirteen commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
+//! The fourteen commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
-use crate::allowlist::{AccountName, Call, ConversationId};
+use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId};
 use crate::ipc::{
     AppError, AppSettings, CliResult, DeepLinkTarget, Installation, ProfileOpened, TerminalCommand,
     TerminalOutcome, UpdaterState,
@@ -17,6 +17,7 @@ pub const NAMES: &[&str] = &[
     "installation",
     "cli",
     "open_in_terminal",
+    "revoke_preview",
     "copy_text",
     "open_link",
     "open_profile",
@@ -56,7 +57,8 @@ pub async fn installation(state: State<'_, AppState>) -> Result<Installation, Ap
 }
 
 /// One call from the allow-list. An argument the allow-list refuses never reaches here: the invoke fails first. The
-/// approvals waiting, when the window reads them, are counted in the tray too.
+/// approvals waiting, when the window reads them, are counted in the tray too; a change the app prepared that came
+/// back waiting is recorded, with its approval, for `open_in_terminal` and `revoke_preview`.
 #[tauri::command]
 pub async fn cli(
     call: Call,
@@ -65,7 +67,13 @@ pub async fn cli(
 ) -> Result<CliResult, AppError> {
     let ctx = context(&state);
     let counts = matches!(call, Call::ApprovalsPending {});
+    let asked = call.clone();
     let result = blocking(move || run(&call, &ctx)).await?;
+    state.prepared.record(&asked, &result);
+    if let (Call::ApprovalRevoke { approval_id }, CliResult::Ok { exit: 0, .. }) = (&asked, &result)
+    {
+        state.prepared.forget(approval_id.as_str());
+    }
     if let (true, CliResult::Ok { data, .. }) = (counts, &result) {
         if let Some(n) = tray::pending_count(data) {
             tray::set_count(&app, n);
@@ -75,7 +83,7 @@ pub async fn cli(
 }
 
 /// Opens the system terminal with an approve, change or sign-in command (DA6, DA10), or copies it and says why. A
-/// change's own pending approval is revoked first.
+/// change's own pending approval — only the one the app recorded for that change — is revoked first.
 #[tauri::command]
 pub async fn open_in_terminal(
     command: TerminalCommand,
@@ -83,7 +91,30 @@ pub async fn open_in_terminal(
     state: State<'_, AppState>,
 ) -> Result<TerminalOutcome, AppError> {
     let ctx = context(&state);
-    blocking(move || terminal::open(&app, command, &ctx)).await?
+    let prepared = state.prepared.clone();
+    blocking(move || terminal::open(&app, command, &ctx, &prepared)).await?
+}
+
+/// Revokes the pending approval of a preview the app prepared, when the preview is cancelled or left behind (DA16):
+/// only an approval `cli` recorded for one of the app's own changes. Core's answer is given back as it is.
+#[tauri::command]
+pub async fn revoke_preview(
+    approval_id: ApprovalId,
+    state: State<'_, AppState>,
+) -> Result<CliResult, AppError> {
+    let ctx = context(&state);
+    let prepared = state.prepared.clone();
+    blocking(move || {
+        terminal::revoke_preview_with(&prepared, &approval_id, |id| {
+            run(
+                &Call::ApprovalRevoke {
+                    approval_id: id.clone(),
+                },
+                &ctx,
+            )
+        })
+    })
+    .await?
 }
 
 /// Puts text on the clipboard: what the screen shows, and nothing hidden in it.
@@ -182,7 +213,7 @@ mod tests {
 
     #[test]
     fn capabilities_grant_exactly_the_commands() {
-        assert_eq!(NAMES.len(), 13);
+        assert_eq!(NAMES.len(), 14);
         assert_eq!(build_rs_commands(), NAMES);
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json"))

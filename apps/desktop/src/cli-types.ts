@@ -210,6 +210,8 @@ export interface StandingView {
 /** core `StandingReport`: what `standing list`, `standing revoke` and `standing off` print. */
 export interface StandingReport {
   approvals: StandingView[];
+  /** `standing off`: what could not be done while ending every one all the same; absent when nothing. */
+  partial?: string[];
 }
 
 /** The products that have a doctor. */

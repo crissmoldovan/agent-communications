@@ -203,10 +203,11 @@ describe('Agent: the behaviour rules', () => {
       command: 'cli',
       args: { kind: 'behaviourClear', account: 'example/gmail', conversation: '@example.com' },
     });
-    // Cancel revokes the app's own approval, and the preview goes.
+    // Cancel revokes the app's own approval, through the command that takes only a preview's, and the preview goes.
     fireEvent.click(within(rules).getByRole('button', { name: COPY.cancel }));
     await waitFor(() => expect(within(rules).queryByText(COPY.approveThisInTerminal)).toBeNull());
-    expect(bridge.calls).toContainEqual({ command: 'cli', args: { kind: 'approvalRevoke', approvalId: ID } });
+    expect(within(rules).getByText('Cancelled: nothing was changed.')).toBeTruthy();
+    expect(bridge.calls).toContainEqual({ command: 'revokePreview', args: ID });
 
     // One that applies at once refreshes, as a tightening from the form does.
     const reads = count(bridge, 'behaviour');
@@ -215,6 +216,36 @@ describe('Agent: the behaviour rules', () => {
     expect(await within(rules).findByText('Applied.')).toBeTruthy();
     expect(bridge.calls).toContainEqual({ command: 'cli', args: { kind: 'behaviourClear', account: 'example/slack' } });
     await waitFor(() => expect(count(bridge, 'behaviour')).toBe(reads + 1));
+  });
+
+  it('a preview replaced by the next change revokes its own approval, and a Cancel that did not revoke says so', async () => {
+    const SECOND = 'ap_ZZZZZZZZZZZZZZZZZZZZZZZZZZ';
+    let next = ID;
+    const bridge = createFakeBridge({
+      cli: async (call) => {
+        if (call.kind === 'behaviourAllow') return pending(next, `Allow ${next}`);
+        return createFakeBridge().cli(call);
+      },
+      revokePreview: async () => failed('TRANSIENT', 'the approvals store is busy', 'Try again in a moment.', 75),
+    });
+    renderApp(bridge, { screen: 'agent' });
+    const rules = await section('Behaviour rules');
+    const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
+    await fillRule(form, 'example/slack', ['post']);
+    fireEvent.click(within(form).getByRole('button', { name: 'Save rule' }));
+    expect(await within(rules).findByText(`Allow ${ID}`)).toBeTruthy();
+    // The next change comes back waiting too: its preview takes the place of the first, whose approval goes.
+    next = SECOND;
+    fireEvent.click(within(form).getByRole('button', { name: 'Save rule' }));
+    expect(await within(rules).findByText(`Allow ${SECOND}`)).toBeTruthy();
+    await waitFor(() =>
+      expect(bridge.calls.filter((call) => call.command === 'revokePreview').map((call) => call.args)).toEqual([ID]),
+    );
+    // Cancel, whose revoke did not happen: not "Cancelled", but what went wrong; the preview stays.
+    fireEvent.click(within(rules).getByRole('button', { name: COPY.cancel }));
+    expect(await within(rules).findByText(/the approvals store is busy/)).toBeTruthy();
+    expect(within(rules).queryByText('Cancelled: nothing was changed.')).toBeNull();
+    expect(within(rules).getByText(`Allow ${SECOND}`)).toBeTruthy();
   });
 
   it('a refused change says why, with its hint', async () => {
@@ -338,6 +369,18 @@ describe('Agent: standing approvals', () => {
     const standing = await section('Standing approvals');
     expect(await within(standing).findByText('No standing approvals.')).toBeTruthy();
     expect(within(standing).queryByRole('button', { name: COPY.endEveryStanding })).toBeNull();
+  });
+
+  it('ending them all says what could not be done all the same', async () => {
+    const note = `${STANDING} could not be written down as ended (EACCES); the raised standing epoch ends it.`;
+    const bridge = createFakeBridge({}, { standingOff: { approvals: [], partial: [note] } });
+    renderApp(bridge, { screen: 'agent' });
+    const standing = await section('Standing approvals');
+    await within(standing).findByRole('table', { name: 'Standing approvals' });
+    fireEvent.click(within(standing).getByRole('button', { name: COPY.endEveryStanding }));
+    const said = await within(standing).findByRole('status');
+    expect(said.textContent).toContain('Every standing approval has ended.');
+    expect(said.textContent).toContain(note);
   });
 
   it('a revoke that fails says why', async () => {

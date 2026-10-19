@@ -8,11 +8,12 @@ import { prepaintSource } from '../theme.ts';
 const APP = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string): string => readFileSync(`${APP}${path}`, 'utf8');
 
-/** The thirteen commands the app's Rust side answers (plan, Global Constraints), each granted as `allow-<name>`. */
+/** The fourteen commands the app's Rust side answers (plan, Global Constraints), each granted as `allow-<name>`. */
 const COMMANDS = [
   'installation',
   'cli',
   'open_in_terminal',
+  'revoke_preview',
   'copy_text',
   'open_link',
   'open_profile',
@@ -77,7 +78,7 @@ describe('the content policy', () => {
     expect(html).not.toMatch(/https?:\/\//);
   });
 
-  it('capabilities grant only events, dragging and the thirteen commands', () => {
+  it('capabilities grant only events, dragging and the fourteen commands', () => {
     const capability = JSON.parse(read('src-tauri/capabilities/default.json'));
     expect(capability.windows).toEqual(['main']);
     expect([...capability.permissions].sort()).toEqual(

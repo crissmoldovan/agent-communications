@@ -141,11 +141,16 @@ export interface AppEvents {
   'data-changed': null;
 }
 
-/** The thirteen commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** The fourteen commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
   openInTerminal(command: TerminalCommand): Promise<TerminalOutcome>;
+  /**
+   * Revokes the pending approval of one of the app's own previews, when it is cancelled or left behind: only one Rust
+   * recorded for a change the app prepared. Core's answer comes back as it is.
+   */
+  revokePreview(approvalId: string): Promise<CliResult>;
   copyText(text: string): Promise<void>;
   openLink(url: string): Promise<void>;
   openProfile(target: { account?: string; conversation?: string }): Promise<ProfileOpened>;
@@ -165,6 +170,7 @@ export const tauriBridge: Bridge = {
   installation: () => invoke('installation'),
   cli: (call) => invoke('cli', { call }),
   openInTerminal: (command) => invoke('open_in_terminal', { command }),
+  revokePreview: (approvalId) => invoke('revoke_preview', { approvalId }),
   copyText: (text) => invoke('copy_text', { text }),
   openLink: (url) => invoke('open_link', { url }),
   openProfile: ({ account, conversation }) =>

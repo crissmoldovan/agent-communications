@@ -18,15 +18,17 @@ pub mod version;
 pub mod window;
 
 use paths::FolderOverrides;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-/// What the commands share: the folder overrides from Settings, loaded from `settings.json` at start (`settings`).
+/// What the commands share: the folder overrides from Settings, loaded from `settings.json` at start (`settings`), and
+/// the approvals the app's own previews wait on (`terminal::Prepared`).
 #[derive(Default)]
 pub struct AppState {
     pub overrides: Mutex<FolderOverrides>,
+    pub prepared: Arc<terminal::Prepared>,
 }
 
-/// Starts the app: its plugins, its state, its thirteen commands, the main window (`window::build_main`), the tray, the
+/// Starts the app: its plugins, its state, its fourteen commands, the main window (`window::build_main`), the tray, the
 /// deep links and the updater.
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -62,6 +64,7 @@ pub fn run() {
             commands::installation,
             commands::cli,
             commands::open_in_terminal,
+            commands::revoke_preview,
             commands::copy_text,
             commands::open_link,
             commands::open_profile,

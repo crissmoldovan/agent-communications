@@ -380,7 +380,11 @@ function Standing() {
     try {
       const outcome = await change.run(call);
       if (outcome.state === 'applied') {
-        setSaid(call.kind === 'standingOff' ? 'Every standing approval has ended.' : `Revoked ${call.id}.`);
+        // What could not be done while ending them all the same (core's `partial`): said beside it.
+        const partial = (outcome.data as { partial?: unknown } | null)?.partial;
+        const notes = Array.isArray(partial) ? partial.filter((note): note is string => typeof note === 'string') : [];
+        const done = call.kind === 'standingOff' ? 'Every standing approval has ended.' : `Revoked ${call.id}.`;
+        setSaid([done, ...notes].join('\n'));
         await reload();
       } else if (outcome.state === 'failed') {
         setRefused({ message: outcome.message, hint: outcome.hint });
@@ -517,7 +521,7 @@ function Standing() {
         <div className="flex flex-col gap-(--cue-space-1) p-(--cue-space-4)">
           {said === null ? null : (
             <p role="status" className="text-fg">
-              {said}
+              <UntrustedText text={said} />
             </p>
           )}
           {refused === null ? null : <Refusal message={refused.message} hint={refused.hint} />}

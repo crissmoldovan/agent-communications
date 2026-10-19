@@ -112,6 +112,9 @@ export function createFakeBridge(
     async openInTerminal(command) {
       return { outcome: 'opened', via: 'Terminal', revoked: command.kind === 'change' ? true : null };
     },
+    async revokePreview(approvalId) {
+      return ok({ approvalId, state: 'revoked' });
+    },
     async copyText() {},
     async openLink() {},
     async openProfile({ account }) {

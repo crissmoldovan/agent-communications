@@ -22,9 +22,10 @@ use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for
 use crate::paths::Platform;
 use crate::runner::{argv, child_env, run, RunContext};
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -357,6 +358,74 @@ pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<Strin
     Ok(argv(&words, &program, &ctx.folders, false))
 }
 
+/// The approvals the app's own previews wait on (DA10; DA16, after review): each id a change the app prepared came back
+/// with, `APPROVAL_PENDING`, and that change. Opening a change in the terminal names the id it revokes first; only an id
+/// recorded here for an equal call is taken, and only once, so the webview cannot have the app revoke an approval that
+/// is not that preview's. A preview left without Approve or Cancel is revoked through `revoke_preview`.
+#[derive(Debug, Default)]
+pub struct Prepared(Mutex<HashMap<String, Call>>);
+
+impl Prepared {
+    fn map(&self) -> MutexGuard<'_, HashMap<String, Call>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Records what `call` came to, when it is a change the app prepares and it came back waiting for approval.
+    pub fn record(&self, call: &Call, result: &CliResult) {
+        if !call.prepares_change() {
+            return;
+        }
+        if let CliResult::ApprovalPending { approval_id, .. } = result {
+            self.map().insert(approval_id.clone(), call.clone());
+        }
+    }
+
+    /// Takes `id` for opening `call`: refused unless it was recorded for an equal call. Taken once.
+    pub fn take_for(&self, id: &ApprovalId, call: &Call) -> Result<(), AppError> {
+        let mut map = self.map();
+        if map.get(id.as_str()) == Some(call) {
+            map.remove(id.as_str());
+            return Ok(());
+        }
+        Err(AppError::refused(
+            "that approval is not the one the app prepared for this change: prepare the change again",
+        ))
+    }
+
+    /// Takes `id` whatever change it was for, giving the change back: refused unless it was recorded.
+    pub fn take(&self, id: &ApprovalId) -> Result<Call, AppError> {
+        self.map().remove(id.as_str()).ok_or_else(|| {
+            AppError::refused("that approval is not one a preview of the app is waiting on")
+        })
+    }
+
+    /// Puts back what `take` took, when the revoke it was for did not happen.
+    pub fn restore(&self, id: &ApprovalId, call: Call) {
+        self.map().insert(id.as_str().to_string(), call);
+    }
+
+    /// Forgets `id`: it was revoked some other way.
+    pub fn forget(&self, id: &str) {
+        self.map().remove(id);
+    }
+}
+
+/// Revokes a preview's own pending approval, when the preview is left without Approve or Cancel, or is cancelled: only
+/// an id `Prepared` recorded, through core's `approvals revoke`, whose answer is given back. When the revoke did not
+/// happen the record is kept, so the person can try again.
+pub fn revoke_preview_with(
+    prepared: &Prepared,
+    id: &ApprovalId,
+    revoke: impl FnOnce(&ApprovalId) -> CliResult,
+) -> Result<CliResult, AppError> {
+    let call = prepared.take(id)?;
+    let result = revoke(id);
+    if !matches!(result, CliResult::Ok { exit: 0, .. }) {
+        prepared.restore(id, call);
+    }
+    Ok(result)
+}
+
 /// What opening the terminal does to the machine, so the tests can stand in for it: the revoke, finding a program,
 /// starting it, and the clipboard.
 pub trait Effects {
@@ -370,15 +439,20 @@ pub trait Effects {
     fn copy(&self, text: &str) -> Result<(), AppError>;
 }
 
-/// Opens `command` through `effects`: the command is built (or refused) first; a change's own approval is revoked
-/// next, and the result recorded; then the terminal opens either way (DA10). A terminal that does not start is one
-/// there is not, so the command is copied instead, and every copy says why.
+/// Opens `command` through `effects`: the command is built (or refused) first; a change's approval must be the one
+/// `prepared` recorded for that change; it is revoked next, and the result recorded; then the terminal opens either
+/// way (DA10). A terminal that does not start is one there is not, so the command is copied instead, and every copy
+/// says why.
 pub fn open_with(
     command: TerminalCommand,
     ctx: &RunContext,
     effects: &dyn Effects,
+    prepared: &Prepared,
 ) -> Result<TerminalOutcome, AppError> {
     let words = argv_for(&command, ctx)?;
+    if let TerminalCommand::Change { call, revoke } = &command {
+        prepared.take_for(revoke, call)?;
+    }
     let revoked = match &command {
         TerminalCommand::Change { revoke, .. } => Some(effects.revoke(revoke, ctx)),
         TerminalCommand::Approve { .. } | TerminalCommand::SignIn { .. } => None,
@@ -439,8 +513,9 @@ pub fn open(
     app: &AppHandle,
     command: TerminalCommand,
     ctx: &RunContext,
+    prepared: &Prepared,
 ) -> Result<TerminalOutcome, AppError> {
-    open_with(command, ctx, &System { app })
+    open_with(command, ctx, &System { app }, prepared)
 }
 
 /// Where `program` is: on Windows `cmd.exe` is `%SystemRoot%\System32\cmd.exe`; anything else is looked for in each
@@ -1142,7 +1217,7 @@ mod tests {
             approval_id: id(),
         };
         let words = argv_for(&command, &ctx).expect("words");
-        let outcome = open_with(command, &ctx, &effects).expect("an outcome");
+        let outcome = open_with(command, &ctx, &effects, &Prepared::default()).expect("an outcome");
         assert_eq!(
             outcome,
             TerminalOutcome::Copied {
@@ -1463,6 +1538,9 @@ mod tests {
             Call::EventsPause {},
         ] {
             let effects = Fake::new(true);
+            // Even with its approval recorded as if it had prepared one.
+            let prepared = Prepared::default();
+            prepared.map().insert(ID.into(), call.clone());
             let refused = open_with(
                 TerminalCommand::Change {
                     call: call.clone(),
@@ -1470,6 +1548,7 @@ mod tests {
                 },
                 &ctx,
                 &effects,
+                &prepared,
             )
             .expect_err("refused");
             assert_eq!(refused.code, "APP_REFUSED", "{call:?}");
@@ -1492,7 +1571,8 @@ mod tests {
             located(&ctx, Product::Core, &["update", "--level", "never"])
         );
         let effects = Fake::new(true);
-        let outcome = open_with(command.clone(), &ctx, &effects).expect("an outcome");
+        let outcome = open_with(command.clone(), &ctx, &effects, &prepared_for(&command))
+            .expect("an outcome");
         assert!(
             matches!(
                 outcome,
@@ -1516,7 +1596,8 @@ mod tests {
             revoke_ok: false,
             ..Fake::new(true)
         };
-        let outcome = open_with(command.clone(), &ctx, &effects).expect("an outcome");
+        let outcome = open_with(command.clone(), &ctx, &effects, &prepared_for(&command))
+            .expect("an outcome");
         assert!(
             matches!(
                 outcome,
@@ -1533,7 +1614,8 @@ mod tests {
         );
         // Where no terminal opens, the change is copied, after the revoke too.
         let effects = Fake::new(false);
-        let outcome = open_with(command, &ctx, &effects).expect("an outcome");
+        let outcome = open_with(command.clone(), &ctx, &effects, &prepared_for(&command))
+            .expect("an outcome");
         assert!(
             matches!(
                 outcome,
@@ -1572,6 +1654,133 @@ mod tests {
                 expected
             );
         }
+    }
+
+    /// The record `cli` keeps once `command`'s change came back waiting for approval `ID`.
+    fn prepared_for(command: &TerminalCommand) -> Prepared {
+        let TerminalCommand::Change { call, revoke } = command else {
+            panic!("not a change: {command:?}")
+        };
+        let prepared = Prepared::default();
+        prepared.record(
+            call,
+            &CliResult::ApprovalPending {
+                approval_id: revoke.as_str().into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        prepared
+    }
+
+    #[test]
+    fn a_change_opens_only_with_the_approval_the_app_prepared_for_it() {
+        let (_dir, ctx) = installation(&[Product::Core]);
+        let never = Call::UpdateLevel {
+            level: UpdateLevel::Never,
+        };
+        let change = TerminalCommand::Change {
+            call: never.clone(),
+            revoke: id(),
+        };
+        // Nothing recorded: refused, and nothing is revoked or opened.
+        let effects = Fake::new(true);
+        let refused =
+            open_with(change.clone(), &ctx, &effects, &Prepared::default()).expect_err("refused");
+        assert_eq!(refused.code, "APP_REFUSED");
+        assert!(
+            effects.log.borrow().is_empty(),
+            "{:?}",
+            effects.log.borrow()
+        );
+        // Recorded for another change (an approval that is some other preview's): refused the same.
+        let prepared = Prepared::default();
+        let pending = CliResult::ApprovalPending {
+            approval_id: ID.into(),
+            preview: "p".into(),
+            expires_at: None,
+        };
+        prepared.record(
+            &Call::UpdateLevel {
+                level: UpdateLevel::Auto,
+            },
+            &pending,
+        );
+        let effects = Fake::new(true);
+        assert_eq!(
+            open_with(change.clone(), &ctx, &effects, &prepared)
+                .expect_err("refused")
+                .code,
+            "APP_REFUSED"
+        );
+        assert!(effects.log.borrow().is_empty());
+        // Only a change the app prepares is recorded, and only when it came back waiting.
+        let prepared = Prepared::default();
+        prepared.record(&Call::ApprovalsPending {}, &pending);
+        prepared.record(
+            &never,
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::Value::Null,
+            },
+        );
+        assert!(prepared.map().is_empty());
+        // Recorded for this change: it opens, once; the same approval a second time is refused.
+        prepared.record(&never, &pending);
+        let effects = Fake::new(true);
+        assert!(open_with(change.clone(), &ctx, &effects, &prepared).is_ok());
+        assert_eq!(
+            *effects.log.borrow(),
+            strings(&[&format!("revoke {ID}"), "spawn"])
+        );
+        let again = Fake::new(true);
+        assert_eq!(
+            open_with(change, &ctx, &again, &prepared)
+                .expect_err("used")
+                .code,
+            "APP_REFUSED"
+        );
+        assert!(again.log.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_abandoned_preview_revokes_only_its_own_approval() {
+        let pending = CliResult::ApprovalPending {
+            approval_id: ID.into(),
+            preview: "p".into(),
+            expires_at: None,
+        };
+        let ok = || CliResult::Ok {
+            exit: 0,
+            data: serde_json::json!({ "approvalId": ID, "state": "revoked" }),
+        };
+        // Not recorded: refused, and core is never asked.
+        let asked = RefCell::new(0);
+        let refused = revoke_preview_with(&Prepared::default(), &id(), |_| {
+            *asked.borrow_mut() += 1;
+            ok()
+        })
+        .expect_err("refused");
+        assert_eq!(refused.code, "APP_REFUSED");
+        assert_eq!(*asked.borrow(), 0);
+        // Recorded: revoked once, and then gone.
+        let prepared = Prepared::default();
+        prepared.record(&Call::UpdateRollback {}, &pending);
+        assert_eq!(revoke_preview_with(&prepared, &id(), |_| ok()), Ok(ok()));
+        assert!(revoke_preview_with(&prepared, &id(), |_| ok()).is_err());
+        // A revoke that failed keeps the record, so the person can try again; and its failure comes back as it was.
+        prepared.record(&Call::UpdateRollback {}, &pending);
+        let failed = CliResult::Failed {
+            exit: 75,
+            code: "TRANSIENT".into(),
+            message: "the approvals store is busy".into(),
+            hint: None,
+        };
+        assert_eq!(
+            revoke_preview_with(&prepared, &id(), |_| failed.clone()),
+            Ok(failed)
+        );
+        assert_eq!(revoke_preview_with(&prepared, &id(), |_| ok()), Ok(ok()));
     }
 
     #[test]

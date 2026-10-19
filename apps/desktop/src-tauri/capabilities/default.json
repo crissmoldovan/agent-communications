@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: Tauri's events, dragging the window by its header, and the app's thirteen commands. No plugin is granted: the app's plugins run from Rust.",
+  "description": "The main window: Tauri's events, dragging the window by its header, and the app's fourteen commands. No plugin is granted: the app's plugins run from Rust.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -11,6 +11,7 @@
     "allow-installation",
     "allow-cli",
     "allow-open-in-terminal",
+    "allow-revoke-preview",
     "allow-copy-text",
     "allow-open-link",
     "allow-open-profile",
