@@ -8,7 +8,9 @@ agent-gmail doctor
 agent-gmail doctor --json | jq '.data.checks[] | select(.status != "ok")'
 ```
 
-It exits `0` when nothing is broken and `78` when something is, so CI can gate on it. Warnings do not fail it.
+It exits `0` when nothing is broken and `78` when something is, so CI can gate on it. Warnings do not fail it. With
+`--json`, every doctor — `agentcomms doctor` included — prints one envelope either way: the report, `ok`, with what is
+broken in its checks.
 
 ## Setting up
 

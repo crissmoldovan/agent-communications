@@ -22,6 +22,13 @@ installation recorded one, as `doctor` asks it. With `--json` the fields are `le
 `pausedUntil`, `lastChecked`, `latest`, `running`, `security`, `lastError` and `job`, each `null` when nothing is known
 of it; [Upgrading](docs/upgrading.md#the-daily-check-and-its-notice) has them all.
 
+**`agentcomms doctor --json` prints one envelope when a check fails, as Gmail's and Slack's doctors do.** It printed
+the report and then an error envelope after it — two documents on stdout, where `--json` promises one — so a script
+that read the last line lost the report. Now the report is the one envelope, `ok`, with `data.ok` false and each
+failing check in `data.checks`, and the exit status is still `78`. A script that read the error envelope's `CONFIG`
+should read `data.ok` instead. At a terminal nothing changes: the report, then `doctor found problems`. `comms_doctor`
+already returned the report alone.
+
 ## 0.23.0
 
 **An agent can acknowledge a Slack message without asking you, in your words, where and as often as you allowed —

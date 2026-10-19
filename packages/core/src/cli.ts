@@ -690,8 +690,12 @@ export async function main(
           ...(deps.updateJob === undefined ? {} : { updateJob: deps.updateJob }),
         });
         writeResult(report, output, renderDoctor);
-        if (!report.ok)
-          throw new CommsError('CONFIG', 'doctor found problems', { hint: 'Apply the fixes listed above.' });
+        if (!report.ok) {
+          // `--json` promises one envelope on stdout: the report is it, its `ok` false, and the exit status says the
+          // rest — as Gmail's and Slack's doctors do (desktop design DA13). An error envelope after it made two.
+          if (output.json) softExit = EXIT_CODES.CONFIG;
+          else throw new CommsError('CONFIG', 'doctor found problems', { hint: 'Apply the fixes listed above.' });
+        }
         return;
       }
       case 'audit': {

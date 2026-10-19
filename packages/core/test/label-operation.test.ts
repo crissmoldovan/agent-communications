@@ -6,7 +6,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { AGENT_LABEL_WORDS, agentLabelOf } from '../src/agent-label.ts';
+import {
+  AGENT_LABEL_WORDS,
+  agentLabelOf,
+  MAIL_CONVERSATION_PATTERN,
+  SLACK_CONVERSATION_PATTERN,
+} from '../src/agent-label.ts';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
 import type { Config } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
@@ -14,6 +19,7 @@ import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
 import { renameEntry } from '../src/names.ts';
+import * as labelModule from '../src/operations/label.ts';
 import { type LabelChangeRequest, labelChange, labelReport } from '../src/operations/label.ts';
 import { auditTail, listApprovals } from '../src/operations/maintenance.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -730,4 +736,12 @@ test('comms_label and the label command show the same thing, and a change from e
   } finally {
     await close();
   }
+});
+
+test('the conversation grammars are exported from the label operation, as the desktop app reads them', () => {
+  // `apps/desktop/src/test/grammar.test.ts` checks the app's own grammars against these two, by these names: the very
+  // patterns a rule's conversation is checked with here, not copies of them.
+  const exported = labelModule as Record<string, unknown>;
+  assert.equal(exported.SLACK_CONVERSATION, SLACK_CONVERSATION_PATTERN);
+  assert.equal(exported.MAIL_CONVERSATION, MAIL_CONVERSATION_PATTERN);
 });

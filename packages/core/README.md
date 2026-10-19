@@ -43,7 +43,9 @@ cannot be reached changes nothing. The check is skipped when `CI` is set, `AGENT
 `AGENT_COMMS_UPDATES=never`; `doctor` shows it on one line.
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
-`{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`.
+`{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`. `doctor --json` prints its report as that
+one `ok` envelope even when a check fails, as the channels' doctors do: read `data.ok`, which is false then, and the
+exit status, `78`.
 
 A command that loosens something or cannot be undone — `policy chat`, `attach roots add`, `attach deny remove`,
 `label word`, `label name`, `label icon`, `label rule add --as me`, `label rule remove --as agent`,

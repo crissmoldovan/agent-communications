@@ -1160,7 +1160,7 @@ function namesMigrateApproved(args: string[], env: Record<string, string>) {
 test('doctor says a version-1 config can be migrated, and stops saying it once it has been', () => {
   const config = tempDir();
   beforeTheRename(config);
-  // The first line is the report; a failing check (the keychain, in a sandbox) adds an error envelope after it.
+  // The report is the one line `--json` prints, whether or not a check fails (the keychain, in a sandbox).
   const names = (out: string) =>
     JSON.parse(out.split('\n')[0] ?? '').data.checks.find((check: { name: string }) => check.name === 'account names');
 

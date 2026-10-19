@@ -47,6 +47,13 @@ import { formerNameRefusal } from '../names.ts';
  * stricter one; a change writes only the field it is about, and keeps every other key of `agentLabel` as it was.
  */
 
+/**
+ * The conversation grammar a rule's `--conversation` is checked against here — a Slack channel, DM or person, or an
+ * address or `@domain` — by the names the desktop app's grammar test reads them by. The patterns themselves are
+ * `agent-label.ts`'s: these are those, not copies.
+ */
+export { MAIL_CONVERSATION, SLACK_CONVERSATION };
+
 /** Who an agent's message appears to come from, as a person reads it. */
 const AS_AGENT = 'as your agent';
 const AS_YOU = 'as you, with no label';
