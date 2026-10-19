@@ -5,6 +5,38 @@ together under one version.
 
 ## Unreleased
 
+**Agent Comms, a desktop app, shows what agent-communications is doing on this machine — and never sends, posts or
+approves anything.** It is a tray app for macOS, Windows and Linux, in `apps/desktop`, and it drives what you already
+installed: nothing about the packages on npm changes. It shows:
+
+- **Overview:** the version, where updates stand, each doctor's result, how many approvals wait, the standing
+  approvals that are active, and the events service;
+- **Accounts:** each mailbox, workspace, Resend account and WhatsApp, with its policies, label style, what agents may
+  do there, and its writing profile, which opens in your editor;
+- **Approvals:** each one waiting, with Revoke and Approve in Terminal;
+- **Agent:** the label, the behaviour rules — a rule that narrows applies at once, one that widens goes to Terminal —
+  and the standing approvals, each of which you can end;
+- **Updates, Events and Doctor:** the level, a pause and the background job; the events service's status, rules and
+  deliveries; and every check, with its fix to copy. Gmail's doctor runs only when you ask, because it calls Google.
+
+What only takes something away it applies itself, as the CLI would at once. Everything that needs your approval goes
+to Terminal: the app shows the full preview, revokes the approval it prepared to get it, and opens your terminal with
+the change itself, built from a fixed list of commands, never from the CLI's output; you approve it there with its
+code. An approval an agent prepared opens as that channel's `approve`. Sign-ins run in Terminal too, so the app never
+handles a token. What a sender wrote shows as plain text in a block marked *From outside*.
+
+It runs this installation's own launchers, with no shell, every argument checked against the product's grammar, and
+all the folder pins on every call, so it and the CLI always agree on the folders; Settings takes the folders
+`AGENT_COMMS_*` would set, for an app started from the Dock or the Start menu. With nothing installed it shows the
+install command, and installs nothing. A section that needs a newer release than yours says so: behaviour rules and
+profiles need 0.22.0, standing approvals 0.23.0, and the update status this release.
+
+It is released on its own tag, `desktop-vX.Y.Z`, on the commit of the release it ships with, and never as Latest.
+macOS gets a DMG signed with a Developer ID and notarised, built on the owner's Mac, that installs a later signed
+release when you choose to, after checking its signature. Windows and Linux get an unsigned `.exe`, `.AppImage` and
+`.deb` from CI, whose updater is off. [The desktop app](README.md#the-desktop-app) says how to install it, and
+[Releasing](docs/RELEASING.md#the-desktop-app) how the owner releases it.
+
 **`agentcomms update --status` says where updates stand on this machine, and asks npm nothing.** Until now the level,
 a pause, the last check and the background job were each in a different place: `doctor` gave one line, `update --check`
 asked the registry, and the job had no read of its own. `update --status`, and `comms_update` with `status: true`, read

@@ -317,7 +317,10 @@ and none of it goes to npm. A release of it holds:
 - **macOS:** a universal DMG, signed with the Developer ID in the owner's login keychain and notarised, and the
   updater's signed archive with its `latest.json`. They are built on the owner's Mac by
   `apps/desktop/scripts/release-desktop.sh` and published by `apps/desktop/scripts/publish-desktop.sh`. The signing
-  identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate.
+  identity and the updater key stay on that Mac, as they do for Supbuddy and QuotaMate. The app is signed under the
+  hardened runtime with one entitlement, `com.apple.security.automation.apple-events`
+  (`apps/desktop/src-tauri/Entitlements.plist`), and its `Info.plist` says why it asks to control Terminal: Approve in
+  Terminal drives Terminal through `osascript`, which a signed build may not do without both.
 - **Windows and Linux:** an NSIS `.exe`, an AppImage and a `.deb`, unsigned. `.github/workflows/desktop-release.yml`
   builds them when the tag is pushed, once the four legs of `desktop.yml` have passed, and attaches them to the tag's
   draft release. The release notes say they are unsigned.
