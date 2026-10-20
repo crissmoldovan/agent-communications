@@ -1,6 +1,12 @@
-import { type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio, spawn } from 'node:child_process';
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptions,
+  type SpawnOptionsWithoutStdio,
+  spawn,
+} from 'node:child_process';
 import { createSocket, Socket as DatagramSocket } from 'node:dgram';
-import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { connect, createServer, Server, Socket } from 'node:net';
 import { join, sep } from 'node:path';
 import { installErrorSink } from '../../network/error-sink.ts';
@@ -14,6 +20,25 @@ import {
 
 export const LAYA_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 export const LAYA_SANDBOX_PROFILE = '(version 1) (allow default) (deny network*)';
+/** The profile parameter naming the one directory the worker may write in: its own, resolved as the kernel sees it. */
+export const LAYA_WORKER_DIRECTORY_PARAMETER = 'LAYA_WORKER_DIRECTORY';
+/**
+ * E2 review round 1 (A1): beside the network clause, the worker may not start another process (`/usr/bin/open`,
+ * `pbcopy` and `osascript` among them), send an Apple event, look up any Mach service (LaunchServices, the pasteboard and
+ * every XPC service with them), or write anywhere but its own directory and `/dev/null` (no LaunchAgent, no file in
+ * the home folder or a synced one). The Mach-service allow-list is empty: measured on macOS 14.5 with Node 22 and
+ * Task 8's synthetic runtime under the real `sandbox-exec`, the worker proves, loads and answers with every lookup
+ * refused; the four it attempts (notification centre, user records, logging, DNS configuration) are refused
+ * harmlessly. A later rule wins, so the one write allowance follows the write denial.
+ */
+export const LAYA_SANDBOX_CONFINEMENT: string =
+  '(deny process-fork) (deny appleevent-send) (deny mach-lookup) (deny file-write*) ' +
+  `(allow file-write* (subpath (param "${LAYA_WORKER_DIRECTORY_PARAMETER}")) (literal "/dev/null"))`;
+/**
+ * What the worker runs under. The binding still names `LAYA_SANDBOX_PROFILE`, the reviewed profile's identity that the
+ * worker checks and Task 7's frozen vectors pin; the launch adds the confinement to it, and the launch test pins both.
+ */
+export const LAYA_WORKER_SANDBOX_PROFILE: string = `${LAYA_SANDBOX_PROFILE} ${LAYA_SANDBOX_CONFINEMENT}`;
 const BOUNDARY_PROBE_TIMEOUT_MS = 5_000;
 const BOUNDARY_SETTLE_MS = 150;
 const PROBE_SOCKET_RELEASE_MS = 1_000;
@@ -81,8 +106,8 @@ export interface LayaWorkerBoundaryTestOptions {
   readonly signal?: AbortSignal | undefined;
 }
 
-/** The worker's four attempts, in the order it makes and reports them. */
-export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds'] as const;
+/** The worker's five attempts, in the order it makes and reports them: four connections, then a process start. */
+export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds', 'spawn'] as const;
 /** `denied` only when the operating system refused (EPERM or EACCES); any other error is `failed`, never a denial. */
 export type LayaBoundaryProbeOutcome = 'denied' | 'escaped' | 'failed';
 export type LayaBoundaryProbeAttempt = (typeof PROBE_ATTEMPTS)[number];
@@ -232,10 +257,11 @@ async function startBoundaryListeners(dataDirectory: string): Promise<LayaBounda
   }
 }
 
-function workerArguments(entry: string): readonly string[] {
+function workerArguments(entry: string, workerDirectory: string): readonly string[] {
+  const sandbox = ['-D', `${LAYA_WORKER_DIRECTORY_PARAMETER}=${workerDirectory}`, '-p', LAYA_WORKER_SANDBOX_PROFILE];
   return entry.endsWith('.ts')
-    ? ['-p', LAYA_SANDBOX_PROFILE, process.execPath, '--experimental-strip-types', entry]
-    : ['-p', LAYA_SANDBOX_PROFILE, process.execPath, entry];
+    ? [...sandbox, process.execPath, '--experimental-strip-types', entry]
+    : [...sandbox, process.execPath, entry];
 }
 
 /** The working directory is the owner-only (0700) data directory the proof's listeners were made in. */
@@ -441,6 +467,7 @@ export function boundaryProbePassed(
     result.fetch === 'denied' &&
     result.udp === 'denied' &&
     result.uds === 'denied' &&
+    result.spawn === 'denied' &&
     observed.tcpConnections === 0 &&
     observed.udpDatagrams === 0 &&
     observed.udsConnections === 0
@@ -497,10 +524,12 @@ async function createLayaWorkerBoundaryInternal(options: LayaWorkerBoundaryTestO
       listeners = undefined;
       return { ok: false, code: 'boundary-failed', loadSent: false };
     }
+    // A pathname the profile matches is the resolved one (`/tmp` is `/private/tmp`), so the parameter is resolved.
+    const workerDirectory = await realpath(options.dataDirectory);
     const start = options.spawn ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
     child = start(
       LAYA_SANDBOX_EXECUTABLE,
-      workerArguments(options.workerEntry),
+      workerArguments(options.workerEntry, workerDirectory),
       workerSpawnOptions(options.dataDirectory),
     );
     const started = child;
@@ -708,6 +737,35 @@ function udpProbe(port: number): Promise<void> {
   });
 }
 
+/** The fifth attempt's program, which exits at once if the profile ever let it start. */
+const LAYA_PROBE_SPAWN_COMMAND = '/usr/bin/true';
+const PROBE_SPAWN_OPTIONS: SpawnOptions = Object.freeze({ cwd: '/', env: {}, shell: false, stdio: 'ignore' });
+
+/**
+ * The fifth attempt: start another process. Under the profile `process-fork` refuses it and Node's spawn fails with
+ * EPERM; unconfined it starts, which is an escape. It settles only after a process it started has exited, so none
+ * outlives the report. No daemon listener can see a process start, so this attempt rests on the system's refusal.
+ */
+function spawnProbe(): Promise<void> {
+  return bounded((resolve, reject) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(LAYA_PROBE_SPAWN_COMMAND, [], PROBE_SPAWN_OPTIONS);
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('probe spawn'));
+      return undefined;
+    }
+    const ended = new Promise<void>((settle) => child.once('close', () => settle()));
+    const release = (): Promise<void> => {
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      return child.pid === undefined ? Promise.resolve() : ended;
+    };
+    child.once('error', (error) => void release().then(() => reject(error)));
+    child.once('spawn', () => void ended.then(resolve));
+    return release;
+  });
+}
+
 /** This is the worker's first built-in-only act, before any runtime/model import. */
 export async function runWorkerBoundaryProbe(
   input: Readonly<{ tcpPort: number; udpPort: number; udsPath: string }>,
@@ -718,6 +776,7 @@ export async function runWorkerBoundaryProbe(
     ['fetch', () => fetchProbe(input.tcpPort)],
     ['udp', () => udpProbe(input.udpPort)],
     ['uds', () => connectProbe({ path: input.udsPath })],
+    ['spawn', () => spawnProbe()],
   ];
   const outcomes: Partial<Record<LayaBoundaryProbeAttempt, LayaBoundaryProbeOutcome>> = {};
   for (const [attempt, run] of attempts) {

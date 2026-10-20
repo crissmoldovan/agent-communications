@@ -464,6 +464,96 @@ test('E2 runtime lock: rebuilds canonical platform files from acquirer-verified 
   assert.equal(lock, await readFile(join(fixtureRoot, 'lock-expected.json'), 'utf8'));
 });
 
+/**
+ * Two or three synthetic packages, each archived with the given `package.json` (or none) and files, built into a lock
+ * whose platform lists are the given ones; the lock text, or the refusal's message.
+ */
+async function buildSyntheticLock(
+  packages: Readonly<
+    Record<string, { readonly manifest?: Readonly<Record<string, unknown>>; readonly files: Record<string, string> }>
+  >,
+  platforms: Readonly<Record<'darwin-arm64' | 'darwin-x64', Readonly<Record<string, readonly string[]>>>>,
+): Promise<string> {
+  const { buildFixtureRuntimeLock } = await runtimeLockModule();
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { writeUstarFixture } = await import('./support/laya-ustar.ts');
+  const directory = await mkdtemp(join(tmpdir(), 'laya-lock-needs-'));
+  try {
+    const archives = new Map<string, Buffer>();
+    const input = [];
+    for (const [name, pkg] of Object.entries(packages)) {
+      const entries = Object.entries(pkg.files).map(([path, data]) => ({ path: `package/${path}`, data }));
+      if (pkg.manifest !== undefined)
+        entries.unshift({ path: 'package/package.json', data: `${JSON.stringify({ name, ...pkg.manifest })}\n` });
+      const archive = await writeUstarFixture(directory, `${name}-1.0.0.tgz`, entries);
+      archives.set(`${name}@1.0.0`, await readFile(archive));
+      input.push({ name, version: '1.0.0', url: registryTarball(name, '1.0.0'), integrity: await sri(archive) });
+    }
+    return await buildFixtureRuntimeLock({ packages: input, platforms }, archives);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs', async () => {
+  const needs = (manifest: Readonly<Record<string, unknown>>, listed: readonly string[]) =>
+    buildSyntheticLock(
+      {
+        'runtime-a': { manifest, files: { 'index.mjs': 'export {};\n' } },
+        'runtime-b': { manifest: {}, files: { 'index.mjs': 'export {};\n' } },
+      },
+      {
+        'darwin-arm64': { 'runtime-a': ['package.json', 'index.mjs'], 'runtime-b': listed },
+        // A platform the tree does not reach: neither package is in it, so neither's needs apply there.
+        'darwin-x64': { 'runtime-a': [], 'runtime-b': [] },
+      },
+    );
+  // A bare import of runtime-b from runtime-a resolves to the tree's runtime-b only through its package.json.
+  await assert.rejects(
+    needs({ dependencies: { 'runtime-b': '1.0.0' } }, ['index.mjs']),
+    (error: Error) =>
+      (error as Error & { code?: string }).code === 'RUNTIME_LOCK_DEPENDENCY' &&
+      error.message.includes('runtime-a needs runtime-b on darwin-arm64'),
+  );
+  assert.match(await needs({ dependencies: { 'runtime-b': '1.0.0' } }, ['package.json', 'index.mjs']), /runtime-b/);
+  for (const manifest of [
+    { optionalDependencies: { 'runtime-c': '1.0.0' } },
+    { peerDependencies: { 'runtime-c': '1.0.0' } },
+    { dependencies: { 'runtime-c': '1.0.0' } },
+  ]) {
+    await assert.rejects(
+      needs(manifest, ['package.json', 'index.mjs']),
+      (error: Error) => error.message.includes('runtime-a needs runtime-c on darwin-arm64'),
+      JSON.stringify(manifest),
+    );
+  }
+  // A peer the package itself marks optional is not one it needs.
+  assert.match(
+    await needs(
+      { peerDependencies: { 'runtime-c': '1.0.0' }, peerDependenciesMeta: { 'runtime-c': { optional: true } } },
+      ['package.json', 'index.mjs'],
+    ),
+    /runtime-a/,
+  );
+});
+
+test('E2 review round 1: the lock builder refuses to list an empty file, and names it', async () => {
+  const build = (listed: readonly string[]) =>
+    buildSyntheticLock(
+      { 'runtime-a': { files: { 'index.mjs': 'export {};\n', 'empty.mjs': '' } } },
+      { 'darwin-arm64': { 'runtime-a': listed }, 'darwin-x64': { 'runtime-a': [] } },
+    );
+  await assert.rejects(
+    build(['index.mjs', 'empty.mjs']),
+    (error: Error) =>
+      (error as Error & { code?: string }).code === 'RUNTIME_LOCK_EMPTY_FILE' &&
+      error.message.includes('runtime-a empty.mjs'),
+  );
+  // The daemon's strict lock parser refuses a size-0 file, so the owner leaves it out of the list.
+  assert.doesNotMatch(await build(['index.mjs']), /empty\.mjs/);
+});
+
 test('E2 runtime lock: refuses a local archive path', async () => {
   const module = await runtimeLockModule();
   assert.equal(typeof module.buildFixtureRuntimeLock, 'function');

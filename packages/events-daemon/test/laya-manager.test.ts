@@ -10,6 +10,7 @@ import {
   type LayaRig,
   layaArtifactOrigin,
   layaRig,
+  macPlatform,
   modelPath,
   pauseAt,
   syntheticLaya,
@@ -699,6 +700,46 @@ test('E2 race: a disable and re-enable during a worker start’s tree walk leave
   } finally {
     pause.release();
     await verifying?.catch(() => undefined);
+    await rig.close();
+  }
+});
+
+test('E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let clock = 1_800_000_000_000;
+  let sandbox: 'passes' | 'fails' = 'fails';
+  let probes = 0;
+  const rig = await layaRig({
+    now: () => clock,
+    platform: {
+      ...macPlatform(),
+      spawnSync: (command) => {
+        if (command === '/usr/sbin/sysctl') return { status: 0, signal: null, error: undefined, stdout: '0\n' };
+        probes += 1;
+        return { status: sandbox === 'passes' ? 0 : 1, signal: null, error: undefined };
+      },
+    },
+  });
+  try {
+    const unavailable = { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' };
+    assert.deepEqual(rig.manager.availability(), unavailable);
+    assert.equal(probes, 1);
+    // Within the minute the failure stands, whatever the machine now says: no probe per request.
+    sandbox = 'passes';
+    clock += 59_999;
+    assert.deepEqual(rig.manager.availability(), unavailable);
+    assert.equal(probes, 1, 'a failure is probed again at most once a minute');
+    // A minute on, the next request that needs it probes again, and a working sandbox is offered.
+    clock += 1;
+    assert.deepEqual(rig.manager.availability(), { available: true });
+    assert.equal(probes, 2);
+    // A success is kept for the owner's life: it is never probed again, even if the machine would now refuse.
+    sandbox = 'fails';
+    clock += 3_600_000;
+    assert.deepEqual(rig.manager.availability(), { available: true });
+    assert.equal(probes, 2);
+  } finally {
     await rig.close();
   }
 });

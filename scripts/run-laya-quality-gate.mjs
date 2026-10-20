@@ -7,8 +7,12 @@
  *
  *   keygen  --key-file <path>                       a fresh 256-bit corpus key, owner-only, outside the repository
  *   seal    --key-file <path> --corpus <directory>  encrypts one plaintext corpus read from stdin into the directory
- *   run     --attest-written-consent --corpus <directory> --key-file <path> --reference <snapshot directory>
- *           --python <interpreter> --runtime-tree <directory> --model-tree <directory>
+ *   run     --attest-written-consent --corpus <directory> --reference <snapshot directory>
+ *           --python <interpreter> --runtime-tree <directory> --model-tree <directory> [--run-copy <file>]
+ *
+ * `run` takes the corpus key from `AGENTCOMMS_LAYA_GATE_CORPUS_KEY`, the `laya-quality-gate` environment's secret that
+ * the workflow passes in the quality step's own environment and nowhere else (E2 review round 1, A4), and never from a
+ * file: the gate Mac holds the sealed corpus, not its key.
  *
  * `run` refuses a corpus or key inside the repository and a corpus directory holding anything but sealed corpus files;
  * decrypts only in memory; builds each judge input with E's own envelope (`buildJudgeInput`); asks the candidate's
@@ -35,6 +39,7 @@ import {
   LAYA_SANDBOX_PROFILE,
 } from '../packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
 import { LayaWorkerSupervisor } from '../packages/events-daemon/src/runtime/laya/worker-supervisor.ts';
+import { runCopyBytes } from './verify-laya-gate-runs.mjs';
 import {
   aggregateTemplate,
   canonicalReportBytes,
@@ -152,7 +157,29 @@ export function openCorpus(key, sealed) {
   }
 }
 
-/** The key file: outside the repository, a regular file only its owner can read, holding base64 of 32 bytes. */
+/** The corpus key's environment variable: the gate environment's secret, in the quality step's `env:` alone. */
+export const CORPUS_KEY_VARIABLE = 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY';
+
+/**
+ * The run's corpus key: base64 of 32 bytes from the environment, removed from it before it is checked, so no child the
+ * run starts later can inherit it, whatever environment it is given.
+ */
+export function takeCorpusKey(env = process.env) {
+  const text = env[CORPUS_KEY_VARIABLE];
+  delete env[CORPUS_KEY_VARIABLE];
+  if (typeof text !== 'string' || text.trim().length === 0)
+    fail('QUALITY_KEY', `the run reads the corpus key from ${CORPUS_KEY_VARIABLE}, the gate environment's secret`);
+  const trimmed = text.trim();
+  const key = Buffer.from(trimmed, 'base64');
+  if (key.length !== CORPUS_KEY_BYTES || key.toString('base64') !== trimmed)
+    fail('QUALITY_KEY', `${CORPUS_KEY_VARIABLE} holds base64 of 32 bytes`);
+  return key;
+}
+
+/**
+ * The key file `keygen` writes and `seal` reads, on the owner's own machine: outside the repository, a regular file only
+ * its owner can read, holding base64 of 32 bytes.
+ */
 export async function readCorpusKey(path, { root = repositoryRoot } = {}) {
   const target = assertOutsideRepository(path, { root, what: 'the corpus key' });
   const info = await lstat(target).catch(() => fail('QUALITY_KEY', 'the corpus key file is missing'));
@@ -686,7 +713,7 @@ export function buildReport({ candidate, environment, templates, node = process.
  * Writes the one artifact, only after it validates as release evidence for this candidate. Another architecture's
  * existing entry is kept only when it, too, still validates for this checkout and shares every top-level field.
  */
-export async function writeGateReport({ root = repositoryRoot, report }) {
+export async function writeGateReport({ root = repositoryRoot, report, runCopy }) {
   const path = join(root, GATE_REPORT_DIRECTORY, `${report.manifestId}.json`);
   const architecture = report.architectures[0].architecture;
   let merged = report;
@@ -716,6 +743,10 @@ export async function writeGateReport({ root = repositoryRoot, report }) {
   const temporary = `${path}.${randomBytes(8).toString('hex')}.partial`;
   await writeFile(temporary, canonicalReportBytes(merged), { flag: 'wx', mode: 0o644 });
   await rename(temporary, path);
+  // In the protected workflow, the run's own copy for its architecture (E2 review round 1, A3), as a release
+  // recomputes it from the committed report, uploaded unzipped so its digest can be compared.
+  if (runCopy !== undefined)
+    await writeFile(runCopy, runCopyBytes(merged, architecture, canonicalReportBytes), { mode: 0o644 });
   return relative(root, path).split(sep).join('/');
 }
 
@@ -752,7 +783,9 @@ export async function runQualityGate(options, dependencies = PRODUCTION_DEPENDEN
   if (options.corpus === undefined)
     fail('QUALITY_CORPUS_REQUIRED', 'the run needs an explicitly supplied corpus directory');
   assertOutsideRepository(options.corpus, { root, what: 'the corpus directory' });
-  const key = await readCorpusKey(options.keyFile, { root });
+  if (options.keyFile !== undefined)
+    fail('QUALITY_USAGE', `the run takes the corpus key from ${CORPUS_KEY_VARIABLE}, never from a file`);
+  const key = takeCorpusKey(options.env ?? process.env);
   const candidate = computeCandidate({ root, architecture });
   verifyPythonReferenceRecord(root);
   await dependencies.verifyReferenceSnapshot(options.reference);
@@ -780,7 +813,7 @@ export async function runQualityGate(options, dependencies = PRODUCTION_DEPENDEN
     await worker.close();
   }
   const report = buildReport({ candidate, environment: reference.environment, templates, node: options.node });
-  const path = await writeGateReport({ root, report });
+  const path = await writeGateReport({ root, report, runCopy: options.runCopy });
   return { path, lines: summary(templates) };
 }
 
@@ -793,6 +826,7 @@ const COMMAND_OPTIONS = Object.freeze({
   '--python': 'python',
   '--runtime-tree': 'runtimeTree',
   '--model-tree': 'modelTree',
+  '--run-copy': 'runCopy',
 });
 
 export function parseCommand(argv) {
@@ -802,6 +836,8 @@ export function parseCommand(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--attest-written-consent') options.attestWrittenConsent = true;
+    else if (argument === '--key-file' && command === 'run')
+      fail('QUALITY_USAGE', `run takes the corpus key from ${CORPUS_KEY_VARIABLE}, never --key-file`);
     else if (Object.hasOwn(COMMAND_OPTIONS, argument)) {
       const value = rest[++index];
       if (value === undefined) fail('QUALITY_USAGE', `${argument} needs a value`);

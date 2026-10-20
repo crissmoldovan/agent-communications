@@ -59,7 +59,12 @@ test("E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word 
     section(security, '## What the safety model does not claim').includes(`\n${OFFLINE}\n`),
     'the limit is under what the safety model does not claim',
   );
-  assert.equal(security.split('Laya').length - 1, 8, 'and no other Laya wording beside them');
+  // Beside D2's two bullets, SECURITY.md's own bullet on what the macOS profile denies beyond the network (E2 review
+  // round 1, A1), in scope after D2's network bullet: one Laya more, and no other.
+  const profile = lines.filter((line) => line.startsWith('- **The Laya worker acting outside its profile** — '));
+  assert.equal(profile.length, 1, "SECURITY.md's own profile bullet, exactly once");
+  assert.ok(section(security, '## Scope').includes(`\n${NETWORK}\n${profile[0]}\n`), 'right after the network bullet');
+  assert.equal(security.split('Laya').length - 1, 9, 'and no other Laya wording beside them');
 });
 
 test('E2 SECURITY Laya wording: the documents state the limits, and promise no protection from the same user', async () => {
@@ -107,7 +112,7 @@ test('E2 SECURITY Laya wording: the documents state the limits, and promise no p
     /protected/,
     /Rosetta/,
     /laya-candidate-/,
-    /macos-boundary-v1\.json/,
+    /macos-boundary-v2\.json/,
   ]) {
     assert.match(procedure, fact, `RELEASING.md's Laya section says ${fact}`);
   }
@@ -124,4 +129,25 @@ test('E2 SECURITY Laya wording: the documents state the limits, and promise no p
       `${name} promises protection from another process of the same user`,
     );
   }
+});
+
+test('E2 review round 1: the documents claim only the checks that run, and keep the corpus key off the gate Mac', async () => {
+  const [runtimeReadme, releasing, gateWorkflow] = await Promise.all([
+    readFile(join(ROOT, 'packages/events-laya-runtime/README.md'), 'utf8'),
+    readFile(join(ROOT, 'docs/RELEASING.md'), 'utf8'),
+    readFile(join(ROOT, '.github/workflows/laya-quality-gate.yml'), 'utf8'),
+  ]);
+  const flat = (text) => text.replace(/\s+/g, ' ');
+  // B9: `pnpm verify` runs the cold-store probe's self-test; the cold-store install itself runs in no workflow.
+  const runtime = flat(runtimeReadme);
+  assert.doesNotMatch(runtime, /proves from a cold store/);
+  assert.match(runtime, /The cold-store install itself .* runs in no workflow; it is a check to run by hand/);
+  // A4 and B9: the egress step checks TCP 443 to three addresses and nothing else, and the key is a secret.
+  const procedure = flat(section(releasing, '## Laya: the local model judge'));
+  assert.match(procedure, /checks only that a TCP connection to each of three public addresses on port 443/);
+  assert.match(procedure, /it does not check DNS, another port or another address/);
+  assert.doesNotMatch(procedure, /fails if it can reach an outside address|no secret or registry credential/);
+  assert.match(procedure, /`AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret of the `laya-quality-gate` environment/);
+  assert.doesNotMatch(procedure, /AGENTCOMMS_LAYA_GATE_KEY_FILE/);
+  assert.doesNotMatch(flat(gateWorkflow), /no secret,|the egress step proves a connection elsewhere fails/);
 });

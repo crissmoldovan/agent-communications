@@ -263,6 +263,7 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/README.md',
     'packages/events-laya-runtime/README.md',
     'packages/events-laya-runtime/gate/macos-boundary-v1.schema.json',
+    'packages/events-laya-runtime/gate/macos-boundary-v2.schema.json',
     'packages/events-daemon/test/fixtures/laya/quality/metrics-v1.json',
     // E2 Task 13's release end-to-end oracles copy a whole release candidate: the gate's verifiers bind its subject
     // (these two among them) and both gate runners, which no oracle imports.
@@ -270,6 +271,8 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
     'scripts/run-laya-quality-gate.mjs',
     'scripts/run-laya-macos-boundary-gate.mjs',
+    // E2 review round 1 (A3): the release's gate-run check, which both runners and the release gate import.
+    'scripts/verify-laya-gate-runs.mjs',
     // E2 Task 14: the release gate's checklist oracle reads the owner's checklist as text, to put it in the evidence's
     // place.
     'test/laya-manual-macos-checklist.md',

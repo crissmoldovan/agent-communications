@@ -1756,3 +1756,34 @@ test('E2 supersession: the runner skips a superseded mutant and runs its replace
     /which would never run/,
   );
 });
+
+test('E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt', async () => {
+  const probe = `${LAYA_SOURCE}/worker-boundary-probe.ts`;
+  // The apostrophe is matched as any character: the checker's import scanner reads quotes, not regular expressions.
+  const refused = /worker-boundary-probe\.ts starts a process beyond the sandbox launcher and the probe.s one refused/;
+  for (const evasion of [
+    "export const open = () => spawn('/usr/bin/open', ['/Applications']);",
+    "import * as childProcess from 'node:child_process';\nexport const copy = () => childProcess.spawn('/usr/bin/pbcopy');",
+    "import { spawnSync as run } from 'node:child_process';\nvoid run;",
+    "const start = spawn;\nexport const script = () => start('/usr/bin/osascript');",
+  ]) {
+    await withCase(async (root) => {
+      await amend(root, probe, evasion);
+      await expectRejected(root, refused);
+    });
+  }
+});
+
+test("E2 static boundary: the release's gate-run check makes its one GitHub API request, and nothing else in it does", async () => {
+  await withCase(async (root) => {
+    await amend(root, 'scripts/verify-laya-gate-runs.mjs', "export const again = () => fetch('http://127.0.0.1/');");
+    await expectRejected(root, /verify-laya-gate-runs\.mjs calls fetch more than once; the gate-run check makes/);
+  });
+  await withCase(async (root) => {
+    await amend(root, 'scripts/verify-laya-gate-runs.mjs', "import { request as leak } from 'node:https';\nvoid leak;");
+    await expectRejected(
+      root,
+      /verify-laya-gate-runs\.mjs makes an HTTP request; only the release-only raw-tarball acquirer may/,
+    );
+  });
+});

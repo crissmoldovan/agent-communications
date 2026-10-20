@@ -282,7 +282,7 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
   2. the aggregate quality report `packages/events-laya-runtime/gate/<manifestId>.json`, which
      `scripts/verify-laya-quality-gate.mjs` validates, with every template the manifest offers passing on Gmail and on
      Slack;
-  3. the content-free boundary evidence `packages/events-laya-runtime/gate/macos-boundary-v1.json`, which
+  3. the content-free boundary evidence `packages/events-laya-runtime/gate/macos-boundary-v2.json`, which
      `scripts/verify-laya-boundary-gate.mjs` validates, passing.
 
   Items 2 and 3 are required for every macOS architecture the lock offers — each architecture whose platform file list
@@ -300,8 +300,12 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
    install — the whole package, less `onnxruntime-node`'s binaries for other platforms — and build
    `packages/events-daemon/laya-runtime.json` from them with the owner-only acquirer (`buildLayaRuntimeLock` in
    `scripts/fetch-laya-release-tarballs.mjs`, with `AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE=1`). There is no command for this
-   yet; it is the owner's step. Review the lock and commit it. Its file lists name the architectures it offers: leave
-   one empty to offer the other alone. The tests that pin the placeholder change with it.
+   yet; it is the owner's step. The builder refuses a list that names an empty file, and names it: the daemon refuses
+   a file of size 0, so leave it out. It also refuses a list where a package with files on an architecture needs, by
+   its `dependencies`, `optionalDependencies` or non-optional `peerDependencies`, a package whose `package.json` is not
+   listed there too, and names both: a bare import would otherwise leave the verified tree. Review the lock and commit
+   it. Its file lists name the architectures it offers: leave one empty to offer the other alone. The tests that pin
+   the placeholder change with it.
 2. **A candidate tag.** Tag that commit `laya-candidate-<n>` and push the tag. A candidate tag publishes nothing; only
    a `v*` tag does.
 3. **The trees.** On each gate Mac, install the candidate's runtime and model trees by enabling Laya in that
@@ -310,12 +314,45 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
 4. **The boundary run, then the quality run.** Run the `Laya quality gate` workflow on the candidate tag and approve its
    environment. It verifies the candidate and the trees, checks the host's egress, runs
    `scripts/run-laya-macos-boundary-gate.mjs run` and then `scripts/run-laya-quality-gate.mjs run`, and keeps the two
-   results as an artifact for seven days.
+   results as an artifact (`laya-gate-results`) for seven days. It also uploads, unzipped, each run's own copy of its
+   result for this Mac's architecture, `laya-quality-run.json` and `laya-boundary-run.json`, kept for 90 days: those
+   are what a release checks the committed results against.
 5. **Commit the results.** Read both files, then commit them under `packages/events-laya-runtime/gate/`. The gate
-   directory is outside the candidate subject, so committing them does not change what they are bound to; changing a
-   subject file — the three assets, the daemon's `package.json` and `tsdown.config.ts`, E's judge envelope, the
-   supervisor or anything the worker imports — does, and needs a new run.
-6. **Release** as usual. The `laya` job refuses until every check above passes.
+   directory is outside the candidate subject, so committing them does not change what they are bound to. Changing a
+   subject file does, and needs both gates run again on a new candidate: the three assets, the daemon's `package.json`
+   and `tsdown.config.ts`, `pnpm-lock.yaml`, E's judge envelope, the supervisor, the strict parsers (`contracts.ts`),
+   the extractor (`tar.ts`), the tree verifier, the artifact manager, or anything the worker imports. A version bump
+   alone does not: the daemon's `package.json` is bound as canonical JSON without its `version`, so the release
+   commit's bump keeps the evidence.
+
+   **Record the run.** Write `packages/events-laya-runtime/gate/runs-v1.json` beside them, naming for each architecture
+   the run that produced its results — its id, the number in the run's URL (`…/actions/runs/<id>`), as a string — and
+   the candidate commit it ran on, the full 40-character id the `laya-candidate-*` tag names:
+
+   ```json
+   {
+     "schemaVersion": 1,
+     "runs": [
+       {
+         "architecture": "arm64",
+         "runId": "<run id>",
+         "commit": "<candidate commit>"
+       }
+     ]
+   }
+   ```
+
+   Two-space JSON with a final newline, one entry per architecture the lock offers. For a second architecture, commit
+   the first one's results and run record, tag that commit as a new candidate (the gate directory is outside the
+   subject, so the subject is the same), run the workflow on the other Mac — its run joins the committed entry — then
+   commit its results and add its run, with its own candidate commit, to the record.
+6. **Release** as usual, within 90 days of the runs. The `laya` job refuses until every check above passes and, with
+   `actions: read` and its own token, asks GitHub about each recorded run: it must be
+   `.github/workflows/laya-quality-gate.yml`, started by `workflow_dispatch` on a `laya-candidate-*` tag of this
+   repository, `completed` with `success`, on exactly the recorded commit; and the SHA-256 digests of its two unzipped
+   copies must equal the committed results restricted to that architecture (`scripts/verify-laya-gate-runs.mjs`). A
+   result written or changed by hand, or kept from another run, is refused (`LAYA_RELEASE_RUN`). Once the copies have
+   expired, run the gate again.
 
 ### The protected gate
 
@@ -338,13 +375,19 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
      it, treat the Mac as compromised: discard its trees and keys, and set it up again.
 
   Keep the repository's Actions setting that requires approval before a fork's pull-request workflows run, for every
-  outside contributor. The gate Mac must deny outbound connections except to GitHub, the npm registry
-  and the Node download the job uses to check out, install and report; the job's egress step fails if it can reach an
-  outside address. Set, in the runner's own environment, `AGENTCOMMS_LAYA_GATE_RUNTIME_TREE`,
-  `AGENTCOMMS_LAYA_GATE_MODEL_TREE`, `AGENTCOMMS_LAYA_GATE_CORPUS`, `AGENTCOMMS_LAYA_GATE_KEY_FILE`,
+  outside contributor. The gate Mac must deny outbound connections except to GitHub, the npm registry and the Node
+  download the job uses to check out, install and report. The job's egress step checks only that a TCP connection to
+  each of three public addresses on port 443 (`1.1.1.1`, `8.8.8.8` and `9.9.9.9`) fails; it does not check DNS,
+  another port or another address, so the host's own firewall is what denies them. Set, in the runner's own
+  environment, `AGENTCOMMS_LAYA_GATE_RUNTIME_TREE`, `AGENTCOMMS_LAYA_GATE_MODEL_TREE`, `AGENTCOMMS_LAYA_GATE_CORPUS`,
   `AGENTCOMMS_LAYA_GATE_REFERENCE` and `AGENTCOMMS_LAYA_GATE_PYTHON`: the workflow names them and holds none of them.
-- **Nothing to publish with.** Read-only contents, no OIDC permission, no secret or registry credential, a checkout
-  that keeps no credential, and actions pinned to commits.
+- **The corpus key is the environment's secret, not the Mac's.** Store the key's base64 text (what `keygen` writes) as
+  the `AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret of the `laya-quality-gate` environment, and keep no copy of it on the
+  gate Mac. The workflow passes it only in the quality step's own `env:`, so no other step sees it and the runner's
+  environment names no key path; the run reads it, removes it from its environment before it starts any child, and
+  refuses a key file.
+- **Nothing to publish with.** Read-only contents, no OIDC permission, no registry credential, a checkout that keeps
+  no credential, actions pinned to commits, and one secret, the corpus key, which publishes nothing.
 - **The corpus is read last,** by the quality run alone, after the candidate, the trees, the egress check and the
   boundary run. Ordinary CI, `pnpm verify` and every other workflow run neither gate and read no corpus; a test fails
   if one does.
@@ -356,8 +399,9 @@ D11's quality gate measures each offered template on real, labelled Gmail and Sl
 1. **Written consent and provenance.** Everyone whose messages are in the corpus agreed in writing. The consent ledger
    stays with the corpus owner, outside any checkout; each run attests it, and its report says `written-attested`.
 2. **Encrypted, external retention.** `scripts/run-laya-quality-gate.mjs keygen` and `seal` make the key and the sealed
-   corpus outside the repository. Delete the plaintext after sealing, keep the key and the corpus apart, and upload
-   neither to CI, a fixture, a log or an artifact.
+   corpus outside the repository, on the owner's own machine. Delete the plaintext after sealing and keep the key and
+   the corpus apart: the sealed corpus goes on the gate Mac, the key only into the gate environment's secret (and
+   wherever the owner seals from), and neither into a fixture, a log or an artifact.
 3. **The items** are `{ channel, language, label, question, inputs, event }`, the event a version-1 catalogue event as a
    dry-run delivery shows it; its account's channel must be the item's.
 4. **Aggregate only.** The run prints and writes only `gate/<manifestId>.json`, which must validate with
@@ -374,14 +418,24 @@ D11's quality gate measures each offered template on real, labelled Gmail and Sl
 
 ### What the boundary run proves
 
-On the gate Mac, through the daemon's own supervisor and boundary and the shipped worker entry, against disposable
-copies of the two trees: the production same-child proof (TCP, `fetch`, UDP with zero datagrams at the daemon's
-receiver, and a pathname Unix-domain socket all refused, with the pipes working), the real runtime and model loading
-and answering one synthetic question, a fresh proven worker after a crash, after a request past its 30-second deadline
-and after ten idle minutes, and a changed byte in either tree starting no worker until it is restored. It records
-`pass` or `fail` for each, never a path, socket, process id, request or answer. It does not exercise the daemon's own
-delete-and-reinstall repair, which downloads, or a Mac without a working `sandbox-exec`; their tests do, and the
-supplemental checklist covers them by hand. The checklist never stands in for this evidence.
+On the gate Mac, through the daemon's own supervisor and boundary, running the built worker a release ships
+(`packages/events-daemon/dist/laya-worker.mjs`, which the workflow builds from the candidate), against disposable copies
+of the two trees: the production same-child proof (TCP, `fetch`, UDP with zero datagrams at the daemon's receiver, a
+pathname Unix-domain socket and starting another process all refused, with the pipes working), the real runtime and
+model loading and answering one synthetic question, a fresh proven worker after a crash, after a request past its
+30-second deadline and after ten idle minutes, and a changed byte in either tree starting no worker until it is
+restored. It records `pass` or `fail` for each, never a path, socket, process id, request or answer. It does not
+exercise the daemon's own delete-and-reinstall repair, which downloads, or a Mac without a working `sandbox-exec`; their
+tests do, and the supplemental checklist covers them by hand. The checklist never stands in for this evidence.
+
+The worker's profile denies more than the network: starting another process, sending an Apple event, looking up any
+Mach service — its allow-list is empty, measured with Node and a synthetic runtime — and writing anywhere but its own
+temporary folder and `/dev/null`. No test loads the real runtime under it, so `nativeLoad` is where a real runtime
+that needs more shows. **If `nativeLoad` fails,** find what the profile refused the worker on the gate Mac (`log show
+--last 10m --predicate 'eventMessage CONTAINS "deny(1)"'`, the worker's process only), widen `LAYA_SANDBOX_CONFINEMENT`
+in `packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts` by exactly that named service, never a broader
+rule, record the name and why in the E2 plan's decisions, and re-run both gates on a new candidate tag: the profile is
+part of the candidate subject.
 
 ## If a publish fails part way through
 

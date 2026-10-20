@@ -1042,9 +1042,33 @@ function codeImportSpecifiers(source) {
 }
 
 /**
+ * E2 review round 1 (A1): the boundary probe's file starts a process in exactly two places — the launcher's
+ * `sandbox-exec`, and the worker's fifth attempt, which the profile must refuse — and in no other way: no second call,
+ * no other `child_process` entry point, no renamed, namespace, default or required import, no alias.
+ */
+const PROBE_PROCESS_STARTS = Object.freeze([
+  'spawn(command, args, spawnOptions)',
+  'spawn(LAYA_PROBE_SPAWN_COMMAND, [], PROBE_SPAWN_OPTIONS)',
+]);
+
+function probeStartsAnotherProcess(code) {
+  let rest = code;
+  for (const call of PROBE_PROCESS_STARTS) rest = rest.replace(call, '');
+  return (
+    /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/.test(rest) ||
+    /\bimport\s+(?!type\b)(?!\{)[^'"]*from\s*['"](?:node:)?child_process['"]/.test(rest) ||
+    /\b(?:require|import)\s*\(\s*['"](?:node:)?child_process['"]/.test(rest) ||
+    /\b(?:spawn|spawnSync)\s+as\b/.test(rest) ||
+    /=\s*(?:spawn|spawnSync)\s*[;,)\n]/.test(rest)
+  );
+}
+
+/**
  * E2 Task 12, Step 4: the static trust boundaries. The named exceptions stay exactly these and no others: the probe's
- * one loopback `fetch`, the worker runtime's one verified-tree import (both phase E's checker's rules) and the
- * release-only raw-tarball acquirer, `scripts/fetch-laya-release-tarballs.mjs`.
+ * one loopback `fetch`, the worker runtime's one verified-tree import (both phase E's checker's rules), the
+ * release-only raw-tarball acquirer, `scripts/fetch-laya-release-tarballs.mjs`, and, from E2 review round 1, the
+ * probe's one refused process start (A1) and the release's one GitHub API request (A3,
+ * `scripts/verify-laya-gate-runs.mjs`).
  */
 const STATIC_RULES = [
   {
@@ -1064,12 +1088,17 @@ const STATIC_RULES = [
     id: 'laya-network-calls-named-only',
     check(root) {
       const acquirer = 'scripts/fetch-laya-release-tarballs.mjs';
+      // E2 review round 1 (A3): the release's check of the protected gate runs makes its GitHub API request in one place.
+      const gateRuns = 'scripts/verify-laya-gate-runs.mjs';
       const scripts = filesBelow(root, 'scripts').filter((file) => /laya/.test(file) && /\.m?[jt]s$/.test(file));
       for (const file of [...layaSources(root), ...scripts]) {
         const code = codeOnly(readText(root, file));
         const fetches = (code.match(/\bfetch\s*\(/g) ?? []).length;
         const requests = valueImports(code).filter((specifier) => /^node:https?$/.test(specifier)).length;
-        if (file.endsWith('/worker-boundary-probe.ts') ? fetches > 1 : fetches > 0)
+        if (file === gateRuns) {
+          if (fetches > 1)
+            fail(`${file} calls fetch more than once; the gate-run check makes its GitHub API request in one place`);
+        } else if (file.endsWith('/worker-boundary-probe.ts') ? fetches > 1 : fetches > 0)
           fail(`${file} calls fetch; only the boundary probe's one loopback attempt may`);
         if (requests > 0 && file !== acquirer)
           fail(`${file} makes an HTTP request; only the release-only raw-tarball acquirer may`);
@@ -1086,7 +1115,11 @@ const STATIC_RULES = [
         if (childProcess && !allowed)
           fail(`${file} imports node:child_process; only the availability probe and the sandbox launcher may`);
         if (/(?<![.\w$])(?:exec|execSync|execFile|execFileSync|fork)\s*\(|\bshell\s*:\s*true\b/.test(code))
-          fail(`${file} runs a shell or another program; the Laya modules spawn only sandbox-exec, without a shell`);
+          fail(
+            `${file} runs a shell or another program; the Laya modules start only sandbox-exec, the availability probe's sysctl and the probe's refused attempt, never through a shell`,
+          );
+        if (file.endsWith('/worker-boundary-probe.ts') && probeStartsAnotherProcess(code))
+          fail(`${file} starts a process beyond the sandbox launcher and the probe's one refused spawn attempt`);
       }
     },
   },
@@ -1203,7 +1236,7 @@ const STATIC_RULES = [
         .slice(workflow.indexOf('\n    steps:\n'))
         .split(/\n {6}- /)
         .slice(1);
-      const corpus = /AGENTCOMMS_LAYA_GATE_(?:CORPUS|KEY_FILE|REFERENCE|PYTHON)\b/;
+      const corpus = /AGENTCOMMS_LAYA_GATE_(?:CORPUS|CORPUS_KEY|KEY_FILE|REFERENCE|PYTHON)\b/;
       const reading = steps.flatMap((step, index) => (corpus.test(step) ? [index] : []));
       const boundary = steps.findIndex((step) => /run-laya-macos-boundary-gate\.mjs run\b/.test(step));
       if (

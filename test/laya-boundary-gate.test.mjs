@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import {
+  BUILT_WORKER_ENTRY,
   EGRESS_PROBES,
   egressCheck,
   runBoundaryGate,
@@ -18,6 +19,7 @@ import {
 import {
   BOUNDARY_CHECKS,
   BOUNDARY_EVIDENCE,
+  BOUNDARY_SCHEMA,
   boundaryPassed,
   canonicalEvidenceBytes,
   computeBoundaryCandidate,
@@ -25,6 +27,7 @@ import {
   validateBoundaryEvidence,
   verifyBoundaryGate,
 } from '../scripts/verify-laya-boundary-gate.mjs';
+import { RUN_COPIES } from '../scripts/verify-laya-gate-runs.mjs';
 import {
   boundaryEvidence,
   codeOf,
@@ -196,7 +199,8 @@ test('E2 macOS boundary gate: evidence is canonical JSON with exactly its review
     const [arm64, x64] = good.architectures;
     const { tcp: _tcp, ...withoutTcp } = arm64.checks;
     for (const [code, bad] of [
-      ['BOUNDARY_EVIDENCE_SHAPE', { ...good, schemaVersion: 2 }],
+      // Version 1 named no spawn check; no version 1 evidence was ever produced, and a release accepts only version 2.
+      ['BOUNDARY_EVIDENCE_SHAPE', { ...good, schemaVersion: 1 }],
       ['BOUNDARY_EVIDENCE_SHAPE', { ...good, architectures: [] }],
       ['BOUNDARY_EVIDENCE_SHAPE', { ...good, architectures: [{ ...arm64, checks: withoutTcp }, x64] }],
       [
@@ -218,28 +222,62 @@ test('E2 macOS boundary gate: evidence is canonical JSON with exactly its review
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from(JSON.stringify(good)))), 'BOUNDARY_EVIDENCE_JSON');
     const duplicated = bytes
       .toString('utf8')
-      .replace('"schemaVersion": 1,', '"schemaVersion": 1,\n  "schemaVersion": 1,');
+      .replace('"schemaVersion": 2,', '"schemaVersion": 2,\n  "schemaVersion": 2,');
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from(duplicated))), 'BOUNDARY_EVIDENCE_JSON');
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from('- [x] TCP denied\n'))), 'BOUNDARY_EVIDENCE_JSON');
   });
 });
 
-test('E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator', async () => {
+async function boundarySchema(version) {
   const require = createRequire(join(ROOT, 'packages/events-daemon/package.json'));
   const ajvModule = require('ajv/dist/2020.js');
   const Ajv2020 = ajvModule.default ?? ajvModule;
   const schema = JSON.parse(
-    await readFile(join(ROOT, 'packages/events-laya-runtime/gate/macos-boundary-v1.schema.json'), 'utf8'),
+    await readFile(join(ROOT, `packages/events-laya-runtime/gate/macos-boundary-${version}.schema.json`), 'utf8'),
   );
-  const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
+  return { schema, validate: new Ajv2020({ allErrors: true, strict: true }).compile(schema) };
+}
+
+test('E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator', async () => {
+  // Version 1 is kept as it was written (E2 review round 1, A1): exactly version 2's checks less the process start,
+  // and the validator, which reads version 2, refuses a version 1 document.
+  const { schema } = await boundarySchema('v1');
+  assert.equal(schema.properties.schemaVersion.const, 1);
+  assert.deepEqual(
+    schema.$defs.architecture.properties.checks.required,
+    BOUNDARY_CHECKS.filter((name) => name !== 'spawn'),
+  );
+  await withOffered(async (root) => {
+    assert.equal(
+      await codeOf(() =>
+        validateBoundaryEvidence(
+          { ...boundaryEvidence(root, ['arm64']), schemaVersion: 1 },
+          {
+            candidates: candidatesFor(root, ['arm64']),
+          },
+        ),
+      ),
+      'BOUNDARY_EVIDENCE_SHAPE',
+    );
+  });
+});
+
+test('E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start', async () => {
+  const { schema, validate } = await boundarySchema('v2');
+  assert.equal(BOUNDARY_SCHEMA, 'packages/events-laya-runtime/gate/macos-boundary-v2.schema.json');
+  assert.equal(BOUNDARY_EVIDENCE, 'packages/events-laya-runtime/gate/macos-boundary-v2.json');
+  assert.equal(schema.properties.schemaVersion.const, 2);
   await withOffered(async (root) => {
     const good = boundaryEvidence(root, BOTH);
     assert.equal(validate(good), true, JSON.stringify(validate.errors));
     assert.deepEqual(schema.$defs.architecture.properties.checks.required, [...BOUNDARY_CHECKS]);
+    assert.ok(BOUNDARY_CHECKS.includes('spawn'), 'the real-Mac run records the refused process start');
     const [arm64] = good.architectures;
+    const { spawn: _spawn, ...withoutSpawn } = arm64.checks;
     for (const bad of [
       { ...good, extra: true },
       { ...good, architectures: [{ ...arm64, checks: { ...arm64.checks, tcp: 'skipped' } }] },
+      { ...good, architectures: [{ ...arm64, checks: withoutSpawn }] },
       { ...good, architectures: [{ ...arm64, node: 'node' }] },
     ]) {
       assert.equal(validate(bad), false);
@@ -293,6 +331,39 @@ test('E2 macOS boundary gate run: writes only the validated, content-free eviden
       assert.equal(text.includes(content), false, `${content} never reaches the evidence`);
     }
     assert.doesNotThrow(() => verifyBoundaryGate({ root, architectures: ['arm64'] }));
+  });
+});
+
+test('E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source', async () => {
+  assert.equal(BUILT_WORKER_ENTRY, 'packages/events-daemon/dist/laya-worker.mjs');
+  await withOffered(async (root) => {
+    const given = [];
+    const mac = standinMac({
+      runChecks: async (options) => {
+        given.push(options.workerEntry);
+        return passingChecks();
+      },
+    });
+    await runOn(root, mac.dependencies);
+    assert.deepEqual(given, [join(root, BUILT_WORKER_ENTRY)], 'the checks run the candidate checkout’s own build');
+  });
+  // The harness hands that entry to the boundary itself: every other option is the production one.
+  const runner = await readFile(join(ROOT, 'scripts/run-laya-macos-boundary-gate.mjs'), 'utf8');
+  assert.match(
+    runner,
+    /createLayaWorkerBoundaryForTest\(\{\s*dataDirectory: options\.dataDirectory,\s*signal: options\.signal,\s*workerEntry,\s*\}\)/u,
+  );
+  assert.doesNotMatch(runner, /\bcreateLayaWorkerBoundary\(/u, 'never the source entry the production surface derives');
+  // A candidate whose daemon was not built runs no check: every one is recorded as failed.
+  await withOffered(async (root) => {
+    const { candidate } = computeBoundaryCandidate({ root, architecture: 'arm64' });
+    const checks = await runProductionChecks({
+      candidate,
+      runtimeTree: TREES.runtimeTree,
+      modelTree: TREES.modelTree,
+      workerEntry: join(root, BUILT_WORKER_ENTRY),
+    });
+    assert.deepEqual(checks, Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'fail'])));
   });
 });
 
@@ -407,7 +478,22 @@ test('E2 macOS boundary gate workflow: nothing in it can publish or keep a crede
   const workflow = await gateWorkflow();
   assert.match(workflow, /\npermissions: \{\}\n/);
   assert.match(workflow, /\n {4}permissions:\n {6}contents: read\n {4}steps:\n/, 'contents: read, and nothing else');
-  assert.doesNotMatch(workflow, /id-token|secrets\.|registry-url|NODE_AUTH_TOKEN|NPM_TOKEN|github\.token|write-all/);
+  assert.doesNotMatch(workflow, /id-token|registry-url|NODE_AUTH_TOKEN|NPM_TOKEN|github\.token|write-all/);
+  // E2 review round 1 (A4): one secret, the corpus key, the gate environment's own, in the quality step's env alone.
+  const secrets = steps(workflow).flatMap((step, index) =>
+    [...step.matchAll(/\$\{\{\s*secrets\.(\w+)\s*\}\}/g)].map((match) => [index, match[1], step]),
+  );
+  assert.equal([...workflow.matchAll(/secrets\./g)].length, 1, 'no secret anywhere else');
+  assert.equal(secrets.length, 1);
+  const [[, name, step]] = secrets;
+  assert.equal(name, 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY');
+  assert.match(step, /run-laya-quality-gate\.mjs run\b/, 'only the quality run is given it');
+  assert.match(
+    step,
+    /\n {8}env:\n {10}AGENTCOMMS_LAYA_GATE_CORPUS_KEY: \$\{\{ secrets\.AGENTCOMMS_LAYA_GATE_CORPUS_KEY \}\}\n/,
+    'as that step’s own environment',
+  );
+  assert.doesNotMatch(workflow, /KEY_FILE|--key-file/, 'no key path on the gate Mac');
   const checkout = steps(workflow).find((step) => step.startsWith('uses: actions/checkout@'));
   assert.match(checkout ?? '', /\n {10}persist-credentials: false/);
   for (const [, action, ref] of workflow.matchAll(/uses: ([^@\s]+)@(\S+)/g)) {
@@ -428,8 +514,10 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
   const boundary = at('scripts/run-laya-macos-boundary-gate.mjs run');
   const quality = at('scripts/run-laya-quality-gate.mjs run --attest-written-consent');
   assert.ok(install < candidate && candidate < egress && egress < boundary && boundary < quality);
-  // The order protects only if every step runs: none before the results' artifact may be skipped or allowed to fail.
-  for (const [index, step] of list.slice(0, -1).entries()) {
+  // The order protects only if every step runs: none before the results' artifacts may be skipped or allowed to fail.
+  const uploads = list.flatMap((step, index) => (step.includes('uses: actions/upload-artifact@') ? [index] : []));
+  assert.deepEqual(uploads, [list.length - 3, list.length - 2, list.length - 1], 'the three artifact steps come last');
+  for (const [index, step] of list.slice(0, uploads[0]).entries()) {
     assert.doesNotMatch(
       step,
       /\n {8}(?:if|continue-on-error):/,
@@ -437,17 +525,50 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
     );
   }
   const corpus = list.flatMap((step, index) =>
-    /AGENTCOMMS_LAYA_GATE_(?:CORPUS|KEY_FILE|REFERENCE|PYTHON)\b/.test(step) ? [index] : [],
+    /AGENTCOMMS_LAYA_GATE_(?:CORPUS|CORPUS_KEY|KEY_FILE|REFERENCE|PYTHON)\b/.test(step) ? [index] : [],
   );
   assert.deepEqual(corpus, [quality], 'only the quality run names the corpus, its key or the reference');
-  const kept = list.at(-1) ?? '';
+  const kept = list[uploads[0]] ?? '';
   assert.match(kept, /packages\/events-laya-runtime\/gate\/laya-\*\.json\n/);
-  assert.match(kept, /packages\/events-laya-runtime\/gate\/macos-boundary-v1\.json\n/);
+  assert.match(kept, /packages\/events-laya-runtime\/gate\/macos-boundary-v2\.json\n/);
   assert.equal(
     [...kept.matchAll(/\n {12}\S/g)].length,
     2,
     'the artifact keeps the two content-free results and nothing else',
   );
+});
+
+test('E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped', async () => {
+  const list = steps(await gateWorkflow());
+  const boundaryRun = list.find((step) => step.includes('scripts/run-laya-macos-boundary-gate.mjs run')) ?? '';
+  const qualityRun = list.find((step) => step.includes('scripts/run-laya-quality-gate.mjs run')) ?? '';
+  assert.match(boundaryRun, new RegExp(`--run-copy "\\$RUNNER_TEMP/${RUN_COPIES.boundary}"(?:\n|$)`));
+  assert.match(qualityRun, new RegExp(`--run-copy "\\$RUNNER_TEMP/${RUN_COPIES.quality}"(?:\n|$)`));
+  for (const [step, name] of [
+    [list.at(-2), RUN_COPIES.quality],
+    [list.at(-1), RUN_COPIES.boundary],
+  ]) {
+    // Unzipped, the artifact is the file itself, named by it, and GitHub's digest of it is the file's SHA-256.
+    assert.match(step ?? '', new RegExp(`\\n {10}path: \\$\\{\\{ runner\\.temp \\}\\}/${name}\\n`), name);
+    assert.match(step ?? '', /\n {10}archive: false\n/, `${name} is uploaded unzipped`);
+    assert.match(step ?? '', /\n {10}retention-days: 90(?:\n|$)/, `${name} is kept as long as GitHub allows`);
+  }
+  await withOffered(async (root) => {
+    // Another architecture's entry already there: the copy is still this run's architecture alone.
+    await writeBoundaryEvidence(root, boundaryEvidence(root, ['x64']));
+    const copy = join(root, 'run-copy.json');
+    await runOn(root, standinMac().dependencies, { runCopy: copy });
+    const committed = parseEvidenceBytes(await readFile(join(root, BOUNDARY_EVIDENCE)));
+    assert.deepEqual(
+      committed.architectures.map((entry) => entry.architecture),
+      ['arm64', 'x64'],
+    );
+    assert.deepEqual(
+      await readFile(copy),
+      canonicalEvidenceBytes({ ...committed, architectures: [committed.architectures[0]] }),
+      "the run's copy is the committed evidence restricted to its architecture",
+    );
+  });
 });
 
 test('E2 macOS boundary gate workflow: ordinary CI and pnpm verify run neither gate and read no corpus', async () => {

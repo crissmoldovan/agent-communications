@@ -2,7 +2,7 @@
 
 **This checklist is not release evidence, and it cannot satisfy the release gate.** A release may offer Laya only with
 the machine-produced evidence E2 Task 10 requires: the content-free boundary evidence
-`packages/events-laya-runtime/gate/macos-boundary-v1.json`, written on the gate Mac by
+`packages/events-laya-runtime/gate/macos-boundary-v2.json`, written on the gate Mac by
 `scripts/run-laya-macos-boundary-gate.mjs` and validated by `scripts/verify-laya-boundary-gate.mjs`; the aggregate
 quality report `packages/events-laya-runtime/gate/<manifestId>.json`; and the runtime lock rebuilt from the registry.
 Each is required for every architecture the lock offers ([Releasing](../docs/RELEASING.md#laya-the-local-model-judge)).
@@ -50,10 +50,14 @@ the daemon's data directory on that Mac.
 - [ ] If this Mac cannot be made to refuse its sandbox, record that. The automated tests then stand alone for this case
       (`E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup`).
 
-## 4. Network denial, with the pipes working
+## 4. Network and process denial, with the pipes working
 
-- [ ] The boundary run passed `tcp`, `fetch`, `udp`, `uds` and `pipes` on this architecture (read them in the
+- [ ] The boundary run passed `spawn`, `tcp`, `fetch`, `udp`, `uds` and `pipes` on this architecture (read them in the
       workflow's artifact before committing it).
+- [ ] By hand, from the repository root:
+      `node --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-name-pattern 'E2 boundary: under the real profile the worker writes only in its own directory' packages/events-daemon/test/laya-boundary.test.ts`
+      passes, and is not skipped: the worker's profile refuses a write outside its folder, a process start and a Mach
+      service lookup on this Mac, and the worker still loads a synthetic runtime under it.
 - [ ] By hand, from the repository root:
       `node --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-name-pattern 'E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live' packages/events-daemon/test/laya-boundary.test.ts`
       passes, and is not skipped.
@@ -95,8 +99,9 @@ the daemon's data directory on that Mac.
 
 ## 9. The quality report, from the consented external corpus
 
-- [ ] The corpus, its key and its consent ledger stayed outside every checkout, and nothing of them was uploaded to CI,
-      a fixture, a log or an artifact.
+- [ ] The corpus, its key and its consent ledger stayed outside every checkout; the key is only the gate environment's
+      `AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret (and wherever you seal from), never a file on the gate Mac; and nothing
+      of them went into a fixture, a log or an artifact.
 - [ ] Read `gate/<manifestId>.json` before committing it. It holds aggregates only: no message, subject, address,
       account, path, token, question or answer. Its consent is `written-attested`, Gmail and Slack are reported
       separately for every offered template, and its architectures are the Macs that ran.

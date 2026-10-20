@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentcomms:schema:laya-macos-boundary:v2",
+  "title": "Laya real-Mac boundary evidence, version 2",
+  "description": "What scripts/run-laya-macos-boundary-gate.mjs writes on the owner's protected Mac, as packages/events-laya-runtime/gate/macos-boundary-v2.json: per architecture, the candidate it ran (manifest, runtime lock, platform file list, subject and runner digests), the Node and macOS versions, and pass or fail for each boundary check. spawn, tcp, fetch, udp and uds pass only when the production same-child proof accepted the worker, which needs the operating system to have refused that attempt (spawn: starting another process) and, for the four connections, the daemon's listener for it to have seen nothing (for UDP, zero datagrams). Version 2 adds spawn to version 1's checks. It holds no path, socket, process id, request, answer or secret. scripts/verify-laya-boundary-gate.mjs enforces this schema, the privacy scan, the candidate binding and the verdicts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "manifestId", "manifestSha256", "runtimeLockSha256", "runnerSha256", "architectures"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "manifestId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "runtimeLockSha256": { "$ref": "#/$defs/sha256" },
+    "runnerSha256": { "$ref": "#/$defs/sha256" },
+    "architectures": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/architecture" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "version": { "type": "string", "pattern": "^[0-9][0-9A-Za-z.+-]{0,31}$" },
+    "verdict": { "enum": ["pass", "fail"] },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "platformFileListDigest", "subjectDigest", "node", "macos", "checks", "passed"],
+      "properties": {
+        "architecture": { "enum": ["arm64", "x64"] },
+        "platformFileListDigest": { "$ref": "#/$defs/sha256" },
+        "subjectDigest": { "$ref": "#/$defs/sha256" },
+        "node": { "$ref": "#/$defs/version" },
+        "macos": { "$ref": "#/$defs/version" },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "spawn",
+            "tcp",
+            "fetch",
+            "udp",
+            "uds",
+            "pipes",
+            "nativeLoad",
+            "crashRestart",
+            "timeoutRestart",
+            "idleRestart",
+            "alteredTreeRefused",
+            "repairedTreeAccepted"
+          ],
+          "properties": {
+            "spawn": { "$ref": "#/$defs/verdict" },
+            "tcp": { "$ref": "#/$defs/verdict" },
+            "fetch": { "$ref": "#/$defs/verdict" },
+            "udp": { "$ref": "#/$defs/verdict" },
+            "uds": { "$ref": "#/$defs/verdict" },
+            "pipes": { "$ref": "#/$defs/verdict" },
+            "nativeLoad": { "$ref": "#/$defs/verdict" },
+            "crashRestart": { "$ref": "#/$defs/verdict" },
+            "timeoutRestart": { "$ref": "#/$defs/verdict" },
+            "idleRestart": { "$ref": "#/$defs/verdict" },
+            "alteredTreeRefused": { "$ref": "#/$defs/verdict" },
+            "repairedTreeAccepted": { "$ref": "#/$defs/verdict" }
+          }
+        },
+        "passed": { "type": "boolean" }
+      }
+    }
+  }
+}

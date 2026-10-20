@@ -135,12 +135,15 @@ jobs:
   # SRI, with the owner-only acquirer the flag below enables, and carry passing quality and real-Mac boundary evidence
   # for every architecture the lock offers; any failure stops the release with nothing sent. It also refuses a Laya or
   # ONNX package in the daemon's published dependencies, and the private runtime declaration in a release list. It holds
-  # no registry credential and no OIDC permission, and runs on dry runs too. See docs/RELEASING.md.
+  # no registry credential and no OIDC permission, and runs on dry runs too. When a real lock ships, it asks the GitHub
+  # API, with this job's token, whether each architecture's results are exactly what the owner's recorded protected
+  # gate run wrote: `actions: read` is all that needs. See docs/RELEASING.md.
   laya:
     name: Laya release gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -155,6 +158,7 @@ jobs:
       - name: Laya ships dormant, or with every gate's evidence
         env:
           AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1'
+          GITHUB_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/laya-release-gate.mjs
 
   publish:

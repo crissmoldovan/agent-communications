@@ -24,9 +24,14 @@ pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 ```
 
 `scripts/verify-events-phase-e2-tests.mjs` refuses any install in a tracked
-file that does not carry that filter, and `scripts/verify-laya-ci-install.mjs`
-proves from a cold store that the filtered install acquires none of the
-runtime's packages.
+file that does not carry that filter. `pnpm verify` runs
+`scripts/verify-laya-ci-install.mjs --self-test`, which checks that the
+workspace stops pnpm from reinstalling unfiltered before a script and that its
+store scanner finds a runtime package in a synthetic store. The cold-store
+install itself — `node scripts/verify-laya-ci-install.mjs`, a filtered install
+into an empty store, scanned for the runtime's three root packages — runs in
+no workflow; it is a check to run by hand, and the coordinator ran it on
+2026-10-10.
 
 ## Reviewed direct packages
 
@@ -49,18 +54,23 @@ checks that this is so. A release that ships the real lock must first:
 2. carry the aggregate quality report `gate/<manifestId>.json`, which
    `scripts/verify-laya-quality-gate.mjs` accepts, with every offered prompt
    template passing on Gmail and on Slack;
-3. carry the real-Mac boundary evidence `gate/macos-boundary-v1.json` (schema
-   `gate/macos-boundary-v1.schema.json`), which
+3. carry the real-Mac boundary evidence `gate/macos-boundary-v2.json` (schema
+   `gate/macos-boundary-v2.schema.json`; version 1's schema is kept as it was
+   written, and no evidence was ever made under it), which
    `scripts/verify-laya-boundary-gate.mjs` accepts, passing.
 
 Steps 2 and 3 hold for every macOS architecture the lock offers, each with its
-own evidence: arm64 evidence never stands for Intel. Any failure stops the
+own evidence: arm64 evidence never stands for Intel. And for each, GitHub must
+show that the results are exactly what the protected gate run the owner
+recorded wrote (`scripts/verify-laya-gate-runs.mjs`). Any failure stops the
 release with nothing published.
 
 ## The gate directory
 
-`gate/` holds the two schemas and, once the owner has run the gates, the two
-results — and nothing else. Both results are aggregate and content-free: no
+`gate/` holds the schemas and, once the owner has run the gates, the two
+results and the run record (`runs-v1.json`, the protected run each
+architecture's results came from, which a release checks with GitHub) — and
+nothing else. Both results are aggregate and content-free: no
 message, subject, address, handle, event id, question, label, per-item value,
 path or secret. They come only from the owner's protected Mac
 (`.github/workflows/laya-quality-gate.yml`), over a corpus of the owner's and

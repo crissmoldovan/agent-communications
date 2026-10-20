@@ -10,8 +10,10 @@
  *   the owner-only raw-tarball acquirer (`scripts/fetch-laya-release-tarballs.mjs`) and match it byte for byte,
  *   (b) carry the aggregate quality report `packages/events-laya-runtime/gate/<manifestId>.json` that E2 Task 9's
  *   validator accepts with every offered template passing, and (c) carry the content-free real-Mac boundary evidence
- *   `packages/events-laya-runtime/gate/macos-boundary-v1.json` passing — (b) and (c) for every macOS architecture the
- *   lock offers, each with its own evidence (E2-J). Any failure stops the release with nothing published.
+ *   `packages/events-laya-runtime/gate/macos-boundary-v2.json` passing — (b) and (c) for every macOS architecture the
+ *   lock offers, each with its own evidence (E2-J) — and (d) show, through the GitHub API, that each architecture's
+ *   results are exactly what the protected gate run the owner recorded for it wrote (E2 review round 1, A3:
+ *   `scripts/verify-laya-gate-runs.mjs`). Any failure stops the release with nothing published.
  *
  * Either way: the manifest offers exactly `laya-noul-v1` (`laya-choice2-v1` waits for its own task), no Laya or ONNX
  * package is in the daemon's published dependency closure, and the private runtime package is never published.
@@ -33,6 +35,7 @@ import {
   parseRuntimeLock,
 } from './laya-runtime-lock.mjs';
 import { verifyBoundaryGate } from './verify-laya-boundary-gate.mjs';
+import { gateRunsApi, verifyGateRuns } from './verify-laya-gate-runs.mjs';
 import { verifyQualityGate } from './verify-laya-quality-gate.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -279,6 +282,7 @@ export async function layaReleaseGate({
   rebuildLock = (lockText) => rebuildRuntimeLock(lockText, { acquire: supplyChainGateAcquirer(env) }),
   verifyQuality = verifyQualityGate,
   verifyBoundary = verifyBoundaryGate,
+  verifyRuns = (input) => verifyGateRuns({ ...input, api: gateRunsApi(env, input.root) }),
 } = {}) {
   const texts = {
     manifest: await readRootText(root, LAYA_ASSETS.manifest),
@@ -329,6 +333,12 @@ export async function layaReleaseGate({
     verifyBoundary({ root, architectures });
   } catch (error) {
     fail('LAYA_RELEASE_BOUNDARY', error instanceof Error ? error.message : String(error));
+  }
+  // Committed by hand, the results are only the owner's word until GitHub says which protected run wrote them.
+  try {
+    await verifyRuns({ root, architectures });
+  } catch (error) {
+    fail('LAYA_RELEASE_RUN', error instanceof Error ? error.message : String(error));
   }
   let rebuilt;
   try {

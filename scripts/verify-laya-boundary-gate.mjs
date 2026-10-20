@@ -6,7 +6,7 @@
  *
  *   node --experimental-strip-types scripts/verify-laya-boundary-gate.mjs [--architecture arm64|x64]...
  *
- * The evidence, `packages/events-laya-runtime/gate/macos-boundary-v1.json`, holds per architecture only the candidate's
+ * The evidence, `packages/events-laya-runtime/gate/macos-boundary-v2.json`, holds per architecture only the candidate's
  * digests, the Node and macOS versions it ran on, and `pass` or `fail` for each check — never a path, a socket, a
  * process id, a request or an answer. It sits in the gate directory, which the candidate subject excludes, so
  * committing it does not change the subject it names (E2 Task 9's subject).
@@ -24,11 +24,18 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
-export const BOUNDARY_SCHEMA_VERSION = 1;
-export const BOUNDARY_EVIDENCE = `${GATE_REPORT_DIRECTORY}/macos-boundary-v1.json`;
+/**
+ * Version 2 (E2 review round 1, A1) adds `spawn`. No version 1 evidence was ever produced, so none is invalidated;
+ * `gate/macos-boundary-v1.schema.json` stays as it was written, beside version 2's.
+ */
+export const BOUNDARY_SCHEMA_VERSION = 2;
+export const BOUNDARY_EVIDENCE = `${GATE_REPORT_DIRECTORY}/macos-boundary-v2.json`;
+export const BOUNDARY_SCHEMA = `${GATE_REPORT_DIRECTORY}/macos-boundary-v2.schema.json`;
 export const BOUNDARY_RUNNER = 'scripts/run-laya-macos-boundary-gate.mjs';
 /**
  * What the run proves on a real Mac, each `pass` or `fail`:
+ * - `spawn`: the production same-child proof accepted the worker, which it does only when the operating system refused
+ *   the worker's attempt to start another process (EPERM under the profile's `process-fork` denial);
  * - `tcp`, `fetch`, `udp`, `uds`: the production same-child proof accepted the worker, which it does only when the
  *   operating system refused that attempt and the daemon's own listener for it saw nothing — for UDP, zero datagrams;
  * - `pipes`, `nativeLoad`: over that child's own pipes, the real runtime and model loaded and answered;
@@ -38,6 +45,7 @@ export const BOUNDARY_RUNNER = 'scripts/run-laya-macos-boundary-gate.mjs';
  *   and the restored tree starts one that answers.
  */
 export const BOUNDARY_CHECKS = Object.freeze([
+  'spawn',
   'tcp',
   'fetch',
   'udp',
@@ -146,7 +154,7 @@ export function validateBoundaryEvidence(evidence, { candidates }) {
     fail('BOUNDARY_EVIDENCE_RAW', `the evidence holds what is not a closed token (${error?.code ?? 'unknown'})`);
   }
   exactObject(evidence, TOP_KEYS, '');
-  if (evidence.schemaVersion !== BOUNDARY_SCHEMA_VERSION) fail('BOUNDARY_EVIDENCE_SHAPE', 'the schema version is 1');
+  if (evidence.schemaVersion !== BOUNDARY_SCHEMA_VERSION) fail('BOUNDARY_EVIDENCE_SHAPE', 'the schema version is 2');
   token(evidence.manifestId, /^[a-z0-9][a-z0-9-]{0,63}$/, '/manifestId');
   for (const key of ['manifestSha256', 'runtimeLockSha256', 'runnerSha256']) token(evidence[key], HEX64, `/${key}`);
   if (!Array.isArray(evidence.architectures) || evidence.architectures.length === 0)

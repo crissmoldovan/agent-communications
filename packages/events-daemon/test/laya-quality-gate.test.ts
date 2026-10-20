@@ -69,6 +69,7 @@ interface Verifier {
   readonly QUALITY_THRESHOLDS: Readonly<Record<string, number>>;
   readonly QUALITY_CORPUS_RELEASE: Readonly<Record<string, string>>;
   readonly GATE_REPORT_DIRECTORY: string;
+  readonly GATE_SUBJECT_FILES: readonly string[];
   readonly EVIDENCE_RECORD: string;
   calibrationBin(probability: number, bins?: number): number;
   expectedCalibrationError(probabilities: readonly number[], labels: readonly number[]): number;
@@ -129,6 +130,9 @@ interface Runner {
   sealCorpus(key: Buffer, plaintext: Buffer): Buffer;
   openCorpus(key: Buffer, sealed: Buffer): Buffer;
   readCorpusKey(path: string, options: { readonly root: string }): Promise<Buffer>;
+  readonly CORPUS_KEY_VARIABLE: string;
+  takeCorpusKey(env: Record<string, string | undefined>): Buffer;
+  parseCommand(argv: readonly string[]): Readonly<Record<string, unknown>>;
   generateCorpusKey(path: string, options: { readonly root: string }): Promise<void>;
   sealCorpusFile(options: {
     readonly keyFile: string;
@@ -396,10 +400,15 @@ test('E2 quality gate: the subject digest binds the worker source and ignores th
       'packages/events-daemon/laya-runtime.json',
       'packages/events-daemon/package.json',
       'packages/events-daemon/src/runtime/judge-coordinator.ts',
+      'packages/events-daemon/src/runtime/laya/contracts.ts',
+      'packages/events-daemon/src/runtime/laya/manager.ts',
+      'packages/events-daemon/src/runtime/laya/tar.ts',
+      'packages/events-daemon/src/runtime/laya/tree-verifier.ts',
       'packages/events-daemon/src/runtime/laya/worker-main.ts',
       'packages/events-daemon/src/runtime/laya/worker-runtime.ts',
       'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
       'packages/events-daemon/tsdown.config.ts',
+      'pnpm-lock.yaml',
     ]);
     const before = gate.gateSubjectDigest(root, 'arm64');
     assert.notEqual(before, gate.gateSubjectDigest(root, 'x64'), 'the subject is bound to its architecture');
@@ -417,6 +426,44 @@ test('E2 quality gate: the subject digest binds the worker source and ignores th
         'export function answer(): void {\n  // changed\n}\n',
     },
   );
+});
+
+test('E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was', async () => {
+  // A2: the tree checks, the strict extractor, the artifact manager, the strict parsers and the lockfile that pins the
+  // toolchain each change what a passing run measured, so each is in the subject.
+  const measured = [
+    'packages/events-daemon/src/runtime/laya/contracts.ts',
+    'packages/events-daemon/src/runtime/laya/manager.ts',
+    'packages/events-daemon/src/runtime/laya/tar.ts',
+    'packages/events-daemon/src/runtime/laya/tree-verifier.ts',
+    'pnpm-lock.yaml',
+  ];
+  for (const file of measured) {
+    await withFixtureRoot(async (root, gate) => {
+      assert.ok(gate.GATE_SUBJECT_FILES.includes(file), `${file} is a subject file`);
+      const before = gate.gateSubjectDigest(root, 'arm64');
+      await writeFile(join(root, file), `${await readFile(join(root, file), 'utf8')}\n// changed\n`);
+      assert.notEqual(gate.gateSubjectDigest(root, 'arm64'), before, `a change to ${file} is another candidate`);
+    });
+  }
+  // B3: the daemon's package.json is bound without its version: a release's bump keeps the evidence; nothing else does.
+  await withFixtureRoot(async (root, gate) => {
+    const path = join(root, 'packages/events-daemon/package.json');
+    const original = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    const before = gate.gateSubjectDigest(root, 'arm64');
+    await writeFile(path, `${JSON.stringify({ ...original, version: '9.9.9' }, null, 2)}\n`);
+    assert.equal(gate.gateSubjectDigest(root, 'arm64'), before, 'a version bump alone is the same candidate');
+    await writeFile(path, `${JSON.stringify({ version: '0.25.0', ...original })}\n`);
+    assert.equal(gate.gateSubjectDigest(root, 'arm64'), before, 'nor do the order of its keys or its layout');
+    await writeFile(path, `${JSON.stringify({ ...original, version: '0.25.0', files: ['dist'] }, null, 2)}\n`);
+    assert.notEqual(gate.gateSubjectDigest(root, 'arm64'), before, 'any other change is another candidate');
+    await writeFile(path, 'not json\n');
+    assert.equal(
+      codeOf(() => gate.gateSubjectDigest(root, 'arm64')),
+      'QUALITY_CANDIDATE',
+      'broken JSON is refused',
+    );
+  });
 });
 
 test('E2 quality gate: a candidate subject that includes the report is refused', async () => {
@@ -797,6 +844,53 @@ test('E2 quality gate run: a corpus or key inside the repository is refused', { 
   });
 });
 
+test('E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const gateRunner = await runner();
+  assert.equal(gateRunner.CORPUS_KEY_VARIABLE, 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY');
+  const key = Buffer.alloc(32, 9);
+  const env: Record<string, string | undefined> = {
+    PATH: '/usr/bin',
+    AGENTCOMMS_LAYA_GATE_CORPUS_KEY: key.toString('base64'),
+  };
+  assert.deepEqual(gateRunner.takeCorpusKey(env), key);
+  assert.deepEqual(env, { PATH: '/usr/bin' }, 'read once, then gone from the environment the run passes on');
+  assert.equal(
+    codeOf(() => gateRunner.takeCorpusKey(env)),
+    'QUALITY_KEY',
+    'no key, no run',
+  );
+  for (const text of ['', 'not base64', Buffer.alloc(16).toString('base64')]) {
+    assert.equal(
+      codeOf(() => gateRunner.takeCorpusKey({ AGENTCOMMS_LAYA_GATE_CORPUS_KEY: text })),
+      'QUALITY_KEY',
+    );
+  }
+  await withFixtureRoot(async (root) => {
+    const sealed = await sealedCorpus(gateRunner, root, [gmailItem(0, 1)]);
+    try {
+      const options = {
+        root,
+        platform: 'darwin',
+        architecture: 'arm64',
+        attestWrittenConsent: true,
+        corpus: sealed.directory,
+      };
+      assert.equal(
+        await asyncCodeOf(() => gateRunner.runQualityGate({ ...options, keyFile: sealed.keyFile, env: {} }, {})),
+        'QUALITY_USAGE',
+        'a key file is refused: the key lives in the gate environment, not on its Mac',
+      );
+      assert.equal(await asyncCodeOf(() => gateRunner.runQualityGate({ ...options, env: {} }, {})), 'QUALITY_KEY');
+    } finally {
+      await sealed.remove();
+    }
+  });
+  assert.throws(() => gateRunner.parseCommand(['run', '--key-file', '/outside/corpus.key']), /QUALITY_USAGE/);
+  assert.equal(gateRunner.parseCommand(['seal', '--key-file', '/outside/corpus.key']).keyFile, '/outside/corpus.key');
+});
+
 test('E2 quality gate run: the corpus directory holds only sealed corpus files', { skip: WINDOWS_SKIP }, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
@@ -1101,7 +1195,8 @@ test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_S
           architecture: 'arm64',
           attestWrittenConsent: true,
           corpus: sealed.directory,
-          keyFile: sealed.keyFile,
+          env: { [gateRunner.CORPUS_KEY_VARIABLE]: sealed.key.toString('base64') },
+          runCopy: join(sealed.directory, '..', `laya-quality-run-${process.pid}.json`),
           reference: '/nonexistent/reference-snapshot',
           python: '/nonexistent/python',
           runtimeTree: '/nonexistent/runtime',
@@ -1142,6 +1237,11 @@ test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_S
       );
       assert.deepEqual(await filesBelow(sealed.directory), corpusBefore, 'the corpus directory is untouched');
       const bytes = await readFile(join(root, result.path), 'utf8');
+      // E2 review round 1 (A3): the run's own copy, which the workflow uploads unzipped, is its architecture's entry of
+      // that same report: here, with one architecture, the report itself.
+      const runCopy = join(sealed.directory, '..', `laya-quality-run-${process.pid}.json`);
+      assert.equal(await readFile(runCopy, 'utf8'), bytes);
+      await rm(runCopy, { force: true });
       for (const output of [bytes, result.lines.join('\n')]) {
         for (const content of ['Synthetic', 'quarterly', '@', 'untrusted-content', '/subject', QUESTION]) {
           assert.equal(output.includes(content), false, `no ${content} leaves the run`);
