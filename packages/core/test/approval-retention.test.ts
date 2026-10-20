@@ -1080,7 +1080,13 @@ test('old active, corrupt and unreadable records do not starve the slots after t
 
 // ── Lock ownership ───────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a batch held past the stale interval keeps its lock by renewal: another process never takes it, and only the first batch prunes and commits its cursor (D9r-j)', async () => {
+test('a batch held past the stale interval keeps its lock by renewal: another process never takes it, and only the first batch prunes and commits its cursor (D9r-j)', async (t) => {
+  /*
+   * On the test's time, not the wall clock's: a lock's age is `Date.now()` against its file's times, and its renewal a
+   * timer, so both are mocked and move only when the test says. On the wall clock, a stall of a fifth of a second
+   * between a renewal and the other process's look was enough to make a live holder look abandoned.
+   */
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const w = world(NOW);
   storeInternals(w.store).timings = { staleMs: 300, renewMs: 80, recordStaleMs: 30_000 };
   const ids = kept(w, 3);
@@ -1091,15 +1097,28 @@ test('a batch held past the stale interval keeps its lock by renewal: another pr
   const held = new Promise<void>((settle) => {
     release = settle;
   });
+  let reached!: () => void;
+  const hanging = new Promise<void>((settle) => {
+    reached = settle;
+  });
   let hung = false;
   w.fs.before = async (op) => {
     if (!hung && op.kind === 'read' && isRecordFile(op.path)) {
       hung = true;
+      reached();
       await held;
     }
   };
   const running = w.store.ensurePruned();
-  await sleep(700);
+  await hanging;
+  // 700 ms held, one renewal interval at a time, each renewal's touch landed before the next is due.
+  const touches = (phase: 'start' | 'end') =>
+    w.fs.log.filter((op) => op.kind === 'lock.touch' && op.phase === phase).length;
+  for (let elapsed = 0; elapsed + 80 <= 700; elapsed += 80) {
+    t.mock.timers.tick(80);
+    while (touches('end') < touches('start')) await new Promise((settle) => setImmediate(settle));
+  }
+  t.mock.timers.tick(700 % 80);
   // A process for which the next batch is due — a day on — so it does try the lock.
   const second = w.open({ clock: { t: NOW + DAY } });
   storeInternals(second.store).timings = { staleMs: 300, renewMs: 80, recordStaleMs: 30_000 };
@@ -1110,7 +1129,7 @@ test('a batch held past the stale interval keeps its lock by renewal: another pr
   assert.equal(theirs.skipped, 'busy', 'the lock was renewed, so it was not abandoned');
   assert.equal(second.fs.started('lock.rename').length, 0, 'no takeover was tried');
   assert.equal(second.fs.started('unlink').length + second.fs.started('write').length, 0);
-  assert.ok(w.fs.started('lock.touch', isMaintenanceLock).length >= 3, 'renewed while it held on');
+  assert.equal(w.fs.started('lock.touch', isMaintenanceLock).length, 8, 'renewed every 80 ms while it held on');
   assert.deepEqual(ours.errors, []);
   assert.equal(ours.complete, true);
   assert.equal(ours.pruned, 1);
