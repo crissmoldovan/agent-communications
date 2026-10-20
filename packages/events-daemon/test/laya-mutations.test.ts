@@ -15,6 +15,7 @@ import {
   type LayaMutation,
   layaMutationLeg,
   loadLayaMutations,
+  nodeOracleArguments,
   VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
@@ -708,6 +709,21 @@ test('E2 mutation: an oracle that does not pass unmutated is not a kill', async 
 
 test('E2 mutation: a mutant its oracle accepts is not a kill', async () => {
   await assert.rejects(expectLayaMutationToFail(runnerProbe({})), /unexpectedly accepted mutant/u);
+});
+
+// E2 CI round 1: Windows loads an `--import` only by file URL; an absolute path there is read as a URL whose scheme is
+// the drive letter (`ERR_UNSUPPORTED_ESM_URL_SCHEME`), and every copied oracle failed to start on both Windows legs.
+test('E2 mutation: a copied oracle preloads the loopback seal by file URL, as Windows requires', () => {
+  const root = join(tmpdir(), 'events-e2-oracle-arguments');
+  const args = nodeOracleArguments(root, {
+    testFile: 'packages/events-daemon/test/laya-mutations.test.ts',
+    testName: 'E2 mutation: loads production mutants from every task fragment',
+  });
+  const preload = args[args.indexOf('--import') + 1] ?? '';
+  assert.equal(new URL(preload).protocol, 'file:', preload);
+  assert.equal(fileURLToPath(preload), join(root, 'test/helpers/loopback-seal-preload.mjs'));
+  assert.equal(args.at(-1), join(root, 'packages/events-daemon/test/laya-mutations.test.ts'));
+  assert.ok(args.includes('--test-reporter=tap'));
 });
 
 // E2 Task 14: an oracle of the built daemon runs against its copy's own build, made again after the edit; an edit the

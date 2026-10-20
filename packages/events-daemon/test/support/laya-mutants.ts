@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { endOracleGroupsWithThisRunner } from './mutation-runner-exit.ts';
 import { WINDOWS_SKIP_REASON } from './short-temp.ts';
 import { runStrictMutationChild, type StrictMutationChildResult } from './strict-mutation-child.ts';
@@ -73,6 +74,33 @@ const CARGO_CHILD_TIMEOUT_MS = 1_200_000;
 const packageRoot = join(import.meta.dirname, '..', '..');
 const repositoryRoot = join(packageRoot, '..', '..');
 const casesRoot = join(repositoryRoot, 'packages/events-daemon/test/fixtures/laya/cases');
+
+/**
+ * A fresh folder for one copy. On Windows the temporary directory is often an 8.3 short name (`C:\Users\RUNNER~1\…`):
+ * Node's native `realpath` and the tools that use it (Vite among them) answer the long one, so a copy rooted at the
+ * short name sees its own files as somewhere else. The copy is rooted at the long name there. Elsewhere it is the
+ * folder `mkdtemp` made, as before (E2 CI round 1).
+ */
+async function mutationCopyRoot(prefix: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  return process.platform === 'win32' ? realpath(root) : root;
+}
+
+/** The `node:test` arguments of one oracle in a copy: the preload is a file URL, which Windows needs for `--import`. */
+export function nodeOracleArguments(root: string, mutation: Pick<LayaMutation, 'testFile' | 'testName'>): string[] {
+  return [
+    '--import',
+    pathToFileURL(join(root, 'test/helpers/loopback-seal-preload.mjs')).href,
+    '--experimental-strip-types',
+    '--disable-warning=ExperimentalWarning',
+    '--test',
+    // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+    '--test-reporter=tap',
+    '--test-name-pattern',
+    exactTestName(mutation.testName),
+    join(root, mutation.testFile),
+  ];
+}
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} must be a non-empty string`);
@@ -537,7 +565,7 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
 
 /** Copies one production module, proves its named sealed oracle first, then makes one exact destructive edit. */
 async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
-  const root = await mkdtemp(join(tmpdir(), `events-e2-mutant-${mutation.id}-`));
+  const root = await mutationCopyRoot(`events-e2-mutant-${mutation.id}-`);
   try {
     const buildsDaemon = BUILT_DAEMON_ORACLES.has(mutation.testName);
     if (
@@ -558,18 +586,7 @@ async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMut
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
     const child = {
       command: process.execPath,
-      args: [
-        '--import',
-        join(root, 'test/helpers/loopback-seal-preload.mjs'),
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
-        '--test-reporter=tap',
-        '--test-name-pattern',
-        exactTestName(mutation.testName),
-        join(root, mutation.testFile),
-      ],
+      args: nodeOracleArguments(root, mutation),
       cwd: root,
       env: environment,
       timeoutMs: MUTATION_CHILD_TIMEOUT_MS,
@@ -655,25 +672,44 @@ interface VitestAssertion {
 /** A test's path as Vitest matches `-t` against it (its report's `fullName` joins the same titles with spaces). */
 const vitestPath = (assertion: VitestAssertion): string => [...assertion.ancestorTitles, assertion.title].join(' > ');
 
-/** What one Vitest run reported: every test that ran (passed or failed), and how many files failed to run. */
+/**
+ * What one Vitest run reported: every test that ran (passed or failed), how many files failed to run, and what the
+ * report says went wrong, which the JSON reporter writes nowhere else (so a failure seen only on CI says why).
+ */
 async function vitestReport(
   mutation: LayaMutation,
   path: string,
-): Promise<{ readonly ran: readonly VitestAssertion[]; readonly failedFiles: number }> {
+): Promise<{ readonly ran: readonly VitestAssertion[]; readonly failedFiles: number; readonly problems: string }> {
   const text = await readFile(path, 'utf8').catch(() => undefined);
   if (text === undefined) throw new Error(`${mutation.id}: Vitest wrote no report, so nothing is evidence`);
   const report = JSON.parse(text) as {
+    readonly numTotalTestSuites?: number;
+    readonly numTotalTests?: number;
     readonly testResults?: readonly {
+      readonly name?: string;
       readonly status?: string;
-      readonly assertionResults?: readonly VitestAssertion[];
+      readonly message?: string;
+      readonly assertionResults?: readonly (VitestAssertion & { readonly failureMessages?: readonly string[] })[];
     }[];
   };
   const files = report.testResults ?? [];
+  const problems = [
+    `files ${files.length}, tests ${report.numTotalTests ?? '?'}`,
+    ...files.flatMap((file) => [
+      ...(file.message ? [`${file.name ?? '?'}: ${file.message}`] : []),
+      ...(file.assertionResults ?? []).flatMap((assertion) =>
+        (assertion.failureMessages ?? []).map((message) => `${vitestPath(assertion)}: ${message}`),
+      ),
+    ]),
+  ]
+    .join('\n')
+    .slice(0, 4000);
   return {
     ran: files
       .flatMap((file) => file.assertionResults ?? [])
       .filter((assertion) => assertion.status === 'passed' || assertion.status === 'failed'),
     failedFiles: files.filter((file) => file.status === 'failed' && (file.assertionResults ?? []).length === 0).length,
+    problems,
   };
 }
 
@@ -683,7 +719,7 @@ async function vitestReport(
  * exactly that test and it failed. A file that fails to load reports no test at all, so it is never a kill.
  */
 async function expectVitestMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
-  const root = await mkdtemp(join(tmpdir(), `events-e2-vitest-${mutation.id}-`));
+  const root = await mutationCopyRoot(`events-e2-vitest-${mutation.id}-`);
   try {
     const app = await copyDesktopTree(root, { dist: false });
     await linkDesktopModules(root);
@@ -704,7 +740,8 @@ async function expectVitestMutationToFail(mutation: LayaMutation): Promise<LayaM
         args: [
           join(app, 'node_modules', 'vitest', 'vitest.mjs'),
           'run',
-          relative(join(repositoryRoot, 'apps/desktop'), join(repositoryRoot, mutation.testFile)),
+          // Vitest matches a file filter against `/`-separated paths.
+          relative(join(repositoryRoot, 'apps/desktop'), join(repositoryRoot, mutation.testFile)).split(sep).join('/'),
           '-t',
           exactTestName(mutation.testName),
           '--reporter=json',
@@ -721,12 +758,12 @@ async function expectVitestMutationToFail(mutation: LayaMutation): Promise<LayaM
     assert.equal(
       baseline.result.code,
       0,
-      `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail(baseline.result.output)}`,
+      `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail(baseline.result.output)}\n${baseline.problems}`,
     );
     assert.deepEqual(
       baseline.ran.map((assertion) => [vitestPath(assertion), assertion.status]),
       [[mutation.testName, 'passed']],
-      `${mutation.id}: the unmutated copy did not run exactly its named test, and pass it\n${tail(baseline.result.output)}`,
+      `${mutation.id}: the unmutated copy did not run exactly its named test, and pass it\n${tail(baseline.result.output)}\n${baseline.problems}`,
     );
     assert.equal(baseline.failedFiles, 0, `${mutation.id}: the baseline reported no file failure`);
     await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
