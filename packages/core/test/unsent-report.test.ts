@@ -659,15 +659,20 @@ test('all 500 selected record locks held by another process: each tried once, no
       send({ n: index + 1, state: 'expired', at: NOW - 30 * MINUTE, draftId: `r-${index}` }),
     ),
   );
+  /*
+   * Counted, and timed on the store's own clock: the wall clock measured only this machine's speed. "Tried once
+   * without polling" is the count of each lock's tries, and none taken over; "about five seconds at most" is the one
+   * shared deadline, shown on a machine too slow for 500 tries in five seconds — the store's clock moving on 4 ms with
+   * every file operation — where no step of the report starts after it.
+   */
   const other = await child();
   try {
     await other.ask({ op: 'hold', paths: ids.map((id) => lockOf(w, id)) });
-    const began = Date.now();
     const result = await report(w);
-    assert.ok(Date.now() - began < 5_500, `took ${Date.now() - began} ms`);
     assert.equal(result.scanned.busy.length, UNSENT_WINDOW);
     assert.equal(result.scanned.opened, 0);
     assert.equal(w.fs.started('read', isRecordFile).length, 0, 'not one record opened');
+    assert.equal(w.fs.started('lock.rename').length, 0, 'no busy lock taken over');
     assert.deepEqual(result.rows, []);
     assert.equal(result.evidence, 'indeterminate');
     const reportPhase = w.fs.log.slice(w.fs.log.findLastIndex((op) => op.kind === 'readdir'));
@@ -678,6 +683,25 @@ test('all 500 selected record locks held by another process: each tried once, no
         1,
       );
     }
+
+    // The same report on a slow machine: the deadline ends it, and nothing starts after it.
+    const from = w.fs.log.length;
+    const began = w.clock.t;
+    w.fs.before = () => {
+      w.clock.t += 4;
+    };
+    const slow = await report(w);
+    const ops = w.fs.log.slice(from).filter((op) => op.phase === 'start');
+    const tries = ops.filter((op) => op.kind === 'lock.create' && isRecordLock(op.path));
+    assert.ok(tries.length > 0 && tries.length < UNSENT_WINDOW, `the deadline ended it: ${tries.length} tried`);
+    assert.equal(new Set(tries.map((op) => op.path)).size, tries.length, 'each busy lock tried once at most');
+    for (const op of ops.filter((each) => each.kind === 'stat' || each.kind === 'lock.create')) {
+      assert.ok(op.at < began + 5_000, `${op.kind} ${op.path} started at +${op.at - began} ms`);
+    }
+    assert.equal(ops.filter((op) => op.kind === 'read' && isRecordFile(op.path)).length, 0, 'not one record opened');
+    assert.ok(slow.truncated.includes('deadline'));
+    assert.deepEqual(slow.rows, []);
+    assert.equal(slow.evidence, 'indeterminate');
   } finally {
     await other.ask({ op: 'release' });
     other.close();
