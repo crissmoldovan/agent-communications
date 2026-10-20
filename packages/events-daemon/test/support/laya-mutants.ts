@@ -226,6 +226,9 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
     'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
     'scripts/run-laya-quality-gate.mjs',
     'scripts/run-laya-macos-boundary-gate.mjs',
+    // E2 Task 14: the release gate's checklist oracle reads the owner's checklist as text, to put it in the evidence's
+    // place.
+    'test/laya-manual-macos-checklist.md',
   ];
   for (const file of files) await copyFile(root, file);
   // A test spawns these entries rather than importing them, so their own relative imports are copied too: the shipped
@@ -258,11 +261,44 @@ export const WHOLE_REPOSITORY_ORACLES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Oracles that read the daemon's build rather than its source (E2 Task 14): the built CLI against its own owner, and
+ * the tarball `pnpm pack` lists. A linked `dist/` is the checkout's, which no edit to a copy's source or build config
+ * reaches, so each gets a whole-repository copy whose daemon is built there, from the copy's own files, before its
+ * unmutated run and again after the edit. A copy that does not build runs no oracle, so it is never a kill.
+ */
+export const BUILT_DAEMON_ORACLES: ReadonlySet<string> = new Set([
+  'E2: the built daemon reads its shipped Laya assets and keeps Laya held, through its own CLI and owner',
+  'E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model',
+]);
+/** One daemon build in a copy, bounded as an oracle is: tsdown bundles and types the package in seconds. */
+const DAEMON_BUILD_TIMEOUT_MS = 120_000;
+
+/** The copy's own daemon build, by the package's `build` script (`tsdown`), into the copy's own `dist/`. */
+async function buildCopiedDaemon(root: string, mutation: LayaMutation, when: string): Promise<void> {
+  const daemon = join(root, 'packages/events-daemon');
+  if ((await lstat(join(daemon, 'dist')).catch(() => undefined))?.isSymbolicLink())
+    throw new Error(`${mutation.id}: a copy's daemon build never writes through a link to the checkout's dist`);
+  const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
+  const result = await runStrictMutationChild({
+    command: process.execPath,
+    args: [join(daemon, 'node_modules', 'tsdown', 'dist', 'run.mjs')],
+    cwd: daemon,
+    env: environment,
+    timeoutMs: DAEMON_BUILD_TIMEOUT_MS,
+  });
+  if (result.code !== 0)
+    throw new Error(
+      `${mutation.id}: the copy's daemon did not build ${when}, so nothing ran\n${result.output.slice(-2000)}`,
+    );
+}
+
+/**
  * Every file Git tracks or would track, copied below `root` and committed once in a fresh repository there, so the
  * checker's tracked-file scan and fragment-history rule read the copy as they read this checkout. The installed
- * modules are linked as for every copy, and each package's built `dist/` (never tracked) is linked beside its sources.
+ * modules are linked as for every copy, and each package's built `dist/` (never tracked) is linked beside its sources —
+ * but the daemon's, when the copy builds its own.
  */
-async function copyRepositoryTree(root: string): Promise<void> {
+async function copyRepositoryTree(root: string, options: { readonly buildsDaemon: boolean }): Promise<void> {
   const listed = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -294,11 +330,9 @@ async function copyRepositoryTree(root: string): Promise<void> {
   // The links added below are installed trees, not the checkout: `.gitignore`'s `node_modules/` and `dist/` match
   // directories only, so name the links here, or a copy of this copy would take them for files.
   await mkdir(join(root, '.git', 'info'), { recursive: true });
-  await writeFile(
-    join(root, '.git', 'info', 'exclude'),
-    '/node_modules\n/packages/events-daemon/node_modules\n/packages/*/dist\n',
-    'utf8',
-  );
+  const excluded = ['/node_modules', '/packages/events-daemon/node_modules', '/packages/*/dist'];
+  if (options.buildsDaemon) excluded.push('/packages/*/node_modules');
+  await writeFile(join(root, '.git', 'info', 'exclude'), `${excluded.join('\n')}\n`, 'utf8');
   git(['add', '--all']);
   git(['commit', '--quiet', '--no-verify', '-m', 'the mutation copy']);
   for (const directory of ['', 'packages/events-daemon']) {
@@ -308,6 +342,14 @@ async function copyRepositoryTree(root: string): Promise<void> {
     await symlink(installed, join(root, directory, 'node_modules'), 'dir');
   }
   for (const name of await readdir(join(repositoryRoot, 'packages'))) {
+    if (options.buildsDaemon) {
+      // The daemon's `dist/` is built in the copy, never linked. An oracle of the built daemon imports the sibling
+      // packages' copied sources too, and they resolve their own installed modules.
+      if (name === 'events-daemon') continue;
+      const installed = join(repositoryRoot, 'packages', name, 'node_modules');
+      if ((await stat(installed).catch(() => undefined))?.isDirectory())
+        await symlink(installed, join(root, 'packages', name, 'node_modules'), 'dir');
+    }
     const built = join(repositoryRoot, 'packages', name, 'dist');
     if ((await stat(built).catch(() => undefined))?.isDirectory())
       await symlink(built, join(root, 'packages', name, 'dist'), 'dir');
@@ -449,8 +491,13 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
 async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
   const root = await mkdtemp(join(tmpdir(), `events-e2-mutant-${mutation.id}-`));
   try {
-    if (WHOLE_REPOSITORY_ORACLES.has(mutation.testName) || WHOLE_REPOSITORY_TEST_FILES.has(mutation.testFile))
-      await copyRepositoryTree(root);
+    const buildsDaemon = BUILT_DAEMON_ORACLES.has(mutation.testName);
+    if (
+      buildsDaemon ||
+      WHOLE_REPOSITORY_ORACLES.has(mutation.testName) ||
+      WHOLE_REPOSITORY_TEST_FILES.has(mutation.testFile)
+    )
+      await copyRepositoryTree(root, { buildsDaemon });
     else await copyFixtureTree(root, mutation);
     const target = join(root, mutation.source);
     const original = await readFile(target, 'utf8');
@@ -480,6 +527,7 @@ async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMut
       timeoutMs: MUTATION_CHILD_TIMEOUT_MS,
     };
     namedBaselines.delete(mutation);
+    if (buildsDaemon) await buildCopiedDaemon(root, mutation, 'unmutated');
     assertNamedBaselinePasses(mutation, await runStrictMutationChild(child));
     // Recorded by the proof above; it is missing only if that proof was removed, which the runner self-tests refuse.
     const baseline = namedBaselines.get(mutation) ?? { output: '', platformSkipped: false };
@@ -487,6 +535,7 @@ async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMut
       return { changedLine: null, baselineOutput: baseline.output, mutantOutput: null, platformSkipped: true };
     }
     await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
+    if (buildsDaemon) await buildCopiedDaemon(root, mutation, 'mutated');
     const result = await runStrictMutationChild(child);
     assert.notEqual(
       result.code,
