@@ -329,7 +329,9 @@ test('E2 boundary: the production launcher resolves only the daemon-shipped work
   assert.equal(LAYA_WORKER_ENTRY, workerMain);
 });
 
-test('E2 boundary: closes probe listeners before returning a successful worker', async () => {
+test('E2 boundary: closes probe listeners before returning a successful worker', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     let closeCalls = 0;
     const boundary = await createLayaWorkerBoundaryForTest({
@@ -351,7 +353,9 @@ test('E2 boundary: closes probe listeners before returning a successful worker',
   });
 });
 
-test('E2 boundary: waits for a loaded child to complete all observable attempts', async () => {
+test('E2 boundary: waits for a loaded child to complete all observable attempts', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     let boundary: Awaited<ReturnType<typeof createLayaWorkerBoundary>> | undefined;
     try {
@@ -369,7 +373,9 @@ test('E2 boundary: waits for a loaded child to complete all observable attempts'
   });
 });
 
-test('E2 boundary: a forged all-denied report without four observed attempts is refused', async () => {
+test('E2 boundary: a forged all-denied report without four observed attempts is refused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -386,7 +392,9 @@ test('E2 boundary: a forged all-denied report without four observed attempts is 
   });
 });
 
-test('E2 boundary: out-of-order and every unexpected proof frame are refused', async () => {
+test('E2 boundary: out-of-order and every unexpected proof frame are refused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const modes = [
     'out-of-order-attempts',
     'unrecognised-frame',
@@ -432,7 +440,9 @@ test('E2 boundary: a late TCP attempt after a denied report still refuses the ch
   );
 });
 
-test('E2 boundary: a late escaped attempt frame after a denied report still refuses the child', async () => {
+test('E2 boundary: a late escaped attempt frame after a denied report still refuses the child', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -479,7 +489,9 @@ test('E2 boundary: resources return to baseline after every boundary outcome', {
   });
 });
 
-test('E2 boundary: a sandbox spawn error without exit fails closed and returns within its cleanup bound', async () => {
+test('E2 boundary: a sandbox spawn error without exit fails closed and returns within its cleanup bound', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const before = activeResources();
   await withTemporaryDirectory(async (directory) => {
     let closeCalls = 0;
@@ -503,7 +515,9 @@ test('E2 boundary: a sandbox spawn error without exit fails closed and returns w
   assert.deepEqual(activeResources(), before);
 });
 
-test('E2 boundary: a listener error after setup fails closed without escaping the daemon', async () => {
+test('E2 boundary: a listener error after setup fails closed without escaping the daemon', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const before = activeResources();
   await withTemporaryDirectory(async (directory) => {
     let closeCalls = 0;
@@ -535,7 +549,9 @@ test('E2 boundary: a listener error after setup fails closed without escaping th
   assert.deepEqual(activeResources(), before);
 });
 
-test('E2 boundary: abort before spawn, during proof, and during settle cleans up fully', async () => {
+test('E2 boundary: abort before spawn, during proof, and during settle cleans up fully', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stages = ['before-spawn', 'during-proof', 'during-settle'] as const;
   for (const stage of stages) {
     await nextTurn();
@@ -587,27 +603,39 @@ test('E2 boundary: abort before spawn, during proof, and during settle cleans up
   }
 });
 
-test('E2 boundary: a tcp-only child escape is killed before load', async () => {
+test('E2 boundary: a tcp-only child escape is killed before load', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await expectSyntheticEscape('tcp');
 });
 
-test('E2 boundary: a fetch-only child escape is killed before load', async () => {
+test('E2 boundary: a fetch-only child escape is killed before load', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await expectSyntheticEscape('fetch');
 });
 
-test('E2 boundary: a udp-only child escape is killed before load', async () => {
+test('E2 boundary: a udp-only child escape is killed before load', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await expectSyntheticEscape('udp');
 });
 
-test('E2 boundary: a uds-only child escape is killed before load', async () => {
+test('E2 boundary: a uds-only child escape is killed before load', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await expectSyntheticEscape('uds');
 });
 
-test('E2 boundary: a child that started a process is killed before load', async () => {
+test('E2 boundary: a child that started a process is killed before load', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await expectSyntheticEscape('spawn');
 });
 
-test('E2 boundary: launch has literal profile, pipe-only fds and a closed environment', async () => {
+test('E2 boundary: launch has literal profile, pipe-only fds and a closed environment', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   assert.equal(LAYA_SANDBOX_EXECUTABLE, '/usr/bin/sandbox-exec');
   assert.equal(LAYA_SANDBOX_PROFILE, '(version 1) (allow default) (deny network*)');
   // E2 review round 1 (A1): beside the network clause, no process, no Apple event, no Mach service and no write
@@ -670,7 +698,9 @@ test('E2 boundary: Linux and an unavailable macOS sandbox refuse before child st
   );
 });
 
-test('E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live', async (t) => {
+test('E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
   const { sandboxExecAvailable } = await import('../src/runtime/laya/contracts.ts');
   if (process.platform !== 'darwin' || !sandboxExecAvailable({ platform: 'darwin', architecture: process.arch })) {
     t.skip('requires the host macOS sandbox-exec boundary');
@@ -742,7 +772,9 @@ async function confinementProbe(directory: string, confined: boolean): Promise<R
   return JSON.parse(output) as Readonly<Record<string, string>>;
 }
 
-test('E2 boundary: under the real profile the worker writes only in its own directory, starts no process and reaches no system service, and still loads its runtime', async (t) => {
+test('E2 boundary: under the real profile the worker writes only in its own directory, starts no process and reaches no system service, and still loads its runtime', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
   const { sandboxExecAvailable } = await import('../src/runtime/laya/contracts.ts');
   if (process.platform !== 'darwin' || !sandboxExecAvailable({ platform: 'darwin', architecture: process.arch })) {
     t.skip('requires the host macOS sandbox-exec boundary');
@@ -1046,7 +1078,9 @@ test('E2 boundary: the actual worker refuses a probe for another process, entry 
   }
 });
 
-test("E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed", async () => {
+test("E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed", {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const listeners = await unconfinedListeners(directory, { pathname: false });
     try {
@@ -1181,7 +1215,9 @@ function childWhosePipesFail(): LayaWorkerSpawn {
   };
 }
 
-test('E2 boundary: a worker that exits before the probe fails closed without an EPIPE escaping the daemon', async () => {
+test('E2 boundary: a worker that exits before the probe fails closed without an EPIPE escaping the daemon', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const result = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -1195,7 +1231,9 @@ test('E2 boundary: a worker that exits before the probe fails closed without an 
   });
 });
 
-test('E2 boundary: a chatty stderr neither stalls the proof nor reaches its result', async () => {
+test('E2 boundary: a chatty stderr neither stalls the proof nor reaches its result', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -1215,7 +1253,9 @@ test('E2 boundary: a chatty stderr neither stalls the proof nor reaches its resu
   });
 });
 
-test("E2 boundary: a proven worker's next frame waits for its next reader", async () => {
+test("E2 boundary: a proven worker's next frame waits for its next reader", {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -1339,7 +1379,9 @@ test('E2 boundary: a socket path macOS would truncate fails closed before any ch
   });
 });
 
-test('E2 boundary: traffic that reaches a listener while it closes still fails the proof', async () => {
+test('E2 boundary: traffic that reaches a listener while it closes still fails the proof', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   await withTemporaryDirectory(async (directory) => {
     const observed = { tcpConnections: 0, udpDatagrams: 0, udsConnections: 0 };
     const boundary = await createLayaWorkerBoundaryForTest({

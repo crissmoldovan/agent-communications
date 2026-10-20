@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
@@ -269,17 +269,18 @@ const TEMPLATE_DIGESTS: Readonly<Record<string, string>> = {
   [LAYA_CHOICE2_TEMPLATE_ID]: '36b7c018309b476ceb3afc3381dd5514381b36076ec1f656260015ed42c9d01d',
 };
 
+// The trees are absolute on the worker's own host: `/a/runtime` on POSIX, `<drive>:\a\runtime` on Windows, where
+// `/a/runtime` is not normalised (E2 CI round 1: this data test must pass on Windows too, and named POSIX paths there).
 test('E2 Laya worker runtime: a load names two absolute, normalised trees and nothing else', () => {
-  assert.deepEqual(layaLoadPayload({ runtimeRoot: '/a/runtime', modelDir: '/a/model' }), {
-    runtimeRoot: '/a/runtime',
-    modelDir: '/a/model',
-  });
+  const runtimeRoot = resolve('/a', 'runtime');
+  const modelDir = resolve('/a', 'model');
+  assert.deepEqual(layaLoadPayload({ runtimeRoot, modelDir }), { runtimeRoot, modelDir });
   for (const payload of [
     null,
-    { runtimeRoot: '/a/runtime' },
-    { runtimeRoot: 'relative', modelDir: '/a/model' },
-    { runtimeRoot: '/a/../runtime', modelDir: '/a/model' },
-    { runtimeRoot: '/a/runtime', modelDir: '/a/model', repo: 'receptron/laya-onnx' },
+    { runtimeRoot },
+    { runtimeRoot: 'relative', modelDir },
+    { runtimeRoot: `${resolve('/a')}${sep}..${sep}runtime`, modelDir },
+    { runtimeRoot, modelDir, repo: 'receptron/laya-onnx' },
     { kind: 'test-only-no-runtime' },
   ])
     assert.equal(layaLoadPayload(payload), null);
