@@ -321,23 +321,37 @@ test('the claim and the ask are two steps: one claim a day, and the ask handed i
 /**
  * A registry on the loopback address that answers `latest` for core after `delayMs`, and counts every request — and
  * every answer, once it is given.
+ *
+ * `'held'` answers nothing until `release()`, so that whether something waited for the registry is decided by the
+ * test, not by how fast this machine is. It lets go by itself after a minute, only so that something that does wait
+ * for it ends, and fails, rather than hanging the test.
  */
-async function loopbackRegistry(latest: string, delayMs: number) {
+async function loopbackRegistry(latest: string, delayMs: number | 'held') {
   const requests: string[] = [];
   /** Which document each request asked for: npm's abbreviated one (the `latest` tag), or the full one (manifests). */
   const documents: string[] = [];
   const answered: string[] = [];
+  let released = delayMs !== 'held';
+  const waiting: (() => void)[] = [];
+  const release = () => {
+    released = true;
+    for (const answer of waiting.splice(0)) answer();
+  };
+  const lettingGo = delayMs === 'held' ? setTimeout(release, 60_000) : undefined;
   const server: Server = createServer((request, response) => {
     requests.push(request.url ?? '');
     documents.push(
       String(request.headers.accept ?? '').startsWith('application/vnd.npm.install-v1+json') ? 'abbreviated' : 'full',
     );
-    setTimeout(() => {
+    const answer = () => {
       answered.push(request.url ?? '');
       response
         .writeHead(200, { 'content-type': 'application/json' })
         .end(JSON.stringify({ name: CORE, 'dist-tags': { latest }, versions: { [latest]: {} } }));
-    }, delayMs);
+    };
+    if (delayMs !== 'held') setTimeout(answer, delayMs);
+    else if (released) answer();
+    else waiting.push(answer);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -346,8 +360,10 @@ async function loopbackRegistry(latest: string, delayMs: number) {
     requests,
     documents,
     answered,
+    release,
     close: () =>
       new Promise<void>((resolve) => {
+        clearTimeout(lettingGo);
         server.closeAllConnections();
         server.close(() => resolve());
       }),
@@ -987,10 +1003,14 @@ test('at a terminal the check waits about three seconds at most, then the comman
 
 test('a registry slower than the terminal waits is still heard from: the check finishes beside the command', async () => {
   const m = machine();
-  const served = await loopbackRegistry(LATEST, 1_500);
+  /*
+   * Silent until the gate has gone on, so "slower than the gate's wait" holds whatever this machine's speed. A gate that
+   * waited for the check instead would wait until the check gave up on the silent registry, and the answer released
+   * after it would never be recorded.
+   */
+  const served = await loopbackRegistry(LATEST, 'held');
   const env = { ...m.env, npm_config_registry: served.url };
   try {
-    const started = Date.now();
     const output = { json: true, color: false };
     const streams = terminal([]).streams;
     await updateNoticeAtTerminal({
@@ -1003,7 +1023,8 @@ test('a registry slower than the terminal waits is still heard from: the check f
       ...terminalUpdateHooks(m.core, env, { deps: { globalPackages: async () => ({}) } }),
       waitMs: 200,
     });
-    assert.ok(Date.now() - started < 1_400, `the command waited ${Date.now() - started} ms for the registry`);
+    assert.deepEqual(served.answered, [], 'the command went on before the registry answered');
+    served.release();
     // The ask was not cut off at the wait: its answer lands, and the day's check is a real one.
     await until(async () => (await readUpdateCheck(m.stateDir)).latest === LATEST, 'the answer to be recorded', 15_000);
     const record = await readUpdateCheck(m.stateDir);
