@@ -1160,10 +1160,11 @@ async function groupKillOutcome(shell: string): Promise<Readonly<Record<string, 
     if (descendant === undefined || leader.pid === undefined) return { shell, started: false };
     const group = leader.pid;
     const runningBeforeKill = processAlive(group) && processAlive(descendant);
-    const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], {
-      env: { ORACLE_GROUP: String(group) },
-      encoding: 'utf8',
-    });
+    const env = { ORACLE_GROUP: String(group) };
+    // What this shell prints of its own in this environment, running nothing: on GitHub's macOS 26 image /bin/bash
+    // writes a Homebrew warning when HOME is unset (E2 CI round 1). Only what the group kill adds to it is the kill's.
+    const quiet = spawnSync(shell, ['-c', ':'], { env, encoding: 'utf8' });
+    const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], { env, encoding: 'utf8' });
     const leaderEnded = await settlesWithin(exited, 5_000).then(
       () => leader.signalCode,
       () => 'still running',
@@ -1172,7 +1173,8 @@ async function groupKillOutcome(shell: string): Promise<Readonly<Record<string, 
       shell,
       started: true,
       runningBeforeKill,
-      stderr: killed.stderr,
+      shellRuns: quiet.status === 0,
+      stderr: killed.stderr.startsWith(quiet.stderr) ? killed.stderr.slice(quiet.stderr.length) : killed.stderr,
       status: killed.status,
       leaderEnded,
       descendantGone: await goneWithin(descendant, 5_000),
@@ -1217,6 +1219,7 @@ test('E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, 
       shell,
       started: true,
       runningBeforeKill: true,
+      shellRuns: true,
       stderr: '',
       status: 0,
       leaderEnded: 'SIGKILL',
