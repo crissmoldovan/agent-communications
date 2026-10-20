@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { appendFile, readdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import Ajv2020Runtime, { type Ajv2020 as Ajv2020Class, type Options } from 'ajv/dist/2020.js';
@@ -202,6 +202,43 @@ test('E2 laya update: a changed model manifest disables at start-up as model-cha
     await assertTightenedKeepingTrees(outcome, 'model-changed');
   } finally {
     await closeAndRemove(outcome.rig);
+  }
+});
+
+test('E2 laya update: once the re-approved entry is ready, every tree the earlier entry left is deleted', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // D11 and E2-5 (E2 review round 1, A6/B4): a tree no enabled entry names is deleted once its replacement verified.
+  // The earlier entry named runtime-a 1.0.1 and the first manifest; the re-approved one names 1.0.0 and a second.
+  const before = await syntheticLaya({
+    lock: (lock) => {
+      const pkg = lock.packages[0];
+      if (pkg === undefined) return;
+      pkg.version = '1.0.1';
+      pkg.url = pkg.url.replace(/-1\.0\.0\.tgz$/u, '-1.0.1.tgz');
+    },
+  });
+  const after = await syntheticLaya({ manifestId: 'laya-en-onnx-tiny-v2', revision: 'd'.repeat(40) });
+  const outcome = await startUpUnder(before, after);
+  const { rig } = outcome;
+  try {
+    await assertTightenedKeepingTrees(outcome, 'model-changed');
+    const earlierPartial = join(rig.artifactRoot, 'models', 'laya-en-onnx-tiny-v1.partial');
+    await mkdir(earlierPartial, { recursive: true });
+    await writeFile(join(earlierPartial, 'laya.onnx'), 'an interrupted earlier download');
+    await rig.enable();
+    await rig.manager.ensureInstalled();
+    assert.equal(rig.manager.status().state, 'ready', 'the re-approved entry installed and verified');
+    const digest = rig.manager.status().runtimeLockDigest as string;
+    assert.notEqual(digest, outcome.earlierDigest, 'the two entries name different runtime trees');
+    assert.deepEqual(await readdir(join(rig.artifactRoot, 'runtime')), [digest], 'only the enabled runtime is left');
+    assert.deepEqual(
+      await readdir(join(rig.artifactRoot, 'models')),
+      ['laya-en-onnx-tiny-v2'],
+      'only the enabled model is left: the earlier one and its partial are deleted',
+    );
+  } finally {
+    await closeAndRemove(rig);
   }
 });
 

@@ -170,8 +170,9 @@ the daemon downloads the runtime (about 300 MB) and the model (about 1.69 GB) â€
 network traffic Laya has â€” and checks every file against the release's lock and manifest before each start.
 `judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,
 `ready`, `failed` or `unavailable`), its byte progress and any failure or unavailable reason;
-`judge kind disable laya` cancels a download and keeps the verified files; and `judge model remove` deletes them, only
-while Laya is disabled.
+`judge kind disable laya` cancels a download and keeps the verified files; `judge model remove` deletes every verified
+runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
+files of every entry it replaced.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing

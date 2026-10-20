@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { lstatSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -356,18 +357,39 @@ test('E2 manager: removal refuses while Laya is enabled and touches no tree', { 
   }
 });
 
+/**
+ * Trees another release left: a verified runtime and model it named, and an unverified runtime staging tree and model
+ * partial, as a crash mid-install under it leaves them.
+ */
+async function plantForeignTrees(rig: LayaRig): Promise<{
+  readonly runtime: string;
+  readonly model: string;
+  readonly staging: string;
+  readonly partial: string;
+}> {
+  const trees = {
+    runtime: join(rig.artifactRoot, 'runtime', 'f'.repeat(64)),
+    model: join(rig.artifactRoot, 'models', 'laya-en-onnx-other'),
+    staging: join(rig.artifactRoot, 'runtime', `${'e'.repeat(64)}.staging`),
+    partial: join(rig.artifactRoot, 'models', 'laya-en-onnx-other.partial'),
+  };
+  for (const [name, tree] of Object.entries(trees)) {
+    await mkdir(tree, { recursive: true });
+    await writeFile(join(tree, 'kept'), `another release's ${name}`);
+  }
+  return trees;
+}
+
+// E2 review round 1 (A6/B4): this test's name is frozen by Task 6's fragment, whose mutant names it. It asserted that
+// another lock's and another manifest's verified trees survive a removal; D11 has `judge model remove` delete them, so
+// it now asserts that every verified tree goes, and that only unverified trees, a disable's to delete, are left.
 test('E2 manager: removal while disabled deletes only this release’s trees and reports idle', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const rig = await readyRig();
   try {
     await within(rig.disable(), 5_000, 'the disable');
-    const foreignRuntime = join(rig.artifactRoot, 'runtime', 'f'.repeat(64));
-    const foreignModel = join(rig.artifactRoot, 'models', 'laya-en-onnx-other');
-    await mkdir(foreignRuntime, { recursive: true });
-    await writeFile(join(foreignRuntime, 'kept'), 'another lock');
-    await mkdir(foreignModel, { recursive: true });
-    await writeFile(join(foreignModel, 'kept'), 'another manifest');
+    const foreign = await plantForeignTrees(rig);
     const runtime = runtimeRoot(rig);
     const removed = await rig.operator.handle({ operation: 'removeJudgeModel', args: {} });
     assert.deepEqual(removed, {
@@ -382,10 +404,147 @@ test('E2 manager: removal while disabled deletes only this release’s trees and
     });
     assert.equal(await treeListing(runtime), null, 'this release’s runtime is deleted');
     assert.equal(await treeListing(modelRoot(rig)), null, 'this release’s model is deleted');
-    assert.deepEqual(await treeListing(foreignRuntime), ['kept'], 'another lock’s tree is untouched');
-    assert.deepEqual(await treeListing(foreignModel), ['kept'], 'another manifest’s tree is untouched');
+    assert.equal(await treeListing(foreign.runtime), null, 'another lock’s verified tree is deleted');
+    assert.equal(await treeListing(foreign.model), null, 'another manifest’s verified tree is deleted');
+    assert.deepEqual(await treeListing(foreign.staging), ['kept'], 'an unverified runtime tree is a disable’s');
+    assert.deepEqual(await treeListing(foreign.partial), ['kept'], 'and so is an unverified model tree');
     assert.equal((rig.modelRow() as { state: string }).state, 'removed');
   } finally {
+    await rig.close();
+  }
+});
+
+test('E2 manager: removal deletes an earlier release’s verified trees even when this release installed nothing', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const rig = await layaRig();
+  try {
+    const foreign = await plantForeignTrees(rig);
+    const removed = (await rig.operator.handle({ operation: 'removeJudgeModel', args: {} })) as { state: string };
+    assert.equal(removed.state, 'idle');
+    assert.equal(await treeListing(foreign.runtime), null, 'the earlier release’s verified runtime is deleted');
+    assert.equal(await treeListing(foreign.model), null, 'the earlier release’s verified model is deleted');
+    assert.deepEqual(await treeListing(foreign.staging), ['kept']);
+    assert.deepEqual(await treeListing(foreign.partial), ['kept']);
+    assert.equal(rig.modelRow(), null, 'this release recorded no model, and records none');
+  } finally {
+    await rig.close();
+  }
+});
+
+/** A pause at the first `tree-sweep` visit once armed, counting every visit after arming. */
+function sweepPause(): {
+  readonly failpoint: (edge: string) => Promise<void>;
+  readonly reached: Promise<void>;
+  readonly visits: () => number;
+  arm(): void;
+  release(): void;
+} {
+  let armed = false;
+  let visits = 0;
+  let reached!: () => void;
+  let release!: () => void;
+  const reachedPromise = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    failpoint: async (edge) => {
+      if (!armed || edge !== 'tree-sweep') return;
+      visits += 1;
+      if (visits === 1) {
+        reached();
+        await released;
+      }
+    },
+    reached: reachedPromise,
+    visits: () => visits,
+    arm: () => {
+      armed = true;
+    },
+    release,
+  };
+}
+
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test('E2 race: a re-enable claimed during a removal’s sweep stops it before its next deletion', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const pause = sweepPause();
+  const rig = await readyRig({ failpoint: pause.failpoint });
+  let removal: Promise<unknown> | undefined;
+  try {
+    await within(rig.disable(), 5_000, 'the disable');
+    const first = join(rig.artifactRoot, 'runtime', 'a'.repeat(64));
+    const second = join(rig.artifactRoot, 'runtime', 'b'.repeat(64));
+    for (const tree of [first, second]) {
+      await mkdir(tree, { recursive: true });
+      await writeFile(join(tree, 'kept'), 'an earlier lock');
+    }
+    const prepared = await rig.prepare();
+    const modelsBefore = modelRequests(rig).length;
+    pause.arm();
+    removal = rig.operator.handle({ operation: 'removeJudgeModel', args: {} });
+    await within(pause.reached, 5_000, 'the removal’s sweep');
+    assert.equal(present(first), false, 'the sweep deleted the first earlier tree');
+    // A person approves the re-enable while the sweep holds the artifact lock: the claim lands meanwhile.
+    await rig.approve(prepared);
+    pause.release();
+    await within(removal, 5_000, 'the removal');
+    assert.equal(pause.visits(), 1, 'the removal deleted nothing after the claim');
+    assert.equal(present(second), true, 'the removal stopped before the next tree');
+    await within(rig.manager.ensureInstalled(), 10_000, 'the re-enabled install');
+    assert.equal(rig.manager.status().state, 'ready');
+    assert.equal(modelRequests(rig).length, modelsBefore, 'the removal stopped before this release’s own trees');
+    assert.deepEqual(await treeListing(runtimeRoot(rig)), RUNTIME_TREE);
+    assert.deepEqual(await treeListing(modelRoot(rig)), MODEL_TREE);
+    assert.equal(present(second), false, 'once ready, the re-enabled selection deletes the tree it does not name');
+  } finally {
+    pause.release();
+    await removal?.catch(() => undefined);
+    await rig.close();
+  }
+});
+
+test('E2 race: a disable during the obsolete-tree sweep stops it before its next deletion', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const pause = sweepPause();
+  const rig = await layaRig({ failpoint: pause.failpoint });
+  let disabled: Promise<unknown> | undefined;
+  try {
+    const first = join(rig.artifactRoot, 'models', 'laya-en-onnx-earlier-a');
+    const second = join(rig.artifactRoot, 'models', 'laya-en-onnx-earlier-b');
+    for (const tree of [first, second]) {
+      await mkdir(tree, { recursive: true });
+      await writeFile(join(tree, 'kept'), 'an earlier manifest');
+    }
+    pause.arm();
+    await rig.enable();
+    // The install verifies both trees, records ready and, inside the artifact lock, sweeps what it does not name.
+    await within(pause.reached, 10_000, 'the obsolete-tree sweep');
+    assert.equal(present(first), false, 'the sweep deleted the first obsolete tree');
+    disabled = rig.disable();
+    pause.release();
+    await within(disabled, 5_000, 'the disable');
+    assert.equal(pause.visits(), 1, 'the sweep deleted nothing after the disable fenced its job');
+    assert.equal(present(second), true, 'the sweep stopped before the next tree');
+    assert.deepEqual(await treeListing(runtimeRoot(rig)), RUNTIME_TREE, 'the verified runtime is kept');
+    assert.deepEqual(await treeListing(modelRoot(rig)), MODEL_TREE, 'the verified model is kept');
+    assert.equal(rig.manager.status().state, 'idle');
+  } finally {
+    pause.release();
+    await disabled?.catch(() => undefined);
     await rig.close();
   }
 });
