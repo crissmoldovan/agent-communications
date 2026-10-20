@@ -205,10 +205,10 @@ export async function runProductionChecks({
   workerEntry = join(repositoryRoot, BUILT_WORKER_ENTRY),
 }) {
   const checks = Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'fail']));
-  // No build, no worker a release would ship: nothing runs, and every check is recorded as failed.
-  if (!existsSync(workerEntry)) return checks;
   const work = await mkdtemp(join(tmpdir(), 'laya-boundary-gate-'));
   try {
+    // No build, no worker a release would ship: nothing runs, and every check is recorded as failed.
+    if (!existsSync(workerEntry)) return checks;
     // Disposable clones (copy-on-write on APFS): the altered-tree checks change a byte in these, never the originals.
     const trees = { runtimeTree: join(work, 'runtime'), modelTree: join(work, 'model') };
     await cp(runtimeTree, trees.runtimeTree, { recursive: true, mode: constants.COPYFILE_FICLONE });
