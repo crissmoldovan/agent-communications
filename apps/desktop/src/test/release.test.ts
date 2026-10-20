@@ -119,7 +119,7 @@ describe('the desktop workflows', () => {
     expect(workflow).toContain('libwebkit2gtk-4.1-dev');
 
     const gates = [
-      'pnpm install --frozen-lockfile',
+      "pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'",
       'pnpm --filter @agentcomms/desktop typecheck',
       'pnpm --filter @agentcomms/desktop test',
       'pnpm --filter @agentcomms/desktop build',
@@ -207,6 +207,85 @@ describe('the desktop workflows', () => {
     expect(workflow).not.toMatch(/TAURI_SIGNING|APPLE_|createUpdaterArtifacts/);
   });
 
+  /*
+   * GitHub's list of releases can lag a few seconds behind a draft just made, and attempt 1 of desktop-v0.24.0's run
+   * failed on it. The draft step's own shell runs here against a stand-in `gh`, whose list is empty for the first
+   * `lagging` asks, and a stand-in `sleep` that only counts.
+   */
+  function runDraftLookup(answers: { lagging: number; ids: string }): {
+    status: number | null;
+    asks: number;
+    sleeps: number;
+    stderr: string;
+  } {
+    const step = block(block(block(read(RELEASE_YML), 'jobs'), 'draft', 2), '- name', 6);
+    expect(step).toContain('- name: make the draft, unless the release exists');
+    const script = step.slice(step.indexOf('run: |') + 'run: |'.length).replace(/^ {10}/gm, '');
+    const folder = mkdtempSync(join(tmpdir(), 'agentcomms-draft-lookup-'));
+    try {
+      const gh = join(folder, 'gh');
+      writeFileSync(
+        gh,
+        [
+          '#!/usr/bin/env bash',
+          `if [ "$1" = release ]; then case "$*" in *isDraft*) echo true ;; esac; exit 0; fi`,
+          `n=$(( $(cat "${folder}/asks" 2>/dev/null || echo 0) + 1 )); echo "$n" > "${folder}/asks"`,
+          `[ "$n" -le ${answers.lagging} ] || printf '%s\\n' ${answers.ids
+            .split(' ')
+            .map((id) => `'${id}'`)
+            .join(' ')}`,
+          '',
+        ].join('\n'),
+      );
+      const sleep = join(folder, 'sleep');
+      writeFileSync(sleep, `#!/usr/bin/env bash\necho x >> "${folder}/sleeps"\n`);
+      chmodSync(gh, 0o755);
+      chmodSync(sleep, 0o755);
+      const run = spawnSync('bash', ['-c', script], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${folder}:${process.env.PATH}`,
+          GITHUB_REF_NAME: 'desktop-v9.9.9',
+          GH_REPO: 'o/r',
+          RUNNER_TEMP: folder,
+        },
+      });
+      const count = (file: string): number => {
+        try {
+          return readFileSync(join(folder, file), 'utf8').trim().split('\n').filter(Boolean).length;
+        } catch {
+          return 0;
+        }
+      };
+      const asks = Number(readFileSync(join(folder, 'asks'), 'utf8').trim());
+      return { status: run.status, asks, sleeps: count('sleeps'), stderr: run.stderr };
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }
+
+  it.skipIf(process.platform === 'win32')(
+    "the draft job asks again while GitHub's list lags behind a new draft, for up to 30 s (Windows has no bash to ask)",
+    () => {
+      const lagged = runDraftLookup({ lagging: 2, ids: '417525829' });
+      expect(lagged.status, lagged.stderr).toBe(0);
+      expect([lagged.asks, lagged.sleeps]).toEqual([3, 2]);
+
+      // Never there: it gives up after 7 asks and 6 pauses of 5 s, naming what it found.
+      const absent = runDraftLookup({ lagging: 99, ids: '1' });
+      expect(absent.status).toBe(1);
+      expect([absent.asks, absent.sleeps]).toEqual([7, 6]);
+      expect(absent.stderr).toContain('expected one release for desktop-v9.9.9, found: ');
+
+      // Two releases for one tag is no lag: it fails at the first answer.
+      const two = runDraftLookup({ lagging: 0, ids: '1 2' });
+      expect(two.status).toBe(1);
+      expect([two.asks, two.sleeps]).toEqual([1, 0]);
+      expect(two.stderr).toContain('expected one release for desktop-v9.9.9, found: 1 2');
+    },
+  );
+
   it("leaves the npm release workflow's trigger to v* tags, and its publish job builds the packages alone", () => {
     const release = read('.github/workflows/release.yml');
     expect(block(block(release, 'on'), 'push', 2)).toBe("  push:\n    tags: ['v*']");
@@ -261,6 +340,21 @@ describe('the desktop workflows', () => {
     ]) {
       outside.add(read);
     }
+    // The Laya Rust mutants step runs E2's cargo leg from the events daemon's tests: every file that entry imports,
+    // through every relative import, decides what the step does (E2 review round 1, B10).
+    const cargoLeg = /^\s+run: node \S.* (packages\/events-daemon\/\S+\.ts) --leg cargo$/m.exec(workflow)?.[1];
+    expect(cargoLeg, 'desktop.yml runs the cargo leg').toBeDefined();
+    const pending = [cargoLeg ?? ''];
+    const imported = new Set<string>();
+    while (pending.length > 0) {
+      const file = pending.pop() ?? '';
+      if (imported.has(file)) continue;
+      imported.add(file);
+      for (const [, specifier] of read(file).matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g))
+        pending.push(join(dirname(file), specifier ?? '').replaceAll('\\', '/'));
+    }
+    expect(imported.size, 'the cargo leg and its relative imports').toBeGreaterThan(4);
+    for (const path of imported) outside.add(path);
     expect(outside.size).toBeGreaterThan(8);
     for (const path of outside) expect(covers(path), `${path} is not in desktop.yml's paths`).toBe(true);
     // And push is filtered the same way.

@@ -1,10 +1,15 @@
 /** Stable domain failures that daemon operations translate unchanged at their control boundary. */
 export type EventDomainErrorCode =
   | 'E2_REQUIRED'
+  | 'E2_EXTERNAL_REFERENCE_BLOCKED'
   | 'EVENT_TYPE_NOT_SELECTABLE'
   | 'EVENT_TYPE_UNKNOWN'
   | 'EVENT_VERSION_UNKNOWN'
   | 'JUDGE_KIND_DISABLED'
+  | 'LAYA_MANIFEST_NOT_REVIEWED'
+  | 'LAYA_PLATFORM_UNAVAILABLE'
+  | 'LAYA_SANDBOX_UNAVAILABLE'
+  | 'LAYA_TEMPLATE_BLOCKED'
   | 'SOURCE_CHANNEL_UNSUPPORTED'
   | 'VERSION_DOCUMENT_INVALID';
 

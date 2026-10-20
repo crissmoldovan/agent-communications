@@ -28,6 +28,7 @@ import {
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
+import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
 /**
@@ -1211,7 +1212,8 @@ export interface B3ApprovalPreviewTerminalView {
 
 /**
  * The terminal and desktop fixture boundary. This formats only daemon-authored identifiers and a canonical, neutralised
- * preview representation; it never consumes a secret operation or claims the approval.
+ * preview representation; it never consumes a secret operation or claims the approval. A B3 v3 rule preview naming a
+ * Laya judge also carries D11's Laya limits, rendered after the preview.
  */
 export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerminalView {
   if (
@@ -1237,6 +1239,7 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
   )
     throw new TypeError('a ready approval preview is malformed');
   normaliseActivationDocument(value.preview as ActivationDocumentV1);
+  const laya = Object.hasOwn(value, 'layaJudge') ? renderLayaJudgePreviewV3(value.layaJudge) : [];
   const structured = {
     approvalId: value.approvalId,
     digest: value.digest,
@@ -1247,6 +1250,7 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
       challenge: value.challenge.challenge,
       expiresAt: value.challenge.expiresAt,
     },
+    ...(Object.hasOwn(value, 'layaJudge') ? { layaJudge: value.layaJudge } : {}),
   };
   return {
     kind: 'READY',
@@ -1255,6 +1259,7 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
+      ...laya,
       `Challenge ${value.challenge.challenge}`,
       `Expires ${new Date(value.challenge.expiresAt).toISOString()}`,
     ].join('\n'),

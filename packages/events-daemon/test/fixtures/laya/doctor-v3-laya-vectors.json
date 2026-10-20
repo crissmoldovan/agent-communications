@@ -1,0 +1,72 @@
+{
+  "ready": {
+    "state": "ready",
+    "manifestId": "laya-en-onnx-tiny-v1",
+    "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+    "runtime": "installed",
+    "model": "ready",
+    "boundary": {
+      "status": "active",
+      "reason": null
+    },
+    "failureCode": null,
+    "bytesVerified": 154,
+    "totalBytes": 154
+  },
+  "integrity": {
+    "state": "failed",
+    "manifestId": "laya-en-onnx-tiny-v1",
+    "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+    "runtime": "installed",
+    "model": "failed",
+    "boundary": {
+      "status": "active",
+      "reason": null
+    },
+    "failureCode": "integrity",
+    "bytesVerified": 0,
+    "totalBytes": 154
+  },
+  "boundary": {
+    "state": "failed",
+    "manifestId": "laya-en-onnx-tiny-v1",
+    "runtimeLockDigest": "4ba9c3c8573598f2e4d953af3a273e716b10eb2a8d72d02a25c838424adeb22c",
+    "runtime": "installed",
+    "model": "ready",
+    "boundary": {
+      "status": "unavailable",
+      "reason": "LAYA_SANDBOX_UNAVAILABLE"
+    },
+    "failureCode": "boundary-failed",
+    "bytesVerified": 154,
+    "totalBytes": 154
+  },
+  "linux": {
+    "state": "unavailable",
+    "manifestId": "laya-en-onnx-tiny-v1",
+    "runtimeLockDigest": null,
+    "runtime": "absent",
+    "model": "absent",
+    "boundary": {
+      "status": "unavailable",
+      "reason": "LAYA_PLATFORM_UNAVAILABLE"
+    },
+    "failureCode": null,
+    "bytesVerified": 0,
+    "totalBytes": 75
+  },
+  "windows": {
+    "state": "unavailable",
+    "manifestId": "laya-en-onnx-tiny-v1",
+    "runtimeLockDigest": null,
+    "runtime": "absent",
+    "model": "absent",
+    "boundary": {
+      "status": "unavailable",
+      "reason": "LAYA_PLATFORM_UNAVAILABLE"
+    },
+    "failureCode": null,
+    "bytesVerified": 0,
+    "totalBytes": 75
+  }
+}

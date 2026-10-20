@@ -8,7 +8,9 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { REGISTRY } from '../scripts/channels.mjs';
+import { DRIVERS } from '../scripts/operations.mjs';
 import { HELD, PACKAGES, PUBLISHABLE } from '../scripts/packages.mjs';
+import { SURFACES } from '../scripts/registries.mjs';
 import { isVisible } from '../scripts/release-confirm.mjs';
 import { workspaceClosure } from '../scripts/verify-package.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
@@ -33,6 +35,52 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const exec = promisify(execFile);
+
+test('E2 runtime package: private dependency declaration reaches no package, surface, or driver registry', async () => {
+  const manifest = JSON.parse(await readFile(join(ROOT, 'packages', 'events-laya-runtime', 'package.json'), 'utf8'));
+  assert.equal(manifest.private, true, 'the runtime declaration is never publishable');
+  assert.ok(!PUBLISHABLE.includes('events-laya-runtime'));
+  assert.ok(!PACKAGES.includes('events-laya-runtime'));
+  assert.ok(
+    ![...REGISTRY.channels, ...REGISTRY.libraries, ...REGISTRY.services].some(
+      (entry) => entry.directory === 'events-laya-runtime',
+    ),
+  );
+  assert.ok(!SURFACES.some((surface) => surface.package === 'events-laya-runtime'));
+  assert.equal(DRIVERS['events-laya-runtime'], undefined);
+});
+
+/**
+ * E2: what the daemon's publish packs, as `pnpm pack` lists it (no tarball is written, and a dead registry stands in
+ * for npm): Laya's three reviewed assets — the lock exactly the fail-closed placeholder — and its worker, and nothing
+ * of the runtime, a model or a test fixture. The packed consumer check proves the same of an installed tarball.
+ */
+test('E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model', {
+  skip: process.platform === 'win32' && 'pnpm is a .cmd shim on Windows; the packed list is the same on every platform',
+}, async () => {
+  const daemon = join(ROOT, 'packages', 'events-daemon');
+  const { stdout } = await exec('pnpm', ['pack', '--dry-run', '--json'], {
+    cwd: daemon,
+    encoding: 'utf8',
+    env: { ...process.env, npm_config_registry: 'http://127.0.0.1:9/' },
+  });
+  const files = JSON.parse(stdout).files.map((file) => file.path);
+  for (const asset of ['laya-enablement-disclosures.json', 'laya-manifest.json', 'laya-runtime.json'])
+    assert.ok(files.includes(asset), `the tarball carries ${asset}`);
+  assert.ok(files.includes('dist/laya-worker.mjs'), 'the tarball carries the built worker (run `pnpm build` first)');
+  assert.equal(
+    await readFile(join(daemon, 'laya-runtime.json'), 'utf8'),
+    '{\n  "schemaVersion": 1,\n  "blocked": "E2_EXTERNAL_REFERENCE_BLOCKED"\n}\n',
+    'and the lock it packs is the placeholder: Laya ships held',
+  );
+  assert.deepEqual(
+    files.filter((path) =>
+      /\.onnx|laya_config|tokenizer|node_modules|^test\/|^src\/|events-laya-runtime|\.tgz$/u.test(path),
+    ),
+    [],
+    'no model, tokenizer, runtime tree, source, test fixture or archive is packed',
+  );
+});
 
 /** Runs a script and returns its exit status and output; a refusal is an answer, not a thrown error. */
 async function runScript(script, args, options = {}) {
@@ -1683,6 +1731,29 @@ function jobBlock(workflow, key) {
   return workflow.slice(start, end);
 }
 
+test('E2: every release-workflow install excludes the private Laya runtime before ordinary verification', async () => {
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const install = ['pnpm', 'install', '--frozen-lockfile', '--filter', "'!@agentcomms/events-laya-runtime'"].join(' ');
+  const installPattern = ['pnpm', 'install', '--frozen-lockfile'].join('\\s+');
+  const installs =
+    workflow.match(new RegExp(`${installPattern}(?: --filter '!@agentcomms\\/events-laya-runtime')?`, 'g')) ?? [];
+  // The verify legs, the old-Node leg, the browser leg, the Laya release gate (E2 Task 10) and the publish.
+  assert.equal(installs.length, 5, 'the five workflow installs are the complete ordinary/release install surface');
+  assert.ok(
+    installs.every((command) => command === install),
+    'no workflow job can acquire the private runtime closure',
+  );
+  const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(root.scripts['verify:events-phase-e2'], 'node scripts/verify-events-phase-e2-tests.mjs');
+  assert.equal(root.scripts['verify:laya-ci-install'], 'node scripts/verify-laya-ci-install.mjs --self-test');
+  const verify = jobBlock(workflow, 'verify');
+  assert.match(
+    verify,
+    /- uses: actions\/checkout@v\d+\n {8}with:\n {10}persist-credentials: false\n {10}fetch-depth: 0\n/,
+    'the only workflow job that runs the E2 structural checker has complete fragment history',
+  );
+});
+
 test('the publish waits for the old-Node leg, which builds on the tooling Node and then runs its built-command tests', async () => {
   /*
    * Case 0000 of the CUE-403 design: a located command for a `.ts` entry runs on the oldest Node the packages claim.
@@ -1701,7 +1772,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
     return index;
   };
   const tooling = at('node-version: 22.18.0');
-  const install = at('- run: pnpm install --frozen-lockfile');
+  const install = at(`- run: ${['pnpm', 'install', '--frozen-lockfile'].join(' ')}`);
   const build = at('- run: pnpm build');
   const old = at('node-version: 22.12.0\n');
   const run = at(
@@ -1726,7 +1797,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
       .exec(publish)?.[1]
       .split(',')
       .map((need) => need.trim()) ?? [];
-  assert.deepEqual(needs.sort(), ['browser', 'old-node', 'verify']);
+  assert.deepEqual(needs.sort(), ['browser', 'laya', 'old-node', 'verify']);
   assert.match(jobBlock(workflow, 'verify'), /node: \[22\.18\.0, 24\]/, 'the matrix keeps its own Node versions');
   // The test is there, and the repository's own tooling floor stays where it is.
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
@@ -1750,7 +1821,7 @@ test('BRW-b: the release cannot publish without event vectors and loopback SSE C
     .exec(publish)?.[1]
     .split(',')
     .map((need) => need.trim());
-  assert.deepEqual(needs?.sort(), ['browser', 'old-node', 'verify']);
+  assert.deepEqual(needs?.sort(), ['browser', 'laya', 'old-node', 'verify']);
 
   const job = jobBlock(workflow, 'browser');
   assert.ok(job, 'there is a browser job');
@@ -1768,7 +1839,7 @@ test('BRW-b: the release cannot publish without event vectors and loopback SSE C
   const pnpm = at('uses: pnpm/action-setup@');
   const node = at('uses: actions/setup-node@');
   assert.match(job, /node-version: 22\.18\.0\n/);
-  const install = at('run: pnpm install --frozen-lockfile');
+  const install = at(`run: ${['pnpm', 'install', '--frozen-lockfile'].join(' ')}`);
   const browsers = at('run: pnpm --filter @agentcomms/events exec playwright install chromium webkit');
   const build = at('run: pnpm build');
   const run = at('run: pnpm verify:browser');

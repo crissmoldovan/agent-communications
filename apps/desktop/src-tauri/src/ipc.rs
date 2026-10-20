@@ -155,6 +155,10 @@ pub enum TerminalCommand {
         account: AccountName,
         again: bool,
     },
+    /// Laya's enablement, which only a terminal may take (E2 Task 11): the events service's `judge kind enable laya`.
+    /// Its preview and its approval happen there; the app prepares nothing, records no approval and never approves. It
+    /// is not a `change`: it takes no argument and no approval of the app's.
+    EventsJudgeKindEnable {},
 }
 
 /// What opening the terminal came to.

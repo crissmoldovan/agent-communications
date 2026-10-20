@@ -11,25 +11,50 @@ function available(kind: string): JudgeKind {
   if (!(JUDGE_KINDS as readonly string[]).includes(kind))
     throw new CommsError('BAD_DATA', 'the judge kind is not recognised');
   const definition = JUDGE_KIND_DEFINITIONS.find((entry) => entry.kind === kind);
-  if (definition?.availability !== 'available')
-    throw new EventDomainError('E2_REQUIRED', 'laya is unavailable until E2');
+  if (definition?.availability !== 'available' && definition?.implementation === undefined)
+    throw new EventDomainError('E2_REQUIRED', 'the judge kind is unavailable');
   return kind as JudgeKind;
 }
+
+/**
+ * E2's artifact lifecycle around one kind's immediate disable. It fences and stops that kind's in-memory artifact work
+ * first, runs E's whole disable transaction under the artifact lock, then removes what the disable orphaned.
+ */
+export interface JudgeKindArtifactLifecycle {
+  readonly kind: JudgeKind;
+  disableKind<T>(disable: () => T): Promise<T>;
+}
+
+export type JudgeKindDisableResult = ReturnType<JudgeKinds['disable']>;
 
 /** Task 4's dormant kind authority. Public operation registration remains Task 9's job. */
 export class JudgeKinds {
   readonly #store: EventDatabase;
   readonly #now: () => number;
   readonly #activations: Pick<ActivationRuntime, 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction'> | undefined;
+  readonly #artifacts: JudgeKindArtifactLifecycle | undefined;
 
   constructor(input: {
     readonly store: EventDatabase;
     readonly now?: (() => number) | undefined;
     readonly activations?: Pick<ActivationRuntime, 'prepareJudgeKind' | 'cancelForJudgeKindInTransaction'> | undefined;
+    readonly artifacts?: JudgeKindArtifactLifecycle | undefined;
   }) {
     this.#store = input.store;
     this.#now = input.now ?? Date.now;
     this.#activations = input.activations;
+    this.#artifacts = input.artifacts;
+  }
+
+  /**
+   * The operation-facing disable. A kind with installed artifacts disables through their lifecycle, which wraps
+   * exactly the transaction below; every other kind is that transaction alone.
+   */
+  async disableKind(kind: string): Promise<JudgeKindDisableResult> {
+    const enabledKind = available(kind);
+    if (this.#artifacts !== undefined && this.#artifacts.kind === enabledKind)
+      return this.#artifacts.disableKind(() => this.disable(enabledKind));
+    return this.disable(enabledKind);
   }
 
   prepareEnable(input: { readonly kind: string; readonly version: number }): Promise<PreparedActivation> {

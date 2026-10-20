@@ -29,14 +29,14 @@ without bypass, so the merge is theirs and is made on their word — never infer
    `git fetch origin pull/<n>/head:review/pr-<n>` and `git worktree add ../.agentcomms-wt/pr-<n> review/pr-<n>`.
    **Complete when:** the worktree is at the pull request's head, and its base is the current `main`.
 
-3. **Read before you run.** A contributor's tests are code that runs on this machine. Before `pnpm install` or
+3. **Read before you run.** A contributor's tests are code that runs on this machine. Before `pnpm install --filter '!@agentcomms/events-laya-runtime'` or
    `pnpm verify`, look at the diff for changes to `package.json`, the lockfile, `scripts/`, `.githooks/` or
    `.github/`; for `child_process`, `spawn` or a host other than the provider's own documentation, `localhost` and
    `example.*`/`*.test`; for reads of the environment; and for anything shaped like a real token, address or account
    id. Anything there is read in full and raised before going on.
    **Complete when:** each of those searches has been run and its result is known.
 
-4. **Verify it here.** `pnpm install --frozen-lockfile && pnpm verify` in the worktree, and record the per-package
+4. **Verify it here.** `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime' && pnpm verify` in the worktree, and record the per-package
    pass and fail counts. "Passes locally" in the description is the contributor's claim; this is the evidence.
    **Complete when:** `pnpm verify` exits 0 on the head being reviewed, and the counts are written down.
 

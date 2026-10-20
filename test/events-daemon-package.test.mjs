@@ -38,7 +38,15 @@ test('PKG-B1-b: the local event daemon is a released service with its declared r
     '@agentcomms/slack': 'workspace:*',
     '@agentcomms/whatsapp': 'workspace:*',
   });
-  assert.deepEqual(manifest.files, ['dist', 'README.md', 'LICENSE', 'THIRD_PARTY_LICENSES']);
+  assert.deepEqual(manifest.files, [
+    'dist',
+    'laya-enablement-disclosures.json',
+    'laya-manifest.json',
+    'laya-runtime.json',
+    'README.md',
+    'LICENSE',
+    'THIRD_PARTY_LICENSES',
+  ]);
   assert.doesNotMatch(
     JSON.stringify({ ...manifest.dependencies, ...manifest.optionalDependencies }),
     /(?:better-sqlite3|sqlite3|node-sqlite3)/,
@@ -138,4 +146,18 @@ test('PKG-B1-b: the built daemon imports nothing at runtime but Node, its declar
     }
   }
   assert.deepEqual([...stray].sort(), [], 'every other package is bundled');
+});
+
+test('PKG-E2: the published daemon installs no Laya or ONNX package, and the private runtime is never released', async () => {
+  // E2 Task 10's release audit, over this checkout: the daemon's declared dependencies and everything they install,
+  // read from the lockfile through each workspace package it links; and both release lists.
+  const { auditLayaPackages, daemonDependencyClosure } = await import('../scripts/laya-release-gate.mjs');
+  const { PACKAGES, PUBLISHABLE } = await import('../scripts/packages.mjs');
+  await auditLayaPackages({ root: ROOT, publishable: [...PUBLISHABLE], packages: [...PACKAGES] });
+  const closure = daemonDependencyClosure(readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8'));
+  for (const name of ['@receptron/laya', 'onnxruntime-node', 'onnxruntime-common', '@huggingface/tokenizers']) {
+    assert.equal(closure.includes(name), false, `the published daemon would install ${name}`);
+  }
+  assert.equal(PUBLISHABLE.includes('events-laya-runtime'), false);
+  assert.equal(PACKAGES.includes('events-laya-runtime'), false);
 });

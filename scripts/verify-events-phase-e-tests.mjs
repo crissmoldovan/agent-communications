@@ -626,13 +626,52 @@ function isSyntheticAuthorityEnumeration(statement) {
   );
 }
 
+/**
+ * E2 Task 7: the Laya worker's boundary probe calls `fetch` once, on purpose, to prove that the macOS sandbox denies
+ * it before the worker may load anything; the worker then seals `fetch` itself. That one loopback call, in that one
+ * file, is the only exception to the fetch rule. Elsewhere in the file the word may appear only on the four reviewed
+ * lines below, none of which can reach `fetch`; any other use (a second call, `?.(`, `['fetch']`, `.call`, an alias)
+ * is refused. Every other rule (no http(s) request or import, no computed specifier) still applies to the file.
+ */
+const LAYA_BOUNDARY_PROBE = 'packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
+const LAYA_BOUNDARY_FETCH_ATTEMPT = ['globalThis.fetch(`http://127.0.0.1:', '$', '{port}/laya-boundary-probe`'].join(
+  '',
+);
+const LAYA_BOUNDARY_FETCH_NAMES = new Set([
+  "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds', 'spawn'] as const;",
+  "result.fetch === 'denied' &&",
+  "['fetch', () => fetchProbe(input.tcpPort)],",
+  "seal(globalThis, 'fetch', async (): Promise<never> => sealedNetwork());",
+]);
+
+function layaBoundaryProbeFetchProblems(file, executableText) {
+  const named = executableText
+    .replace(LAYA_BOUNDARY_FETCH_ATTEMPT, '')
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /\bfetch\b/u.test(line));
+  const reviewed = named.every((line) => LAYA_BOUNDARY_FETCH_NAMES.has(line)) && new Set(named).size === named.length;
+  return reviewed ? [] : [`${file}: the Laya boundary probe may use fetch only in its one loopback attempt`];
+}
+
+/**
+ * E2 Task 8: the isolated Laya worker loads its runtime only after its own boundary proof, from the extracted tree the
+ * daemon verified for that start — an absolute path no source can spell as a literal. That one call, in that one file,
+ * is the only exception to the computed-specifier rule: `worker-runtime.ts` may contain it once. Any other computed
+ * `import(` or `require(` there — a second copy of the same call among them — and the same call in any other file are
+ * still `judge paths must not use computed module specifiers`. Every other rule still applies to the file.
+ */
+const LAYA_WORKER_RUNTIME = 'packages/events-daemon/src/runtime/laya/worker-runtime.ts';
+const LAYA_VERIFIED_RUNTIME_IMPORT = 'await import(pathToFileURL(verifiedEntry).href)';
+
 /** Scan one production source file; exported so fixture-copy tests exercise the exact static rules. */
 export function verifyPhaseEJudgeSource({ file, source: text }) {
   const problems = [];
   const judgePath =
     file.startsWith('packages/events-daemon/src/') && file !== 'packages/events-daemon/src/runtime/sse-server.ts';
   const executableText = text.replace(/\/\*[\s\S]*?\*\/|^\s*\/\/[^\r\n]*$/gmu, '');
-  if (judgePath && /\bfetch\s*\(/u.test(executableText)) problems.push(`${file}: judge paths must not call fetch`);
+  if (judgePath && file === LAYA_BOUNDARY_PROBE) problems.push(...layaBoundaryProbeFetchProblems(file, executableText));
+  else if (judgePath && /\bfetch\s*\(/u.test(executableText)) problems.push(`${file}: judge paths must not call fetch`);
   else if (judgePath && /\bfetch\b/u.test(executableText))
     problems.push(`${file}: judge paths must not reference fetch`);
   if (judgePath && /\bhttp\s*\.\s*request\s*\(/u.test(executableText))
@@ -641,8 +680,10 @@ export function verifyPhaseEJudgeSource({ file, source: text }) {
     problems.push(`${file}: judge paths must not call https.request`);
   if (judgePath && /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?https?['"]/u.test(executableText))
     problems.push(`${file}: judge paths must not import node:http or node:https`);
+  const specifierText =
+    file === LAYA_WORKER_RUNTIME ? executableText.replace(LAYA_VERIFIED_RUNTIME_IMPORT, '') : executableText;
   const computedModuleSpecifier = [
-    ...executableText.matchAll(/(?<![\w$.#])(import|require)\s*\(\s*([^\r\n)]*)/gmu),
+    ...specifierText.matchAll(/(?<![\w$.#])(import|require)\s*\(\s*([^\r\n)]*)/gmu),
   ].some((match) => {
     const argument = match[2]?.trim() ?? '';
     if (argument.startsWith("'") || argument.startsWith('"')) return false;

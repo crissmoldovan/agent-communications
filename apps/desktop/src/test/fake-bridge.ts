@@ -15,6 +15,7 @@ import doctorGmail from './fixtures/doctor-gmail.json';
 import doctorResend from './fixtures/doctor-resend.json';
 import doctorSlack from './fixtures/doctor-slack.json';
 import doctorWhatsapp from './fixtures/doctor-whatsapp.json';
+import layaDisabled from './fixtures/events-judge-model-status.disabled.json';
 import eventsStatus from './fixtures/events-status.running.json';
 import label from './fixtures/label.populated.json';
 import standingList from './fixtures/standing-list.json';
@@ -40,7 +41,10 @@ export const EXAMPLE_INSTALLATION: Installation = {
   problem: null,
 };
 
-/** A fixture's answer for a call: its data, or a function of the call that gives it. */
+/**
+ * A fixture's answer for a call: its data, or a function of the call that gives it. For `version` it is the version
+ * itself, or a function of the call (and so of its product), and every product is at `EXAMPLE_INSTALLATION`'s without one.
+ */
 export type Fixture = unknown | ((call: Call) => unknown);
 
 /** What each call kind answers by default: the populated fixtures, a doctor and an account list per product. */
@@ -54,6 +58,8 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   behaviour,
   standingList,
   eventsStatus,
+  eventsJudgeModelStatus: layaDisabled,
+  eventsJudgeKindDisable: { kind: 'laya', disabled: true, pointer: 'removed', pendingActivationsCancelled: 0 },
   doctor: (call: Call) =>
     ({
       core: doctorCore,
@@ -104,7 +110,14 @@ export function createFakeBridge(
       return EXAMPLE_INSTALLATION;
     },
     async cli(call) {
-      if (call.kind === 'version') return { status: 'version', version: EXAMPLE_INSTALLATION.version ?? '0.24.0' };
+      if (call.kind === 'version') {
+        const version = answers.version;
+        const given = typeof version === 'function' ? (version as (call: Call) => unknown)(call) : version;
+        return {
+          status: 'version',
+          version: typeof given === 'string' ? given : (EXAMPLE_INSTALLATION.version ?? '0.24.0'),
+        };
+      }
       const fixture = answers[call.kind];
       if (fixture === undefined) return failed('APP_NOT_BUILT', `no fixture answers ${call.kind}`);
       return ok(typeof fixture === 'function' ? (fixture as (call: Call) => unknown)(call) : fixture);

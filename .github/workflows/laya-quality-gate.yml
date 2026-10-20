@@ -1,0 +1,115 @@
+name: Laya quality gate
+
+# **Owner-only.** The two real-Mac gates a release needs before it may offer Laya (events E2 Tasks 9 and 10): the
+# boundary run and the labelled quality run, on a candidate that ships the real Laya runtime lock. Only the owner runs
+# it, by hand, on a Mac of their own; docs/RELEASING.md ("Laya") gives the whole procedure.
+#
+# - **Started only by hand, and only on a candidate tag.** `workflow_dispatch` with no input: no pull request, push or
+#   other event starts it, and nothing a dispatcher types reaches a step. The job runs only for a `laya-candidate-*`
+#   tag, which publishes nothing (a `v*` tag would), and checks the tag still names the commit it checked out.
+# - **Behind the owner's approval.** The `laya-quality-gate` environment requires the owner's review before the job
+#   starts, and allows only `laya-candidate-*` tags. Approving it is also the owner's attestation that everyone whose
+#   Gmail or Slack messages are in the corpus agreed in writing (the run's `--attest-written-consent`).
+# - **On the owner's protected Mac.** A self-hosted macOS runner the owner registers with the
+#   `agentcomms-laya-gate` label as an ephemeral runner, for this one job, after dispatching and before approving it
+#   (this public, personal repository has no runner groups; docs/RELEASING.md), whose host denies outbound connections
+#   beyond GitHub, the npm registry and the Node download. The egress step checks only that a TCP connection to each of
+#   three public addresses on port 443 fails; it does not check DNS, another port or another address, which the host's
+#   own firewall must deny. The sealed corpus, the Python reference snapshot and the verified runtime and model trees
+#   stay on that host, named by the runner's own environment (`AGENTCOMMS_LAYA_GATE_*`); nothing here holds or uploads
+#   them. The corpus key is not on that host: it is the `laya-quality-gate` environment's secret, which only the quality
+#   step is given, in its own `env:`, so no other step and no path the runner's environment names can reach it.
+# - **Nothing to publish with.** Read-only contents, no OIDC permission, no registry credential, a checkout that keeps
+#   no credential, and one secret, the corpus key above, which publishes nothing.
+# - **The corpus is read last.** Only after the candidate and both trees verify, the host's egress is checked and the
+#   boundary run has finished does the quality run open the corpus, in memory. Both runs print and write only their
+#   content-free results, which the first artifact step keeps for the owner to read and commit: the aggregate
+#   `packages/events-laya-runtime/gate/<manifestId>.json` and `packages/events-laya-runtime/gate/macos-boundary-v2.json`.
+# - **Provenance a release can check.** Each run also writes its own copy of its result for this architecture, and the
+#   last two steps upload them unzipped (`laya-quality-run.json`, `laya-boundary-run.json`), so each artifact's digest
+#   is that file's SHA-256. The owner records this run's id and commit in `gate/runs-v1.json`; a release that offers
+#   Laya asks GitHub about this run and compares those digests with the committed results (E2 review round 1, A3).
+#
+# Actions are pinned to the commit of the tag in each comment.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: laya-quality-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Laya boundary and quality gate, on the owner's protected Mac
+    if: startsWith(github.ref, 'refs/tags/laya-candidate-')
+    environment: laya-quality-gate
+    runs-on: [self-hosted, macOS, agentcomms-laya-gate]
+    timeout-minutes: 720
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.18.0
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
+      - run: pnpm -r --filter "./packages/**" run build
+      - name: the candidate tag still names this commit
+        run: node scripts/release-ci.mjs tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
+      - name: the candidate ships the real runtime lock, and both trees on this Mac are exactly its own
+        run: >-
+          node --experimental-strip-types --disable-warning=ExperimentalWarning
+          scripts/run-laya-macos-boundary-gate.mjs verify-candidate
+          --runtime-tree "$AGENTCOMMS_LAYA_GATE_RUNTIME_TREE" --model-tree "$AGENTCOMMS_LAYA_GATE_MODEL_TREE"
+      - name: this runner reaches nothing beyond its allow-list
+        run: >-
+          node --experimental-strip-types --disable-warning=ExperimentalWarning
+          scripts/run-laya-macos-boundary-gate.mjs egress-check
+      - name: the real-Mac boundary run
+        run: >-
+          node --experimental-strip-types --disable-warning=ExperimentalWarning
+          scripts/run-laya-macos-boundary-gate.mjs run
+          --runtime-tree "$AGENTCOMMS_LAYA_GATE_RUNTIME_TREE" --model-tree "$AGENTCOMMS_LAYA_GATE_MODEL_TREE"
+          --run-copy "$RUNNER_TEMP/laya-boundary-run.json"
+      - name: the labelled quality run, over the consented corpus
+        env:
+          AGENTCOMMS_LAYA_GATE_CORPUS_KEY: ${{ secrets.AGENTCOMMS_LAYA_GATE_CORPUS_KEY }}
+        run: >-
+          node --experimental-strip-types --disable-warning=ExperimentalWarning
+          scripts/run-laya-quality-gate.mjs run --attest-written-consent
+          --corpus "$AGENTCOMMS_LAYA_GATE_CORPUS"
+          --reference "$AGENTCOMMS_LAYA_GATE_REFERENCE" --python "$AGENTCOMMS_LAYA_GATE_PYTHON"
+          --runtime-tree "$AGENTCOMMS_LAYA_GATE_RUNTIME_TREE" --model-tree "$AGENTCOMMS_LAYA_GATE_MODEL_TREE"
+          --run-copy "$RUNNER_TEMP/laya-quality-run.json"
+      - name: keep the two content-free results for the owner
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: laya-gate-results
+          path: |
+            packages/events-laya-runtime/gate/laya-*.json
+            packages/events-laya-runtime/gate/macos-boundary-v2.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: this run's own copy of its quality result, unzipped, for the release to check
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          path: ${{ runner.temp }}/laya-quality-run.json
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: this run's own copy of its boundary result, unzipped, for the release to check
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          path: ${{ runner.temp }}/laya-boundary-run.json
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 90

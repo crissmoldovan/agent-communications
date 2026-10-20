@@ -32,8 +32,8 @@ const MUTATIONS: readonly SocketSinkMutation[] = [
     productionEntry: 'packages/events-daemon/src/network/pinned-connection.ts',
     test: 'packages/events-daemon/test/network/pinned-connection.test.ts',
     mutation: {
-      from: "    socket.once('error', reject);\n    installErrorSink(socket);\n    socket.once('connect', () => {",
-      to: "    socket.once('error', reject);\n    socket.once('connect', () => {",
+      from: '    const socket = net.connect({ host: options.host, port: options.port });\n    installErrorSink(socket);\n',
+      to: '    const socket = net.connect({ host: options.host, port: options.port });\n',
     },
     mutationTest: 'NET-B2: connected pinned TCP keeps an error sink after its connect listener settles',
     loadedMarker: 'pinned-tcp-error-sink',
@@ -44,8 +44,8 @@ const MUTATIONS: readonly SocketSinkMutation[] = [
     productionEntry: 'packages/events-daemon/src/network/pinned-connection.ts',
     test: 'packages/events-daemon/test/network/pinned-connection.test.ts',
     mutation: {
-      from: "    socket.once('error', reject);\n    installErrorSink(socket);\n    socket.once('secureConnect', () => {",
-      to: "    socket.once('error', reject);\n    socket.once('secureConnect', () => {",
+      from: '      checkServerIdentity: (_name, certificate) => tls.checkServerIdentity(options.certificateHost, certificate),\n    });\n    installErrorSink(socket);\n',
+      to: '      checkServerIdentity: (_name, certificate) => tls.checkServerIdentity(options.certificateHost, certificate),\n    });\n',
     },
     mutationTest: 'NET-B2: handshaken pinned TLS keeps an error sink after its handshake listener settles',
     loadedMarker: 'pinned-tls-error-sink',

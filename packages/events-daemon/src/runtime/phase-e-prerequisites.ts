@@ -421,7 +421,8 @@ export function assertPhaseEPrerequisites(): void {
         (entry) =>
           entry.kind === JUDGE_KIND_LAYA &&
           entry.availability === 'unavailable' &&
-          entry.unavailableCode === 'E2_REQUIRED',
+          entry.unavailableCode === 'E2_REQUIRED' &&
+          entry.implementation !== undefined,
       ),
     'Phase E judge-kind registry',
   );

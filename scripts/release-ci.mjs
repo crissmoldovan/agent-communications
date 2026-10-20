@@ -181,7 +181,7 @@ async function preflight(version, commit) {
     const tag = version.includes('-') ? 'next' : 'latest';
     console.log(
       `\nFirst publish, by hand, from this commit (${commit}): in a checkout of it, from the repository root, after ` +
-        '`pnpm install --frozen-lockfile && pnpm build`, run',
+        "`pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime' && pnpm build`, run",
     );
     for (const full of unborn) {
       console.log(

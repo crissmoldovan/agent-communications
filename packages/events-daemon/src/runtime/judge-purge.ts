@@ -5,9 +5,30 @@ import { purgeHeldDecisionsInTransaction } from './holds.ts';
 import { type JudgeRecoveryResult, recoverJudgeWork, recoverRevokedJudgeVersions } from './judge-recovery.ts';
 
 /**
+ * In-memory judge work that outlives a reservation transition — E2's isolated Laya worker request — learns of a purge
+ * here. A listener only stops work whose durable reservation the purge already terminalised: E's recovery transition
+ * above it stays the sole authority, and the listener owns no SQL write.
+ */
+export interface JudgeWorkPurgeListener {
+  onWorkPurged(): void;
+}
+
+const purgeListeners = new WeakMap<DatabaseSync, JudgeWorkPurgeListener>();
+
+/** One owner composes one listener per database; the returned function removes exactly that registration. */
+export function registerJudgeWorkPurgeListener(database: DatabaseSync, listener: JudgeWorkPurgeListener): () => void {
+  if (purgeListeners.has(database)) throw new Error('a judge work purge listener is already registered');
+  purgeListeners.set(database, listener);
+  return () => {
+    if (purgeListeners.get(database) === listener) purgeListeners.delete(database);
+  };
+}
+
+/**
  * The sole judge participant for a caller's already-open immediate transaction. It deliberately performs no
  * reservation transition itself: Task 5's idempotent recovery primitive releases pre-I/O work and terminalises
- * post-I/O work exactly once.
+ * post-I/O work exactly once. After each transition it tells the database's work listener, so every E purge caller
+ * — they all reach judge work through this class — also stops the in-memory work that transition orphaned.
  */
 export class JudgePurgeParticipant {
   readonly #database: DatabaseSync;
@@ -18,11 +39,16 @@ export class JudgePurgeParticipant {
     this.#now = input.now ?? Date.now;
   }
 
+  #purged<T>(result: T): T {
+    purgeListeners.get(this.#database)?.onWorkPurged();
+    return result;
+  }
+
   all(): JudgeRecoveryResult {
     const result = recoverJudgeWork({ database: this.#database, now: this.#now(), selector: { scope: 'all' } });
     purgeHeldDecisionsInTransaction(this.#database, { scope: 'all' });
     this.#database.prepare('UPDATE decisions SET encrypted_record = NULL WHERE encrypted_record IS NOT NULL').run();
-    return result;
+    return this.#purged(result);
   }
 
   kind(judgeKind: JudgeKind): JudgeRecoveryResult {
@@ -32,17 +58,19 @@ export class JudgePurgeParticipant {
       selector: { scope: 'judge-kind', judgeKind },
     });
     purgeHeldDecisionsInTransaction(this.#database, { scope: 'judge-kind', judgeKind });
-    return result;
+    return this.#purged(result);
   }
 
   /** Judge removal is version-exact and delegates each durable identity to the single recovery transition. */
   judge(input: { readonly judgeId: string; readonly versions: readonly number[] }): JudgeRecoveryResult {
-    return recoverRevokedJudgeVersions({
-      database: this.#database,
-      now: this.#now(),
-      judgeId: input.judgeId,
-      versions: input.versions,
-    });
+    return this.#purged(
+      recoverRevokedJudgeVersions({
+        database: this.#database,
+        now: this.#now(),
+        judgeId: input.judgeId,
+        versions: input.versions,
+      }),
+    );
   }
 
   account(input: { readonly source: SourceOptions['channel']; readonly accountId: string }): JudgeRecoveryResult {
@@ -52,7 +80,7 @@ export class JudgePurgeParticipant {
       selector: { scope: 'source-account', source: input.source, accountId: input.accountId },
     });
     purgeHeldDecisionsInTransaction(this.#database, { scope: 'source-account', ...input });
-    return result;
+    return this.#purged(result);
   }
 
   event(input: {
@@ -95,7 +123,7 @@ export class JudgePurgeParticipant {
         ruleId: input.ruleId,
         ruleVersion: input.ruleVersion as number,
       });
-    return result;
+    return this.#purged(result);
   }
 
   /**
@@ -128,7 +156,7 @@ export class JudgePurgeParticipant {
       released += result.released;
       settled += result.settled;
     }
-    return { released, settled };
+    return this.#purged({ released, settled });
   }
 
   /** Enumerate the raw source/account identities first; each recovery call remains exact and account-scoped. */
@@ -209,6 +237,6 @@ export class JudgePurgeParticipant {
         ruleId: input.ruleId,
         ruleVersion: row.rule_version,
       });
-    return { released, settled };
+    return this.#purged({ released, settled });
   }
 }

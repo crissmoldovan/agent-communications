@@ -14,6 +14,7 @@ import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { copyShippedPackageAssets } from './support/shipped-assets.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
@@ -1383,6 +1384,7 @@ test('P1 (review round 13) mutation: omitting pending-intent accounts makes the 
   await rm(root, { recursive: true, force: true });
   try {
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
+    await copyShippedPackageAssets(packageRoot, root);
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
     const source = await readFile(scheduler, 'utf8');
     assert.equal(

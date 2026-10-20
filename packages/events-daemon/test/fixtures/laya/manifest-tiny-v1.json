@@ -1,0 +1,52 @@
+{
+  "manifestVersion": 1,
+  "manifestId": "laya-en-onnx-68f27dfe",
+  "source": {
+    "host": "huggingface.co",
+    "repo": "receptron/laya-onnx",
+    "revision": "68f27dfe5a27a54fb2b1fefc432f43f972e90868"
+  },
+  "weights": {
+    "publisher": "Convai Innovations",
+    "origin": "convaiinnovations/laya",
+    "originSha256": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c",
+    "licence": "Apache-2.0"
+  },
+  "files": [
+    {
+      "path": "laya.onnx",
+      "size": 3807291,
+      "sha256": "a874eb254b58b0fcb1e7ad56fbb188c29d64e08c9a46b689433e1f52c66dba1e"
+    },
+    {
+      "path": "laya.onnx.data",
+      "size": 1685258240,
+      "sha256": "487746363a8da57bcadb4345352997d22a0fb90d70aa22c6856668d023242aba"
+    },
+    {
+      "path": "laya_config.json",
+      "size": 369,
+      "sha256": "5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561"
+    },
+    {
+      "path": "tokenizer/tokenizer.json",
+      "size": 3583228,
+      "sha256": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30"
+    },
+    {
+      "path": "tokenizer/tokenizer_config.json",
+      "size": 308,
+      "sha256": "50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12"
+    }
+  ],
+  "runtime": {
+    "@receptron/laya": "0.1.2",
+    "onnxruntime-node": "1.30.0",
+    "@huggingface/tokenizers": "0.2.0"
+  },
+  "context": {
+    "maxTokens": 512,
+    "language": "en"
+  },
+  "promptTemplates": ["laya-choice2-v1", "laya-noul-v1"]
+}

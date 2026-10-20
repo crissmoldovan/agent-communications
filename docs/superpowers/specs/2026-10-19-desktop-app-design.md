@@ -397,3 +397,16 @@ the plan, differ, this list is the later word.
   the CLI said. Ending every standing approval shows core's `partial` notes. Base UI writes no `<style>` element
   (`CSPProvider disableStyleElements`), and the scrollbar rule it would have written is in the app's stylesheet.
   Playwright never reuses a server already on its port. **(lead's call, after review)**
+- **Laya, the local judge, on the Events screen,** when the events service's phase E2 ships it. This replaces D13's
+  Judges screen for Laya, which approved in the app.
+  - **Its state is shown read-only:** the events service's `idle | installing | downloading | verifying | ready |
+    failed | unavailable`, the bytes verified of the total, and its stable reason codes, as plain text. A new call in
+    the allow-list, `eventsJudgeModelStatus`, reads them: `judge model status`, through `<data>/launch/events-daemon`.
+  - **Enable opens the terminal** with `judge kind enable laya`, through the same launcher. The service's preview and
+    its approval happen there; the app never approves.
+  - **Disable applies at once,** through another new allow-listed call, `eventsJudgeKindDisable` (`judge kind
+    disable laya`): it is a tightening.
+  - Removing the model files stays in the CLI and MCP.
+  - **No model, runtime, worker or Laya artifact ever enters the app's bundle,** and the bundle check refuses one.
+
+  E2's plan, Task 11, builds this. **(lead's call, 2026-10-19)**

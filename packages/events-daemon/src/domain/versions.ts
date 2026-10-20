@@ -11,6 +11,9 @@ import {
   type TargetDocument,
 } from './activation-documents.ts';
 import {
+  assertCreatableLayaJudge,
+  assertLayaJudgeKindAvailable,
+  assertLayaRuleJudgeOffered,
   type CanonicalJudgeBudgetDocument,
   type CanonicalJudgeDocument,
   type CanonicalJudgeKindEnablementDocument,
@@ -18,10 +21,20 @@ import {
   canonicalJudgeBudget,
   canonicalJudgeKindEnablement,
   judgeKindDefinition,
+  type LayaEnablementInputs,
+  layaEnablementInputsFor,
 } from './judges.ts';
-import { assertJudgeKindEnabled, EventDomainError, isJudgeKind } from './lifecycle.ts';
+import { assertJudgeKindEnabled, EventDomainError, isJudgeKind, JUDGE_KINDS } from './lifecycle.ts';
 
 export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';
+
+/**
+ * The control contract whose judge documents a creation answers (`operations/b3-control-v3.ts`). B3 control v1 and v2
+ * (`b3-control-v1`, the default) have no Laya judge variant, so under them a Laya judge, or a rule naming one, exists
+ * only where this release and platform offer Laya (E2 Task 8). B3 control v3 (`b3-control-v3`) adds the variant: a
+ * Laya judge is configuration, kept whatever Laya's state, and it evaluates only once Laya is enabled and ready.
+ */
+export type JudgeDocumentContract = 'b3-control-v1' | 'b3-control-v3';
 
 export interface PendingVersion {
   readonly id: string;
@@ -44,13 +57,25 @@ function documentRecord(value: unknown): Record<string, unknown> {
 /** SQLite repository for D2's immutable, initially inert version rows. */
 export class ImmutableVersions {
   readonly #database: DatabaseSync;
+  readonly #layaInputs: LayaEnablementInputs;
+  #judgeContract: JudgeDocumentContract = 'b3-control-v1';
 
-  constructor(database: DatabaseSync) {
+  constructor(database: DatabaseSync, options: LayaEnablementInputs = layaEnablementInputsFor(database)) {
     this.#database = database;
+    this.#layaInputs = options;
+  }
+
+  /** The repository over this database's own Laya inputs, creating judges and rules as `contract` defines them. */
+  static forJudgeContract(database: DatabaseSync, contract: JudgeDocumentContract): ImmutableVersions {
+    const versions = new ImmutableVersions(database);
+    versions.#judgeContract = contract;
+    return versions;
   }
 
   createRule(input: unknown): PendingVersion {
     const document = canonicalFullRuleDocument(input);
+    if (this.#judgeContract === 'b3-control-v3') assertCreatableLayaJudge(document.agentic?.judge, this.#layaInputs);
+    else this.#assertLayaRuleOffered(document);
     this.assertEmbeddedVersions(document);
     return this.insert('rule_versions', 'rule', document.ruleId, document.version, document);
   }
@@ -80,9 +105,25 @@ export class ImmutableVersions {
     return this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
   }
 
-  /** Validates a dormant judge version; this deliberately does not require an enabled kind. */
+  /**
+   * Validates a dormant judge version; this deliberately does not require an enabled kind. Under B3 v1 and v2 a Laya
+   * judge, or a rule naming one, is refused with the kind's own closed reason wherever this release or platform does
+   * not offer Laya — with the placeholder lock, everywhere. Under B3 v3 it is kept as configuration, naming this
+   * release's reviewed manifest and a template the worker runs (JudgeDocumentContract).
+   */
   prepareJudge(input: unknown): CanonicalJudgeDocument {
-    return canonicalJudge(input);
+    const document = canonicalJudge(input);
+    if (this.#judgeContract === 'b3-control-v3') {
+      assertCreatableLayaJudge(document, this.#layaInputs);
+      return document;
+    }
+    if (document.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);
+    return document;
+  }
+
+  /** B3 v1 and v2: a rule naming a Laya judge exists only where this release and platform offer Laya (E2 Task 8). */
+  #assertLayaRuleOffered(document: CanonicalFullRuleDocument): void {
+    if (document.agentic?.judge.kind === JUDGE_KINDS[1]) assertLayaJudgeKindAvailable(this.#layaInputs);
   }
 
   createJudge(input: unknown): PendingVersion {
@@ -128,13 +169,11 @@ export class ImmutableVersions {
   }
 
   prepareJudgeKindDocument(input: unknown): CanonicalJudgeKindEnablementDocument {
-    return canonicalJudgeKindEnablement(input);
+    return canonicalJudgeKindEnablement(input, this.#layaInputs);
   }
 
   /** The sole digest-verifying loader for an immutable kind enablement document. */
   loadJudgeKind(kind: string, version: number): CanonicalJudgeKindEnablementDocument {
-    if (isJudgeKind(kind) && judgeKindDefinition(kind).availability === 'unavailable')
-      throw new EventDomainError('E2_REQUIRED', 'laya is unavailable until E2');
     const row = this.#database
       .prepare('SELECT document, digest FROM judge_kind_versions WHERE kind = ? AND version = ? AND revoked_at IS NULL')
       .get(kind, version) as { document: string; digest: string } | undefined;
@@ -142,7 +181,7 @@ export class ImmutableVersions {
       throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested judge kind version does not exist');
     let enablement: CanonicalJudgeKindEnablementDocument;
     try {
-      enablement = canonicalJudgeKindEnablement(JSON.parse(row.document));
+      enablement = canonicalJudgeKindEnablement(JSON.parse(row.document), this.#layaInputs);
     } catch {
       throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge kind document is invalid');
     }
@@ -153,6 +192,16 @@ export class ImmutableVersions {
 
   /** Loads one exact immutable kind enablement document, never inferring a default enabled state. */
   prepareJudgeKind(kind: string, version: number): Extract<ActivationDocumentV1, { kind: 'judge-kind' }> {
+    // Retain Phase E's unavailable-kind fence for every registry slot that has not been concretely replaced.  E2's
+    // Laya entry is available here, then its own strict shipped-asset validator refuses before an intent when the
+    // release lock is blocked or the platform boundary is unavailable.
+    if (isJudgeKind(kind) && judgeKindDefinition(kind).availability === 'unavailable') {
+      if (kind !== JUDGE_KINDS[1] || judgeKindDefinition(kind).implementation === undefined)
+        throw new EventDomainError('E2_REQUIRED', 'the judge kind requires its next phase implementation');
+      // Until Task 10 replaces the shipped placeholder lock, production refuses before even reading a pending
+      // document. Tests replace only strict-reviewed fixture bytes; a caller cannot inject a ready definition.
+      assertLayaJudgeKindAvailable(this.#layaInputs);
+    }
     const enablement = this.loadJudgeKind(kind, version);
     return {
       documentVersion: 1,
@@ -186,6 +235,7 @@ export class ImmutableVersions {
     const rule = canonicalFullRuleDocument(JSON.parse(row.document));
     this.assertEmbeddedVersions(rule);
     if (rule.agentic !== undefined) {
+      if (rule.agentic.judge.kind === JUDGE_KINDS[1]) assertLayaRuleJudgeOffered(this.#layaInputs);
       assertJudgeKindEnabled(
         rule.agentic.judge.kind,
         this.activeVersion('judge-kind', rule.agentic.judge.kind) !== null,

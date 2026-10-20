@@ -70,9 +70,9 @@ export interface WhatsappStatusResult {
   setup?: string;
 }
 
-/** The events service's `doctor` (`packages/events-daemon/src/operations/doctor.ts:41`, v1 and v2), bare JSON. */
+/** The events service's `doctor` (`packages/events-daemon/src/operations/doctor.ts:41`, v1 to v3), bare JSON. */
 export interface EventsDoctorReport {
-  schemaVersion: 'doctor-v1' | 'doctor-v2';
+  schemaVersion: 'doctor-v1' | 'doctor-v2' | 'doctor-v3';
   owner: { status: 'running' };
   switch: { status: 'enabled' | 'disabled'; paused: boolean; generation: number };
   lineages: {

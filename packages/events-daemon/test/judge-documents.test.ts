@@ -151,6 +151,6 @@ test('E1: judge budgets use only the judge-budget singleton and canonical kind d
         kind: 'judge-kind',
         enablement: { id: 'judge-kind:laya', kind: 'laya', version: 1 },
       }),
-    (error: unknown) => error instanceof EventDomainError && error.code === 'E2_REQUIRED',
+    (error: unknown) => error instanceof EventDomainError && error.code === 'E2_EXTERNAL_REFERENCE_BLOCKED',
   );
 });

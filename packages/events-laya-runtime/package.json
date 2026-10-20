@@ -1,0 +1,12 @@
+{
+  "name": "@agentcomms/events-laya-runtime",
+  "version": "0.15.2",
+  "private": true,
+  "description": "Private dependency-only declaration for the reviewed Laya runtime closure.",
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "@receptron/laya": "0.1.2",
+    "onnxruntime-node": "1.30.0"
+  }
+}

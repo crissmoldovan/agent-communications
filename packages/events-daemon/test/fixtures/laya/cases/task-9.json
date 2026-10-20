@@ -1,0 +1,501 @@
+{
+  "schemaVersion": 1,
+  "task": 9,
+  "owners": [
+    {
+      "id": "task-9"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-laya-quality-gate-external-aggregate-harness",
+      "owner": "task-9",
+      "test": "E2 quality gate run: only the aggregate leaves the run"
+    },
+    {
+      "id": "e2-laya-quality-gate-consent-and-data-rejection",
+      "owner": "task-9",
+      "test": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory"
+    },
+    {
+      "id": "e2-laya-quality-gate-exact-aggregate-validity",
+      "owner": "task-9",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d11-2337-2350-quality-reference-gate",
+      "owner": "task-9",
+      "test": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it"
+    },
+    {
+      "id": "d11-2337-2350-gmail-and-slack-separately",
+      "owner": "task-9",
+      "test": "E2 quality gate: Gmail and Slack are measured and judged separately, never combined"
+    },
+    {
+      "id": "d11-2337-2350-architecture-bound-release-condition",
+      "owner": "task-9",
+      "test": "E2 quality gate: a release offers an architecture only when every manifest template passed there"
+    },
+    {
+      "id": "s7-3380-3385-quality-gate",
+      "owner": "task-9",
+      "test": "E2 quality gate: a passing flag its numbers do not give is refused"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-9.json",
+      "owner": "task-9"
+    }
+  ],
+  "externalSources": [
+    {
+      "id": "hf-laya-python-reference-choice",
+      "url": "https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/rl_agent_api.py",
+      "fetchedAt": "2026-10-19T19:53:45Z",
+      "immutable": "be3b46819c9999c3ef88e0f2ecf6d3ab1cdfed1d9a8b466fc89811e34d44031b",
+      "fact": "rl_agent_api.py at 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 system_one(state, questions) takes the Jev request shape {id: {\"type\": \"choice\"|\"score\"|\"noul\", \"instructions\": ..., \"criteria\": ...}}; _to_internal turns a choice criteria list into {c: None for c in crit}; for each question it computes z = logits[r, :k] / self.temperature_by_options.get(temp_bucket(qt, k), self.temperature[qt]), p = np.exp(z - z.max()), p = p / p.sum(); a choice question, with keys = list(q[\"crit\"].keys()), answers {\"type\": \"choice\", \"choice\": keys[int(p.argmax())], \"probabilities\": {kk: round(float(v), 4) for kk, v in zip(keys, p)}, \"confidence\": round(confidence_from_probs(p, k), 4), \"rl_agent\": ext}; a noul question answers {\"type\": \"noul\", \"noul\": round(float(p[1]), 4), \"rl_agent\": ext}; the result is {\"model\": \"rl-agent\", \"answers\": answers, \"usage\": {\"input_tokens\": n_tokens, \"output_tokens\": 0}} with n_tokens = int(b[\"attention_mask\"].sum())",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-python-reference-common",
+      "url": "https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/rl_common.py",
+      "fetchedAt": "2026-10-19T19:53:45Z",
+      "immutable": "8d83611d480c971d640a7b7d3aa2f2219c5e8455e9cc2329fd073681bd8be23e",
+      "fact": "rl_common.py at 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 render_options renders a choice question's options as [k if not v else \"%s: %s\" % (k, v) for k, v in crit.items()] and a noul question's as \"false: \" + (crit.get(\"false\") or \"no, the statement does not hold\"), \"true: \" + (crit.get(\"true\") or \"yes, the statement holds\"); temp_bucket(qtype, k) is \"%s:%s\" % (QTYPE_NAMES[int(qtype)], size) with size \"2\" if k <= 2; build_model(cfg, encoder_dir) with an encoder_dir builds the encoder from AutoConfig.from_pretrained(encoder_dir) and AutoModel.from_config(ecfg, attn_implementation=\"sdpa\") (\"offline: architecture only, weights come from the saved state dict\")",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-python-reference-encoder-config",
+      "url": "https://huggingface.co/convaiinnovations/laya/raw/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/encoder/config.json",
+      "fetchedAt": "2026-10-19T20:04:28Z",
+      "immutable": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979",
+      "fact": "convaiinnovations/laya encoder/config.json at revision 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 is 2083 bytes with SHA-256 bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979, last changed by commit 00c37c405e3c3ad73ee070227614c89cda06b99e (the weights' source revision); it names model_type \"modernbert\", architectures [\"ModernBertForMaskedLM\"] and hidden_size 1024",
+      "reviewer": "coordinator"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-t9-ece-equal-width-bins",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: ten equal-width bins put each probability in its bin and 1 in the last",
+      "testPattern": "E2 quality gate: ten equal-width bins put each probability in its bin and 1 in the last",
+      "before": "  return Math.min(bins - 1, Math.floor(probability * bins));",
+      "after": "  return Math.min(bins - 1, Math.round(probability * bins));"
+    },
+    {
+      "id": "e2-t9-brier-squared",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: ECE, Brier, AUROC and positive share recompute the synthetic vectors exactly",
+      "testPattern": "E2 quality gate: ECE, Brier, AUROC and positive share recompute the synthetic vectors exactly",
+      "before": "    total += (probability - labels[index]) ** 2;",
+      "after": "    total += Math.abs(probability - labels[index]);"
+    },
+    {
+      "id": "e2-t9-auroc-tie-half",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: AUROC counts a tie as one half and is undefined without both classes",
+      "testPattern": "E2 quality gate: AUROC counts a tie as one half and is undefined without both classes",
+      "before": "    concordant += below + 0.5 * tied;",
+      "after": "    concordant += below + tied;"
+    },
+    {
+      "id": "e2-t9-gmail-slack-separate",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: Gmail and Slack are measured and judged separately, never combined",
+      "testPattern": "E2 quality gate: Gmail and Slack are measured and judged separately, never combined",
+      "before": "      observations.filter((observation) => observation.channel === channel),",
+      "after": "      observations,"
+    },
+    {
+      "id": "e2-t9-report-both-channels",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report with one channel, or without a manifest template, is refused",
+      "testPattern": "E2 quality gate: a report with one channel, or without a manifest template, is refused",
+      "before": "    if (channels.length !== QUALITY_CHANNELS.length || channels.some((name, index) => name !== QUALITY_CHANNELS[index]))",
+      "after": "    if (channels.length === 0)"
+    },
+    {
+      "id": "e2-t9-at-least-200-pairs",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: 199 labelled pairs or under 30% positives does not pass",
+      "testPattern": "E2 quality gate: 199 labelled pairs or under 30% positives does not pass",
+      "before": "  minPairs: 200,",
+      "after": "  minPairs: 199,"
+    },
+    {
+      "id": "e2-t9-at-least-30-percent-positive",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: 199 labelled pairs or under 30% positives does not pass",
+      "testPattern": "E2 quality gate: 199 labelled pairs or under 30% positives does not pass",
+      "before": "  minPositiveShare: 0.3,",
+      "after": "  minPositiveShare: 0.29,"
+    },
+    {
+      "id": "e2-t9-no-worker-failure",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a channel passes only within every D11 threshold and with no worker failure",
+      "testPattern": "E2 quality gate: a channel passes only within every D11 threshold and with no worker failure",
+      "before": "  const refusals = QUALITY_REFUSALS.filter((code) => code !== 'tokenLimit').every((code) => block.refused[code] === 0);",
+      "after": "  const refusals = true;"
+    },
+    {
+      "id": "e2-t9-reference-delta-0001",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a channel passes only within every D11 threshold and with no worker failure",
+      "testPattern": "E2 quality gate: a channel passes only within every D11 threshold and with no worker failure",
+      "before": "  maxReferenceDelta: 0.001,",
+      "after": "  maxReferenceDelta: 0.01,"
+    },
+    {
+      "id": "e2-t9-bundle-calibration-only",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: model-card or refitted calibration is refused",
+      "testPattern": "E2 quality gate: model-card or refitted calibration is refused",
+      "before": "  if (report.calibration !== QUALITY_CALIBRATION)",
+      "after": "  if (report.calibration === 'never')"
+    },
+    {
+      "id": "e2-t9-candidate-binding",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "    if (!bound) fail('QUALITY_REPORT_CANDIDATE', `${at} is not this candidate's manifest, lock, runtime or runner`);",
+      "after": "    // the candidate binding is not checked"
+    },
+    {
+      "id": "e2-t9-template-digest",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "    if (template.templateSha256 !== reviewed.templateSha256)",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t9-subject-digest",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: the subject digest binds the worker source and ignores the report",
+      "testPattern": "E2 quality gate: the subject digest binds the worker source and ignores the report",
+      "before": "    if (entry.subjectDigest !== candidate.subjectDigest)",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t9-subject-excludes-report",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a candidate subject that includes the report is refused",
+      "testPattern": "E2 quality gate: a candidate subject that includes the report is refused",
+      "before": "    if (file === GATE_REPORT_DIRECTORY || file.startsWith(`${GATE_REPORT_DIRECTORY}/`))",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t9-reference-record-immutable",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: an absent or mutable Python reference record is refused",
+      "testPattern": "E2 quality gate: an absent or mutable Python reference record is refused",
+      "before": "  if (immutable !== PYTHON_REFERENCE.revision)",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t9-reference-record-inputs",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: an absent or mutable Python reference record is refused",
+      "testPattern": "E2 quality gate: an absent or mutable Python reference record is refused",
+      "before": "    if (!text.includes(file.sha256)) fail('QUALITY_REFERENCE_RECORD', 'a Python reference input is not in the record');",
+      "after": "    // every input is assumed recorded"
+    },
+    {
+      "id": "e2-t9-reference-inputs-pinned",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a guessed reference invocation, tokenizer or model input is refused",
+      "testPattern": "E2 quality gate: a guessed reference invocation, tokenizer or model input is refused",
+      "before": "    if (reference.files[key] !== PYTHON_REFERENCE.files[key].sha256)",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-t9-reference-invocation-pinned",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a guessed reference invocation, tokenizer or model input is refused",
+      "testPattern": "E2 quality gate: a guessed reference invocation, tokenizer or model input is refused",
+      "before": "    reference.invocation === PYTHON_REFERENCE.invocation &&",
+      "after": "    true &&"
+    },
+    {
+      "id": "e2-t9-raw-text",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "testPattern": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "before": "    if (!SAFE_STRING.test(value)) fail('QUALITY_REPORT_RAW', `${at} holds text that is not a closed token`);",
+      "after": "    // any text is accepted"
+    },
+    {
+      "id": "e2-t9-raw-key",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "testPattern": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "before": "      if (FORBIDDEN_KEYS.has(key.replaceAll(/[-_]/g, '').toLowerCase()))",
+      "after": "      if (false)"
+    },
+    {
+      "id": "e2-t9-per-item-values",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "testPattern": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "before": "      if (entry === null || typeof entry !== 'object' || Array.isArray(entry))",
+      "after": "      if (false)"
+    },
+    {
+      "id": "e2-t9-secret-looking",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "testPattern": "E2 quality gate: corpus content, secrets and per-item values are refused before any shape check",
+      "before": "    if (SECRET_PREFIX.test(value)) fail('QUALITY_REPORT_RAW', `${at} holds a secret-looking value`);",
+      "after": "    // secrets are not looked for"
+    },
+    {
+      "id": "e2-t9-fixture-never-release",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a synthetic fixture report is never release evidence",
+      "testPattern": "E2 quality gate: a synthetic fixture report is never release evidence",
+      "before": "    if (!consented) fail('QUALITY_REPORT_FIXTURE', 'release evidence comes only from the consented external corpus');",
+      "after": "    // any corpus is release evidence"
+    },
+    {
+      "id": "e2-t9-verdict-recomputed",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a passing flag its numbers do not give is refused",
+      "testPattern": "E2 quality gate: a passing flag its numbers do not give is refused",
+      "before": "      if (block.passed !== channelPasses(block))",
+      "after": "      if (false)"
+    },
+    {
+      "id": "e2-t9-release-every-template",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "testPattern": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "before": "      if (!template.passed) fail('QUALITY_GATE_FAILED', `${template.templateId} did not pass on ${architecture}`);",
+      "after": "      // a failed template is offered anyway"
+    },
+    {
+      "id": "e2-t9-release-architecture-bound",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "testPattern": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "before": "    if (entry === undefined) fail('QUALITY_GATE_ABSENT', `no gate evidence exists for ${architecture}`);",
+      "after": "    if (entry === undefined) continue;"
+    },
+    {
+      "id": "e2-t9-run-written-consent",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory",
+      "testPattern": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory",
+      "before": "  if (options.attestWrittenConsent !== true)",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t9-run-corpus-required",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory",
+      "testPattern": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory",
+      "before": "  if (options.corpus === undefined)",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-t9-run-outside-repository",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: a corpus or key inside the repository is refused",
+      "testPattern": "E2 quality gate run: a corpus or key inside the repository is refused",
+      "before": "    if (within(checkout, target) || within(target, checkout))",
+      "after": "    if (within(target, checkout))"
+    },
+    {
+      "id": "e2-t9-run-sealed-files-only",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: the corpus directory holds only sealed corpus files",
+      "testPattern": "E2 quality gate run: the corpus directory holds only sealed corpus files",
+      "before": "    if (!entry.isFile() || !entry.name.endsWith(CORPUS_FILE_SUFFIX))",
+      "after": "    if (!entry.isFile())"
+    },
+    {
+      "id": "e2-t9-run-sealed-format",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: the corpus directory holds only sealed corpus files",
+      "testPattern": "E2 quality gate run: the corpus directory holds only sealed corpus files",
+      "before": "    !bytes.subarray(0, CORPUS_MAGIC.length).equals(CORPUS_MAGIC)",
+      "after": "    false"
+    },
+    {
+      "id": "e2-t9-run-key-owner-only",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: the corpus key is an owner-only file outside the repository and opens only its corpus",
+      "testPattern": "E2 quality gate run: the corpus key is an owner-only file outside the repository and opens only its corpus",
+      "before": "  if ((info.mode & 0o077) !== 0) fail('QUALITY_KEY', 'the corpus key file is readable only by its owner');",
+      "after": "  // any mode is accepted"
+    },
+    {
+      "id": "e2-t9-run-reference-pinned",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "testPattern": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "before": "  if (!verified.ok) fail('QUALITY_REFERENCE_UNPINNED', 'the reference snapshot is not the pinned revision');",
+      "after": "  // the snapshot is trusted as given"
+    },
+    {
+      "id": "e2-t9-run-reference-affirmative",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "testPattern": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "before": "    value = answer.probabilities[template.affirmative];",
+      "after": "    value = answer.probabilities.b;"
+    },
+    {
+      "id": "e2-t9-run-validates-before-write",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: an aggregate that does not validate is never written",
+      "testPattern": "E2 quality gate run: an aggregate that does not validate is never written",
+      "before": "  validateQualityReport(merged, { candidates, mode: 'release', root });",
+      "after": "  // written unvalidated"
+    },
+    {
+      "id": "e2-t9-run-worker-unavailable-stops",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: refusals are counted and a worker that cannot run stops the run",
+      "testPattern": "E2 quality gate run: refusals are counted and a worker that cannot run stops the run",
+      "before": "        if (outcome.kind === 'abort') fail('QUALITY_WORKER_UNAVAILABLE', `the worker cannot run (${outcome.code})`);",
+      "after": "        // an unavailable worker is measured anyway"
+    },
+    {
+      "id": "e2-t9-run-channel-from-event",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: a sealed corpus holds only labelled pairs whose event is their channel's",
+      "testPattern": "E2 quality gate run: a sealed corpus holds only labelled pairs whose event is their channel's",
+      "before": "    item.event.account?.channel === item.channel;",
+      "after": "    true;"
+    },
+    {
+      "id": "e2-t9-run-judge-envelope",
+      "kind": "production",
+      "owner": "task-9",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate run: only the aggregate leaves the run",
+      "testPattern": "E2 quality gate run: only the aggregate leaves the run",
+      "before": "    state: input.state,",
+      "after": "    state: item.question,"
+    }
+  ]
+}

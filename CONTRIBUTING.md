@@ -44,13 +44,13 @@ Use Node.js 22.18 or newer and pnpm 11 (`npm install -g pnpm@11`, or `corepack e
 needs 22.18; the published packages themselves run on Node 22.12 or newer.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 pnpm verify
 ```
 
 `pnpm verify` runs Biome, the type checks, every test suite, the builds and the skill verifier. It must pass before you
 push: nothing runs it for you on GitHub, because this repository has no CI that runs your code on a push or a pull
-request. `pnpm install` sets up a pre-push hook (`.githooks/pre-push`) that runs it. The release workflow does: a `v*`
+request. `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'` sets up a pre-push hook (`.githooks/pre-push`) that runs it. The release workflow does: a `v*`
 tag runs `pnpm verify` on Linux, macOS and Windows and publishes only if all pass, so a failure only Windows shows turns
 up there — see [Releasing](docs/RELEASING.md). The only other workflow, the pull-request requirements check, reads a
 pull request's description and file list and never its code — see

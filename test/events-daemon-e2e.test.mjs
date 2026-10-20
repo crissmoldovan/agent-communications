@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { readFile, rm } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -161,6 +161,99 @@ test('REL-B1: the packed daemon consumer starts a foreground owner and controls 
   assert.match(check, /'initialize'/, 'the packed consumer starts a standard MCP handshake');
   assert.match(check, /'tools\/call'/, 'the packed consumer calls the installed MCP surface');
   assert.match(check, /'events_status'/, 'the packed consumer uses a content-free MCP tool');
+});
+
+/**
+ * The built daemon, as the package ships it (`dist/`), against its own foreground owner: what the packed consumer check
+ * proves after an install, sealed here and needing no registry. Laya is held: its three reviewed assets are found
+ * where the package keeps them, and every way to turn it on answers the placeholder lock's closed reason.
+ */
+test('E2: the built daemon reads its shipped Laya assets and keeps Laya held, through its own CLI and owner', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const cli = new URL('../packages/events-daemon/dist/cli.mjs', import.meta.url).pathname;
+  const seal = new URL('./helpers/loopback-seal-preload.mjs', import.meta.url).href;
+  const root = await shortTempDir('events-e2-built-');
+  const stateDir = `${root}/state`;
+  const dataDir = `${root}/data`;
+  await mkdir(`${root}/config`, { recursive: true });
+  const { NODE_TEST_CONTEXT: _context, ...inherited } = process.env;
+  const env = {
+    ...inherited,
+    AGENT_COMMS_STATE_DIR: stateDir,
+    AGENT_COMMS_CONFIG_DIR: `${root}/config`,
+    AGENT_COMMS_DATA_DIR: dataDir,
+    AGENT_COMMS_UPDATE_CHECK: 'off',
+    NO_COLOR: '1',
+  };
+  const built = async (...args) =>
+    JSON.parse(
+      (await exec(process.execPath, ['--import', seal, cli, '--state-dir', stateDir, '--json', ...args], { env }))
+        .stdout,
+    );
+  let stderr = '';
+  const owner = spawn(process.execPath, ['--import', seal, cli, '--state-dir', stateDir, 'run'], {
+    env,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  owner.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+  const exited = new Promise((resolve, reject) => {
+    owner.once('error', reject);
+    owner.once('exit', (code) => resolve(code));
+  });
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const running = await built('status').then(
+        (result) => result.owner === 'running',
+        () => false,
+      );
+      if (running) break;
+      if (Date.now() > deadline) throw new Error(`the built owner did not start: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const unavailable = { kind: 'unavailable', code: 'E2_EXTERNAL_REFERENCE_BLOCKED', phase: 'E2' };
+    assert.deepEqual(await built('judge', 'kind', 'enable', 'laya'), unavailable, 'judge kind enable laya is refused');
+    assert.deepEqual(
+      (await built('judge', 'kinds', 'list')).find((entry) => entry.kind === 'laya'),
+      { kind: 'laya', state: 'unavailable', code: 'E2_EXTERNAL_REFERENCE_BLOCKED' },
+      'judge kinds list shows Laya unavailable with its reason',
+    );
+    const model = await built('judge', 'model', 'status');
+    assert.deepEqual(
+      { state: model.state, manifestId: model.manifestId, reason: model.reason },
+      { state: 'unavailable', manifestId: 'laya-en-onnx-68f27dfe', reason: 'E2_EXTERNAL_REFERENCE_BLOCKED' },
+      'judge model status names the shipped manifest and why it is not offered',
+    );
+    assert.deepEqual(await built('stop'), { stopping: true });
+    assert.equal(await exited, 0, stderr);
+    await assert.rejects(stat(`${dataDir}/events/laya`), { code: 'ENOENT' }, 'no Laya directory was created');
+  } finally {
+    if (owner.exitCode === null) owner.kill('SIGTERM');
+    await exited.catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('E2: the packed daemon consumer requires Laya held, its assets and worker, and no runtime or model installed', async () => {
+  const check = await readFile(new URL('../packages/events-daemon/test/consumer-check.mjs', import.meta.url), 'utf8');
+  for (const asset of ["'laya-manifest.json'", "'laya-runtime.json'", "'laya-enablement-disclosures.json'"])
+    assert.ok(check.includes(asset), `the packed consumer reads ${asset}`);
+  assert.match(check, /'laya-worker\.mjs'/u, 'the packed consumer reads the built worker');
+  assert.match(
+    check,
+    /"blocked": "E2_EXTERNAL_REFERENCE_BLOCKED"/u,
+    'and requires the placeholder lock, byte for byte',
+  );
+  assert.match(check, /installedPackages\(/u, 'it walks every package the install placed');
+  assert.match(check, /@receptron/u, 'for the Laya runtime');
+  assert.match(check, /onnxruntime/u, 'and ONNX Runtime');
+  assert.match(check, /\.onnx/u, 'and for any model file');
+  assert.match(check, /'judge', 'kind', 'enable', 'laya'/u, 'it asks the installed owner to enable Laya');
+  assert.match(check, /AGENT_COMMS_DATA_DIR/u, 'with its data directory pinned');
+  assert.match(check, /join\(dataDir, 'events', 'laya'\)/u, 'and requires no Laya directory afterwards');
 });
 
 test('REL-B1: the Gmail end-to-end path is sealed to the repository fake', async () => {

@@ -32,7 +32,13 @@ async function open(screenName: Screen): Promise<HTMLElement> {
 
 describe('what each CLI version supports', () => {
   it('a feature is there from the version that brings it', () => {
-    expect(GATES).toEqual({ behaviour: '0.22.0', profiles: '0.22.0', standing: '0.23.0', updateStatus: '0.24.0' });
+    expect(GATES).toEqual({
+      behaviour: '0.22.0',
+      profiles: '0.22.0',
+      standing: '0.23.0',
+      updateStatus: '0.24.0',
+      layaJudge: '0.25.0',
+    });
     expect(supports('0.21.0', 'behaviour')).toBe(false);
     expect(supports('0.22.0', 'behaviour')).toBe(true);
     expect(supports('0.22.0', 'profiles')).toBe(true);

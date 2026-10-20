@@ -154,8 +154,30 @@ Two kinds of judge are available:
   as Jev. A server that answers in its own JSON says where its number is, with `"protocol": "json-score"` and a
   `scorePointer`, and that number is labelled an uncalibrated score. Nothing leaves this machine.
 
-The third kind, **`laya`**, runs the Laya model inside the daemon. It is not available yet: `agent-events judge kinds
-list` shows it as unavailable, and a judge naming it is refused.
+The third kind, **`laya`**, will run the Laya model on this machine, in an isolated worker. This release does not offer
+it yet: a release offers Laya only once its exact runtime, model and prompt template have passed the owner's labelled
+quality gate on real Gmail and Slack messages, and its worker boundary has been proved on a real Mac. Neither has run
+yet, so this release ships no reviewed runtime lock. `agent-events judge kinds list` and
+`agent-events judge model status` show Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`,
+and `agent-events judge kind enable laya` refuses before anything is prepared. You can still add a Laya judge, and a
+rule that names it: both are configuration, and a Laya judge answers only once you have enabled Laya and its model is
+ready. Until then `rule enable` refuses that rule with Laya's reason: in this release that is
+`E2_EXTERNAL_REFERENCE_BLOCKED` on every platform; once a release offers Laya, it is `LAYA_PLATFORM_UNAVAILABLE` on
+Linux and Windows and to a daemon Rosetta translates on an Apple-silicon Mac, and `LAYA_SANDBOX_UNAVAILABLE` on a Mac
+whose sandbox does not apply.
+The first release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a
+512-token context, on the CPU, one call at a time, in a worker whose `sandbox-exec` profile lets it open no network
+connection (Unix-domain sockets included), start no other process, send no Apple event, look up no system service and
+write nowhere but its own temporary folder, so the worker has no way of its own to send what a rule asks it anywhere.
+Each worker proves, before it loads anything, that a connection and a process start are refused. Linux and Windows
+show Laya as not available. Once you enable it there,
+the daemon downloads the runtime (about 300 MB) and the model (about 1.69 GB) — ordinary network traffic, and the only
+network traffic Laya has — and checks every file against the release's lock and manifest before each start.
+`judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,
+`ready`, `failed` or `unavailable`), its byte progress and any failure or unavailable reason;
+`judge kind disable laya` cancels a download and keeps the verified files; `judge model remove` deletes every verified
+runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
+files of every entry it replaced.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing
@@ -242,6 +264,25 @@ is the judge document exactly as you added it:
 A local judge has `"kind": "local-endpoint"`, your server's `provider`, `model` and `endpoint`, and that endpoint's
 address in `"approvedAddressSet": ["127.0.0.1"]`. It needs no key.
 
+A Laya judge names the Laya provider, this release's reviewed model as `model` (the `manifestId` that
+`judge model status` shows) and the yes/no template `laya-noul-v1`. It needs no key and no endpoint:
+
+```json
+{
+  "judgeId": "laya",
+  "version": 1,
+  "kind": "laya",
+  "provider": "laya",
+  "model": "laya-en-onnx-68f27dfe",
+  "promptTemplate": "laya-noul-v1"
+}
+```
+
+It runs on this Mac, in English only, with a 512-token context, on the CPU and one call at a time, and the approval
+view of a rule that names it says so. Another model is refused (`LAYA_MANIFEST_NOT_REVIEWED`), and so is the two-option
+template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) until where its answer comes from has been reviewed. A budget's
+`laya` provider entry allows at most one call at a time.
+
 **What a judge sees, and what it decides:**
 - Only the fields in `inputs`, sanitised and marked as untrusted inside a fixed prompt. The rule's `condition` must
   check a content field too (`/subject` above), so a judge is never asked about every event.
@@ -266,7 +307,8 @@ name its judges stay, but cannot call them; turning the kind back on needs a new
 along with everything else.
 
 `doctor` shows each kind's state, the active budget version and its reservations, how many decisions are held and
-when the next one expires, any hosted judge whose key is missing, and Laya as not available yet, all without content.
+when the next one expires, any hosted judge whose key is missing, and Laya's runtime, model and sandbox-boundary state
+with its reason, all without content.
 
 ## For desktop and tool builders
 
@@ -275,8 +317,29 @@ The data-only control contract is
 request, result and error vectors are in [`test/fixtures/b3-control-contract-v1`](test/fixtures/b3-control-contract-v1),
 and the terminal approval-preview vectors are in [`test/fixtures/b3-approval-preview-v1`](test/fixtures/b3-approval-preview-v1).
 It covers every B3 capability a desktop app may call, and never contains a secret value. Its frozen doctor result is
-the closed [`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json); the released daemon reports the
-additive Phase-E [`doctor-v2.schema.json`](src/operations/contracts/doctor-v2.schema.json).
+the closed [`doctor-v1.schema.json`](src/operations/contracts/doctor-v1.schema.json), and Phase E's
+[`doctor-v2.schema.json`](src/operations/contracts/doctor-v2.schema.json) stays as it was. The released daemon reports
+[`doctor-v3.schema.json`](src/operations/contracts/doctor-v3.schema.json), which keeps every v2 property, has no judge
+kind left behind a phase boundary, and adds Laya's content-free `judge.laya` entry.
+
+[`b3-control-v2.schema.json`](src/operations/contracts/b3-control-v2.schema.json) is v1 with the real Laya answers: it
+replaces exactly the six results that carried v1's typed `E2_REQUIRED` placeholder (`judgeKindsList`,
+`enableJudgeKind`, `disableJudgeKind`, `judgeModelStatus`, `removeJudgeModel` and `doctor`); its vectors are in
+[`test/fixtures/b3-control-contract-v2`](test/fixtures/b3-control-contract-v2). `judge model status` and
+`judge model remove` answer the stable
+[`laya-model-status-v1.schema.json`](src/operations/contracts/laya-model-status-v1.schema.json): eight closed fields —
+the state, the reviewed manifest id and runtime-lock digest, `bytesVerified` of `totalBytes`, a failure code, an
+unavailable reason and the last update time — and never a path, input, request, response, key or token.
+
+[`b3-control-v3.schema.json`](src/operations/contracts/b3-control-v3.schema.json) is v2 with a Laya judge variant: a
+Laya judge document is exactly `judgeId`, `version`, `kind` and `provider` `laya`, the reviewed manifest id as `model`
+and `promptTemplate` `laya-noul-v1`, and v3 accepts one in `judge add` and `judge update` and in the rule documents of
+`rule create`, `rule update` and `rule test`. It replaces the results of `judgesList`, `addJudge`, `updateJudge`,
+`rule-create` and `rule-update`, and the approval view of a rule that names a Laya judge adds `layaJudge`: its template,
+manifest id and D11's limits, and no input text. A refusal is `BAD_DATA` with one of five closed reasons in
+`details.reason`, named in its message too. Its vectors are in
+[`test/fixtures/b3-control-contract-v3`](test/fixtures/b3-control-contract-v3). An owner without E2's artifact manager
+still answers v1.
 
 ## Licence
 

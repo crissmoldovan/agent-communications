@@ -321,22 +321,60 @@ test('E13 final release: the positive B3 tree passes and B3 drift refuses verify
   }
 });
 
+/** A lockfile section's entries, two spaces in: each key, quotes and peer suffixes dropped, with its block's lines. */
+function lockfileEntries(lockfile: string, section: string): Map<string, string> {
+  const start = lockfile.indexOf(`\n${section}:\n`);
+  assert.notEqual(start, -1, `the lockfile has a ${section} section`);
+  const lines = lockfile.slice(start + section.length + 3).split('\n');
+  const end = lines.findIndex((line) => /^\S/u.test(line));
+  const entries = new Map<string, string>();
+  let key: string | undefined;
+  for (const line of end === -1 ? lines : lines.slice(0, end)) {
+    // An entry with nothing under it is written on one line, `'name@version': {}`.
+    const matched = /^ {2}(\S.*?):(?: \{\})?$/u.exec(line);
+    if (matched?.[1] !== undefined) {
+      const quoted = matched[1].replace(/^'(.*)'$/u, '$1');
+      key = quoted.includes('(') ? quoted.slice(0, quoted.indexOf('(')) : quoted;
+      entries.set(key, '');
+    } else if (key !== undefined) entries.set(key, `${entries.get(key)}${line}\n`);
+  }
+  return entries;
+}
+
 test('E13 packaging: the released event packages carry no Laya or native inference runtime dependency', async () => {
-  const manifests = await Promise.all(
-    ['package.json', 'packages/events/package.json', 'packages/events-daemon/package.json'].map(async (file) => ({
-      file,
-      text: await readFile(join(ROOT, file), 'utf8'),
-    })),
+  // Phase E2 adds Laya by design: the daemon ships its reviewed manifest, lock and disclosures as files, and the
+  // private, never-published `packages/events-laya-runtime` pins the runtime's closure in the lockfile. What phase E
+  // proved stays true: neither the root nor a released event package depends on Laya or a native inference runtime,
+  // and nothing in the lockfile reaches one except that private importer.
+  const inference = /(?:laya|onnxruntime|tensorflow|pytorch|torch-js)/iu;
+  for (const file of ['package.json', 'packages/events/package.json', 'packages/events-daemon/package.json']) {
+    const manifest = JSON.parse(await readFile(join(ROOT, file), 'utf8')) as Record<string, unknown>;
+    for (const field of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+      'bundledDependencies',
+      'bundleDependencies',
+    ]) {
+      const declared = manifest[field] ?? {};
+      for (const name of Array.isArray(declared) ? declared : Object.keys(declared as Record<string, unknown>))
+        assert.doesNotMatch(String(name), inference, `${file} has no Laya or native inference dependency`);
+    }
+  }
+  const lockfile = await readFile(join(ROOT, 'pnpm-lock.yaml'), 'utf8');
+  const runtimePackage = /(?:@receptron\/laya|onnxruntime(?:-node)?|@huggingface\/tokenizers|@tensorflow|torch-js)/iu;
+  for (const [importer, block] of lockfileEntries(lockfile, 'importers'))
+    if (importer !== 'packages/events-laya-runtime')
+      assert.doesNotMatch(block, runtimePackage, `${importer} resolves neither Laya nor a native inference runtime`);
+  // @ts-expect-error The release-only JavaScript command deliberately ships without a TypeScript declaration.
+  const { readPrivateRuntimeClosure } = await import('../../../scripts/laya-runtime-lock.mjs');
+  const closure = new Set(
+    (readPrivateRuntimeClosure(lockfile) as readonly { name: string; version: string }[]).map(
+      (entry) => `${entry.name}@${entry.version}`,
+    ),
   );
-  for (const manifest of manifests)
-    assert.doesNotMatch(
-      manifest.text,
-      /(?:laya|onnxruntime|tensorflow|pytorch|torch-js)/iu,
-      `${manifest.file} has no Laya or native inference dependency`,
-    );
-  assert.doesNotMatch(
-    await readFile(join(ROOT, 'pnpm-lock.yaml'), 'utf8'),
-    /(?:@receptron\/laya|onnxruntime(?:-node)?|@tensorflow|torch-js)/iu,
-    'the resolved lockfile has neither Laya nor a native inference runtime',
-  );
+  for (const [snapshot, block] of lockfileEntries(lockfile, 'snapshots'))
+    if (runtimePackage.test(block))
+      assert.ok(closure.has(snapshot), `${snapshot} depends on a Laya runtime package outside the private closure`);
 });

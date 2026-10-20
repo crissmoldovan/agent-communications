@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.24.0"
+compatibility: "@agentcomms/events-daemon@0.25.0"
 metadata:
   group: communications
   lifecycle: release
@@ -44,13 +44,21 @@ another tool, and do not describe a rule as active.
 ## Judge boundary
 
 Every judge kind is off until a person enables it. `events_judge_kinds_list` shows which kinds are on. Laya is not
-available in this release: its kind, `events_judge_model_status` and `events_judge_model_remove` return a typed
-unavailable result (`E2_REQUIRED`). Report that state.
+offered in this release: its kind is listed as unavailable, `events_judge_model_status` answers the state `unavailable`
+with its reason, and `events_judge_kind_enable` for Laya refuses with that same reason (`E2_EXTERNAL_REFERENCE_BLOCKED`)
+before anything is prepared. Report that state.
 
 - **Propose, never activate.** `events_judge_add` and `events_judge_update` create an immutable judge version, used
   only once a rule naming it is approved. `events_budget_update` creates a pending judge budget, and
   `events_judge_kind_enable` prepares a kind's enablement. Each returns an approval: follow the handoff below. A
   rule's judge goes in its `agentic` part, with only the fields the question needs in `inputs`.
+- **A Laya judge is configuration.** Add one with `events_judge_add` and exactly `judgeId`, `version`,
+  `"kind": "laya"`, `"provider": "laya"`, `"model"` set to the reviewed manifest id — read it from the `manifestId`
+  field of `events_judge_model_status` — and `"promptTemplate": "laya-noul-v1"`; it has no endpoint or key. It answers only after a person has approved Laya's
+  enablement at their terminal and its model is ready, so until then `events_rule_enable` refuses a rule naming it with
+  Laya's reason (`E2_EXTERNAL_REFERENCE_BLOCKED` in this release): report that reason and never call the rule active.
+  Another model (`LAYA_MANIFEST_NOT_REVIEWED`) and the template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) are
+  refused.
 - **Test only with the daemon's event.** `events_judge_test` asks one active judge version about the daemon's own
   fixed synthetic event, never caller content, at most ten times an hour per version. Its answer is not a rule's
   decision.

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   type ApprovalStore,
   type AuditLog,
@@ -35,7 +36,14 @@ import type { AuthenticatedControlRequest } from '../control/protocol.ts';
 import { type ControlServerOptions, type RunningControlServer, startControlServer } from '../control/server.ts';
 import { normaliseActivationDocument } from '../domain/activation-documents.ts';
 import { HumanSecret } from '../domain/human-secret.ts';
-import { EventDomainError } from '../domain/lifecycle.ts';
+import {
+  type LayaPlatformProbe,
+  type LayaReviewedAssetSource,
+  layaEnablementInputsFor,
+  layaJudgeTermsFor,
+  registerLayaEnablementInputs,
+} from '../domain/judges.ts';
+import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import {
@@ -48,6 +56,7 @@ import {
   isB3ControlOperation,
   isB3SecretOperation,
 } from '../operations/b3-contract.ts';
+import { type B3LayaRuleApprovalReadyV3, layaJudgePreviewFor } from '../operations/b3-control-v3.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
@@ -62,7 +71,7 @@ import { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
-import { projectE9Doctor } from './b3-doctor-projection.ts';
+import { projectE2Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
 import { type PendingTargetOrigin, verifyPendingTargetContext } from './b3-pending-activation-context.ts';
 import {
@@ -88,8 +97,12 @@ import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { HoldResolver } from './holds.ts';
+import { JudgeKinds } from './judge-kinds.ts';
+import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeTestControl } from './judge-test.ts';
+import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
+import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -180,6 +193,28 @@ export interface EventOwnerOptions {
   readonly b3OwnerService?: B3OwnerService | undefined;
   /** Test seam only: the normal production owner opens its own SQLite authority. */
   readonly openDatabase?: typeof openEventDatabase | undefined;
+  /**
+   * The data directory whose `events/laya` holds Laya's verified runtime and model trees. Production leaves it unset:
+   * core's data directory. A test pins it beside its state directory.
+   */
+  readonly dataDir?: string | undefined;
+  /**
+   * Test seam only: strict-parsed synthetic reviewed Laya bytes, the content-free sandbox probe spawn, the sealed
+   * network the production fetcher dials, a free-space probe, artifact failpoints and the worker start (Task 7's
+   * frame-compatible stand-in behind the real boundary proof, as E2 Task 8's supervisor tests start it). Production
+   * uses the daemon's shipped assets, this process's platform, no failpoint, and launches only the shipped worker
+   * under the macOS sandbox.
+   */
+  readonly laya?:
+    | {
+        readonly assets?: LayaReviewedAssetSource | undefined;
+        readonly platform?: LayaPlatformProbe | undefined;
+        readonly network?: LayaArtifactNetwork | undefined;
+        readonly freeBytes?: (() => Promise<number>) | undefined;
+        readonly failpoint?: LayaArtifactFailpoint | undefined;
+        readonly startWorker?: LayaWorkerStart | undefined;
+      }
+    | undefined;
 }
 
 /**
@@ -369,6 +404,8 @@ interface OwnerB3ControlServiceOptions {
   /** Task 9's fixed synthetic judge tester is composed by the owner alongside the real secret reader. */
   readonly judgeTest?: (Pick<JudgeTestControl, 'test'> & Partial<Pick<JudgeTestControl, 'testPending'>>) | undefined;
   readonly holdResolver?: Pick<HoldResolver, 'resolve'> | undefined;
+  /** E2's artifact manager; without it the Laya operations keep B3 v1's frozen typed `E2_REQUIRED` answers. */
+  readonly laya?: LayaArtifactManager | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -401,6 +438,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
     // private store, and every CLI/MCP judge test then failed as a generic refusal.
     ...(options.judgeTest === undefined ? {} : { judgeTest: { test: options.judgeTest.test.bind(options.judgeTest) } }),
     ...(options.holdResolver === undefined ? {} : { holdResolver: options.holdResolver }),
+    ...(options.laya === undefined ? {} : { laya: options.laya }),
   });
   const target = (pendingOrigin?: PendingTargetOrigin) =>
     new B3TargetTestControl({
@@ -471,7 +509,13 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
       }
       switch (request.operation) {
         case 'approvalView':
-          return approvalViewFromOwner(options.store, options.activations, now, request.args);
+          return approvalViewFromOwner(
+            options.store,
+            options.activations,
+            now,
+            request.args,
+            options.laya !== undefined,
+          );
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
         case 'ruleTestRetained':
@@ -729,12 +773,17 @@ function terminalSecretResult(receipt: SecretReceipt): unknown {
   return reveal === null ? receipt : { receipt, terminalReveal: reveal };
 }
 
+/**
+ * The authoritative approval view. With E2's artifact manager composed the owner answers B3 control v3, whose view of
+ * a rule naming a Laya judge also carries D11's Laya limits, from the same reviewed assets as the enablement.
+ */
 async function approvalViewFromOwner(
   store: Awaited<ReturnType<typeof openEventDatabase>>,
   activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>,
   now: () => number,
   args: Readonly<Record<string, unknown>>,
-): Promise<B3ApprovalViewResultV1> {
+  layaJudges = false,
+): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3> {
   const approvalId = requiredText(args.approvalId, 'approval id');
   const digest = requiredText(args.digest, 'approval digest');
   const row = store.database
@@ -742,10 +791,13 @@ async function approvalViewFromOwner(
     .get(approvalId) as { id: string; document: string; digest: string; status: string } | undefined;
   if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
   if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
+  const preview = normaliseActivationDocument(JSON.parse(row.document));
+  const layaJudge = layaJudges
+    ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
+    : undefined;
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
   if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
-  const preview = normaliseActivationDocument(JSON.parse(row.document));
   return {
     kind: 'READY',
     approvalId,
@@ -759,6 +811,7 @@ async function approvalViewFromOwner(
       preview,
     }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
+    ...(layaJudge === undefined ? {} : { layaJudge }),
   };
 }
 
@@ -1131,6 +1184,38 @@ async function startOwnerWithLock(
       pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
     });
   };
+  // E2's one Laya artifact owner. It touches no file until an approved enablement's claim, and E's purge participant
+  // tells it which in-memory work a purge orphaned.
+  const layaInputs = {
+    ...(options.laya?.assets === undefined ? {} : { layaAssetSource: options.laya.assets }),
+    ...(options.laya?.platform === undefined ? {} : { layaPlatformProbe: options.laya.platform }),
+  };
+  const layaArtifacts = new LayaArtifactManager({
+    store: database,
+    artifactRoot: join(options.dataDir ?? core.paths.dataDir, 'events', JUDGE_KIND_LAYA),
+    inputs: layaInputs,
+    network: options.laya?.network,
+    freeBytes: options.laya?.freeBytes,
+    failpoint: options.laya?.failpoint,
+    audit: core.audit,
+    now,
+  });
+  const unregisterLayaPurge = registerJudgeWorkPurgeListener(database.database, layaArtifacts);
+  // Every reader of this database's Laya kind document — E's budget fence and settlement among them — validates with
+  // the same inputs as its activation path. The one isolated worker supervisor is E's coordinator's only Laya
+  // executor; it proves and launches only the shipped worker entry.
+  const unregisterLayaInputs = registerLayaEnablementInputs(database.database, layaInputs);
+  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: options.laya?.startWorker });
+  const unregisterLayaWorker = registerLayaJudgeExecutor(database.database, layaWorker);
+  onDatabase({
+    close: () => {
+      unregisterLayaWorker();
+      unregisterLayaInputs();
+      unregisterLayaPurge();
+      void layaWorker.close();
+      database.close();
+    },
+  });
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -1241,6 +1326,11 @@ async function startOwnerWithLock(
     now,
     ...(options.newIntentId === undefined ? {} : { newIntentId: options.newIntentId }),
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
+    ...layaInputs,
+    onJudgeKindEnabled: ({ kind }) => {
+      // The claim committed the pointer; the manager rechecks it before any request, row or file.
+      if (kind === JUDGE_KIND_LAYA) void layaArtifacts.ensureInstalled();
+    },
   });
   const scheduler = new EventScheduler({
     store: database,
@@ -1377,12 +1467,13 @@ async function startOwnerWithLock(
           }),
         whatsappVisibilityFence: whatsappComposition.visibilityFence,
       }),
+      laya: layaArtifacts,
       now,
     });
   // Task 7 is a read-only projection over the same Task 2 control ports used by the mutating B3 control service.
   // It deliberately has no writer capability and never reads a decrypted cursor or provider response.
   const doctorReport = async () => {
-    return projectE9Doctor({
+    return projectE2Doctor({
       database: database.database,
       installationId: database.installationId,
       lifecycle: lifecycle.status(),
@@ -1391,6 +1482,7 @@ async function startOwnerWithLock(
       config: core.config,
       approvals: core.approvals,
       decryptSourceState: decryptSourceStage,
+      laya: layaArtifacts,
       now,
     });
   };
@@ -1420,7 +1512,12 @@ async function startOwnerWithLock(
       try {
         await scheduler.stop();
         await control?.close();
+        await layaWorker.close();
+        await layaArtifacts.stop();
       } finally {
+        unregisterLayaWorker();
+        unregisterLayaInputs();
+        unregisterLayaPurge();
         database.close();
         await removeInstance(paths, instance.instanceId);
         await rm(paths.controlToken, { force: true });
@@ -1443,8 +1540,17 @@ async function startOwnerWithLock(
         }
       ).count > 0;
     if (hasActiveJudgeKind) database.immediate(() => recoverJudgeWork({ database: database.database, now: now() }));
+    // D11's update rule runs before any Laya work: an enabled entry this release no longer ships is disabled through
+    // E's own kind-disable tightening, with its closed audit reason, and waits for a new approval.
+    await withEventWriterLease(writerQuiescer, () =>
+      layaArtifacts.reconcileRelease(() =>
+        new JudgeKinds({ store: database, now, activations }).disable(JUDGE_KIND_LAYA),
+      ),
+    );
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
     await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));
+    // An approved install a restart interrupted resumes; it never waits for the control server.
+    void layaArtifacts.resume().catch(() => undefined);
     await writeToken(paths, token);
     control = await (options.startControlServer ?? startControlServer)({
       endpoint: instance.endpoint,
@@ -1568,10 +1674,14 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);
     case OWNER_CONTROL_WIRES.enableRule:
-      return activations.prepareRule({
-        ruleId: requiredText(request.args.ruleId, 'rule id'),
-        version: requiredVersion(request.args.version, 'rule version'),
-      });
+      // A rule the domain refuses to activate — its judge's kind disabled, or its Laya judge not offered here — is
+      // refused with that fixed reason, as rule create's documents are.
+      return domainAwaited(() =>
+        activations.prepareRule({
+          ruleId: requiredText(request.args.ruleId, 'rule id'),
+          version: requiredVersion(request.args.version, 'rule version'),
+        }),
+      );
     case OWNER_CONTROL_WIRES.disableRule:
     case OWNER_CONTROL_WIRES.removeRule:
       return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
@@ -1634,6 +1744,17 @@ function domain<T>(work: () => T): T {
   }
 }
 
+/** `domain` for an operation that awaits: a refusal is the caller's input, with the same fixed reason. */
+async function domainAwaited<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof EventDomainError)
+      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+    throw error;
+  }
+}
+
 function ruleRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
   return database.database
     .prepare(
@@ -1658,8 +1779,9 @@ function ruleShow(database: Awaited<ReturnType<typeof openEventDatabase>>, ruleI
   return rows.map((row) => ({ ...row, document: JSON.parse(row.document) }));
 }
 
+/** The owner composes E2's artifact manager, so the rules it keeps carry B3 control v3's judge documents. */
 function createRule(database: Awaited<ReturnType<typeof openEventDatabase>>, document: unknown): unknown {
-  return domain(() => new ImmutableVersions(database.database).createRule(document));
+  return domain(() => ImmutableVersions.forJudgeContract(database.database, 'b3-control-v3').createRule(document));
 }
 
 function targetRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {

@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "task": 17,
+  "owners": [
+    {
+      "id": "task-17"
+    }
+  ],
+  "section5": [],
+  "traceability": [],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-17.json",
+      "owner": "task-17"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t17-real-sandbox-denial-codes",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "testPattern": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "before": "const DENIED_CODES = new Set(['EPERM', 'EACCES']);\n",
+      "after": "const DENIED_CODES = new Set(['EACCES']);\n",
+      "platforms": ["darwin"]
+    },
+    {
+      "id": "e2-t17-confine-identical-edit",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a live mutant is confined only by the identical edit, killed by its named test, that names its platforms",
+      "testPattern": "E2 supersession: a live mutant is confined only by the identical edit, killed by its named test, that names its platforms",
+      "before": "  const identical = ['source', 'before', 'after'].every((key) => replacement?.[key] === old[key]);\n",
+      "after": "  const identical = true;\n"
+    },
+    {
+      "id": "e2-t17-confine-names-platforms",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a live mutant is confined only by the identical edit, killed by its named test, that names its platforms",
+      "testPattern": "E2 supersession: a live mutant is confined only by the identical edit, killed by its named test, that names its platforms",
+      "before": "  if (replacement?.platforms === undefined || !identical)\n",
+      "after": "  if (!identical)\n"
+    },
+    {
+      "id": "e2-t17-platforms-some-not-all",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "testPattern": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "before": "platforms.length >= confinablePlatforms.length ||",
+      "after": "false ||"
+    },
+    {
+      "id": "e2-t17-platforms-confinable",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "testPattern": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "before": "!platforms.every((platform) => confinablePlatforms.includes(platform))",
+      "after": "false"
+    },
+    {
+      "id": "e2-t17-platforms-only-to-confine",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "testPattern": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "before": "if (row.kind !== 'production' || leg !== 'node' || !confining.has(id))",
+      "after": "if (false)"
+    },
+    {
+      "id": "e2-t17-moved-anchor-runs-everywhere",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "testPattern": "E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one",
+      "before": "      else if (replacement?.mutation.platforms !== undefined)\n",
+      "after": "      else if (false)\n"
+    },
+    {
+      "id": "e2-t17-confined-skip-off-platforms-only",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a confined mutant is accounted for off its platforms, never credited, and refused a skip on them",
+      "testPattern": "E2 mutation: a confined mutant is accounted for off its platforms, never credited, and refused a skip on them",
+      "before": "const confined = skip.platform !== 'win32' && confinedAway(mutation, skip.platform);",
+      "after": "const confined = skip.platform !== 'win32';"
+    },
+    {
+      "id": "e2-t17-runner-loads-platforms",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a confined mutant is accounted for off its platforms, never credited, and refused a skip on them",
+      "testPattern": "E2 mutation: a confined mutant is accounted for off its platforms, never credited, and refused a skip on them",
+      "before": "...(mutation.platforms === undefined",
+      "after": "...(true"
+    },
+    {
+      "id": "e2-t17-confined-oracle-must-skip",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a confined mutant whose oracle runs off its platforms is refused, never credited there",
+      "testPattern": "E2 mutation: a confined mutant whose oracle runs off its platforms is refused, never credited there",
+      "before": "    confinedAway(mutation, process.platform),\n",
+      "after": "    false,\n"
+    },
+    {
+      "id": "e2-t17-stale-fence-answered",
+      "kind": "production",
+      "owner": "task-17",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: a fence that goes stale as the download is cancelled is answered, never left to reject unhandled",
+      "testPattern": "E2 laya model download: a fence that goes stale as the download is cancelled is answered, never left to reject unhandled",
+      "before": "      wait.catch(() => undefined);\n",
+      "after": "      /* e2-t17 mutant: removed */\n"
+    }
+  ],
+  "supersedes": [
+    {
+      "task": 12,
+      "mutant": "e2-t12-row-t7-real-sandbox-denial-codes",
+      "replacement": "e2-t17-real-sandbox-denial-codes",
+      "reason": "E2 CI round 1: its oracle, E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live, needs the host’s real sandbox-exec and skips everywhere else, so no Linux runner can credit it: the full strict pass refused its skipped baseline on Linux. Its anchor still applies; the replacement is the identical edit, killed by the same named test on macOS, and on Linux its oracle’s skip is accounted for, never credited."
+    }
+  ],
+  "matrix": [
+    {
+      "row": "fixture/task-17.json",
+      "owner": "task-17",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    }
+  ]
+}

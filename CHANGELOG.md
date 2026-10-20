@@ -3,6 +3,56 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.25.0
+
+**Laya, a judge that runs on your own Mac, is built, and switched off everywhere in this release.** A rule can already
+ask TypeSafe's hosted Jev, or a model server you run, one yes/no question about an event. Laya is the third kind: a
+small English model that runs on your Mac's CPU, in a worker the operating system keeps off the network, unable to
+start other programs, reach system services or write outside its own folder, so what a rule asks it never leaves your
+Mac through Laya. A release offers it only once its exact runtime, model and prompt have passed a labelled quality test
+on real Gmail and Slack messages, and its boundary has been proved on a real Mac. Neither has run yet, so this release
+ships no reviewed runtime lock: `agent-events judge kinds list` and `judge model status` show Laya as unavailable with
+`E2_EXTERNAL_REFERENCE_BLOCKED`, and `judge kind enable laya` refuses before anything is prepared or downloaded.
+
+**What changes when you update:**
+- **You can add a Laya judge, and a rule that names it.** Both are configuration. `rule enable` refuses that rule with
+  Laya's reason, and `judge test` names the same reason, until a release offers Laya and you enable it. A Laya judge
+  must name this release's reviewed model (`LAYA_MANIFEST_NOT_REVIEWED`) and its one template, `laya-noul-v1`
+  (`LAYA_TEMPLATE_BLOCKED` for any other).
+- **`rule enable` says why it refuses.** For every judge kind, a rule the daemon will not activate (its judge's kind
+  off, or Laya not offered) is refused as `BAD_DATA`, with the reason in `details.reason` and in the message. Before,
+  it answered "the local event operation failed".
+- **Some answers change shape.** `judge kinds list` gives Laya the reason `E2_EXTERNAL_REFERENCE_BLOCKED` instead of
+  `E2_REQUIRED`. `judge model status` and `judge model remove` return the model's state, manifest, lock digest, bytes
+  verified and expected, and any failure or reason. The doctor reports Laya's model state.
+- **The desktop app's Events screen** shows Laya's state and its reason. Enable opens your terminal; Disable applies at
+  once.
+- **The event database moves to schema 23** on this release's first start, to keep Laya's model state. After that, do
+  not start 0.24.x against it: 0.24.x does not know schema 23, and refuses a database a newer release has migrated.
+
+When a release does offer Laya:
+- **macOS only.** A `sandbox-exec` profile lets the worker open no network connection, Unix-domain sockets included,
+  start no other process, send no Apple event, look up no system service and write nowhere but its own temporary
+  folder. Before it loads anything, each worker proves that a connection and a process start are refused. Linux and
+  Windows show Laya as not available, and so does a daemon Rosetta translates.
+- **Its limits:** English only, a 512-token context, CPU only, one call at a time, one prompt template, about 2 GB on
+  disk (the runtime and the model) and about 2 GB of memory while it runs.
+- **You turn it on, at your terminal.** Nothing downloads before you approve it. Then the daemon fetches the runtime
+  and the model, ordinary downloads that are Laya's only network traffic, and checks every file against the release's
+  lock and manifest before each start. Once an update's replacement has verified, the old files are deleted, and
+  `judge model remove` deletes every verified copy.
+
+Every release now checks Laya before it publishes. One that ships the placeholder lock proves Laya is unavailable. One
+that ships the real lock must rebuild it from the registry, carry the owner's passing quality and real-Mac boundary
+evidence, and show through GitHub that the owner's protected gate run wrote that evidence
+([Releasing](docs/RELEASING.md#laya-the-local-model-judge)). `SECURITY.md` says what counts as a Laya vulnerability,
+and what its boundary does not protect against.
+
+Also:
+- **The desktop release** waits out GitHub's list of releases lagging behind a draft it has just made, which failed the
+  first attempt of `desktop-v0.24.0`.
+- **On Linux,** the tests now end every process a mutation test starts.
+
 ## 0.24.0
 
 **There is a desktop app: Agent Comms, a tray app that shows what your agents are doing and waiting for, and lets you

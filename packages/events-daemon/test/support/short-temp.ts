@@ -12,5 +12,5 @@ export function shortTempDir(prefix: string): Promise<string> {
 }
 
 /** The event service refuses on Windows in B1 (B1-G); tests that start an owner or open its database skip there. */
-export const WINDOWS_SKIP: string | false =
-  process.platform === 'win32' && 'B1-G: the local event service does not run on Windows in this release';
+export const WINDOWS_SKIP_REASON = 'B1-G: the local event service does not run on Windows in this release';
+export const WINDOWS_SKIP: string | false = process.platform === 'win32' && WINDOWS_SKIP_REASON;

@@ -448,7 +448,7 @@ test('E4 judge kind: TypeSafe enablement has no request, while Laya refuses befo
     assert.equal(setup.providerCalls(), 0, 'kind enablement has no provider request');
     await assert.rejects(
       () => setup.runtime.prepareJudgeKind({ kind: 'laya', version: 1 }),
-      (error: unknown) => error instanceof Error && 'code' in error && error.code === 'E2_REQUIRED',
+      (error: unknown) => error instanceof Error && 'code' in error && error.code === 'E2_EXTERNAL_REFERENCE_BLOCKED',
     );
     assert.equal(
       (

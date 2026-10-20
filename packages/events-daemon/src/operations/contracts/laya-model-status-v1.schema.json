@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/laya-model-status-v1.schema.json",
+  "title": "Laya model status v1",
+  "description": "The stable answer of `judge model status` and `judge model remove`, and the shape the desktop app reads. It carries no path, input, request, response, key or token; a new field or code is a new version.",
+  "$defs": {
+    "unavailableCode": {
+      "enum": ["E2_EXTERNAL_REFERENCE_BLOCKED", "LAYA_PLATFORM_UNAVAILABLE", "LAYA_SANDBOX_UNAVAILABLE"]
+    },
+    "failureCode": { "enum": ["boundary-failed", "download-failed", "integrity", "runtime-failed"] },
+    "state": { "enum": ["idle", "installing", "downloading", "verifying", "ready", "failed", "unavailable"] },
+    "manifestId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "lockDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "manifestId",
+        "runtimeLockDigest",
+        "bytesVerified",
+        "totalBytes",
+        "failureCode",
+        "reason",
+        "updatedAt"
+      ],
+      "properties": {
+        "state": { "$ref": "#/$defs/state" },
+        "manifestId": { "anyOf": [{ "$ref": "#/$defs/manifestId" }, { "type": "null" }] },
+        "runtimeLockDigest": { "anyOf": [{ "$ref": "#/$defs/lockDigest" }, { "type": "null" }] },
+        "bytesVerified": { "type": "integer", "minimum": 0 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "failureCode": { "anyOf": [{ "$ref": "#/$defs/failureCode" }, { "type": "null" }] },
+        "reason": { "anyOf": [{ "$ref": "#/$defs/unavailableCode" }, { "type": "null" }] },
+        "updatedAt": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": { "const": "unavailable" },
+            "failureCode": { "type": "null" },
+            "reason": { "$ref": "#/$defs/unavailableCode" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "failed" },
+            "failureCode": { "$ref": "#/$defs/failureCode" }
+          },
+          "anyOf": [
+            { "properties": { "reason": { "type": "null" } } },
+            {
+              "properties": {
+                "failureCode": { "const": "boundary-failed" },
+                "reason": { "enum": ["LAYA_PLATFORM_UNAVAILABLE", "LAYA_SANDBOX_UNAVAILABLE"] }
+              }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "state": { "enum": ["idle", "installing", "downloading", "verifying", "ready"] },
+            "failureCode": { "type": "null" },
+            "reason": { "type": "null" }
+          }
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/status"
+}

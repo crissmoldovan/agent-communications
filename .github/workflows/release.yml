@@ -20,8 +20,9 @@ name: Release
 # that is always opened is worse than none — it reports a control nobody is exercising.
 #
 # What remains is real rather than ceremonial: the environment accepts `v*` tags and nothing else, the tag must
-# match the version the repository declares and still name the commit the run started from, six verify legs and the
-# Node 22.12.0 leg must pass first, and every published version carries provenance naming the commit and the run. The residual risk is stated in
+# match the version the repository declares and still name the commit the run started from, six verify legs, the
+# Node 22.12.0 leg and the Laya release gate must pass first, and every published version carries provenance naming the
+# commit and the run. The residual risk is stated in
 # docs/RELEASING.md rather than papered over: anything that can push a tag to this repository can publish.
 
 on:
@@ -60,12 +61,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
       - run: pnpm verify
 
   # **A located command runs on the oldest Node the packages claim.** A command printed for a TypeScript entry — a
@@ -90,7 +92,7 @@ jobs:
         with:
           node-version: 22.18.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
       - run: pnpm build
       - uses: actions/setup-node@v7
         with:
@@ -122,14 +124,46 @@ jobs:
         with:
           node-version: 22.18.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
       - run: pnpm --filter @agentcomms/events exec playwright install chromium webkit
       - run: pnpm build
       - run: pnpm verify:browser
 
+  # **Laya's release rule** (events E2 Task 10), before the OIDC preflight and before any publish: the publish job needs
+  # it. A release that ships the fail-closed placeholder lock publishes with Laya unavailable, and this proves the
+  # placeholder is what ships. One that ships anything else must rebuild that lock from its exact registry origins and
+  # SRI, with the owner-only acquirer the flag below enables, and carry passing quality and real-Mac boundary evidence
+  # for every architecture the lock offers; any failure stops the release with nothing sent. It also refuses a Laya or
+  # ONNX package in the daemon's published dependencies, and the private runtime declaration in a release list. It holds
+  # no registry credential and no OIDC permission, and runs on dry runs too. When a real lock ships, it asks the GitHub
+  # API, with this job's token, whether each architecture's results are exactly what the owner's recorded protected
+  # gate run wrote: `actions: read` is all that needs. See docs/RELEASING.md.
+  laya:
+    name: Laya release gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
+      - run: pnpm -r --filter "./packages/**" run build
+      - name: Laya ships dormant, or with every gate's evidence
+        env:
+          AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1'
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/laya-release-gate.mjs
+
   publish:
     name: publish to npm
-    needs: [verify, old-node, browser]
+    needs: [verify, old-node, browser, laya]
     if: ${{ inputs.dry-run != true }}
     # Accepts `v*` tags only. It is also one of the claims each package's trusted publisher names, so renaming it
     # fails the OIDC preflight below for every package.
@@ -151,7 +185,7 @@ jobs:
           node-version: 22.18.0
           registry-url: https://registry.npmjs.org
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 
       - name: the tag must be the version the repository declares
         if: startsWith(github.ref, 'refs/tags/v')

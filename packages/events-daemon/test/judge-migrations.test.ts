@@ -361,7 +361,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '22',
+        '23',
         fixture.name,
       );
       assert.deepEqual(
@@ -378,7 +378,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 22').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 23').get() as {
             count: number;
           }
         ).count,
@@ -656,7 +656,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '22',
+        '23',
       );
     } finally {
       first.close();
@@ -665,7 +665,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 22').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 23').get() as {
             count: number;
           }
         ).count,

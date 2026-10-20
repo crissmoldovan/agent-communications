@@ -315,13 +315,13 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
       assert.equal(inProcess.code, 0, inProcess.stderr);
       assert.equal(
         (JSON.parse(inProcess.stdout) as { readonly schemaVersion?: unknown }).schemaVersion,
-        'doctor-v2',
+        'doctor-v3',
         'the in-process CLI run reached the owner and printed the doctor report',
       );
       assert.deepEqual(
         (JSON.parse(inProcess.stdout) as { readonly judgeBoundary?: unknown }).judgeBoundary,
-        [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
-        'the live Phase-E doctor retains v1 boundary meaning for the only unavailable E2 kind',
+        [],
+        'the live E2 doctor (v3) has no judge kind left behind a phase boundary',
       );
 
       const { server } = await createEventsMcpServer({ stateDir });
@@ -334,11 +334,11 @@ test('B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias
           readonly content: readonly { readonly type: string; readonly text?: string }[];
         };
         assert.equal(JSON.stringify(result.structuredContent), result.content[0]?.text);
-        assert.equal((result.structuredContent as { readonly schemaVersion?: unknown }).schemaVersion, 'doctor-v2');
+        assert.equal((result.structuredContent as { readonly schemaVersion?: unknown }).schemaVersion, 'doctor-v3');
         assert.deepEqual(
           (result.structuredContent as { readonly judgeBoundary?: unknown }).judgeBoundary,
-          [{ kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' }],
-          'the MCP result retains the E2-only doctor boundary',
+          [],
+          'the MCP result is the same doctor-v3 report, with no judge kind left behind a boundary',
         );
         return { cli, inProcess, mcp: JSON.stringify(result) };
       } finally {

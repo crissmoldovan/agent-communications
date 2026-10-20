@@ -1,0 +1,10 @@
+{
+  "state": "unavailable",
+  "manifestId": "laya-en-onnx-tiny-v1",
+  "runtimeLockDigest": null,
+  "bytesVerified": 0,
+  "totalBytes": 75,
+  "failureCode": null,
+  "reason": "LAYA_SANDBOX_UNAVAILABLE",
+  "updatedAt": null
+}

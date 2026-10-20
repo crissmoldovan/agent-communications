@@ -1,0 +1,700 @@
+{
+  "schemaVersion": 1,
+  "task": 7,
+  "owners": [
+    {
+      "id": "task-7"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-laya-same-child-network-boundary",
+      "owner": "task-7",
+      "test": "E2 boundary: rejects each worker escape report before load"
+    },
+    {
+      "id": "e2-laya-framed-worker-protocol",
+      "owner": "task-7",
+      "test": "laya worker protocol: length-prefixed frames survive arbitrary pipe chunking"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d11-2153-2165-worker-child-pipe-fence",
+      "owner": "task-7",
+      "test": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment"
+    },
+    {
+      "id": "d11-2167-2204-macos-four-attempt-self-test",
+      "owner": "task-7",
+      "test": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live"
+    },
+    {
+      "id": "s8-3410-3426-macos-only-boundary-availability",
+      "owner": "task-7",
+      "test": "E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup"
+    },
+    {
+      "id": "s9-3498-3501-tcp-and-pathname-uds-probe",
+      "owner": "task-7",
+      "test": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners"
+    },
+    {
+      "id": "d11-2167-2204-in-worker-defence-in-depth",
+      "owner": "task-7",
+      "test": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-worker-boundary-before-load",
+      "owner": "task-7",
+      "test": "E2 boundary: a tcp-only child escape is killed before load"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-7.json",
+      "owner": "task-7"
+    }
+  ],
+  "externalSources": [
+    {
+      "id": "sandbox-exec-man-page",
+      "url": "https://keith.github.io/xcode-man-pages/sandbox-exec.1.html",
+      "fetchedAt": "2026-10-12T18:38:00Z",
+      "immutable": "cc532507f33f6ad1d3f196f4f20cf383d33fc49823b9b9acae763d1193264008",
+      "fact": "sandbox-exec is DEPRECATED (Apple directs app developers to the App Sandbox); it enters a sandbox using a profile given by -f profile-file, -n profile-name or -p profile-string (-D key=value sets a profile parameter) and then executes command with its arguments. The page documents only invocation, not the profile language.",
+      "reviewer": "coordinator"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-boundary-tcp-report",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "result.tcp === 'denied' &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-fetch-report",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "result.fetch === 'denied' &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-udp-report",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "result.udp === 'denied' &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-uds-report",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "result.uds === 'denied' &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-tcp-listener",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "observed.tcpConnections === 0 &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-udp-listener",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "observed.udpDatagrams === 0 &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-uds-listener",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "observed.udsConnections === 0",
+      "after": "true"
+    },
+    {
+      "id": "e2-boundary-before-load",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a tcp-only child escape is killed before load",
+      "testPattern": "E2 boundary: a tcp-only child escape is killed before load",
+      "before": "if (result === null || !boundaryProbePassed(result, proof.observed)) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-boundary-pipe-generation-binding",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "testPattern": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "before": "expected.pipeGeneration === candidate.pipeGeneration",
+      "after": "true"
+    },
+    {
+      "id": "e2-boundary-nonce-binding",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "testPattern": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "before": "expected.nonce === candidate.nonce &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-pid-binding",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "testPattern": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "before": "expected.pid === candidate.pid &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-profile-binding",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "testPattern": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "before": "expected.profile === candidate.profile &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-entry-binding",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "testPattern": "E2 boundary: the load frame repeats exactly the successful child binding",
+      "before": "expected.entry === candidate.entry &&",
+      "after": "true &&"
+    },
+    {
+      "id": "e2-boundary-closed-environment",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "return { cwd: workingDirectory, env: LAYA_WORKER_ENV, shell: false, stdio: ['pipe', 'pipe', 'pipe'] };",
+      "after": "return { cwd: workingDirectory, env: { ...process.env, ...LAYA_WORKER_ENV }, shell: false, stdio: ['pipe', 'pipe', 'pipe'] };"
+    },
+    {
+      "id": "e2-boundary-pipe-only-fds",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "stdio: ['pipe', 'pipe', 'pipe']",
+      "after": "stdio: ['pipe', 'pipe', 'inherit']"
+    },
+    {
+      "id": "e2-boundary-no-shell",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "shell: false, stdio: ['pipe', 'pipe', 'pipe']",
+      "after": "shell: true, stdio: ['pipe', 'pipe', 'pipe']"
+    },
+    {
+      "id": "e2-boundary-literal-profile",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "export const LAYA_SANDBOX_PROFILE = '(version 1) (allow default) (deny network*)';",
+      "after": "export const LAYA_SANDBOX_PROFILE = '(version 1) (allow default)';"
+    },
+    {
+      "id": "e2-boundary-source-network-import",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: source has one probe-only network import boundary and no daemon authority imports",
+      "testPattern": "E2 boundary: source has one probe-only network import boundary and no daemon authority imports",
+      "before": "if (mainImports.some(network)) throw new Error('worker main imports network');",
+      "after": "if (false) throw new Error('worker main imports network');"
+    },
+    {
+      "id": "e2-boundary-platform-simulation",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup",
+      "testPattern": "E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup",
+      "before": "if (platform !== 'darwin') return { ok: false, code: 'LAYA_PLATFORM_UNAVAILABLE', loadSent: false };",
+      "after": "if (false) return { ok: false, code: 'LAYA_PLATFORM_UNAVAILABLE', loadSent: false };"
+    },
+    {
+      "id": "e2-boundary-shipped-entry-only",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the production entry refuses a forged all-denied child before it can receive load",
+      "testPattern": "E2 boundary: the production entry refuses a forged all-denied child before it can receive load",
+      "before": "if (\n    keys.length < 1 ||\n    keys.length > 2 ||\n    keys[0] !== 'dataDirectory' ||\n    (keys[1] !== undefined && keys[1] !== 'signal')\n  )\n    return null;",
+      "after": "if (false) return null;"
+    },
+    {
+      "id": "e2-boundary-observed-attempts",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a forged all-denied report without four observed attempts is refused",
+      "testPattern": "E2 boundary: a forged all-denied report without four observed attempts is refused",
+      "before": "if (result === null || attempts.size !== expectedAttempts.length) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-boundary-startup-deadline",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: waits for a loaded child to complete all observable attempts",
+      "testPattern": "E2 boundary: waits for a loaded child to complete all observable attempts",
+      "before": "const BOUNDARY_PROBE_TIMEOUT_MS = 5_000;",
+      "after": "const BOUNDARY_PROBE_TIMEOUT_MS = 750;"
+    },
+    {
+      "id": "e2-boundary-late-attempt-window",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a late escaped attempt frame after a denied report still refuses the child",
+      "testPattern": "E2 boundary: a late escaped attempt frame after a denied report still refuses the child",
+      "before": "const BOUNDARY_SETTLE_MS = 150;",
+      "after": "const BOUNDARY_SETTLE_MS = 0;"
+    },
+    {
+      "id": "e2-boundary-success-listener-cleanup",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: closes probe listeners before returning a successful worker",
+      "testPattern": "E2 boundary: closes probe listeners before returning a successful worker",
+      "before": "    await proof.close();\n",
+      "after": "    await Promise.resolve();\n"
+    },
+    {
+      "id": "e2-boundary-test-seam-static-guard",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects production use of test-only Laya worker seams",
+      "testPattern": "E2 mutation: rejects production use of test-only Laya worker seams",
+      "before": "  verifyWorkerTestSeams(resolvedRoot);",
+      "after": "  void resolvedRoot;"
+    },
+    {
+      "id": "e2-boundary-attempt-order",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: out-of-order and every unexpected proof frame are refused",
+      "testPattern": "E2 boundary: out-of-order and every unexpected proof frame are refused",
+      "before": "attempt.attempt !== expectedAttempts[attempts.size] ||",
+      "after": "false ||"
+    },
+    {
+      "id": "e2-boundary-listener-error-cleanup",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a listener error after setup fails closed without escaping the daemon",
+      "testPattern": "E2 boundary: a listener error after setup fails closed without escaping the daemon",
+      "before": "listeners.failure.then(() => null),",
+      "after": "new Promise<null>(() => undefined),"
+    },
+    {
+      "id": "e2-boundary-abort-before-spawn",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: abort before spawn, during proof, and during settle cleans up fully",
+      "testPattern": "E2 boundary: abort before spawn, during proof, and during settle cleans up fully",
+      "before": "if (options.signal?.aborted) return { ok: false, code: 'boundary-failed', loadSent: false };",
+      "after": "if (false) return { ok: false, code: 'boundary-failed', loadSent: false };"
+    },
+    {
+      "id": "e2-boundary-worker-tcp-attempt",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "testPattern": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "before": "['tcp', () => connectProbe({ port: input.tcpPort })],",
+      "after": "['tcp', () => Promise.reject(new Error('not attempted'))],"
+    },
+    {
+      "id": "e2-boundary-worker-fetch-attempt",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "testPattern": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "before": "['fetch', () => fetchProbe(input.tcpPort)],",
+      "after": "['fetch', () => Promise.reject(new Error('not attempted'))],"
+    },
+    {
+      "id": "e2-boundary-worker-udp-attempt",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "testPattern": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "before": "['udp', () => udpProbe(input.udpPort)],",
+      "after": "['udp', () => Promise.reject(new Error('not attempted'))],"
+    },
+    {
+      "id": "e2-boundary-worker-uds-attempt",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "testPattern": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "before": "['uds', () => connectProbe({ path: input.udsPath })],",
+      "after": "['uds', () => Promise.reject(new Error('not attempted'))],"
+    },
+    {
+      "id": "e2-boundary-worker-pid",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "testPattern": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "before": "return probe.pid === process.pid && ",
+      "after": "return true && "
+    },
+    {
+      "id": "e2-boundary-worker-entry",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "testPattern": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "before": " && probe.entry === process.argv[1] && ",
+      "after": " && true && "
+    },
+    {
+      "id": "e2-boundary-worker-profile",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "testPattern": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "before": " && probe.profile === LAYA_SANDBOX_PROFILE;",
+      "after": " && true;"
+    },
+    {
+      "id": "e2-boundary-worker-load-before-probe",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-main.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "testPattern": "E2 boundary: the actual worker refuses a probe for another process, entry or frame order before any attempt",
+      "before": "const probe = frame.type === 'probe' ? bindingFromProbe(frame) : null;",
+      "after": "const probe = bindingFromProbe(frame);"
+    },
+    {
+      "id": "e2-boundary-seal-fetch",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(globalThis, 'fetch', async (): Promise<never> => sealedNetwork());",
+      "after": "void sealedNetwork;"
+    },
+    {
+      "id": "e2-boundary-seal-websocket",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "if ('WebSocket' in globalThis) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-boundary-seal-socket-connect",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(Socket.prototype, 'connect', sealedNetwork);",
+      "after": "void Socket;"
+    },
+    {
+      "id": "e2-boundary-seal-listen",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(Server.prototype, 'listen', sealedNetwork);",
+      "after": "void Server;"
+    },
+    {
+      "id": "e2-boundary-seal-datagram-send",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(DatagramSocket.prototype, 'send', sealedNetwork);",
+      "after": "void DatagramSocket;"
+    },
+    {
+      "id": "e2-boundary-seal-datagram-bind",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(DatagramSocket.prototype, 'bind', sealedNetwork);",
+      "after": "void DatagramSocket;"
+    },
+    {
+      "id": "e2-boundary-seal-datagram-connect",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "testPattern": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "before": "seal(DatagramSocket.prototype, 'connect', sealedNetwork);",
+      "after": "void DatagramSocket;"
+    },
+    {
+      "id": "e2-boundary-network-resource-predicate",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a network resource that outlives the probe withholds its report",
+      "testPattern": "E2 boundary: a network resource that outlives the probe withholds its report",
+      "before": "return resources.some((resource) => NETWORK_RESOURCE.test(resource));",
+      "after": "return false;"
+    },
+    {
+      "id": "e2-boundary-worker-stdin-sink",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a worker that exits before the probe fails closed without an EPIPE escaping the daemon",
+      "testPattern": "E2 boundary: a worker that exits before the probe fails closed without an EPIPE escaping the daemon",
+      "before": "installErrorSink(child.stdin);",
+      "after": "void child.stdin;"
+    },
+    {
+      "id": "e2-boundary-stdout-held-for-reader",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a proven worker's next frame waits for its next reader",
+      "testPattern": "E2 boundary: a proven worker's next frame waits for its next reader",
+      "before": "child.stdout.pause();",
+      "after": "void child.stdout;"
+    },
+    {
+      "id": "e2-boundary-uds-path-limit",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a socket path macOS would truncate fails closed before any child starts",
+      "testPattern": "E2 boundary: a socket path macOS would truncate fails closed before any child starts",
+      "before": "if (Buffer.byteLength(udsPath) > UNIX_SOCKET_PATH_LIMIT_BYTES) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-boundary-closed-environment-literal",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "Object.freeze({ PATH: '/usr/bin:/bin', TZ: 'UTC' })",
+      "after": "Object.freeze({ ...process.env, PATH: '/usr/bin:/bin', TZ: 'UTC' })"
+    },
+    {
+      "id": "e2-boundary-phase-e-fetch-exception-file",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "testPattern": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "before": "if (judgePath && file === LAYA_BOUNDARY_PROBE) problems.push(",
+      "after": "if (judgePath && file.startsWith('packages/events-daemon/src/runtime/laya/')) problems.push("
+    },
+    {
+      "id": "e2-boundary-phase-e-fetch-exception-one-call",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "testPattern": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "before": "const reviewed = named.every((line) => LAYA_BOUNDARY_FETCH_NAMES.has(line)) && new Set(named).size === named.length;",
+      "after": "const reviewed = true;"
+    },
+    {
+      "id": "e2-boundary-phase-e-fetch-exception-once",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "scripts/verify-events-phase-e-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "testPattern": "E2 boundary: phase E's fetch rule exempts only the probe's one loopback fetch attempt",
+      "before": " && new Set(named).size === named.length;",
+      "after": ";"
+    },
+    {
+      "id": "e2-boundary-tcp-listener-counts",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "testPattern": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "before": "      tcpConnections += 1;\n",
+      "after": "      void 0;\n"
+    },
+    {
+      "id": "e2-boundary-udp-listener-counts",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "testPattern": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "before": "    udpDatagrams += 1;\n",
+      "after": "    void 0;\n"
+    },
+    {
+      "id": "e2-boundary-uds-listener-counts",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "testPattern": "E2 boundary: the daemon's own listeners catch a child that reaches them and still reports every attempt denied",
+      "before": "      udsConnections += 1;\n",
+      "after": "      void 0;\n"
+    },
+    {
+      "id": "e2-boundary-only-system-refusal-is-denied",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker reports a refused or missing listener as failed, never as denied",
+      "testPattern": "E2 boundary: the actual worker reports a refused or missing listener as failed, never as denied",
+      "before": "(error: unknown) => (deniedBySystem(error) ? 'denied' : 'failed'),",
+      "after": "() => 'denied',"
+    },
+    {
+      "id": "e2-boundary-denial-codes",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: only EPERM or EACCES, on the error, its cause or an aggregate member, is a denial",
+      "testPattern": "E2 boundary: only EPERM or EACCES, on the error, its cause or an aggregate member, is a denial",
+      "before": "if (typeof code === 'string' && DENIED_CODES.has(code)) return true;",
+      "after": "if (typeof code === 'string') return true;"
+    },
+    {
+      "id": "e2-boundary-unspawned-never-signalled",
+      "kind": "production",
+      "owner": "task-7",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a sandbox launcher that cannot start is never signalled, so the daemon process group survives",
+      "testPattern": "E2 boundary: a sandbox launcher that cannot start is never signalled, so the daemon process group survives",
+      "before": "  if (child.pid === undefined) {\n",
+      "after": "  if (false) {\n"
+    }
+  ]
+}

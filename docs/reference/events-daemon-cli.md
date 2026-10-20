@@ -496,7 +496,7 @@ agent-events judge test [options] <judge-id>
 
 ### `agent-events judge kinds`
 
-list disabled/enabled kinds and the typed Laya E2 seam
+list each judge kind as disabled or enabled, or Laya as unavailable here with its reason
 
 ```
 agent-events judge kinds [options] [command]
@@ -530,7 +530,7 @@ agent-events judge kind disable [options] <kind>
 
 ### `agent-events judge model`
 
-local Laya model controls, which answer that Laya is not available yet
+report the local Laya runtime and model state, or remove its files while Laya is disabled
 
 ```
 agent-events judge model [options] [command]

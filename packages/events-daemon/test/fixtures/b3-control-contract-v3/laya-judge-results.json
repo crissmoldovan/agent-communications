@@ -1,0 +1,558 @@
+[
+  {
+    "name": "judge-add-laya",
+    "request": {
+      "operation": "addJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-laya",
+          "version": 1,
+          "kind": "laya",
+          "provider": "laya",
+          "model": "laya-en-onnx-68f27dfe",
+          "promptTemplate": "laya-noul-v1"
+        }
+      }
+    },
+    "result": {
+      "id": "judge-laya@1",
+      "kind": "judge",
+      "objectId": "judge-laya",
+      "version": 1,
+      "document": {
+        "judgeId": "judge-laya",
+        "kind": "laya",
+        "model": "laya-en-onnx-68f27dfe",
+        "promptTemplate": "laya-noul-v1",
+        "provider": "laya",
+        "version": 1
+      },
+      "digest": "7490c1064137b385d1e5e0b15434a64506f79adc0b9bc7fefe53bc19ba47c3ae",
+      "state": null
+    }
+  },
+  {
+    "name": "judge-update-laya",
+    "request": {
+      "operation": "updateJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-laya",
+          "version": 2,
+          "kind": "laya",
+          "provider": "laya",
+          "model": "laya-en-onnx-68f27dfe",
+          "promptTemplate": "laya-noul-v1"
+        }
+      }
+    },
+    "result": {
+      "id": "judge-laya@2",
+      "kind": "judge",
+      "objectId": "judge-laya",
+      "version": 2,
+      "document": {
+        "judgeId": "judge-laya",
+        "kind": "laya",
+        "model": "laya-en-onnx-68f27dfe",
+        "promptTemplate": "laya-noul-v1",
+        "provider": "laya",
+        "version": 2
+      },
+      "digest": "78b526420b6eb4376926575d878f92213220681ea3044c2844b999f0e2b14f9a",
+      "state": null
+    }
+  },
+  {
+    "name": "judge-add-typesafe",
+    "request": {
+      "operation": "addJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
+        }
+      }
+    },
+    "result": {
+      "id": "judge-jev@1",
+      "kind": "judge",
+      "objectId": "judge-jev",
+      "version": 1,
+      "document": {
+        "endpoint": "https://api.typesafe.ai/v1/systemone",
+        "judgeId": "judge-jev",
+        "kind": "typesafe",
+        "model": "jev-1.13.0",
+        "promptTemplate": "typesafe-jev-noul-v1",
+        "protocol": "noul",
+        "provider": "typesafe",
+        "version": 1
+      },
+      "digest": "78e8441a29b7ced7636468a536fbf89214a5b149e7c52eaada3af3889ecbab7f",
+      "state": null
+    }
+  },
+  {
+    "name": "judges-list",
+    "request": {
+      "operation": "judgesList",
+      "args": {}
+    },
+    "result": [
+      {
+        "judgeId": "judge-jev",
+        "version": 1,
+        "kind": "typesafe",
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "revokedAt": null
+      },
+      {
+        "judgeId": "judge-laya",
+        "version": 1,
+        "kind": "laya",
+        "provider": "laya",
+        "model": "laya-en-onnx-68f27dfe",
+        "revokedAt": null
+      },
+      {
+        "judgeId": "judge-laya",
+        "version": 2,
+        "kind": "laya",
+        "provider": "laya",
+        "model": "laya-en-onnx-68f27dfe",
+        "revokedAt": null
+      }
+    ]
+  },
+  {
+    "name": "rule-create-laya",
+    "request": {
+      "operation": "rule-create",
+      "args": {
+        "document": {
+          "ruleId": "rule-laya",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["ibx_LAYAVECTORAAAAAA"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "agentic": {
+            "judge": {
+              "judgeId": "judge-laya",
+              "version": 1,
+              "kind": "laya",
+              "provider": "laya",
+              "model": "laya-en-onnx-68f27dfe",
+              "promptTemplate": "laya-noul-v1"
+            },
+            "question": "Does this synthetic message ask for a reply?",
+            "inputs": ["/subject"],
+            "threshold": 0.5,
+            "onUncertain": "no-match",
+            "callsPerRollingHour": 10,
+            "inputTokensPerRolling30Days": 100000,
+            "concurrency": 1,
+            "maxInputTokens": 400,
+            "maxOutputTokens": 64
+          },
+          "mapping": {
+            "subject": {
+              "$path": "/subject"
+            }
+          },
+          "targets": [
+            {
+              "targetId": "target-laya",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 60000
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 10,
+          "retention": {
+            "ingestMs": 60000,
+            "holdMs": 60000,
+            "deliveryMs": 60000,
+            "dryrunMs": 60000,
+            "sseReplayMs": 60000,
+            "deadLetterMs": 60000,
+            "decisionMetadataMs": 60000
+          }
+        }
+      }
+    },
+    "result": {
+      "id": "rule-laya@1",
+      "kind": "rule",
+      "objectId": "rule-laya",
+      "version": 1,
+      "document": {
+        "agentic": {
+          "callsPerRollingHour": 10,
+          "concurrency": 1,
+          "inputTokensPerRolling30Days": 100000,
+          "inputs": ["/subject"],
+          "judge": {
+            "judgeId": "judge-laya",
+            "kind": "laya",
+            "model": "laya-en-onnx-68f27dfe",
+            "promptTemplate": "laya-noul-v1",
+            "provider": "laya",
+            "version": 1
+          },
+          "maxInputTokens": 400,
+          "maxOutputTokens": 64,
+          "onUncertain": "no-match",
+          "question": "Does this synthetic message ask for a reply?",
+          "threshold": 0.5
+        },
+        "condition": {
+          "op": "exists",
+          "path": "/subject"
+        },
+        "deliveryRateCap": 10,
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "judges": [],
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "retention": {
+          "deadLetterMs": 60000,
+          "decisionMetadataMs": 60000,
+          "deliveryMs": 60000,
+          "dryrunMs": 60000,
+          "holdMs": 60000,
+          "ingestMs": 60000,
+          "sseReplayMs": 60000
+        },
+        "ruleId": "rule-laya",
+        "source": {
+          "accountIds": ["ibx_LAYAVECTORAAAAAA"],
+          "channel": "gmail",
+          "options": {
+            "channel": "gmail",
+            "includeSpamTrash": false,
+            "labels": "inbox"
+          }
+        },
+        "subscribers": [],
+        "targets": [
+          {
+            "kind": "dry-run",
+            "retentionMs": 60000,
+            "targetId": "target-laya",
+            "version": 1
+          }
+        ],
+        "version": 1
+      },
+      "digest": "c8bce68d3eb5f818ee36a7196ae16537b3dc6ec539d70d509c2cd4eab1be84b7",
+      "state": null
+    }
+  },
+  {
+    "name": "rule-update-laya",
+    "request": {
+      "operation": "rule-update",
+      "args": {
+        "document": {
+          "ruleId": "rule-laya",
+          "version": 2,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["ibx_LAYAVECTORAAAAAA"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "agentic": {
+            "judge": {
+              "judgeId": "judge-laya",
+              "version": 2,
+              "kind": "laya",
+              "provider": "laya",
+              "model": "laya-en-onnx-68f27dfe",
+              "promptTemplate": "laya-noul-v1"
+            },
+            "question": "Does this synthetic message ask for a reply?",
+            "inputs": ["/subject"],
+            "threshold": 0.5,
+            "onUncertain": "no-match",
+            "callsPerRollingHour": 10,
+            "inputTokensPerRolling30Days": 100000,
+            "concurrency": 1,
+            "maxInputTokens": 400,
+            "maxOutputTokens": 64
+          },
+          "mapping": {
+            "subject": {
+              "$path": "/subject"
+            }
+          },
+          "targets": [
+            {
+              "targetId": "target-laya",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 60000
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 10,
+          "retention": {
+            "ingestMs": 60000,
+            "holdMs": 60000,
+            "deliveryMs": 60000,
+            "dryrunMs": 60000,
+            "sseReplayMs": 60000,
+            "deadLetterMs": 60000,
+            "decisionMetadataMs": 60000
+          }
+        }
+      }
+    },
+    "result": {
+      "id": "rule-laya@2",
+      "kind": "rule",
+      "objectId": "rule-laya",
+      "version": 2,
+      "document": {
+        "agentic": {
+          "callsPerRollingHour": 10,
+          "concurrency": 1,
+          "inputTokensPerRolling30Days": 100000,
+          "inputs": ["/subject"],
+          "judge": {
+            "judgeId": "judge-laya",
+            "kind": "laya",
+            "model": "laya-en-onnx-68f27dfe",
+            "promptTemplate": "laya-noul-v1",
+            "provider": "laya",
+            "version": 2
+          },
+          "maxInputTokens": 400,
+          "maxOutputTokens": 64,
+          "onUncertain": "no-match",
+          "question": "Does this synthetic message ask for a reply?",
+          "threshold": 0.5
+        },
+        "condition": {
+          "op": "exists",
+          "path": "/subject"
+        },
+        "deliveryRateCap": 10,
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "judges": [],
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "retention": {
+          "deadLetterMs": 60000,
+          "decisionMetadataMs": 60000,
+          "deliveryMs": 60000,
+          "dryrunMs": 60000,
+          "holdMs": 60000,
+          "ingestMs": 60000,
+          "sseReplayMs": 60000
+        },
+        "ruleId": "rule-laya",
+        "source": {
+          "accountIds": ["ibx_LAYAVECTORAAAAAA"],
+          "channel": "gmail",
+          "options": {
+            "channel": "gmail",
+            "includeSpamTrash": false,
+            "labels": "inbox"
+          }
+        },
+        "subscribers": [],
+        "targets": [
+          {
+            "kind": "dry-run",
+            "retentionMs": 60000,
+            "targetId": "target-laya",
+            "version": 1
+          }
+        ],
+        "version": 2
+      },
+      "digest": "90f223708a006ccd7e6389b0ba7155b3e50dfd6a6cf77d8266beca8122b6ebc8",
+      "state": null
+    }
+  },
+  {
+    "name": "judge-add-choice-template",
+    "request": {
+      "operation": "addJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-laya-choice",
+          "version": 1,
+          "kind": "laya",
+          "provider": "laya",
+          "model": "laya-en-onnx-68f27dfe",
+          "promptTemplate": "laya-choice2-v1"
+        }
+      }
+    },
+    "error": {
+      "code": "BAD_DATA",
+      "reason": "LAYA_TEMPLATE_BLOCKED"
+    }
+  },
+  {
+    "name": "judge-update-unreviewed-manifest",
+    "request": {
+      "operation": "updateJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-laya",
+          "version": 3,
+          "kind": "laya",
+          "provider": "laya",
+          "model": "laya-en-onnx-unreviewed",
+          "promptTemplate": "laya-noul-v1"
+        }
+      }
+    },
+    "error": {
+      "code": "BAD_DATA",
+      "reason": "LAYA_MANIFEST_NOT_REVIEWED"
+    }
+  },
+  {
+    "name": "rule-create-choice-template",
+    "request": {
+      "operation": "rule-create",
+      "args": {
+        "document": {
+          "ruleId": "rule-laya",
+          "version": 3,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["ibx_LAYAVECTORAAAAAA"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "agentic": {
+            "judge": {
+              "judgeId": "judge-laya",
+              "version": 1,
+              "kind": "laya",
+              "provider": "laya",
+              "model": "laya-en-onnx-68f27dfe",
+              "promptTemplate": "laya-choice2-v1"
+            },
+            "question": "Does this synthetic message ask for a reply?",
+            "inputs": ["/subject"],
+            "threshold": 0.5,
+            "onUncertain": "no-match",
+            "callsPerRollingHour": 10,
+            "inputTokensPerRolling30Days": 100000,
+            "concurrency": 1,
+            "maxInputTokens": 400,
+            "maxOutputTokens": 64
+          },
+          "mapping": {
+            "subject": {
+              "$path": "/subject"
+            }
+          },
+          "targets": [
+            {
+              "targetId": "target-laya",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 60000
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 10,
+          "retention": {
+            "ingestMs": 60000,
+            "holdMs": 60000,
+            "deliveryMs": 60000,
+            "dryrunMs": 60000,
+            "sseReplayMs": 60000,
+            "deadLetterMs": 60000,
+            "decisionMetadataMs": 60000
+          }
+        }
+      }
+    },
+    "error": {
+      "code": "BAD_DATA",
+      "reason": "LAYA_TEMPLATE_BLOCKED"
+    }
+  },
+  {
+    "name": "rule-enable-laya-not-offered",
+    "request": {
+      "operation": "rule-enable",
+      "args": {
+        "ruleId": "rule-laya",
+        "version": 1
+      }
+    },
+    "error": {
+      "code": "BAD_DATA",
+      "reason": "E2_EXTERNAL_REFERENCE_BLOCKED"
+    }
+  }
+]

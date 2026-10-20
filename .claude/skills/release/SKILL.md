@@ -93,7 +93,7 @@ package's first version" in `docs/RELEASING.md` describes (and "A package held b
    **If it says a package was never published**, nothing was published either, and no trusted publisher can be added
    yet: npm refuses one for a package that does not exist. The preflight printed the first publish for it, with the
    tagged commit. The owner runs that, in a terminal (npm asks for a one-time password to create a package), in a
-   checkout of the tagged commit after `pnpm install --frozen-lockfile && pnpm build`:
+   checkout of the tagged commit after `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime' && pnpm build`:
    `pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter @agentcomms/<name> publish --access public --no-git-checks --tag latest`
    (`next` for a prerelease). Then they add its trusted publisher and re-run the failed job, which finds that version
    already out from this commit and skips it. Not `npm publish` in the package's directory: it records no `gitHead`

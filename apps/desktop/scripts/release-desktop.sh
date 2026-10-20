@@ -103,7 +103,7 @@ else
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────────────────────────────────────────────
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 node apps/desktop/scripts/third-party-licenses.mjs --check
 (cd apps/desktop/src-tauri && rustup target add aarch64-apple-darwin x86_64-apple-darwin)
 # Finder's installer-window styling needs desktop automation consent; CI mode builds the same signed DMG without that

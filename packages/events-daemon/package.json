@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events-daemon",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "The local event service for agent-communications: rules you approve deliver Gmail, Slack, Resend and WhatsApp events to a signed webhook, a local live stream or a dry-run log.",
   "type": "module",
   "license": "MIT",
@@ -26,6 +26,9 @@
   },
   "files": [
     "dist",
+    "laya-enablement-disclosures.json",
+    "laya-manifest.json",
+    "laya-runtime.json",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_LICENSES"
@@ -36,7 +39,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+    "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\" test/laya-runtime-package.test.mjs"
   },
   "dependencies": {
     "@agentcomms/core": "workspace:*",

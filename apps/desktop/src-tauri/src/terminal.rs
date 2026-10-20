@@ -18,8 +18,10 @@
 
 use crate::allowlist::{ApprovalId, Call, Shape, Words};
 use crate::ipc::{AppError, CliResult, CopyReason, TerminalCommand, TerminalOutcome};
-use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for, Product};
-use crate::paths::Platform;
+use crate::launchers::{
+    check_launcher, find_launcher, launcher_path, program_for, Product, Program,
+};
+use crate::paths::{Folders, Platform};
 use crate::runner::{argv, child_env, run, RunContext};
 use regex::Regex;
 use std::collections::HashMap;
@@ -273,13 +275,15 @@ pub fn applescript_string(text: &str) -> String {
     quoted
 }
 
-/// The located command for `command`: its launcher's program and leading words, its words, and the four pins.
+/// The product whose launcher opens `command`, and the words after it, before the pins:
 /// - **Approve:** that channel's `approve <id>`, through its own launcher; the events service approves nothing.
 /// - **Change:** the change itself, as the allow-list builds it; refused unless the call prepares a change.
 /// - **Sign in:** gmail `inbox add|reauth <account>`, slack `workspace add|reauth <account>`, resend
 ///   `account add <account>`; a Resend account has no sign-in again, and no other product has a sign-in.
-pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<String>, AppError> {
-    let (product, words): (Product, Vec<String>) = match command {
+/// - **Laya's Enable:** the events service's `judge kind enable laya`, and nothing else: the terminal shows its preview
+///   and takes its approval (E2 Task 11).
+pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>), AppError> {
+    Ok(match command {
         TerminalCommand::Approve {
             product,
             approval_id,
@@ -334,7 +338,38 @@ pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<Strin
                 ],
             )
         }
+        TerminalCommand::EventsJudgeKindEnable { .. } => (
+            Product::EventsDaemon,
+            ["judge", "kind", "enable", "laya"]
+                .iter()
+                .map(|word| word.to_string())
+                .collect(),
+        ),
+    })
+}
+
+/// The located line: the launcher's program and leading words, `words`, and the four pins. There is no `--json`: a
+/// person reads what it prints.
+pub fn located_line(
+    product: Product,
+    words: &[String],
+    program: &Program,
+    folders: &Folders,
+) -> Vec<String> {
+    let words = Words {
+        product,
+        words: words.to_vec(),
+        shape: Shape::Envelope,
+        pins: true,
+        quiet_updates: true,
+        timeout: Duration::from_secs(30),
     };
+    argv(&words, program, folders, false)
+}
+
+/// The located command for `command` (`command_words`), through the launcher this installation has for it.
+pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<String>, AppError> {
+    let (product, words) = command_words(command)?;
     if ctx.platform == Platform::Windows && ctx.node.is_none() {
         return Err(AppError::no_node());
     }
@@ -347,15 +382,7 @@ pub fn argv_for(command: &TerminalCommand, ctx: &RunContext) -> Result<Vec<Strin
     })?;
     check_launcher(&launcher, ctx.platform)?;
     let program = program_for(&launcher, ctx.platform, ctx.node.as_deref())?;
-    let words = Words {
-        product,
-        words,
-        shape: Shape::Envelope,
-        pins: true,
-        quiet_updates: true,
-        timeout: Duration::from_secs(30),
-    };
-    Ok(argv(&words, &program, &ctx.folders, false))
+    Ok(located_line(product, &words, &program, &ctx.folders))
 }
 
 /// The approvals the app's own previews wait on (DA10; DA16, after review): each id a change the app prepared came back
@@ -455,7 +482,9 @@ pub fn open_with(
     }
     let revoked = match &command {
         TerminalCommand::Change { revoke, .. } => Some(effects.revoke(revoke, ctx)),
-        TerminalCommand::Approve { .. } | TerminalCommand::SignIn { .. } => None,
+        TerminalCommand::Approve { .. }
+        | TerminalCommand::SignIn { .. }
+        | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
     let (text, reason) = match &planned {
@@ -1924,6 +1953,138 @@ mod tests {
         }
         assert!(copyable(&"a".repeat(COPY_LIMIT)));
         assert!(!copyable(&"a".repeat(COPY_LIMIT + 1)));
+    }
+
+    /// Laya's Enable (E2 Task 11): the events service's own launcher, `judge kind enable laya` and the pins, the words
+    /// the daemon's contract runs through its CLI. Nothing is revoked first, and the terminal opens once.
+    #[test]
+    fn laya_enable_opens_the_events_launcher_with_the_pins_and_revokes_nothing() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let command = TerminalCommand::EventsJudgeKindEnable {};
+        let words = argv_for(&command, &ctx).expect("words");
+        assert_eq!(
+            words,
+            located(
+                &ctx,
+                Product::EventsDaemon,
+                &["judge", "kind", "enable", "laya"]
+            )
+        );
+        assert_eq!(
+            crate::allowlist::desktop_contract_words("eventsJudgeKindEnable"),
+            (strings(&["judge", "kind", "enable", "laya"]), false)
+        );
+        let effects = Fake::new(true);
+        let outcome =
+            open_with(command.clone(), &ctx, &effects, &Prepared::default()).expect("an outcome");
+        assert!(
+            matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+        assert_eq!(
+            effects.spawned.borrow().clone().expect("a plan"),
+            plan(ctx.platform, &words, &|name| effects.found(name))
+        );
+        // Without the events service's launcher there is nothing to open.
+        let (_dir, bare) = installation(&[Product::Core]);
+        assert_eq!(
+            argv_for(&command, &bare).expect_err("not installed").code,
+            "APP_NOT_INSTALLED"
+        );
+        // The webview's shape for it, exactly (`ipc.ts`); and it takes no argument: no kind, no approval, no word.
+        assert_eq!(
+            serde_json::from_value::<TerminalCommand>(
+                serde_json::json!({ "kind": "eventsJudgeKindEnable" })
+            )
+            .expect("Enable's shape"),
+            command
+        );
+        for bad in [
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "judge": "typesafe" }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "approval": ID }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "approvalId": ID }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "json": true }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "words": ["--approval", ID] }),
+        ] {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// The Enable line on each platform, as its shell reads it: the launcher (on Windows, Node and the launcher), then
+    /// `judge kind enable laya`, then the pins, with neither `--json` nor `--approval` anywhere in it.
+    #[test]
+    fn laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows() {
+        let (product, words) =
+            command_words(&TerminalCommand::EventsJudgeKindEnable {}).expect("words");
+        assert_eq!(product, Product::EventsDaemon);
+        assert_eq!(words, strings(&["judge", "kind", "enable", "laya"]));
+        let posix = |home: &str| Folders {
+            config_dir: format!("{home}/.config/agent-communications"),
+            state_dir: format!("{home}/.config/agent-communications/state"),
+            data_dir: format!("{home}/.local/share/agent-communications"),
+            secrets_dir: format!("{home}/.config/agent-communications/secrets"),
+        };
+        let windows = Folders {
+            config_dir: r"C:\Users\example\AppData\Roaming\agent-communications".into(),
+            state_dir: r"C:\Users\example\AppData\Roaming\agent-communications\state".into(),
+            data_dir: r"C:\Users\example\AppData\Local\agent-communications".into(),
+            secrets_dir: r"C:\Users\example\AppData\Roaming\agent-communications\secrets".into(),
+        };
+        let cases = [
+            (
+                Platform::MacOs,
+                posix("/Users/example"),
+                vec!["/Users/example/.local/share/agent-communications/launch/events-daemon"],
+                "/Users/example/.local/share/agent-communications/launch/events-daemon judge kind enable laya --config-dir /Users/example/.config/agent-communications --state-dir /Users/example/.config/agent-communications/state --data-dir /Users/example/.local/share/agent-communications --secrets-dir /Users/example/.config/agent-communications/secrets",
+            ),
+            (
+                Platform::Linux,
+                posix("/home/example"),
+                vec!["/home/example/.local/share/agent-communications/launch/events-daemon"],
+                "/home/example/.local/share/agent-communications/launch/events-daemon judge kind enable laya --config-dir /home/example/.config/agent-communications --state-dir /home/example/.config/agent-communications/state --data-dir /home/example/.local/share/agent-communications --secrets-dir /home/example/.config/agent-communications/secrets",
+            ),
+            (
+                Platform::Windows,
+                windows.clone(),
+                vec![
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\Users\example\AppData\Local\agent-communications\launch\events-daemon",
+                ],
+                r#""C:\Program Files\nodejs\node.exe" C:\Users\example\AppData\Local\agent-communications\launch\events-daemon judge kind enable laya --config-dir C:\Users\example\AppData\Roaming\agent-communications --state-dir C:\Users\example\AppData\Roaming\agent-communications\state --data-dir C:\Users\example\AppData\Local\agent-communications --secrets-dir C:\Users\example\AppData\Roaming\agent-communications\secrets"#,
+            ),
+        ];
+        for (platform, folders, program, expected) in cases {
+            let program = crate::launchers::Program {
+                program: program[0].to_string(),
+                leading: program[1..].iter().map(|word| word.to_string()).collect(),
+            };
+            let argv = located_line(product, &words, &program, &folders);
+            let mut whole = vec![program.program.clone()];
+            whole.extend(program.leading.clone());
+            whole.extend(strings(&["judge", "kind", "enable", "laya"]));
+            whole.extend(folders.pins());
+            assert_eq!(argv, whole, "{platform:?}");
+            let text = line(&argv, platform).expect("a line");
+            assert_eq!(text, expected, "{platform:?}");
+            assert!(
+                !text.contains("--json")
+                    && !text.contains("--approval")
+                    && !text.contains(" approve "),
+                "{platform:?}: {text}"
+            );
+            let found = |name: &str| Some(format!("/usr/bin/{name}"));
+            let Plan::Spawn { args, .. } = plan(platform, &argv, &found) else {
+                panic!("{platform:?}: no terminal was planned");
+            };
+            assert!(
+                args.iter().any(|arg| arg.contains(&text)),
+                "{platform:?}: {args:?}"
+            );
+        }
     }
 
     #[test]

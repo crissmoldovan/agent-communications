@@ -4,7 +4,7 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { CanonicalJudgeBudgetDocument, CanonicalJudgeDocument, JudgeBudgetLimits } from '../domain/judges.ts';
 import { canonicalJudge, JUDGE_BUDGET_ID } from '../domain/judges.ts';
-import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { JUDGE_KIND_LAYA, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { JudgeWorkScope } from '../store/records.ts';
@@ -338,6 +338,10 @@ function ruleAuthority(database: DatabaseSync, scope: SourceJudgeWork, judge: Ca
 function providerLimit(document: CanonicalJudgeBudgetDocument, provider: string): JudgeBudgetLimits {
   const found = document.providers.find((entry) => entry.provider === provider);
   if (found === undefined) refusal('PROVIDER_BUDGET_UNCONFIGURED', 'the judge provider has no approved budget ceiling');
+  // The canonical document rejects this too.  Recheck beside the live budget use so a damaged persisted document
+  // can never turn the E2 worker supervisor into a multi-request path.
+  if (provider === JUDGE_KIND_LAYA && found.concurrency > 1)
+    refusal('PROVIDER_BUDGET_UNCONFIGURED', 'the Laya provider budget must remain one-at-a-time');
   return found;
 }
 
@@ -831,7 +835,10 @@ export class JudgeReservationIoGate {
   }
 
   finalGate = (phase: JudgeTransportPhase, assertBeforeTransition?: () => void): undefined => {
-    const firstPhysicalPhase: JudgeTransportPhase = this.#judgeKind === JUDGE_KIND_TYPESAFE ? 'dns' : 'tcp';
+    // Hosted work enters at DNS and a literal-loopback judge at TCP. A Laya request's only physical I/O is the one
+    // write of its frame to the isolated worker, so it enters there.
+    const firstPhysicalPhase: JudgeTransportPhase =
+      this.#judgeKind === JUDGE_KIND_TYPESAFE ? 'dns' : this.#judgeKind === JUDGE_KIND_LAYA ? 'write' : 'tcp';
     if (!this.#entered) {
       if (phase !== firstPhysicalPhase) {
         assertBeforeTransition?.();

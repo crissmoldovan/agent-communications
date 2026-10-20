@@ -1,0 +1,3657 @@
+{
+  "schemaVersion": 1,
+  "task": 12,
+  "owners": [
+    {
+      "id": "task-12"
+    }
+  ],
+  "section5": [
+    {
+      "id": "e2-laya-await-fences",
+      "owner": "task-12",
+      "test": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone"
+    },
+    {
+      "id": "e2-laya-stable-identity-scope",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere"
+    },
+    {
+      "id": "e2-laya-purge-closure",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready"
+    },
+    {
+      "id": "e2-laya-mutation-pairing",
+      "owner": "task-12",
+      "test": "E2 matrix: a row with no owner and red mutant is refused"
+    },
+    {
+      "id": "e2-laya-loopback-seal",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya test that does not assert the loopback seal is refused"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d5-1080-1096-reservation-purge-race",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: revoking the Laya rule stops only its own request"
+    },
+    {
+      "id": "e2-runner-ends-each-oracle-tree",
+      "owner": "task-12",
+      "test": "E2 mutation: a timed-out oracle leaves no process it started running"
+    },
+    {
+      "id": "e2-10a-guards-registered",
+      "owner": "task-12",
+      "test": "E2 Laya judge creation: a rule whose Laya stops being offered after it was prepared is refused at its claim, with Laya’s reason first"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-worker-start-walk-fence",
+      "owner": "task-12",
+      "test": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone"
+    },
+    {
+      "id": "e2-budget-swap-before-request-write",
+      "owner": "task-12",
+      "test": "E2 race: a budget swapped while a Laya worker starts lets no request reach the worker"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-12.json",
+      "owner": "task-12"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t12-runner-exit-releases-pipe",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/test/support/strict-mutation-child.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a process an ended oracle left holding its output does not hold the runner to its bound",
+      "testPattern": "E2 mutation: a process an ended oracle left holding its output does not hold the runner to its bound",
+      "before": "    child.once('exit', () => {\n      if (OWN_PROCESS_GROUP) endOracle();\n    });\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-runner-own-group",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/test/support/strict-mutation-child.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a timed-out oracle leaves no process it started running",
+      "testPattern": "E2 mutation: a timed-out oracle leaves no process it started running",
+      "before": "      detached: OWN_PROCESS_GROUP,\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-runner-group-signalled",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/test/support/strict-mutation-child.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: an oracle that has ended leaves no process it started running",
+      "testPattern": "E2 mutation: an oracle that has ended leaves no process it started running",
+      "before": "  spawnSync('/bin/sh', ['-c', 'kill -KILL -- \"-$ORACLE_GROUP\"'], { env, stdio: 'ignore' });\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-walk-epoch-recheck",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone",
+      "testPattern": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone",
+      "before": "    if (walkedEpoch !== this.#epoch || this.#job !== undefined) return { ok: false, failureCode: null };\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-10a-manifest-not-reviewed",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: only the binary template on this release’s reviewed manifest can be created",
+      "testPattern": "E2 Laya judge creation: only the binary template on this release’s reviewed manifest can be created",
+      "before": "  if (judge.model !== terms.manifestId)\n",
+      "after": "  if (false)\n"
+    },
+    {
+      "id": "e2-t12-10a-template-blocked",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: only the binary template on this release’s reviewed manifest can be created",
+      "testPattern": "E2 Laya judge creation: only the binary template on this release’s reviewed manifest can be created",
+      "before": "  if (\n    !terms.promptTemplates.includes(judge.promptTemplate) ||\n    !LAYA_RUNNABLE_TEMPLATE_IDS.includes(judge.promptTemplate)\n  )\n",
+      "after": "  if (false)\n"
+    },
+    {
+      "id": "e2-t12-10a-template-runnable-only",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/domain/judges.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: a reviewed entry that lists the choice template still creates no choice judge",
+      "testPattern": "E2 Laya judge creation: a reviewed entry that lists the choice template still creates no choice judge",
+      "before": "    !terms.promptTemplates.includes(judge.promptTemplate) ||\n    !LAYA_RUNNABLE_TEMPLATE_IDS.includes(judge.promptTemplate)\n",
+      "after": "    !terms.promptTemplates.includes(judge.promptTemplate)\n"
+    },
+    {
+      "id": "e2-t12-10a-rule-offered-at-prepare",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/domain/versions.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: a rule naming a Laya judge is enabled only where this platform offers Laya",
+      "testPattern": "E2 Laya judge creation: a rule naming a Laya judge is enabled only where this platform offers Laya",
+      "before": "      if (rule.agentic.judge.kind === JUDGE_KINDS[1]) assertLayaRuleJudgeOffered(this.#layaInputs);\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-10a-rule-offered-before-kind-state",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/domain/versions.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: with the shipped placeholder lock, a Laya judge and its rule are kept as configuration",
+      "testPattern": "E2 Laya judge creation: with the shipped placeholder lock, a Laya judge and its rule are kept as configuration",
+      "before": "      if (rule.agentic.judge.kind === JUDGE_KINDS[1]) assertLayaRuleJudgeOffered(this.#layaInputs);\n      assertJudgeKindEnabled(\n        rule.agentic.judge.kind,\n        this.activeVersion('judge-kind', rule.agentic.judge.kind) !== null,\n      );\n",
+      "after": "      assertJudgeKindEnabled(\n        rule.agentic.judge.kind,\n        this.activeVersion('judge-kind', rule.agentic.judge.kind) !== null,\n      );\n      if (rule.agentic.judge.kind === JUDGE_KINDS[1]) assertLayaRuleJudgeOffered(this.#layaInputs);\n"
+    },
+    {
+      "id": "e2-t12-10a-rule-offered-at-claim",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/activations.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: a rule whose Laya stops being offered after it was prepared is refused at its claim, with Laya’s reason first",
+      "testPattern": "E2 Laya judge creation: a rule whose Laya stops being offered after it was prepared is refused at its claim, with Laya’s reason first",
+      "before": "      const document = this.#document(row);\n      this.#assertBoundRuleAuthority(document);\n      if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {\n",
+      "after": "      const document = this.#document(row);\n      if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {\n"
+    },
+    {
+      "id": "e2-t12-10a-rule-offered-at-finalise",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/activations.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: a rule whose Laya stops being offered after its claim is refused at finalise, with Laya’s reason first",
+      "testPattern": "E2 Laya judge creation: a rule whose Laya stops being offered after its claim is refused at finalise, with Laya’s reason first",
+      "before": "      // rule was prepared or approved, so a disabled kind can never become effective through this final swap.\n      this.#assertBoundRuleAuthority(document);\n",
+      "after": "      // rule was prepared or approved, so a disabled kind can never become effective through this final swap.\n"
+    },
+    {
+      "id": "e2-t12-10a-judge-test-refused",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya judge test: where Laya is not offered it is refused with Laya’s own reason, before any reservation or worker",
+      "testPattern": "E2 Laya judge test: where Laya is not offered it is refused with Laya’s own reason, before any reservation or worker",
+      "before": "    if (!availability.available) return { ok: false, code: availability.code };\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-10a-judge-add-creates-nothing",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing",
+      "testPattern": "E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing",
+      "before": "        return this.#ports.quiescer.withShared(async () =>\n          this.#store.immediate(() => this.#judgeVersions().createJudge(request.args.document)),\n        );\n",
+      "after": "        return this.#ports.quiescer.withShared(async () => {\n          const created = this.#store.immediate(() => this.#judgeVersions().createJudge(request.args.document));\n          this.#laya?.enablementVersion();\n          return created;\n        });\n"
+    },
+    {
+      "id": "e2-t12-10a-rule-create-creates-nothing",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/owner.ts",
+      "testFile": "packages/events-daemon/test/laya-judge-creation.test.ts",
+      "testName": "E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing",
+      "testPattern": "E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing",
+      "before": "    case OWNER_CONTROL_WIRES.updateRule:\n      return createRule(database, request.args.document);\n",
+      "after": "    case OWNER_CONTROL_WIRES.updateRule:\n      await b3OwnerService?.handle({ operation: 'enableJudgeKind', args: { kind: 'laya' }, origin: request.origin }).catch(() => undefined);\n      return createRule(database, request.args.document);\n"
+    },
+    {
+      "id": "e2-t12-t10-offered-architectures",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: a real lock with every gate passing releases on the architectures it offers",
+      "testPattern": "E2 release gate: a real lock with every gate passing releases on the architectures it offers",
+      "before": "  return { mode: 'offered', architectures };\n",
+      "after": "  return { mode: 'offered', architectures: architectures.slice(0, 1) };\n"
+    },
+    {
+      "id": "e2-t12-t10-command-reports-dormant",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate: this repository passes as dormant, through the command the release job runs",
+      "testPattern": "E2 release gate: this repository passes as dormant, through the command the release job runs",
+      "before": "      result.mode === 'dormant'\n",
+      "after": "      result.mode !== 'dormant'\n"
+    },
+    {
+      "id": "e2-t12-t10-boundary-schema-checks",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-laya-runtime/gate/macos-boundary-v1.schema.json",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "            \"pipes\",\n            \"nativeLoad\",\n",
+      "after": "            \"nativeLoad\",\n"
+    },
+    {
+      "id": "e2-t12-t10-boundary-run-content-free",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: writes only the validated, content-free evidence",
+      "testPattern": "E2 macOS boundary gate run: writes only the validated, content-free evidence",
+      "before": "  await writeFile(temporary, canonicalEvidenceBytes(evidence), { flag: 'wx', mode: 0o644 });\n",
+      "after": "  await writeFile(temporary, `${JSON.stringify({ ...evidence, workingDirectory: process.cwd() })}\\n`, { flag: 'wx', mode: 0o644 });\n"
+    },
+    {
+      "id": "e2-t12-t10-boundary-checks-fail-closed",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate run: the production checks fail closed when the trees do not verify",
+      "testPattern": "E2 macOS boundary gate run: the production checks fail closed when the trees do not verify",
+      "before": "  const checks = Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'fail']));\n  const work = await mkdtemp(",
+      "after": "  const checks = Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'pass']));\n  const work = await mkdtemp("
+    },
+    {
+      "id": "e2-t12-t10-readme-not-offered",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/README.md",
+      "testFile": "test/laya-security-doc.test.mjs",
+      "testName": "E2 SECURITY Laya wording: the documents state the limits, and promise no protection from the same user",
+      "testPattern": "E2 SECURITY Laya wording: the documents state the limits, and promise no protection from the same user",
+      "before": "in an isolated worker. This release does not offer\n",
+      "after": "in an isolated worker. This release does offer\n"
+    },
+    {
+      "id": "e2-t12-checker-accepts-repository",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-scope.test.ts",
+      "testName": "laya scope: completed checker accepts the Task 3 proof fragment",
+      "testPattern": "laya scope: completed checker accepts the Task 3 proof fragment",
+      "before": "    if (row.testPattern !== testName) {\n",
+      "after": "    if (row.testPattern === testName) {\n"
+    },
+    {
+      "id": "e2-t12-row-t1-model-row-after-pointer",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/store/records.ts",
+      "testFile": "packages/events-daemon/test/laya-enablements.test.ts",
+      "testName": "E2 laya enablement: parsed fixture asset bytes—not an injectable definition—enable the normal activation",
+      "testPattern": "E2 laya enablement: parsed fixture asset bytes—not an injectable definition—enable the normal activation",
+      "before": "    if (record.manifestId !== enabledManifestId)\n",
+      "after": "    if (record.manifestId === enabledManifestId)\n"
+    },
+    {
+      "id": "e2-t12-row-t2-platform-files-raw-byte-order",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "testPattern": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "before": "        files[platform] = sorted(entries.map((entry) => entry.path)).map((path) => byPath.get(path));\n",
+      "after": "        files[platform] = entries.map((entry) => byPath.get(entry.path));\n"
+    },
+    {
+      "id": "e2-t12-row-t2-private-package-exact-pin",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-laya-runtime/package.json",
+      "testFile": "packages/events-daemon/test/laya-runtime-package.test.mjs",
+      "testName": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots",
+      "testPattern": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots",
+      "before": "    \"@receptron/laya\": \"0.1.2\",\n",
+      "after": "    \"@receptron/laya\": \"^0.1.2\",\n"
+    },
+    {
+      "id": "e2-t12-row-t2-manifest-english",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/laya-manifest.json",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: contains the reviewed single English ONNX entry",
+      "testPattern": "E2 manifest: contains the reviewed single English ONNX entry",
+      "before": "    \"language\": \"en\"\n",
+      "after": "    \"language\": \"fr\"\n"
+    },
+    {
+      "id": "e2-t12-row-t2-daemon-ships-lock",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "packages/events-daemon/test/laya-runtime-package.test.mjs",
+      "testName": "E2 runtime package: daemon package ships reviewed assets without importing the runtime",
+      "testPattern": "E2 runtime package: daemon package ships reviewed assets without importing the runtime",
+      "before": "    \"laya-runtime.json\",\n    \"README.md\",\n",
+      "after": "    \"README.md\",\n"
+    },
+    {
+      "id": "e2-t12-row-t4-every-model-file",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: promotes only after five tiny files verify",
+      "testPattern": "E2 laya model download: promotes only after five tiny files verify",
+      "before": "      for (const file of this.#manifest.files) {\n",
+      "after": "      for (const file of this.#manifest.files.slice(0, -1)) {\n"
+    },
+    {
+      "id": "e2-t12-row-t5-verifier-accepts-exact-tree",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: accepts the exact installed runtime tree",
+      "testPattern": "E2 tree verifier: accepts the exact installed runtime tree",
+      "before": "    if (executable !== expectedFile.executable) return { ok: false, code: 'TREE_EXECUTABLE' };\n",
+      "after": "    if (executable === expectedFile.executable) return { ok: false, code: 'TREE_EXECUTABLE' };\n"
+    },
+    {
+      "id": "e2-t12-row-t5-installer-promotes-by-rename",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/runtime-installer.ts",
+      "testFile": "packages/events-daemon/test/laya-runtime-installer.test.ts",
+      "testName": "E2 runtime installer: promotes one complete verified partial tree by rename",
+      "testPattern": "E2 runtime installer: promotes one complete verified partial tree by rename",
+      "before": "    await rename(partial, root);\n    return { root };\n",
+      "after": "    return { root: partial };\n"
+    },
+    {
+      "id": "e2-t12-row-t6-v2-vectors-live",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-status-contract.test.ts",
+      "testName": "E2 laya status contract: the B3 control v2 Laya vectors are the live operator-control answers",
+      "testPattern": "E2 laya status contract: the B3 control v2 Laya vectors are the live operator-control answers",
+      "before": "        reason: null,\n        updatedAt: row?.updatedAt ?? null,\n",
+      "after": "        reason: null,\n        updatedAt: row?.updatedAt ?? 0,\n"
+    },
+    {
+      "id": "e2-t12-row-t6-disable-fences-download",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: disable cancels an in-flight download and keeps the verified runtime",
+      "testPattern": "E2 manager: disable cancels an in-flight download and keeps the verified runtime",
+      "before": "    const job = this.#fence();\n    const result = await this.#mutex.run(async () => {\n",
+      "after": "    const job = this.#job;\n    const result = await this.#mutex.run(async () => {\n"
+    },
+    {
+      "id": "e2-t12-row-t6-status-dto-failure-code",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/operations/b3-control-v2.ts",
+      "testFile": "packages/events-daemon/test/laya-status-contract.test.ts",
+      "testName": "E2 laya status contract: every presentation state is a valid laya-model-status-v1 answer",
+      "testPattern": "E2 laya status contract: every presentation state is a valid laya-model-status-v1 answer",
+      "before": "    if (failure === null) throw new TypeError('a failed Laya status names its failure code');\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-row-t7-frames-across-reads",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-protocol.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-protocol.test.ts",
+      "testName": "laya worker protocol: length-prefixed frames survive arbitrary pipe chunking",
+      "testPattern": "laya worker protocol: length-prefixed frames survive arbitrary pipe chunking",
+      "before": "      if (this.#buffer.length < end) break;\n",
+      "after": "      if (this.#buffer.length < end) throw new LayaWorkerProtocolError('FRAME_TRUNCATED');\n"
+    },
+    {
+      "id": "e2-t12-row-t7-real-sandbox-denial-codes",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "testPattern": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "before": "const DENIED_CODES = new Set(['EPERM', 'EACCES']);\n",
+      "after": "const DENIED_CODES = new Set(['EACCES']);\n"
+    },
+    {
+      "id": "e2-t12-row-t8-supervisor-no-daemon-import",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 Laya supervisor has no daemon authority",
+      "testPattern": "E2 Laya supervisor has no daemon authority",
+      "before": "import { join } from 'node:path';\n",
+      "after": "import { join } from 'node:path';\nimport '@agentcomms/core';\n"
+    },
+    {
+      "id": "e2-t12-row-t8-late-result-deadline",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 late worker result is discarded",
+      "testPattern": "E2 late worker result is discarded",
+      "before": "    const timer = setTimeout(() => finish({ gone: 'laya-timeout' }), deadlineMs);\n",
+      "after": "    const timer = setTimeout(() => undefined, deadlineMs);\n"
+    },
+    {
+      "id": "e2-t12-row-t8-late-worker-killed",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-supervisor.test.ts",
+      "testName": "E2 late worker result is discarded",
+      "testPattern": "E2 late worker result is discarded",
+      "before": "    if ('gone' in result) {\n      await this.#kill(worker, result.gone);\n",
+      "after": "    if ('gone' in result) {\n"
+    },
+    {
+      "id": "e2-t12-row-t8-unavailable-reserves-nothing",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unavailable Laya or no budget",
+      "testPattern": "E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unavailable Laya or no budget",
+      "before": "    if (!availability.available) return { ok: false, code: availability.code };\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-row-t8-value-unchanged",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-runtime.ts",
+      "testFile": "packages/events-daemon/test/laya-worker-runtime.test.ts",
+      "testName": "E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count",
+      "testPattern": "E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count",
+      "before": "  if (answer.usage.input_tokens !== sequenceTokens || answer.usage.output_tokens !== 0) return null;\n  return value;\n",
+      "after": "  if (answer.usage.input_tokens !== sequenceTokens || answer.usage.output_tokens !== 0) return null;\n  return Math.round(value * 100) / 100;\n"
+    },
+    {
+      "id": "e2-t12-row-t8-purge-only-terminalised",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 purge kills only its in-flight Laya work",
+      "testPattern": "E2 purge kills only its in-flight Laya work",
+      "before": "      if (row !== undefined && (row.state === 'reserved' || row.state === 'in-flight')) continue;\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-row-t11-enable-line-is-the-cli",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/cli/program.ts",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "testPattern": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "before": "  judgeKind.command('enable <kind>').action(async (kind: string) => {\n",
+      "after": "  judgeKind.command('enable-now <kind>').action(async (kind: string) => {\n"
+    },
+    {
+      "id": "e2-t12-row-t11-contract-enable-prepares-only",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json",
+      "testFile": "packages/events-daemon/test/judge-desktop-contract.test.ts",
+      "testName": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "testPattern": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "before": "      \"words\": [\"judge\", \"kind\", \"enable\", \"laya\"],\n",
+      "after": "      \"words\": [\"judge\", \"kind\", \"enable\", \"laya\", \"--approval\", \"approve\"],\n"
+    },
+    {
+      "id": "e2-t12-row-t11-disable-reads-status-again",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-12",
+      "source": "apps/desktop/src/screens/Events.tsx",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: Disable applies at once and the status is read again",
+      "testPattern": "E2 desktop Laya contract: Disable applies at once and the status is read again",
+      "before": "    if (outcome.state === 'needsTerminal') setProblem({ message: 'Laya was not disabled.', hint: null });\n    await reload();\n",
+      "after": "    if (outcome.state === 'needsTerminal') setProblem({ message: 'Laya was not disabled.', hint: null });\n"
+    },
+    {
+      "id": "e2-t12-row-t11-app-fixture-is-daemon-vector",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-12",
+      "source": "apps/desktop/src/test/fixtures/events-judge-model-status.ready.json",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: the app fixtures are copies of the daemon status vectors",
+      "testPattern": "E2 desktop Laya contract: the app fixtures are copies of the daemon status vectors",
+      "before": "  \"bytesVerified\": 154,\n",
+      "after": "  \"bytesVerified\": 153,\n"
+    },
+    {
+      "id": "e2-t12-row-t11-latest-started-read-kept",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-12",
+      "source": "apps/desktop/src/hooks/use-call.ts",
+      "testFile": "apps/desktop/src/test/events.test.tsx",
+      "testName": "E2 desktop Laya contract: a download in progress follows the screen poll, and only the latest-started read is kept",
+      "testPattern": "E2 desktop Laya contract: a download in progress follows the screen poll, and only the latest-started read is kept",
+      "before": "    if (ask === asked.current) setResult(next);\n",
+      "after": "    setResult(next);\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-account",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/account-fence.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "testPattern": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "before": "  new JudgePurgeParticipant({ database, now: () => now }).account({ source, accountId });\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-rule",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/replacements.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: revoking the Laya rule stops only its own request",
+      "testPattern": "E2 laya purge scope: revoking the Laya rule stops only its own request",
+      "before": "  new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-retained-projection",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/replacements.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: a tightened retention stops only the expired projection’s work",
+      "testPattern": "E2 laya purge scope: a tightened retention stops only the expired projection’s work",
+      "before": "    new JudgePurgeParticipant({ database, now: () => now }).retainedProjection({\n",
+      "after": "    void ({\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-judge",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: removing the Laya judge stops its work even where no active rule names it",
+      "testPattern": "E2 laya purge scope: removing the Laya judge stops its work even where no active rule names it",
+      "before": "      new JudgePurgeParticipant({ database: this.#store.database, now: () => revokedAt }).judge({\n",
+      "after": "      void ({\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-disable-all",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/lifecycle.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready",
+      "testPattern": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready",
+      "before": "      new JudgePurgeParticipant({ database, now: this.now }).all();\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-kind",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/judge-kinds.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: disabling the Laya kind stops its work even where no active rule names it",
+      "testPattern": "E2 laya purge scope: disabling the Laya kind stops its work even where no active rule names it",
+      "before": "      new JudgePurgeParticipant({ database: this.#store.database, now: this.#now }).kind(enabledKind);\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-expiry",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/expiry.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: an expired decision deadline stops only that event’s Laya request",
+      "testPattern": "E2 laya purge scope: an expired decision deadline stops only that event’s Laya request",
+      "before": "        judgePurge.event({\n",
+      "after": "        void ({\n"
+    },
+    {
+      "id": "e2-t12-purge-caller-visibility",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/whatsapp-visibility.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: hiding a WhatsApp message stops only that event’s work",
+      "testPattern": "E2 laya purge scope: hiding a WhatsApp message stops only that event’s work",
+      "before": "      for (const event of affectedEvents) judgePurge.event({ source: 'whatsapp', accountId, eventId: event.event_id });\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-static-network-imports",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a network built-in imported outside the boundary probe is refused",
+      "testPattern": "E2 static boundary: a network built-in imported outside the boundary probe is refused",
+      "before": "fail(`${file} imports a network built-in",
+      "after": "void (`${file} imports a network built-in"
+    },
+    {
+      "id": "e2-t12-static-network-calls",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused",
+      "testPattern": "E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused",
+      "before": "fail(`${file} calls fetch;",
+      "after": "void (`${file} calls fetch;"
+    },
+    {
+      "id": "e2-t12-static-child-process",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a shell or another program run from a Laya module is refused",
+      "testPattern": "E2 static boundary: a shell or another program run from a Laya module is refused",
+      "before": "fail(`${file} imports node:child_process;",
+      "after": "void (`${file} imports node:child_process;"
+    },
+    {
+      "id": "e2-t12-static-package-manager",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a package manager named in a Laya module is refused",
+      "testPattern": "E2 static boundary: a package manager named in a Laya module is refused",
+      "before": "fail(`${file} names a package manager;",
+      "after": "void (`${file} names a package manager;"
+    },
+    {
+      "id": "e2-t12-static-tests-sealed",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a Laya test that does not assert the loopback seal is refused",
+      "testPattern": "E2 static boundary: a Laya test that does not assert the loopback seal is refused",
+      "before": "fail(`${file} does not assert the loopback seal at load`)",
+      "after": "void (`${file} does not assert the loopback seal at load`)"
+    },
+    {
+      "id": "e2-t12-static-template-vocabulary",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a Laya template id spelled outside templates.ts is refused",
+      "testPattern": "E2 static boundary: a Laya template id spelled outside templates.ts is refused",
+      "before": "fail(`${file} spells a Laya template id;",
+      "after": "void (`${file} spells a Laya template id;"
+    },
+    {
+      "id": "e2-t12-static-shipped-entry",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: production source that names a test worker is refused",
+      "testPattern": "E2 static boundary: production source that names a test worker is refused",
+      "before": "fail(`${file} names a test worker;",
+      "after": "void (`${file} names a test worker;"
+    },
+    {
+      "id": "e2-t12-static-runtime-never-imported",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: any file that imports the Laya runtime or its private package is refused",
+      "testPattern": "E2 static boundary: any file that imports the Laya runtime or its private package is refused",
+      "before": "fail(`${file} imports ${named};",
+      "after": "void (`${file} imports ${named};"
+    },
+    {
+      "id": "e2-t12-static-gate-dispatch-only",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a Laya gate workflow another event or an input can start is refused",
+      "testPattern": "E2 static boundary: a Laya gate workflow another event or an input can start is refused",
+      "before": "fail('the Laya gate workflow must start only by hand, with no input')",
+      "after": "void ('the Laya gate workflow must start only by hand, with no input')"
+    },
+    {
+      "id": "e2-t12-static-gate-runner-owned",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: another workflow that names the owner’s gate runner is refused",
+      "testPattern": "E2 static boundary: another workflow that names the owner’s gate runner is refused",
+      "before": "fail(`${file} names the owner's Laya gate runner",
+      "after": "void (`${file} names the owner's Laya gate runner"
+    },
+    {
+      "id": "e2-t12-static-gate-corpus-last",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused",
+      "testPattern": "E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused",
+      "before": "fail('the Laya gate reads the corpus in one step",
+      "after": "void ('the Laya gate reads the corpus in one step"
+    },
+    {
+      "id": "e2-t12-static-sql-no-raw-identity",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: Laya state keyed on a raw identity is refused",
+      "testPattern": "E2 static boundary: Laya state keyed on a raw identity is refused",
+      "before": "fail(`${file} keys Laya state on a raw identity;",
+      "after": "void (`${file} keys Laya state on a raw identity;"
+    },
+    {
+      "id": "e2-t12-static-desktop-two-calls",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: a desktop app that calls a third Laya operation is refused",
+      "testPattern": "E2 static boundary: a desktop app that calls a third Laya operation is refused",
+      "before": "fail('the desktop app calls exactly two Laya operations: status and disable')",
+      "after": "void ('the desktop app calls exactly two Laya operations: status and disable')"
+    },
+    {
+      "id": "e2-t12-static-daemon-dependency",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a daemon Laya dependency",
+      "testPattern": "E2 mutation: rejects a daemon Laya dependency",
+      "before": "    if (Object.hasOwn(dependencies, name)) fail(`events daemon must not depend on ${name}`);",
+      "after": "    if (false) fail(`events daemon must not depend on ${name}`);"
+    },
+    {
+      "id": "e2-t12-static-kind-literal",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a duplicate judge-kind literal",
+      "testPattern": "E2 mutation: rejects a duplicate judge-kind literal",
+      "before": "    if (/[\"']laya[\"']/.test(source)) fail(`${file} duplicates the lifecycle judge-kind literal`);",
+      "after": "    if (false) fail(`${file} duplicates the lifecycle judge-kind literal`);"
+    },
+    {
+      "id": "e2-t12-static-runner-sealed",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: loopback preload is mandatory",
+      "testPattern": "E2 mutation: loopback preload is mandatory",
+      "before": "  if (!runner.includes(\"join(root, 'test/helpers/loopback-seal-preload.mjs')\")) {",
+      "after": "  if (false) {"
+    },
+    {
+      "id": "e2-t12-static-external-host",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects an external hostname in Laya tests",
+      "testPattern": "E2 mutation: rejects an external hostname in Laya tests",
+      "before": "    if (hosts.some((host) => host !== '127.0.0.1' && host !== '[::1]')) fail(`${file} contains external hostname`);",
+      "after": "    if (false) fail(`${file} contains external hostname`);"
+    },
+    {
+      "id": "e2-t12-static-raw-corpus",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects raw corpus content in a Laya case",
+      "testPattern": "E2 mutation: rejects raw corpus content in a Laya case",
+      "before": "        'rawcorpus',\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-install-release-exact",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: the release workflow installs with exactly the ordinary command",
+      "testPattern": "E2 mutation: the release workflow installs with exactly the ordinary command",
+      "before": "  if (workflowInstalls.length === 0 || workflowInstalls.some((command) => command.text.trim() !== normalInstall)) {",
+      "after": "  if (workflowInstalls.length === 0) {"
+    },
+    {
+      "id": "e2-t12-install-verify-runs-checker",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: pnpm verify runs the E2 structural checker",
+      "testPattern": "E2 mutation: pnpm verify runs the E2 structural checker",
+      "before": "  if (!String(packageJson.scripts?.verify ?? '').includes('verify:events-phase-e2')) {",
+      "after": "  if (false) {"
+    },
+    {
+      "id": "e2-t12-install-cold-store-count",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: cold-store assertion is mandatory",
+      "testPattern": "E2 mutation: cold-store assertion is mandatory",
+      "before": "  if ((coldStore.match(/assertNoRuntimeClosure\\(store\\);/g) ?? []).length !== 2) {",
+      "after": "  if (false) {"
+    },
+    {
+      "id": "e2-t12-matrix-none",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: a row with no owner and red mutant is refused",
+      "testPattern": "E2 matrix: a row with no owner and red mutant is refused",
+      "before": "    if (found.length === 0) fail(",
+      "after": "    if (false) fail("
+    },
+    {
+      "id": "e2-t12-matrix-two",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: a row two entries claim is refused",
+      "testPattern": "E2 matrix: a row two entries claim is refused",
+      "before": "    if (found.length > 1) fail(",
+      "after": "    if (false) fail("
+    },
+    {
+      "id": "e2-t12-matrix-killed-by-its-test",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: an entry whose red mutant its named test does not kill is refused",
+      "testPattern": "E2 matrix: an entry whose red mutant its named test does not kill is refused",
+      "before": "    if (mutation.testName !== test)\n",
+      "after": "    if (false)\n"
+    },
+    {
+      "id": "e2-t12-matrix-row-owner",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: an entry that names another owner is refused",
+      "testPattern": "E2 matrix: an entry that names another owner is refused",
+      "before": "    if (!row.owners.includes(owner))\n",
+      "after": "    if (false)\n"
+    },
+    {
+      "id": "e2-t12-matrix-known-row",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: an entry for a row this repository does not have is refused",
+      "testPattern": "E2 matrix: an entry for a row this repository does not have is refused",
+      "before": "    if (!rows.has(key)) fail(`matrix entry",
+      "after": "    if (false) fail(`matrix entry"
+    },
+    {
+      "id": "e2-t12-matrix-stale-only-undeclared",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: a row whose test no file declares needs its correction named, and a declared one cannot be renamed",
+      "testPattern": "E2 matrix: a row whose test no file declares needs its correction named, and a declared one cannot be renamed",
+      "before": "      if (entry.staleRowTest !== true || (declared.get(row.test) ?? []).length > 0)\n",
+      "after": "      if (entry.staleRowTest !== true)\n"
+    },
+    {
+      "id": "e2-t12-matrix-declared-test",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 matrix: an entry whose test no file declares is refused",
+      "testPattern": "E2 matrix: an entry whose test no file declares is refused",
+      "before": "    if ((declared.get(test) ?? []).length !== 1)\n",
+      "after": "    if (false)\n"
+    },
+    {
+      "id": "e2-t12-matrix-ledger-missing",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 await ledger: an async Laya function not in the ledger is refused",
+      "testPattern": "E2 await ledger: an async Laya function not in the ledger is refused",
+      "before": "    if (entry === undefined) fail(`async Laya function ${key} is not in the E2 await ledger`);",
+      "after": "    if (entry === undefined) continue;"
+    },
+    {
+      "id": "e2-t12-matrix-ledger-count",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 await ledger: a second async function of a ledgered name is refused until it is reviewed",
+      "testPattern": "E2 await ledger: a second async function of a ledgered name is refused until it is reviewed",
+      "before": "    if (entry.occurrences !== count)\n",
+      "after": "    if (false)\n"
+    },
+    {
+      "id": "e2-t12-identity-runtime-tree-by-lock-digest",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "testPattern": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "before": "    return join(this.#root, 'runtime', digest);",
+      "after": "    return join(this.#root, 'runtime', 'current');"
+    },
+    {
+      "id": "e2-t12-identity-model-tree-by-manifest-id",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/artifact-paths.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "testPattern": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "before": "  const complete = below(models, join(models, manifestId));",
+      "after": "  const complete = below(models, join(models, 'current'));"
+    },
+    {
+      "id": "e2-t12-identity-purge-by-source-and-account",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/judge-recovery.ts",
+      "testFile": "packages/events-daemon/test/laya-purge-closure.test.ts",
+      "testName": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "testPattern": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "before": "AND work_scope = 'source-owned' AND source = ? AND account_id = ?${selector.judgeKind",
+      "after": "AND work_scope = 'source-owned' AND ? IS NOT NULL AND account_id = ?${selector.judgeKind"
+    },
+    {
+      "id": "e2-t12-doctor-state",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      state: status.state,\n      manifestId: status.manifestId,\n",
+      "after": "      state: 'ready',\n      manifestId: status.manifestId,\n"
+    },
+    {
+      "id": "e2-t12-doctor-manifestId",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      manifestId: status.manifestId,\n      runtimeLockDigest: status.runtimeLockDigest,\n      runtime,\n",
+      "after": "      manifestId: null,\n      runtimeLockDigest: status.runtimeLockDigest,\n      runtime,\n"
+    },
+    {
+      "id": "e2-t12-doctor-runtimeLockDigest",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      runtimeLockDigest: status.runtimeLockDigest,\n      runtime,\n",
+      "after": "      runtimeLockDigest: null,\n      runtime,\n"
+    },
+    {
+      "id": "e2-t12-doctor-model",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      model: row?.state ?? 'absent',\n",
+      "after": "      model: 'absent',\n"
+    },
+    {
+      "id": "e2-t12-doctor-boundary",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "        ? { status: 'active', reason: null }\n        : { status: 'unavailable', reason: availability.code },\n",
+      "after": "        ? { status: 'active', reason: null }\n        : { status: 'active', reason: null },\n"
+    },
+    {
+      "id": "e2-t12-doctor-failureCode",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      failureCode: status.failureCode,\n      bytesVerified: status.bytesVerified,\n",
+      "after": "      failureCode: null,\n      bytesVerified: status.bytesVerified,\n"
+    },
+    {
+      "id": "e2-t12-doctor-bytesVerified",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      bytesVerified: status.bytesVerified,\n      totalBytes: status.totalBytes,\n    };",
+      "after": "      bytesVerified: 0,\n      totalBytes: status.totalBytes,\n    };"
+    },
+    {
+      "id": "e2-t12-doctor-totalBytes",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "testPattern": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "before": "      totalBytes: status.totalBytes,\n    };",
+      "after": "      totalBytes: 0,\n    };"
+    },
+    {
+      "id": "e2-t12-preview-modelBytes",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "  const modelBytes = parsedManifest.files.reduce((sum, file) => sum + file.size, 0);\n  const runtimeBytes",
+      "after": "  const modelBytes = parsedManifest.files.reduce((sum, file) => sum + file.size, 1);\n  const runtimeBytes"
+    },
+    {
+      "id": "e2-t12-preview-runtimeBytes",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "  const runtimeBytes = runtime.platform.files.reduce((sum, file) => sum + file.size, 0);",
+      "after": "  const runtimeBytes = runtime.platform.files.reduce((sum, file) => sum + file.size, 1);"
+    },
+    {
+      "id": "e2-t12-preview-runtimeLicences",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "    runtimeLicences: reviewedDisclosure.runtimeLicences,\n    workerMemory: reviewedDisclosure.workerMemory,\n",
+      "after": "    runtimeLicences: [...reviewedDisclosure.runtimeLicences, 'Apache-2.0'],\n    workerMemory: reviewedDisclosure.workerMemory,\n"
+    },
+    {
+      "id": "e2-t12-preview-workerMemory",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "    workerMemory: reviewedDisclosure.workerMemory,\n    facts: {\n",
+      "after": "    workerMemory: 'unstated',\n    facts: {\n"
+    },
+    {
+      "id": "e2-t12-preview-facts.englishCpu",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      englishCpu: facts[0] as string,",
+      "after": "      englishCpu: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-facts.macosBoundary",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      macosBoundary: facts[1] as string,",
+      "after": "      macosBoundary: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-facts.linuxUnavailable",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      linuxUnavailable: facts[2] as string,",
+      "after": "      linuxUnavailable: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-facts.windowsUnavailable",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      windowsUnavailable: facts[3] as string,",
+      "after": "      windowsUnavailable: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-facts.downloadAfterApproval",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      downloadAfterApproval: facts[4] as string,",
+      "after": "      downloadAfterApproval: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-facts.oneAtATime",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "      oneAtATime: facts[5] as string,",
+      "after": "      oneAtATime: '' as string,"
+    },
+    {
+      "id": "e2-t12-preview-limitations.sandboxDeprecation",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "    limitations: reviewedDisclosure.limitations,\n  };\n}",
+      "after": "    limitations: { ...reviewedDisclosure.limitations, sandboxDeprecation: '' },\n  };\n}"
+    },
+    {
+      "id": "e2-t12-preview-limitations.englishAccuracy",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "testPattern": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "before": "    limitations: reviewedDisclosure.limitations,\n  };\n}",
+      "after": "    limitations: { ...reviewedDisclosure.limitations, englishAccuracy: '' },\n  };\n}"
+    },
+    {
+      "id": "e2-t12-real-mac-tcp",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'tcp',\n  'fetch',\n",
+      "after": "  'fetch',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-fetch",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'fetch',\n  'udp',\n",
+      "after": "  'udp',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-udp",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'udp',\n  'uds',\n",
+      "after": "  'uds',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-uds",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'uds',\n  'pipes',\n",
+      "after": "  'pipes',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-pipes",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'pipes',\n  'nativeLoad',\n",
+      "after": "  'nativeLoad',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-nativeLoad",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'nativeLoad',\n  'crashRestart',\n",
+      "after": "  'crashRestart',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-crashRestart",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'crashRestart',\n  'timeoutRestart',\n",
+      "after": "  'timeoutRestart',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-timeoutRestart",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'timeoutRestart',\n  'idleRestart',\n",
+      "after": "  'idleRestart',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-idleRestart",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'idleRestart',\n  'alteredTreeRefused',\n",
+      "after": "  'alteredTreeRefused',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-alteredTreeRefused",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'alteredTreeRefused',\n  'repairedTreeAccepted',\n",
+      "after": "  'repairedTreeAccepted',\n"
+    },
+    {
+      "id": "e2-t12-real-mac-repairedTreeAccepted",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "before": "  'repairedTreeAccepted',\n]);\n",
+      "after": "]);\n"
+    },
+    {
+      "id": "e2-t12-binding-manifestId",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.manifestId === candidate.manifestId &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-manifestSha256",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.manifestSha256 === candidate.manifestSha256 &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-runtimeLockSha256",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runtimeLockSha256 === candidate.runtimeLockSha256 &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-runtime.laya",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runtime.laya === candidate.runtime.laya &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-runtime.onnxruntimeNode",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runtime.onnxruntimeNode === candidate.runtime.onnxruntimeNode &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-runtime.tokenizers",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runtime.tokenizers === candidate.runtime.tokenizers &&\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-binding-runnerSha256",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runnerSha256 === candidate.runnerSha256 &&\n      entry.platformFileListDigest",
+      "after": "      entry.platformFileListDigest"
+    },
+    {
+      "id": "e2-t12-binding-platformFileListDigest",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "testPattern": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "before": "      report.runnerSha256 === candidate.runnerSha256 &&\n      entry.platformFileListDigest === candidate.platformFileListDigest;",
+      "after": "      report.runnerSha256 === candidate.runnerSha256;"
+    },
+    {
+      "id": "e2-t12-race-budget-swap-final-gate",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/src/runtime/laya/worker-supervisor.ts",
+      "testFile": "packages/events-daemon/test/laya-evaluation.test.ts",
+      "testName": "E2 race: a budget swapped while a Laya worker starts lets no request reach the worker",
+      "testPattern": "E2 race: a budget swapped while a Laya worker starts lets no request reach the worker",
+      "before": "      hooks.finalGate();\n",
+      "after": "/* e2-t12 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t12-static-worker-start-owner-seam",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start",
+      "testPattern": "E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start",
+      "before": "fail(`${file} hands the Laya supervisor a worker start;",
+      "after": "void (`${file} hands the Laya supervisor a worker start;"
+    },
+    {
+      "id": "e2-t12-runner-stop-ends-oracles",
+      "kind": "production",
+      "owner": "task-12",
+      "source": "packages/events-daemon/test/support/mutation-runner-exit.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a runner that is told to stop ends every oracle it started",
+      "testPattern": "E2 mutation: a runner that is told to stop ends every oracle it started",
+      "before": "      endLiveOracleGroups();\n      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);\n",
+      "after": "      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);\n"
+    }
+  ],
+  "matrix": [
+    {
+      "row": "section5/task-1/e2-laya-reviewed-enablement",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "mutation": "e2-laya-exact-reviewed-assets"
+    },
+    {
+      "row": "section5/task-1/e2-laya-model-pointer",
+      "owner": "task-1",
+      "test": "E2 laya enablement: parsed fixture asset bytes—not an injectable definition—enable the normal activation",
+      "mutation": "e2-t12-row-t1-model-row-after-pointer",
+      "staleRowTest": true
+    },
+    {
+      "row": "traceability/task-1/d8-1418-model-state",
+      "owner": "task-1",
+      "test": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "mutation": "e2-laya-model-pointer-before-claim"
+    },
+    {
+      "row": "traceability/task-1/d11-reviewed-enablement-and-preview",
+      "owner": "task-1",
+      "test": "E2 contract: preview is complete, reviewed, and content-free",
+      "mutation": "e2-laya-preview-after-approval"
+    },
+    {
+      "row": "fixture/task-1.json",
+      "owner": "task-1",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-10/e2-laya-release-refuses-offered-template-without-exact-evidence",
+      "owner": "task-10",
+      "test": "E2 release gate: a real lock without passing quality evidence is refused",
+      "mutation": "e2-t10-quality-required"
+    },
+    {
+      "row": "section5/task-10/e2-laya-release-package-and-security-guard",
+      "owner": "task-10",
+      "test": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "mutation": "e2-t10-audit-leak"
+    },
+    {
+      "row": "section5/task-10/e2-laya-protected-real-mac-boundary-proof",
+      "owner": "task-10",
+      "test": "E2 release gate: a real lock without passing real-Mac boundary evidence is refused",
+      "mutation": "e2-t10-boundary-required"
+    },
+    {
+      "row": "traceability/task-10/d2-503-529-security-laya-wording",
+      "owner": "task-10",
+      "test": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "mutation": "e2-t10-security-network-bullet"
+    },
+    {
+      "row": "traceability/task-10/d11-2167-2204-macos-boundary-gate",
+      "owner": "task-10",
+      "test": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "mutation": "e2-t10-boundary-binding"
+    },
+    {
+      "row": "traceability/task-10/d11-2321-2335-release-asset-guard",
+      "owner": "task-10",
+      "test": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "mutation": "e2-t10-dormant-every-platform"
+    },
+    {
+      "row": "traceability/task-10/d11-2337-2350-release-rejects-stale-laya-evidence",
+      "owner": "task-10",
+      "test": "E2 release gate: a lock that does not rebuild byte for byte from its registry tarballs is refused",
+      "mutation": "e2-t10-rebuild-compared"
+    },
+    {
+      "row": "traceability/task-10/d11-2337-2350-architecture-bound-release",
+      "owner": "task-10",
+      "test": "E2 release gate: every architecture the lock offers needs its own evidence",
+      "mutation": "e2-t10-lock-architectures"
+    },
+    {
+      "row": "traceability/task-10/d14-2677-2686-daemon-package-boundary",
+      "owner": "task-10",
+      "test": "E2 release gate: the private runtime declaration is never published",
+      "mutation": "e2-t10-private-runtime-unlisted"
+    },
+    {
+      "row": "traceability/task-10/s5-3326-3336-release-package-boundary",
+      "owner": "task-10",
+      "test": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "mutation": "e2-t10-release-needs-laya"
+    },
+    {
+      "row": "traceability/task-10/s7-3380-3385-protected-gate",
+      "owner": "task-10",
+      "test": "E2 macOS boundary gate workflow: the corpus is read last, after the candidate, the egress check and the boundary run",
+      "mutation": "e2-t10-gate-corpus-last"
+    },
+    {
+      "row": "fixture/task-10.json",
+      "owner": "task-10",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-11/e2-desktop-presentation-only-status-dto",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "mutation": "e2-t11-daemon-ready-before-verification"
+    },
+    {
+      "row": "section5/task-11/e2-desktop-terminal-only-enable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "mutation": "e2-t12-row-t11-enable-line-is-the-cli"
+    },
+    {
+      "row": "section5/task-11/e2-desktop-immediate-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them",
+      "mutation": "e2-t11-daemon-disable-needs-a-terminal"
+    },
+    {
+      "row": "section5/task-11/e2-desktop-artifact-free-bundle",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "mutation": "e2-t11-bundle-takes-a-model"
+    },
+    {
+      "row": "section5/task-11/e2-desktop-existing-b3-prepare-only-join",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the Enable line prepares the enablement in the terminal and approves nothing",
+      "mutation": "e2-t12-row-t11-enable-line-is-the-cli"
+    },
+    {
+      "row": "traceability/task-11/d1-132-138-app-presentation-only",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "mutation": "e2-t11-daemon-ready-before-verification"
+    },
+    {
+      "row": "traceability/task-11/d10-2071-2085-desktop-status-and-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app’s two calls run through the events CLI exactly as the allow-list builds them",
+      "mutation": "e2-t11-daemon-disable-needs-a-terminal"
+    },
+    {
+      "row": "traceability/task-11/d11-2321-2335-no-app-artifact",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses every model, runtime, worker or Laya file",
+      "mutation": "e2-t11-bundle-takes-a-model"
+    },
+    {
+      "row": "traceability/task-11/d11-2321-2335-no-app-runtime-chunk-or-dependency",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the bundle check refuses a chunk that names the Laya runtime or holds its worker",
+      "mutation": "e2-t11-bundle-takes-a-runtime-chunk"
+    },
+    {
+      "row": "traceability/task-11/d11-2321-2335-app-status-progress-reason",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: each state is shown as the daemon sent it, with its byte progress",
+      "mutation": "e2-t11-app-derives-progress"
+    },
+    {
+      "row": "traceability/task-11/d13-2608-2613-da16-events-screen-buttons",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Enable shows only for idle and Disable only for an enabled kind",
+      "mutation": "e2-t11-app-disable-for-idle"
+    },
+    {
+      "row": "traceability/task-11/d13-2608-2613-da16-terminal-only-enable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Enable opens the terminal with the terminal-only shape and approves nothing",
+      "mutation": "e2-t11-app-enable-approves"
+    },
+    {
+      "row": "traceability/task-11/d13-2608-2613-da16-immediate-disable",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Disable applies at once and the status is read again",
+      "mutation": "e2-t12-row-t11-disable-reads-status-again"
+    },
+    {
+      "row": "traceability/task-11/s8-3393-3432-desktop-reason",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every failure code and reason is shown as plain text",
+      "mutation": "e2-t11-app-omits-the-reason"
+    },
+    {
+      "row": "traceability/task-11/e2-desktop-closed-dto-refusal",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: an unknown state, field or code is refused, not guessed at",
+      "mutation": "e2-t11-app-takes-an-unknown-field"
+    },
+    {
+      "row": "traceability/task-11/e2-desktop-fixtures-are-daemon-vectors",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: the app fixtures are copies of the daemon status vectors",
+      "mutation": "e2-t12-row-t11-app-fixture-is-daemon-vector"
+    },
+    {
+      "row": "traceability/task-11/da12-desktop-laya-version-gate",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: an events service older than E2 asks for an update and calls nothing",
+      "mutation": "e2-t11-app-ungated"
+    },
+    {
+      "row": "traceability/task-11/da12-allow-list-needs-e2",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_need_the_release_that_ships_e2",
+      "mutation": "e2-t11-rust-ungated"
+    },
+    {
+      "row": "traceability/task-11/da4-allow-list-laya-words",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_build_exactly_the_launcher_words_json_and_pins",
+      "mutation": "e2-t11-rust-disable-takes-an-extra-word"
+    },
+    {
+      "row": "traceability/task-11/da4-allow-list-laya-refusals",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_take_no_argument_and_refuse_any_other_kind_or_word",
+      "mutation": "e2-t11-rust-disable-takes-a-kind"
+    },
+    {
+      "row": "traceability/task-11/da10-da16-laya-disable-is-no-change",
+      "owner": "task-11",
+      "test": "allowlist::tests::laya_calls_prepare_no_change",
+      "mutation": "e2-t11-rust-disable-prepares-a-change"
+    },
+    {
+      "row": "traceability/task-11/da6-laya-enable-line-each-platform",
+      "owner": "task-11",
+      "test": "terminal::tests::laya_enable_line_has_no_json_or_approval_on_macos_linux_and_windows",
+      "mutation": "e2-t11-rust-enable-line-json"
+    },
+    {
+      "row": "traceability/task-11/da6-laya-enable-revokes-nothing",
+      "owner": "task-11",
+      "test": "terminal::tests::laya_enable_opens_the_events_launcher_with_the_pins_and_revokes_nothing",
+      "mutation": "e2-t11-rust-enable-revokes-first"
+    },
+    {
+      "row": "awaits/task-11/e2-desktop-latest-started-status-read",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: a download in progress follows the screen poll, and only the latest-started read is kept",
+      "mutation": "e2-t12-row-t11-latest-started-read-kept"
+    },
+    {
+      "row": "fixture/task-11.json",
+      "owner": "task-11",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-12/e2-laya-await-fences",
+      "owner": "task-12",
+      "test": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone",
+      "mutation": "e2-t12-walk-epoch-recheck"
+    },
+    {
+      "row": "section5/task-12/e2-laya-stable-identity-scope",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "mutation": "e2-t12-purge-caller-account"
+    },
+    {
+      "row": "section5/task-12/e2-laya-purge-closure",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready",
+      "mutation": "e2-t12-purge-caller-disable-all"
+    },
+    {
+      "row": "section5/task-12/e2-laya-mutation-pairing",
+      "owner": "task-12",
+      "test": "E2 matrix: a row with no owner and red mutant is refused",
+      "mutation": "e2-t12-matrix-none"
+    },
+    {
+      "row": "section5/task-12/e2-laya-loopback-seal",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya test that does not assert the loopback seal is refused",
+      "mutation": "e2-t12-static-tests-sealed"
+    },
+    {
+      "row": "traceability/task-12/d5-1080-1096-reservation-purge-race",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: revoking the Laya rule stops only its own request",
+      "mutation": "e2-t12-purge-caller-rule"
+    },
+    {
+      "row": "traceability/task-12/e2-runner-ends-each-oracle-tree",
+      "owner": "task-12",
+      "test": "E2 mutation: a timed-out oracle leaves no process it started running",
+      "mutation": "e2-t12-runner-own-group"
+    },
+    {
+      "row": "traceability/task-12/e2-10a-guards-registered",
+      "owner": "task-12",
+      "test": "E2 Laya judge creation: a rule whose Laya stops being offered after it was prepared is refused at its claim, with Laya’s reason first",
+      "mutation": "e2-t12-10a-rule-offered-at-claim"
+    },
+    {
+      "row": "awaits/task-12/e2-worker-start-walk-fence",
+      "owner": "task-12",
+      "test": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone",
+      "mutation": "e2-t12-walk-epoch-recheck"
+    },
+    {
+      "row": "awaits/task-12/e2-budget-swap-before-request-write",
+      "owner": "task-12",
+      "test": "E2 race: a budget swapped while a Laya worker starts lets no request reach the worker",
+      "mutation": "e2-t12-race-budget-swap-final-gate"
+    },
+    {
+      "row": "fixture/task-12.json",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-2/e2-reviewed-manifest-runtime-lock",
+      "owner": "task-2",
+      "test": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "mutation": "e2-t12-row-t2-platform-files-raw-byte-order",
+      "staleRowTest": true
+    },
+    {
+      "row": "section5/task-2/e2-private-runtime-package",
+      "owner": "task-2",
+      "test": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots",
+      "mutation": "e2-t12-row-t2-private-package-exact-pin"
+    },
+    {
+      "row": "traceability/task-2/d11-2215-2256-reviewed-manifest",
+      "owner": "task-2",
+      "test": "E2 manifest: contains the reviewed single English ONNX entry",
+      "mutation": "e2-t12-row-t2-manifest-english"
+    },
+    {
+      "row": "traceability/task-2/d11-2258-2277-runtime-lock",
+      "owner": "task-2",
+      "test": "E2 runtime lock: rejects a changed SRI before the archive parser runs",
+      "mutation": "e2-runtime-sri-before-extraction"
+    },
+    {
+      "row": "traceability/task-2/d11-2321-2335-daemon-runtime-boundary",
+      "owner": "task-2",
+      "test": "E2 runtime package: daemon package ships reviewed assets without importing the runtime",
+      "mutation": "e2-t12-row-t2-daemon-ships-lock"
+    },
+    {
+      "row": "fixture/task-2.json",
+      "owner": "task-2",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "traceability/task-3/e2-proof-pairing",
+      "owner": "task-3",
+      "test": "laya scope: completed checker accepts the Task 3 proof fragment",
+      "mutation": "e2-t12-checker-accepts-repository"
+    },
+    {
+      "row": "fixture/schema-v1.json",
+      "owner": "task-3",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "fixture/task-3.json",
+      "owner": "task-3",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-4/e2-pinned-runtime-fetch-and-model-resume",
+      "owner": "task-4",
+      "test": "E2 laya model download: resumes only a rehashed exact Content-Range",
+      "mutation": "e2-model-resume-range"
+    },
+    {
+      "row": "traceability/task-4/d11-2279-2299-pinned-resumable-model-download",
+      "owner": "task-4",
+      "test": "E2 laya model download: promotes only after five tiny files verify",
+      "mutation": "e2-t12-row-t4-every-model-file"
+    },
+    {
+      "row": "awaits/task-4/e2-model-final-promotion-fence",
+      "owner": "task-4",
+      "test": "E2 laya model download: rechecks its final lifecycle fence before promotion",
+      "mutation": "e2-model-final-promotion-fence"
+    },
+    {
+      "row": "fixture/task-4.json",
+      "owner": "task-4",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-5/e2-runtime-strict-archive",
+      "owner": "task-5",
+      "test": "E2 tar: extracts only listed package regular files",
+      "mutation": "e2-tar-unlisted-entry"
+    },
+    {
+      "row": "section5/task-5/e2-runtime-tree-verification",
+      "owner": "task-5",
+      "test": "E2 tree verifier: accepts the exact installed runtime tree",
+      "mutation": "e2-t12-row-t5-verifier-accepts-exact-tree"
+    },
+    {
+      "row": "traceability/task-5/d11-2258-2277-strict-runtime-archive",
+      "owner": "task-5",
+      "test": "E2 tar: rejects a symbolic-link archive entry",
+      "mutation": "e2-tar-special-entry"
+    },
+    {
+      "row": "traceability/task-5/d11-2301-2311-whole-tree-verification",
+      "owner": "task-5",
+      "test": "E2 tree verifier: reports an altered file after an earlier verification",
+      "mutation": "e2-tree-hash"
+    },
+    {
+      "row": "awaits/task-5/e2-runtime-promotion-after-extraction",
+      "owner": "task-5",
+      "test": "E2 runtime installer: promotes one complete verified partial tree by rename",
+      "mutation": "e2-t12-row-t5-installer-promotes-by-rename"
+    },
+    {
+      "row": "fixture/task-5.json",
+      "owner": "task-5",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-6/e2-complete-lock-update-tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: a URL-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "mutation": "e2-update-platform-digest-is-not-a-fence"
+    },
+    {
+      "row": "section5/task-6/e2-model-update-and-downgrade-tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: a downgraded package version disables at start-up as runtime-changed",
+      "mutation": "e2-update-runtime-lock-is-compared"
+    },
+    {
+      "row": "section5/task-6/e2-code-only-release-no-op",
+      "owner": "task-6",
+      "test": "E2 laya update: a release that changes only daemon code keeps Laya enabled and ready",
+      "mutation": "e2-update-code-only-is-no-change"
+    },
+    {
+      "row": "section5/task-6/e2-required-doctor-fields",
+      "owner": "task-6",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-state"
+    },
+    {
+      "row": "section5/task-6/e2-verified-tree-retention-and-removal",
+      "owner": "task-6",
+      "test": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "mutation": "e2-manager-remove-only-own-trees"
+    },
+    {
+      "row": "traceability/task-6/d2-146-157-install-only-after-claim",
+      "owner": "task-6",
+      "test": "E2 manager: no artifact is fetched or recorded before the enablement claim",
+      "mutation": "e2-manager-claimed-pointer-only"
+    },
+    {
+      "row": "traceability/task-6/d8-1402-1418-legal-model-transitions",
+      "owner": "task-6",
+      "test": "E2 manager: a claimed enable moves through installing, downloading and verifying to ready with byte progress",
+      "mutation": "e2-manager-transition-downloading"
+    },
+    {
+      "row": "traceability/task-6/d10-2071-2085-model-status-remove-doctor",
+      "owner": "task-6",
+      "test": "E2 laya status contract: the B3 control v2 Laya vectors are the live operator-control answers",
+      "mutation": "e2-t12-row-t6-v2-vectors-live"
+    },
+    {
+      "row": "traceability/task-6/d11-2096-2128-disable-closure",
+      "owner": "task-6",
+      "test": "E2 manager: disable cancels an in-flight download and keeps the verified runtime",
+      "mutation": "e2-t12-row-t6-disable-fences-download"
+    },
+    {
+      "row": "traceability/task-6/d11-2279-2299-claim-fence",
+      "owner": "task-6",
+      "test": "E2 manager: an enablement claim that a disable overtakes starts no stale install",
+      "mutation": "e2-manager-job-start-recheck"
+    },
+    {
+      "row": "traceability/task-6/d11-2301-2311-verified-artifact-lifecycle",
+      "owner": "task-6",
+      "test": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "mutation": "e2-manager-repair-fails-closed"
+    },
+    {
+      "row": "traceability/task-6/d11-2313-2319-complete-lock-update",
+      "owner": "task-6",
+      "test": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "mutation": "e2-update-url-and-sri-are-compared"
+    },
+    {
+      "row": "traceability/task-6/e2-status-dto-v1",
+      "owner": "task-6",
+      "test": "E2 laya status contract: every presentation state is a valid laya-model-status-v1 answer",
+      "mutation": "e2-t12-row-t6-status-dto-failure-code"
+    },
+    {
+      "row": "traceability/task-6/e2-dormant-placeholder-release",
+      "owner": "task-6",
+      "test": "E2 laya status contract: the shipped placeholder lock says Laya is not offered yet and refuses enablement first",
+      "mutation": "e2-dormant-enable-refuses-first"
+    },
+    {
+      "row": "traceability/task-6/e2-start-up-update-through-owner",
+      "owner": "task-6",
+      "test": "E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees",
+      "mutation": "e2-activation-hook-after-claim"
+    },
+    {
+      "row": "traceability/task-6/e2-runner-refuses-load-crash-kill",
+      "owner": "task-6",
+      "test": "E2 mutation: a copy whose named oracle fails to load is not a kill",
+      "mutation": "e2-runner-named-oracle-kill"
+    },
+    {
+      "row": "awaits/task-6/e2-enablement-claim-job-start",
+      "owner": "task-6",
+      "test": "E2 manager: an enablement claim that a disable overtakes starts no stale install",
+      "mutation": "e2-manager-job-start-recheck"
+    },
+    {
+      "row": "awaits/task-6/e2-runtime-promotion-after-disable",
+      "owner": "task-6",
+      "test": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "mutation": "e2-manager-runtime-promotion-recheck"
+    },
+    {
+      "row": "awaits/task-6/e2-model-promotion-final-fence-disable",
+      "owner": "task-6",
+      "test": "E2 manager: a disable during the final model promotion fence is prompt and the model is not promoted",
+      "mutation": "e2-manager-disable-aborts-work"
+    },
+    {
+      "row": "awaits/task-6/e2-integrity-repair-selection",
+      "owner": "task-6",
+      "test": "E2 manager: an integrity repair cannot replace a selection a disable changed",
+      "mutation": "e2-manager-repair-selection-recheck"
+    },
+    {
+      "row": "awaits/task-6/e2-update-compare-reenabled-version",
+      "owner": "task-6",
+      "test": "E2 laya update: the start-up comparison does not disable a version re-enabled meanwhile",
+      "mutation": "e2-update-rechecks-compared-pointer"
+    },
+    {
+      "row": "awaits/task-6/e2-model-remove-versus-reenable",
+      "owner": "task-6",
+      "test": "E2 manager: a removal that races a re-enable stops, and the enablement keeps its verified model",
+      "mutation": "e2-manager-remove-stops-on-claim"
+    },
+    {
+      "row": "awaits/task-6/e2-purge-kills-only-its-work",
+      "owner": "task-6",
+      "test": "E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised",
+      "mutation": "e2-purge-stops-only-terminalised-work"
+    },
+    {
+      "row": "fixture/task-6.json",
+      "owner": "task-6",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-7/e2-laya-same-child-network-boundary",
+      "owner": "task-7",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-tcp-report"
+    },
+    {
+      "row": "section5/task-7/e2-laya-framed-worker-protocol",
+      "owner": "task-7",
+      "test": "laya worker protocol: length-prefixed frames survive arbitrary pipe chunking",
+      "mutation": "e2-t12-row-t7-frames-across-reads"
+    },
+    {
+      "row": "traceability/task-7/d11-2153-2165-worker-child-pipe-fence",
+      "owner": "task-7",
+      "test": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "mutation": "e2-boundary-closed-environment"
+    },
+    {
+      "row": "traceability/task-7/d11-2167-2204-macos-four-attempt-self-test",
+      "owner": "task-7",
+      "test": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "mutation": "e2-t12-row-t7-real-sandbox-denial-codes"
+    },
+    {
+      "row": "traceability/task-7/s8-3410-3426-macos-only-boundary-availability",
+      "owner": "task-7",
+      "test": "E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup",
+      "mutation": "e2-boundary-platform-simulation"
+    },
+    {
+      "row": "traceability/task-7/s9-3498-3501-tcp-and-pathname-uds-probe",
+      "owner": "task-7",
+      "test": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "mutation": "e2-boundary-worker-tcp-attempt"
+    },
+    {
+      "row": "traceability/task-7/d11-2167-2204-in-worker-defence-in-depth",
+      "owner": "task-7",
+      "test": "E2 boundary: after its probe the worker's fetch, sockets and listeners are sealed",
+      "mutation": "e2-boundary-seal-fetch"
+    },
+    {
+      "row": "awaits/task-7/e2-worker-boundary-before-load",
+      "owner": "task-7",
+      "test": "E2 boundary: a tcp-only child escape is killed before load",
+      "mutation": "e2-boundary-before-load"
+    },
+    {
+      "row": "fixture/task-7.json",
+      "owner": "task-7",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-8/e2-laya-child-env-and-downloader-fence",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "mutation": "e2-t8-runtime-cpu-only"
+    },
+    {
+      "row": "section5/task-8/e2-laya-worker-limits-and-supervision",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child",
+      "mutation": "e2-t8-supervisor-kill-timeout"
+    },
+    {
+      "row": "traceability/task-8/d1-132-138-supervisor-no-daemon-authority",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor has no daemon authority",
+      "mutation": "e2-t12-row-t8-supervisor-no-daemon-import"
+    },
+    {
+      "row": "traceability/task-8/d5-1053-1071-coordinator-answer",
+      "owner": "task-8",
+      "test": "E2 Laya evaluation uses coordinator answer",
+      "mutation": "e2-t8-coordinator-laya-route"
+    },
+    {
+      "row": "traceability/task-8/d5-1080-1096-late-worker-result",
+      "owner": "task-8",
+      "test": "E2 late worker result is discarded",
+      "mutation": "e2-t12-row-t8-late-result-deadline"
+    },
+    {
+      "row": "traceability/task-8/d10-2035-2047-no-worker-before-approved-test",
+      "owner": "task-8",
+      "test": "E2 no worker before approved synthetic call",
+      "mutation": "e2-t8-judge-test-laya-route"
+    },
+    {
+      "row": "traceability/task-8/d11-2096-2128-laya-evaluation-gating",
+      "owner": "task-8",
+      "test": "E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unavailable Laya or no budget",
+      "mutation": "e2-t12-row-t8-unavailable-reserves-nothing"
+    },
+    {
+      "row": "traceability/task-8/d11-2134-2151-cpu-only-load",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "mutation": "e2-t8-runtime-cpu-only"
+    },
+    {
+      "row": "traceability/task-8/d11-2153-2165-supervisor-timeout-crash-idle",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: an idle worker exits after its idle window",
+      "mutation": "e2-t8-supervisor-idle-exit"
+    },
+    {
+      "row": "traceability/task-8/d11-2206-2213-worker-runtime-vectors",
+      "owner": "task-8",
+      "test": "E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count",
+      "mutation": "e2-t12-row-t8-value-unchanged"
+    },
+    {
+      "row": "traceability/task-8/s8-3393-3432-worker-limits",
+      "owner": "task-8",
+      "test": "E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated",
+      "mutation": "e2-t8-runtime-512-refusal"
+    },
+    {
+      "row": "awaits/task-8/e2-late-worker-result-discarded",
+      "owner": "task-8",
+      "test": "E2 late worker result is discarded",
+      "mutation": "e2-t12-row-t8-late-result-deadline"
+    },
+    {
+      "row": "awaits/task-8/e2-purge-kills-in-flight-laya-work",
+      "owner": "task-8",
+      "test": "E2 purge kills only its in-flight Laya work",
+      "mutation": "e2-t12-row-t8-purge-only-terminalised"
+    },
+    {
+      "row": "awaits/task-8/e2-verified-selection-before-load",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor: a selection changed after its trees were verified sends no load",
+      "mutation": "e2-t8-supervisor-load-selection"
+    },
+    {
+      "row": "fixture/task-8.json",
+      "owner": "task-8",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "section5/task-9/e2-laya-quality-gate-external-aggregate-harness",
+      "owner": "task-9",
+      "test": "E2 quality gate run: only the aggregate leaves the run",
+      "mutation": "e2-t9-run-judge-envelope"
+    },
+    {
+      "row": "section5/task-9/e2-laya-quality-gate-consent-and-data-rejection",
+      "owner": "task-9",
+      "test": "E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory",
+      "mutation": "e2-t9-run-written-consent"
+    },
+    {
+      "row": "section5/task-9/e2-laya-quality-gate-exact-aggregate-validity",
+      "owner": "task-9",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-manifestId"
+    },
+    {
+      "row": "traceability/task-9/d11-2337-2350-quality-reference-gate",
+      "owner": "task-9",
+      "test": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "mutation": "e2-t9-run-reference-pinned"
+    },
+    {
+      "row": "traceability/task-9/d11-2337-2350-gmail-and-slack-separately",
+      "owner": "task-9",
+      "test": "E2 quality gate: Gmail and Slack are measured and judged separately, never combined",
+      "mutation": "e2-t9-gmail-slack-separate"
+    },
+    {
+      "row": "traceability/task-9/d11-2337-2350-architecture-bound-release-condition",
+      "owner": "task-9",
+      "test": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "mutation": "e2-t9-release-every-template"
+    },
+    {
+      "row": "traceability/task-9/s7-3380-3385-quality-gate",
+      "owner": "task-9",
+      "test": "E2 quality gate: a passing flag its numbers do not give is refused",
+      "mutation": "e2-t9-verdict-recomputed"
+    },
+    {
+      "row": "fixture/task-9.json",
+      "owner": "task-9",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    },
+    {
+      "row": "external-source/hf-laya-onnx-tree",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-onnx-readme",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-origin-weights",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-receptron-laya-0.1.2",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-onnxruntime-node-1.30.0",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-huggingface-tokenizers-0.2.0",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-laya-runtime-closure",
+      "owner": "task-2",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/rfc9110-redirect-range",
+      "owner": "task-4",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-onnx-resolve-lfs",
+      "owner": "task-4",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-onnx-resolve-small",
+      "owner": "task-4",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/sandbox-exec-man-page",
+      "owner": "task-7",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-receptron-laya-0.1.2-load",
+      "owner": "task-8",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-receptron-laya-0.1.2-download",
+      "owner": "task-8",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-receptron-laya-0.1.2-render",
+      "owner": "task-8",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/npm-receptron-laya-0.1.2-output",
+      "owner": "task-8",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-onnx-config",
+      "owner": "task-8",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-python-reference-choice",
+      "owner": "task-9",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-python-reference-common",
+      "owner": "task-9",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "external-source/hf-laya-python-reference-encoder-config",
+      "owner": "task-9",
+      "test": "E2 mutation: source record requires every reviewed fact",
+      "mutation": "e2-source-record-fields"
+    },
+    {
+      "row": "plan-section5/2884–2892: default-disabled Laya, normal E enablement/claim only, unavailable-before-intent, canonical enablement/document and exact approval-preview vectors",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "mutation": "e2-laya-exact-reviewed-assets"
+    },
+    {
+      "row": "plan-section5/2892–2895, 2904: private dependency-only package, shipped lock, byte-identical fixture rebuild, exact-origin/SRI acquisition, ordinary-CI exclusion and daemon dependency exclusion",
+      "owner": "task-2",
+      "test": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots",
+      "mutation": "e2-t12-row-t2-private-package-exact-pin"
+    },
+    {
+      "row": "plan-section5/2892–2895: runtime fetch is lock-URL-only and SHA-512-pinned, starts only after claim",
+      "owner": "task-4",
+      "test": "E2 fetcher: refuses a non-registry runtime URL before a request",
+      "mutation": "e2-fetcher-runtime-origin"
+    },
+    {
+      "row": "plan-section5/2893–2895: strict runtime archive shape/listing/owner-only extraction and no npm/install script",
+      "owner": "task-5",
+      "test": "E2 tar: extracts only listed package regular files",
+      "mutation": "e2-tar-unlisted-entry"
+    },
+    {
+      "row": "plan-section5/2895–2900: full-revision model request, redirect/address/header policy, over-size, retry, Range resume, free space, disable cleanup and final rename",
+      "owner": "task-4",
+      "test": "E2 laya model download: resumes only a rehashed exact Content-Range",
+      "mutation": "e2-model-resume-range"
+    },
+    {
+      "row": "plan-section5/2901–2903: exact whole-tree verification before native import/start, one repair, then failed",
+      "owner": "task-5",
+      "test": "E2 tree verifier: reports an altered file after an earlier verification",
+      "mutation": "e2-tree-hash"
+    },
+    {
+      "row": "plan-section5/2905–2907: complete-lock/model update and downgrade tightening, code-only no-op, required doctor fields and verified-tree retention/removal",
+      "owner": "task-6",
+      "test": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "mutation": "e2-update-url-and-sri-are-compared"
+    },
+    {
+      "row": "plan-section5/2907–2908: child environment/descriptor fence and package downloader unreachable",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "mutation": "e2-t8-runtime-cpu-only"
+    },
+    {
+      "row": "plan-section5/2908–2916: same-child macOS deny-network TCP/fetch/UDP/UDS boundary/self-test, unavailable Linux/Windows/doctor reason and protected real-mac proof",
+      "owner": "task-7",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-tcp-report"
+    },
+    {
+      "row": "plan-section5/2916–2919: in-worker defence, malformed/token/score handling, concurrency one, timeout/crash/no-match/restart and idle exit",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child",
+      "mutation": "e2-t8-supervisor-kill-timeout"
+    },
+    {
+      "row": "plan-section5/2920: injected stand-in in ordinary tests; no real bundle in `pnpm verify` or normal CI install",
+      "owner": "task-3",
+      "test": "E2 mutation: rejects an unfiltered install in the post-clone setup hook",
+      "mutation": "e2-tracked-install-instructions"
+    },
+    {
+      "row": "plan-section5/2921–2922: external-only aggregate harness, consent/data-rejection checks and exact manifest/template aggregate validity",
+      "owner": "task-9",
+      "test": "E2 quality gate run: only the aggregate leaves the run",
+      "mutation": "e2-t9-run-judge-envelope"
+    },
+    {
+      "row": "plan-section5/2922: release refuses an offered template without exact passing evidence; held/package/SECURITY release guard",
+      "owner": "task-10",
+      "test": "E2 release gate: a real lock without passing quality evidence is refused",
+      "mutation": "e2-t10-quality-required"
+    },
+    {
+      "row": "plan-section5/3326–3336: desktop app presentation-only status DTO, terminal-only enable, immediate disable and artifact-free bundle (replacing C), and existing B3 CLI/MCP prepare-only contract join",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: every status vector is the real owner’s answer through its control peer",
+      "mutation": "e2-t11-daemon-ready-before-verification"
+    },
+    {
+      "row": "plan-section5/All E2 await fences, stable identity scope, purge closure, production-path/mutation pairing and loopback seal",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready",
+      "mutation": "e2-t12-purge-caller-disable-all"
+    },
+    {
+      "row": "plan-traceability/D1 132-138",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor has no daemon authority",
+      "mutation": "e2-t12-row-t8-supervisor-no-daemon-import"
+    },
+    {
+      "row": "plan-traceability/D2 146-157, 241-247, 320-323",
+      "owner": "task-6",
+      "test": "E2 manager: no artifact is fetched or recorded before the enablement claim",
+      "mutation": "e2-manager-claimed-pointer-only"
+    },
+    {
+      "row": "plan-traceability/D2 283-297",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "mutation": "e2-laya-exact-reviewed-assets"
+    },
+    {
+      "row": "plan-traceability/D2 503-529",
+      "owner": "task-10",
+      "test": "E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word for word, once each",
+      "mutation": "e2-t10-security-network-bullet"
+    },
+    {
+      "row": "plan-traceability/D5 1053-1071",
+      "owner": "task-8",
+      "test": "E2 Laya evaluation uses coordinator answer",
+      "mutation": "e2-t8-coordinator-laya-route"
+    },
+    {
+      "row": "plan-traceability/D5 1080-1096",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: revoking the Laya rule stops only its own request",
+      "mutation": "e2-t12-purge-caller-rule"
+    },
+    {
+      "row": "plan-traceability/D8 1402-1418",
+      "owner": "task-1",
+      "test": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "mutation": "e2-laya-model-pointer-before-claim"
+    },
+    {
+      "row": "plan-traceability/D10 2035-2047",
+      "owner": "task-8",
+      "test": "E2 no worker before approved synthetic call",
+      "mutation": "e2-t8-judge-test-laya-route"
+    },
+    {
+      "row": "plan-traceability/D10 2071-2085",
+      "owner": "task-6",
+      "test": "E2 laya status contract: the B3 control v2 Laya vectors are the live operator-control answers",
+      "mutation": "e2-t12-row-t6-v2-vectors-live"
+    },
+    {
+      "row": "plan-traceability/D11 2096-2128",
+      "owner": "task-6",
+      "test": "E2 manager: disable cancels an in-flight download and keeps the verified runtime",
+      "mutation": "e2-t12-row-t6-disable-fences-download"
+    },
+    {
+      "row": "plan-traceability/D11 2134-2151",
+      "owner": "task-8",
+      "test": "E2 worker CPU load: Laya.load gets only the verified model directory and the CPU provider",
+      "mutation": "e2-t8-runtime-cpu-only"
+    },
+    {
+      "row": "plan-traceability/D11 2153-2165",
+      "owner": "task-7",
+      "test": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "mutation": "e2-boundary-closed-environment"
+    },
+    {
+      "row": "plan-traceability/D11 2167-2204",
+      "owner": "task-7",
+      "test": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "mutation": "e2-t12-row-t7-real-sandbox-denial-codes"
+    },
+    {
+      "row": "plan-traceability/D11 2206-2213",
+      "owner": "task-8",
+      "test": "E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count",
+      "mutation": "e2-t12-row-t8-value-unchanged"
+    },
+    {
+      "row": "plan-traceability/D11 2215-2256",
+      "owner": "task-1",
+      "test": "E2 contract: preview is complete, reviewed, and content-free",
+      "mutation": "e2-laya-preview-after-approval"
+    },
+    {
+      "row": "plan-traceability/D11 2258-2277",
+      "owner": "task-5",
+      "test": "E2 tar: rejects a symbolic-link archive entry",
+      "mutation": "e2-tar-special-entry"
+    },
+    {
+      "row": "plan-traceability/D11 2279-2299",
+      "owner": "task-4",
+      "test": "E2 laya model download: promotes only after five tiny files verify",
+      "mutation": "e2-t12-row-t4-every-model-file"
+    },
+    {
+      "row": "plan-traceability/D11 2301-2311",
+      "owner": "task-6",
+      "test": "E2 manager: an integrity failure before a worker start is repaired once, then stays failed",
+      "mutation": "e2-manager-repair-fails-closed"
+    },
+    {
+      "row": "plan-traceability/D11 2313-2319",
+      "owner": "task-6",
+      "test": "E2 laya update: an SRI-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "mutation": "e2-update-url-and-sri-are-compared"
+    },
+    {
+      "row": "plan-traceability/D11 2321-2335",
+      "owner": "task-10",
+      "test": "E2 release gate: no Laya or ONNX package may enter the daemon's published dependencies",
+      "mutation": "e2-t10-audit-leak"
+    },
+    {
+      "row": "plan-traceability/D11 2337-2350",
+      "owner": "task-9",
+      "test": "E2 quality gate: a release offers an architecture only when every manifest template passed there",
+      "mutation": "e2-t9-release-every-template"
+    },
+    {
+      "row": "plan-traceability/D13 2608-2613, replaced by the desktop design DA1–DA16",
+      "owner": "task-11",
+      "test": "E2 desktop Laya contract: Disable applies at once and the status is read again",
+      "mutation": "e2-t12-row-t11-disable-reads-status-again"
+    },
+    {
+      "row": "plan-traceability/D14 2677-2686, 2715-2719",
+      "owner": "task-10",
+      "test": "E2 release gate: the private runtime declaration is never published",
+      "mutation": "e2-t10-private-runtime-unlisted"
+    },
+    {
+      "row": "plan-traceability/§4 2829, 2832-2833",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "mutation": "e2-laya-exact-reviewed-assets"
+    },
+    {
+      "row": "plan-traceability/§5 2884-2922",
+      "owner": "task-12",
+      "test": "E2 matrix: a row with no owner and red mutant is refused",
+      "mutation": "e2-t12-matrix-none"
+    },
+    {
+      "row": "plan-traceability/§5 3326-3336",
+      "owner": "task-10",
+      "test": "E2 release gate: the shipped placeholder lock releases with Laya checked unavailable on every platform",
+      "mutation": "e2-t10-dormant-every-platform"
+    },
+    {
+      "row": "plan-traceability/§7 3380-3385",
+      "owner": "task-9",
+      "test": "E2 quality gate: a passing flag its numbers do not give is refused",
+      "mutation": "e2-t9-verdict-recomputed"
+    },
+    {
+      "row": "plan-traceability/§8 3393-3399, 3410-3413, 3421-3426, 3431-3432",
+      "owner": "task-7",
+      "test": "E2 boundary: Linux and an unavailable macOS sandbox refuse before child startup",
+      "mutation": "e2-boundary-platform-simulation"
+    },
+    {
+      "row": "plan-traceability/§9 3463-3471, 3498-3501",
+      "owner": "task-7",
+      "test": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "mutation": "e2-boundary-worker-tcp-attempt"
+    },
+    {
+      "row": "plan-await/E enablement claim → artifact job start",
+      "owner": "task-6",
+      "test": "E2 manager: an enablement claim that a disable overtakes starts no stale install",
+      "mutation": "e2-manager-job-start-recheck"
+    },
+    {
+      "row": "plan-await/free-space/stat/hash/read → runtime partial write/promote",
+      "owner": "task-6",
+      "test": "E2 manager: a disable racing the runtime promotion waits for the artifact lock and leaves no promoted runtime",
+      "mutation": "e2-manager-runtime-promotion-recheck"
+    },
+    {
+      "row": "plan-await/model Range response/hash → partial write/promote/ready row",
+      "owner": "task-4",
+      "test": "E2 laya model download: rechecks its final lifecycle fence before promotion",
+      "mutation": "e2-model-final-promotion-fence"
+    },
+    {
+      "row": "plan-await/tree walk/hash → delete/reinstall/failure status",
+      "owner": "task-12",
+      "test": "E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone",
+      "mutation": "e2-t12-walk-epoch-recheck"
+    },
+    {
+      "row": "plan-await/current release asset read → kind-disable tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: the start-up comparison does not disable a version re-enabled meanwhile",
+      "mutation": "e2-update-rechecks-compared-pointer"
+    },
+    {
+      "row": "plan-await/boundary probe child result → send worker load frame",
+      "owner": "task-7",
+      "test": "E2 boundary: a tcp-only child escape is killed before load",
+      "mutation": "e2-boundary-before-load"
+    },
+    {
+      "row": "plan-await/worker answer/exit/timeout → return to coordinator",
+      "owner": "task-8",
+      "test": "E2 late worker result is discarded",
+      "mutation": "e2-t12-row-t8-late-result-deadline"
+    },
+    {
+      "row": "plan-await/remove filesystem work → removed status",
+      "owner": "task-6",
+      "test": "E2 manager: a removal that races a re-enable stops, and the enablement keeps its verified model",
+      "mutation": "e2-manager-remove-stops-on-claim"
+    },
+    {
+      "row": "plan-await/purge/disable request → child kill/download abort",
+      "owner": "task-8",
+      "test": "E2 purge kills only its in-flight Laya work",
+      "mutation": "e2-t12-row-t8-purge-only-terminalised"
+    },
+    {
+      "row": "plan-decision/E2-1 typed E registry seam, one pointer and E coordinator/budget/hold reuse",
+      "owner": "task-1",
+      "test": "E2 contract: canonical Laya enablement binds every reviewed asset and digest input",
+      "mutation": "e2-laya-exact-reviewed-assets"
+    },
+    {
+      "row": "plan-decision/E2-2 strict reviewed English manifest, preview and immutable templates",
+      "owner": "task-2",
+      "test": "E2 manifest: contains the reviewed single English ONNX entry",
+      "mutation": "e2-t12-row-t2-manifest-english"
+    },
+    {
+      "row": "plan-decision/E2-3 private declaration, exact-origin/SRI acquisition and release-built runtime lock",
+      "owner": "task-2",
+      "test": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "mutation": "e2-t12-row-t2-platform-files-raw-byte-order"
+    },
+    {
+      "row": "plan-decision/E2-4 fixed-purpose verified fetch, strict extraction and resumable model promotion",
+      "owner": "task-4",
+      "test": "E2 laya model download: resumes only a rehashed exact Content-Range",
+      "mutation": "e2-model-resume-range"
+    },
+    {
+      "row": "plan-decision/E2-5 whole-tree verification, repair and complete-lock update tightening",
+      "owner": "task-6",
+      "test": "E2 laya update: a URL-only lock change keeps the platform digest yet disables at start-up as runtime-changed",
+      "mutation": "e2-update-platform-digest-is-not-a-fence"
+    },
+    {
+      "row": "plan-decision/E2-6 macOS-only OS boundary, same-child self-test and protected real-mac proof",
+      "owner": "task-7",
+      "test": "E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live",
+      "mutation": "e2-t12-row-t7-real-sandbox-denial-codes"
+    },
+    {
+      "row": "plan-decision/E2-7 one isolated framed worker and E-only answer authority",
+      "owner": "task-8",
+      "test": "E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child",
+      "mutation": "e2-t8-supervisor-kill-timeout"
+    },
+    {
+      "row": "plan-decision/E2-8 consented aggregate quality evidence, immutable Python reference and pre-release refusal",
+      "owner": "task-9",
+      "test": "E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it",
+      "mutation": "e2-t9-run-reference-pinned"
+    },
+    {
+      "row": "plan-decision/E2-9 synthetic CI/fakes plus protected real-mac proof",
+      "owner": "task-10",
+      "test": "E2 macOS boundary gate: evidence bound to another candidate is refused",
+      "mutation": "e2-t10-boundary-binding"
+    },
+    {
+      "row": "purge-caller/account-fence.ts#account",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "mutation": "e2-t12-purge-caller-account"
+    },
+    {
+      "row": "purge-caller/b3-operator-control.ts#judge",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: removing the Laya judge stops its work even where no active rule names it",
+      "mutation": "e2-t12-purge-caller-judge"
+    },
+    {
+      "row": "purge-caller/expiry.ts#event",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: an expired decision deadline stops only that event’s Laya request",
+      "mutation": "e2-t12-purge-caller-expiry"
+    },
+    {
+      "row": "purge-caller/judge-kinds.ts#kind",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: disabling the Laya kind stops its work even where no active rule names it",
+      "mutation": "e2-t12-purge-caller-kind"
+    },
+    {
+      "row": "purge-caller/lifecycle.ts#all",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready",
+      "mutation": "e2-t12-purge-caller-disable-all"
+    },
+    {
+      "row": "purge-caller/replacements.ts#retainedProjection",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: a tightened retention stops only the expired projection’s work",
+      "mutation": "e2-t12-purge-caller-retained-projection"
+    },
+    {
+      "row": "purge-caller/replacements.ts#rule",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: revoking the Laya rule stops only its own request",
+      "mutation": "e2-t12-purge-caller-rule"
+    },
+    {
+      "row": "purge-caller/whatsapp-visibility.ts#event",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: hiding a WhatsApp message stops only that event’s work",
+      "mutation": "e2-t12-purge-caller-visibility"
+    },
+    {
+      "row": "boundary-attempt/tcp",
+      "owner": "task-12",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-tcp-report"
+    },
+    {
+      "row": "boundary-attempt/fetch",
+      "owner": "task-12",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-fetch-report"
+    },
+    {
+      "row": "boundary-attempt/udp",
+      "owner": "task-12",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-udp-report"
+    },
+    {
+      "row": "boundary-attempt/uds",
+      "owner": "task-12",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-boundary-uds-report"
+    },
+    {
+      "row": "real-mac-check/tcp",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-tcp"
+    },
+    {
+      "row": "real-mac-check/fetch",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-fetch"
+    },
+    {
+      "row": "real-mac-check/udp",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-udp"
+    },
+    {
+      "row": "real-mac-check/uds",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-uds"
+    },
+    {
+      "row": "real-mac-check/pipes",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-pipes"
+    },
+    {
+      "row": "real-mac-check/nativeLoad",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-nativeLoad"
+    },
+    {
+      "row": "real-mac-check/crashRestart",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-crashRestart"
+    },
+    {
+      "row": "real-mac-check/timeoutRestart",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-timeoutRestart"
+    },
+    {
+      "row": "real-mac-check/idleRestart",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-idleRestart"
+    },
+    {
+      "row": "real-mac-check/alteredTreeRefused",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-alteredTreeRefused"
+    },
+    {
+      "row": "real-mac-check/repairedTreeAccepted",
+      "owner": "task-12",
+      "test": "E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator",
+      "mutation": "e2-t12-real-mac-repairedTreeAccepted"
+    },
+    {
+      "row": "doctor-field/state",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-state"
+    },
+    {
+      "row": "doctor-field/manifestId",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-manifestId"
+    },
+    {
+      "row": "doctor-field/runtimeLockDigest",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-runtimeLockDigest"
+    },
+    {
+      "row": "doctor-field/runtime",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-doctor-runtime-state-field"
+    },
+    {
+      "row": "doctor-field/model",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-model"
+    },
+    {
+      "row": "doctor-field/boundary",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-boundary"
+    },
+    {
+      "row": "doctor-field/failureCode",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-failureCode"
+    },
+    {
+      "row": "doctor-field/bytesVerified",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-bytesVerified"
+    },
+    {
+      "row": "doctor-field/totalBytes",
+      "owner": "task-12",
+      "test": "E2 laya update: doctor reports ready, integrity, boundary, Linux and Windows Laya states with no path or content",
+      "mutation": "e2-t12-doctor-totalBytes"
+    },
+    {
+      "row": "preview-field/modelBytes",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-modelBytes"
+    },
+    {
+      "row": "preview-field/runtimeBytes",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-runtimeBytes"
+    },
+    {
+      "row": "preview-field/runtimeLicences",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-runtimeLicences"
+    },
+    {
+      "row": "preview-field/workerMemory",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-workerMemory"
+    },
+    {
+      "row": "preview-field/facts.englishCpu",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.englishCpu"
+    },
+    {
+      "row": "preview-field/facts.macosBoundary",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.macosBoundary"
+    },
+    {
+      "row": "preview-field/facts.linuxUnavailable",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.linuxUnavailable"
+    },
+    {
+      "row": "preview-field/facts.windowsUnavailable",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.windowsUnavailable"
+    },
+    {
+      "row": "preview-field/facts.downloadAfterApproval",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.downloadAfterApproval"
+    },
+    {
+      "row": "preview-field/facts.oneAtATime",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-facts.oneAtATime"
+    },
+    {
+      "row": "preview-field/limitations.sandboxDeprecation",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-limitations.sandboxDeprecation"
+    },
+    {
+      "row": "preview-field/limitations.englishAccuracy",
+      "owner": "task-12",
+      "test": "E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document",
+      "mutation": "e2-t12-preview-limitations.englishAccuracy"
+    },
+    {
+      "row": "candidate-binding/manifestId",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-manifestId"
+    },
+    {
+      "row": "candidate-binding/manifestSha256",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-manifestSha256"
+    },
+    {
+      "row": "candidate-binding/platformFileListDigest",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-platformFileListDigest"
+    },
+    {
+      "row": "candidate-binding/runnerSha256",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-runnerSha256"
+    },
+    {
+      "row": "candidate-binding/runtime.laya",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-runtime.laya"
+    },
+    {
+      "row": "candidate-binding/runtime.onnxruntimeNode",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-runtime.onnxruntimeNode"
+    },
+    {
+      "row": "candidate-binding/runtime.tokenizers",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-runtime.tokenizers"
+    },
+    {
+      "row": "candidate-binding/runtimeLockSha256",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t12-binding-runtimeLockSha256"
+    },
+    {
+      "row": "candidate-binding/subjectDigest",
+      "owner": "task-12",
+      "test": "E2 quality gate: the subject digest binds the worker source and ignores the report",
+      "mutation": "e2-t9-subject-digest"
+    },
+    {
+      "row": "candidate-binding/templates",
+      "owner": "task-12",
+      "test": "E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused",
+      "mutation": "e2-t9-template-digest"
+    },
+    {
+      "row": "identity/worker-frame-closed",
+      "owner": "task-12",
+      "test": "E2 Laya worker runtime: the real worker entry refuses a request frame with any field beyond its own",
+      "mutation": "e2-t8-worker-request-fields"
+    },
+    {
+      "row": "identity/model-state-content-free",
+      "owner": "task-12",
+      "test": "E2 laya model state: has only D8 content-free fields and needs the active kind pointer",
+      "mutation": "e2-laya-model-status-no-path"
+    },
+    {
+      "row": "identity/runtime-tree-by-lock-digest",
+      "owner": "task-12",
+      "test": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "mutation": "e2-t12-identity-runtime-tree-by-lock-digest"
+    },
+    {
+      "row": "identity/model-tree-by-manifest-id",
+      "owner": "task-12",
+      "test": "E2 manager: re-enabling the same reviewed entry reuses its verified trees and downloads nothing",
+      "mutation": "e2-t12-identity-model-tree-by-manifest-id"
+    },
+    {
+      "row": "identity/purge-by-stable-ids",
+      "owner": "task-12",
+      "test": "E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere",
+      "mutation": "e2-t12-identity-purge-by-source-and-account"
+    },
+    {
+      "row": "identity/laya-sql-no-raw-identity",
+      "owner": "task-12",
+      "test": "E2 static boundary: Laya state keyed on a raw identity is refused",
+      "mutation": "e2-t12-static-sql-no-raw-identity"
+    },
+    {
+      "row": "install/every-install-excludes-runtime",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects an unfiltered install in the post-clone setup hook",
+      "mutation": "e2-tracked-install-instructions"
+    },
+    {
+      "row": "install/release-ci-install-exact",
+      "owner": "task-12",
+      "test": "E2 mutation: the release workflow installs with exactly the ordinary command",
+      "mutation": "e2-t12-install-release-exact"
+    },
+    {
+      "row": "install/cold-store-proves-absence",
+      "owner": "task-12",
+      "test": "E2 mutation: cold-store assertion is mandatory",
+      "mutation": "e2-t12-install-cold-store-count"
+    },
+    {
+      "row": "install/verify-runs-checker-and-fence",
+      "owner": "task-12",
+      "test": "E2 mutation: pnpm verify runs the E2 structural checker",
+      "mutation": "e2-t12-install-verify-runs-checker"
+    },
+    {
+      "row": "static/laya-network-imports-probe-only",
+      "owner": "task-12",
+      "test": "E2 static boundary: a network built-in imported outside the boundary probe is refused",
+      "mutation": "e2-t12-static-network-imports"
+    },
+    {
+      "row": "static/laya-network-calls-named-only",
+      "owner": "task-12",
+      "test": "E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused",
+      "mutation": "e2-t12-static-network-calls"
+    },
+    {
+      "row": "static/laya-child-process-named-sites",
+      "owner": "task-12",
+      "test": "E2 static boundary: a shell or another program run from a Laya module is refused",
+      "mutation": "e2-t12-static-child-process"
+    },
+    {
+      "row": "static/laya-no-package-manager",
+      "owner": "task-12",
+      "test": "E2 static boundary: a package manager named in a Laya module is refused",
+      "mutation": "e2-t12-static-package-manager"
+    },
+    {
+      "row": "static/laya-tests-assert-seal",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya test that does not assert the loopback seal is refused",
+      "mutation": "e2-t12-static-tests-sealed"
+    },
+    {
+      "row": "static/laya-template-vocabulary-owned",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya template id spelled outside templates.ts is refused",
+      "mutation": "e2-t12-static-template-vocabulary"
+    },
+    {
+      "row": "static/laya-production-spawns-shipped-entry",
+      "owner": "task-12",
+      "test": "E2 static boundary: production source that names a test worker is refused",
+      "mutation": "e2-t12-static-shipped-entry"
+    },
+    {
+      "row": "static/laya-worker-start-owner-seam-only",
+      "owner": "task-12",
+      "test": "E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start",
+      "mutation": "e2-t12-static-worker-start-owner-seam"
+    },
+    {
+      "row": "static/laya-runtime-never-imported",
+      "owner": "task-12",
+      "test": "E2 static boundary: any file that imports the Laya runtime or its private package is refused",
+      "mutation": "e2-t12-static-runtime-never-imported"
+    },
+    {
+      "row": "static/laya-gate-dispatch-only",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya gate workflow another event or an input can start is refused",
+      "mutation": "e2-t12-static-gate-dispatch-only"
+    },
+    {
+      "row": "static/laya-gate-runner-owned",
+      "owner": "task-12",
+      "test": "E2 static boundary: another workflow that names the owner’s gate runner is refused",
+      "mutation": "e2-t12-static-gate-runner-owned"
+    },
+    {
+      "row": "static/laya-gate-corpus-last",
+      "owner": "task-12",
+      "test": "E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused",
+      "mutation": "e2-t12-static-gate-corpus-last"
+    },
+    {
+      "row": "static/laya-sql-no-raw-identity",
+      "owner": "task-12",
+      "test": "E2 static boundary: Laya state keyed on a raw identity is refused",
+      "mutation": "e2-t12-static-sql-no-raw-identity"
+    },
+    {
+      "row": "static/desktop-two-laya-calls",
+      "owner": "task-12",
+      "test": "E2 static boundary: a desktop app that calls a third Laya operation is refused",
+      "mutation": "e2-t12-static-desktop-two-calls"
+    },
+    {
+      "row": "static/daemon-laya-dependency",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects a daemon Laya dependency",
+      "mutation": "e2-t12-static-daemon-dependency"
+    },
+    {
+      "row": "static/kind-vocabulary-owned",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects a duplicate judge-kind literal",
+      "mutation": "e2-t12-static-kind-literal"
+    },
+    {
+      "row": "static/test-only-worker-seams",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects production use of test-only Laya worker seams",
+      "mutation": "e2-boundary-test-seam-static-guard"
+    },
+    {
+      "row": "static/mutant-runner-sealed",
+      "owner": "task-12",
+      "test": "E2 mutation: loopback preload is mandatory",
+      "mutation": "e2-t12-static-runner-sealed"
+    },
+    {
+      "row": "static/laya-tests-no-external-host",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects an external hostname in Laya tests",
+      "mutation": "e2-t12-static-external-host"
+    },
+    {
+      "row": "static/cases-no-raw-corpus",
+      "owner": "task-12",
+      "test": "E2 mutation: rejects raw corpus content in a Laya case",
+      "mutation": "e2-t12-static-raw-corpus"
+    }
+  ],
+  "asyncLedger": [
+    {
+      "function": "contracts.ts#onEnabled",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the blocked registry slot’s fixed refusals: it holds and writes no state"
+    },
+    {
+      "function": "contracts.ts#execute",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the blocked registry slot’s fixed refusals: it holds and writes no state"
+    },
+    {
+      "function": "contracts.ts#onWorkPurged",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the blocked registry slot’s fixed refusals: it holds and writes no state"
+    },
+    {
+      "function": "contracts.ts#onDisabled",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the blocked registry slot’s fixed refusals: it holds and writes no state"
+    },
+    {
+      "function": "contracts.ts#removeWhenDisabled",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the blocked registry slot’s fixed refusals: it holds and writes no state"
+    },
+    {
+      "function": "fetcher.ts#fetchRuntimeArchive",
+      "occurrences": 1,
+      "writes": false,
+      "why": "a fetch or lookup that returns bytes or addresses; its caller’s fenced sink makes every write"
+    },
+    {
+      "function": "fetcher.ts#fetchModelFile",
+      "occurrences": 1,
+      "writes": false,
+      "why": "a fetch or lookup that returns bytes or addresses; its caller’s fenced sink makes every write"
+    },
+    {
+      "function": "fetcher.ts#fetchModelFileTo",
+      "occurrences": 1,
+      "fence": "plan-await/model Range response/hash → partial write/promote/ready row"
+    },
+    {
+      "function": "fetcher.ts##globalApprovedAddresses",
+      "occurrences": 1,
+      "writes": false,
+      "why": "a fetch or lookup that returns bytes or addresses; its caller’s fenced sink makes every write"
+    },
+    {
+      "function": "fetcher.ts##get",
+      "occurrences": 1,
+      "writes": false,
+      "why": "a fetch or lookup that returns bytes or addresses; its caller’s fenced sink makes every write"
+    },
+    {
+      "function": "manager.ts#isDirectory",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads a directory’s type only"
+    },
+    {
+      "function": "manager.ts#ownerOnlyDirectory",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "manager.ts#availableBytes",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads free space only"
+    },
+    {
+      "function": "manager.ts#fetchModelFileTo",
+      "occurrences": 1,
+      "writes": false,
+      "why": "counts bytes for status only, after the downloader’s own fenced sink took them"
+    },
+    {
+      "function": "manager.ts#resume",
+      "occurrences": 1,
+      "fence": "plan-await/E enablement claim → artifact job start"
+    },
+    {
+      "function": "manager.ts#disableKind",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "manager.ts#reconcileRelease",
+      "occurrences": 1,
+      "fence": "plan-await/current release asset read → kind-disable tightening"
+    },
+    {
+      "function": "manager.ts#remove",
+      "occurrences": 1,
+      "fence": "plan-await/remove filesystem work → removed status"
+    },
+    {
+      "function": "manager.ts#verifyForWorkerStart",
+      "occurrences": 1,
+      "fence": "awaits/task-12/e2-worker-start-walk-fence"
+    },
+    {
+      "function": "manager.ts#doctor",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads state and a directory’s type for doctor; writes nothing"
+    },
+    {
+      "function": "manager.ts#stop",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "manager.ts##install",
+      "occurrences": 1,
+      "fence": "plan-await/E enablement claim → artifact job start"
+    },
+    {
+      "function": "manager.ts##installRuntime",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "manager.ts##downloadModel",
+      "occurrences": 1,
+      "fence": "plan-await/model Range response/hash → partial write/promote/ready row"
+    },
+    {
+      "function": "manager.ts##repair",
+      "occurrences": 1,
+      "fence": "plan-await/tree walk/hash → delete/reinstall/failure status"
+    },
+    {
+      "function": "manager.ts##removeUnverified",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "model-downloader.ts#ownerOnlyDirectory",
+      "occurrences": 1,
+      "fence": "plan-await/model Range response/hash → partial write/promote/ready row"
+    },
+    {
+      "function": "model-downloader.ts#missing",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads or hashes a file only"
+    },
+    {
+      "function": "model-downloader.ts#hashFile",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads or hashes a file only"
+    },
+    {
+      "function": "model-downloader.ts#partialSize",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads or hashes a file only"
+    },
+    {
+      "function": "model-downloader.ts#verifyPartialFile",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads or hashes a file only"
+    },
+    {
+      "function": "model-downloader.ts#availableBytes",
+      "occurrences": 1,
+      "writes": false,
+      "why": "reads or hashes a file only"
+    },
+    {
+      "function": "model-downloader.ts#download",
+      "occurrences": 1,
+      "fence": "plan-await/model Range response/hash → partial write/promote/ready row"
+    },
+    {
+      "function": "model-downloader.ts#cleanupPartial",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "model-downloader.ts##assertCurrent",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the downloader’s recheck itself: it awaits the fence and writes nothing"
+    },
+    {
+      "function": "model-downloader.ts##downloadFile",
+      "occurrences": 1,
+      "fence": "plan-await/model Range response/hash → partial write/promote/ready row"
+    },
+    {
+      "function": "runtime-installer.ts#ownerOnlyDirectory",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "runtime-installer.ts#assertAbsent",
+      "occurrences": 1,
+      "writes": false,
+      "why": "checks that a path is absent only"
+    },
+    {
+      "function": "runtime-installer.ts#installRuntime",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "tar.ts#readExactly",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#ensureEndIsZero",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#chunks",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#drain",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#parseGzippedUstar",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#archiveBytes",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#validateExpectedPackageArchive",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#makeOwnerOnlyDirectory",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "tar.ts#writeAll",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "tar.ts#assertAbsent",
+      "occurrences": 1,
+      "writes": false,
+      "why": "checks that a path is absent only"
+    },
+    {
+      "function": "tar.ts#inspectPackageArchive",
+      "occurrences": 1,
+      "writes": false,
+      "why": "parses or validates the in-memory archive only; writing waits for the whole archive to validate (Task 5)"
+    },
+    {
+      "function": "tar.ts#extractPackageArchive",
+      "occurrences": 1,
+      "fence": "plan-await/free-space/stat/hash/read → runtime partial write/promote"
+    },
+    {
+      "function": "tree-verifier.ts#sha256",
+      "occurrences": 1,
+      "writes": false,
+      "why": "walks and hashes a tree only"
+    },
+    {
+      "function": "tree-verifier.ts#verifyDirectory",
+      "occurrences": 1,
+      "writes": false,
+      "why": "walks and hashes a tree only"
+    },
+    {
+      "function": "tree-verifier.ts#verifyRuntimeTree",
+      "occurrences": 1,
+      "writes": false,
+      "why": "walks and hashes a tree only"
+    },
+    {
+      "function": "worker-boundary-probe.ts#startBoundaryListeners",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#killWorker",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "worker-boundary-probe.ts#disposeFailedBoundary",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#createLayaWorkerBoundaryInternal",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#sendLoad",
+      "occurrences": 1,
+      "fence": "awaits/task-8/e2-verified-selection-before-load"
+    },
+    {
+      "function": "worker-boundary-probe.ts#close",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "worker-boundary-probe.ts#createLayaWorkerBoundary",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#createLayaWorkerBoundaryForTest",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#runWorkerBoundaryProbe",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-boundary-probe.ts#assertNoProbeSocketsRemain",
+      "occurrences": 1,
+      "writes": false,
+      "why": "waits for the worker’s probe sockets to close; writes nothing"
+    },
+    {
+      "function": "worker-main.ts#rejectAndExit",
+      "occurrences": 1,
+      "writes": false,
+      "why": "ends the worker; writes nothing"
+    },
+    {
+      "function": "worker-protocol.ts#writeWorkerFrame",
+      "occurrences": 1,
+      "fence": "plan-await/boundary probe child result → send worker load frame"
+    },
+    {
+      "function": "worker-runtime.ts#evaluateLayaRequest",
+      "occurrences": 1,
+      "writes": false,
+      "why": "runs inside the proven worker after its load frame: the daemon’s fences come before that frame"
+    },
+    {
+      "function": "worker-runtime.ts#importVerified",
+      "occurrences": 1,
+      "writes": false,
+      "why": "runs inside the proven worker after its load frame: the daemon’s fences come before that frame"
+    },
+    {
+      "function": "worker-runtime.ts#jsonFile",
+      "occurrences": 1,
+      "writes": false,
+      "why": "runs inside the proven worker after its load frame: the daemon’s fences come before that frame"
+    },
+    {
+      "function": "worker-runtime.ts#loadVerifiedLayaRuntime",
+      "occurrences": 1,
+      "writes": false,
+      "why": "runs inside the proven worker after its load frame: the daemon’s fences come before that frame"
+    },
+    {
+      "function": "worker-supervisor.ts#stop",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "worker-supervisor.ts#close",
+      "occurrences": 1,
+      "fence": "plan-await/purge/disable request → child kill/download abort"
+    },
+    {
+      "function": "worker-supervisor.ts##execute",
+      "occurrences": 1,
+      "fence": "plan-await/worker answer/exit/timeout → return to coordinator"
+    },
+    {
+      "function": "worker-supervisor.ts##ensureWorker",
+      "occurrences": 1,
+      "fence": "awaits/task-8/e2-verified-selection-before-load"
+    }
+  ]
+}

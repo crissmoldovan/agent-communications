@@ -1,0 +1,321 @@
+{
+  "schemaVersion": 1,
+  "task": 3,
+  "owners": [{ "id": "task-3" }],
+  "section5": [],
+  "traceability": [
+    {
+      "id": "e2-proof-pairing",
+      "owner": "task-3",
+      "test": "laya scope: completed checker accepts the Task 3 proof fragment"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [{ "path": "schema-v1.json", "owner": "task-3" }, { "path": "task-3.json", "owner": "task-3" }],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-negative-workspace-filter",
+      "kind": "input",
+      "owner": "task-3",
+      "source": ".github/workflows/release.yml",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: negative workspace filter is mandatory",
+      "testPattern": "E2 mutation: negative workspace filter is mandatory"
+    },
+    {
+      "id": "e2-cold-store-assertion",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "scripts/verify-laya-ci-install.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: cold-store assertion is mandatory",
+      "testPattern": "E2 mutation: cold-store assertion is mandatory"
+    },
+    {
+      "id": "e2-source-record-requirement",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: source-record requirement blocks without coordinator evidence",
+      "testPattern": "E2 mutation: source-record requirement blocks without coordinator evidence",
+      "before": "if (fragment.externalSources.length > 0) verifyExternalSources(root, fragment);",
+      "after": "if (false) verifyExternalSources(root, fragment);"
+    },
+    {
+      "id": "e2-source-record-fields",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: source record requires every reviewed fact",
+      "testPattern": "E2 mutation: source record requires every reviewed fact",
+      "before": "if (fragment.externalSources.length > 0) verifyExternalSources(root, fragment);",
+      "after": "if (false) verifyExternalSources(root, fragment);"
+    },
+    {
+      "id": "e2-source-record-immutable",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: source record rejects a mutable revision",
+      "testPattern": "E2 mutation: source record rejects a mutable revision",
+      "before": "if (fragment.externalSources.length > 0) verifyExternalSources(root, fragment);",
+      "after": "if (false) verifyExternalSources(root, fragment);"
+    },
+    {
+      "id": "e2-fragment-owner",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: task fragment ownership is immutable",
+      "testPattern": "E2 mutation: task fragment ownership is immutable"
+    },
+    {
+      "id": "e2-unowned-section-5",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects unowned section 5 row",
+      "testPattern": "E2 mutation: rejects unowned section 5 row"
+    },
+    {
+      "id": "e2-unowned-traceability",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects unowned traceability row",
+      "testPattern": "E2 mutation: rejects unowned traceability row"
+    },
+    {
+      "id": "e2-unowned-await",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects unowned await row",
+      "testPattern": "E2 mutation: rejects unowned await row"
+    },
+    {
+      "id": "e2-duplicate-owner",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects duplicate owner",
+      "testPattern": "E2 mutation: rejects duplicate owner"
+    },
+    {
+      "id": "e2-shared-case-manifest",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a shared mutable case manifest",
+      "testPattern": "E2 mutation: rejects a shared mutable case manifest"
+    },
+    {
+      "id": "e2-unfiltered-install-output",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects an unfiltered install printed by a copied script",
+      "testPattern": "E2 mutation: rejects an unfiltered install printed by a copied script",
+      "before": "verifyAllInstallCommands(root);",
+      "after": "void root;"
+    },
+    {
+      "id": "e2-immutable-fragment-history",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects editing a completed task fragment",
+      "testPattern": "E2 mutation: rejects editing a completed task fragment",
+      "before": "verifyImmutableFragments(resolvedRoot, fragments);",
+      "after": "void fragments;"
+    },
+    {
+      "id": "e2-orphan-mutation",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects an orphan mutation mapping",
+      "testPattern": "E2 mutation: rejects an orphan mutation mapping"
+    },
+    {
+      "id": "e2-wrong-test-pattern",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a non-exact test pattern",
+      "testPattern": "E2 mutation: rejects a non-exact test pattern"
+    },
+    {
+      "id": "e2-loopback-preload",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: loopback preload is mandatory",
+      "testPattern": "E2 mutation: loopback preload is mandatory"
+    },
+    {
+      "id": "e2-external-hostname",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/laya-scope.test.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects an external hostname in Laya tests",
+      "testPattern": "E2 mutation: rejects an external hostname in Laya tests"
+    },
+    {
+      "id": "e2-raw-corpus",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects raw corpus content in a Laya case",
+      "testPattern": "E2 mutation: rejects raw corpus content in a Laya case"
+    },
+    {
+      "id": "e2-test-local-ledger",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/fixtures/laya/cases/task-3.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a test-local ledger",
+      "testPattern": "E2 mutation: rejects a test-local ledger"
+    },
+    {
+      "id": "e2-daemon-dependency",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a daemon Laya dependency",
+      "testPattern": "E2 mutation: rejects a daemon Laya dependency"
+    },
+    {
+      "id": "e2-duplicate-kind-literal",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a duplicate judge-kind literal",
+      "testPattern": "E2 mutation: rejects a duplicate judge-kind literal"
+    },
+    {
+      "id": "e2-warm-store",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "scripts/verify-laya-ci-install.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a warm-store assumption",
+      "testPattern": "E2 mutation: rejects a warm-store assumption"
+    },
+    {
+      "id": "e2-skipped-mutant",
+      "kind": "input",
+      "owner": "task-3",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a skipped production-copy mutant",
+      "testPattern": "E2 mutation: rejects a skipped production-copy mutant"
+    },
+    {
+      "id": "e2-runtime-workspace-exclusion",
+      "kind": "input",
+      "owner": "task-3",
+      "source": ".github/workflows/release.yml",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: runtime workspace is explicitly excluded from ordinary CI",
+      "testPattern": "E2 mutation: runtime workspace is explicitly excluded from ordinary CI"
+    },
+    {
+      "id": "e2-tracked-install-instructions",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects an unfiltered install in the post-clone setup hook",
+      "testPattern": "E2 mutation: rejects an unfiltered install in the post-clone setup hook",
+      "before": "for (const file of trackedTextFiles(root)) {",
+      "after": "for (const file of trackedTextFiles(root)) { if (file === '.blocks/post-clone.sh') continue;"
+    },
+    {
+      "id": "e2-versioned-pnpm-install",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a version-pinned pnpm executable in an otherwise unlisted tracked text file",
+      "testPattern": "E2 mutation: rejects a version-pinned pnpm executable in an otherwise unlisted tracked text file",
+      "before": "/\\bpnpm(?:@[A-Za-z0-9._+-]+)?\\b/g",
+      "after": "/\\bpnpm\\b/g"
+    },
+    {
+      "id": "e2-short-install-subcommand",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects the short install subcommand in an otherwise unlisted tracked text file",
+      "testPattern": "E2 mutation: rejects the short install subcommand in an otherwise unlisted tracked text file",
+      "before": "if (word === 'install' || word === 'i') return bareWords <= options;",
+      "after": "if (word === 'install') return bareWords <= options;"
+    },
+    {
+      "id": "e2-install-command-continuation",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a backslash-continued install command in an otherwise unlisted tracked text file",
+      "testPattern": "E2 mutation: rejects a backslash-continued install command in an otherwise unlisted tracked text file",
+      "before": "const continued = /\\\\\\s*$/.test(sourceLine);",
+      "after": "const continued = false;"
+    },
+    {
+      "id": "e2-deleted-fragment-history",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects deleting a completed task fragment from history",
+      "testPattern": "E2 mutation: rejects deleting a completed task fragment from history",
+      "before": "if (!existsSync(resolve(root, file))) fail(`deleted immutable task fragment: ${file}`);",
+      "after": "if (false) fail(`deleted immutable task fragment: ${file}`);"
+    },
+    {
+      "id": "e2-nested-fragment",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a task fragment nested beneath the cases directory",
+      "testPattern": "E2 mutation: rejects a task fragment nested beneath the cases directory",
+      "before": "if (!directCaseFile) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-duplicate-fragment",
+      "kind": "production",
+      "owner": "task-3",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: rejects a second file for the same task",
+      "testPattern": "E2 mutation: rejects a second file for the same task",
+      "before": "if (tasks.has(fragment.task)) fail(`duplicate task fragment for task ${fragment.task}: ${fragment.file}`);",
+      "after": "if (false) fail(`duplicate task fragment for task ${fragment.task}: ${fragment.file}`);"
+    }
+  ]
+}
