@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
   CARGO_LEG_COMMAND,
+  copyRepositoryTree,
   expectEveryLayaMutationToFail,
   expectLayaMutationToFail,
   LAYA_MUTATION_LEGS,
@@ -74,6 +75,10 @@ async function initialiseCaseHistory(root: string): Promise<void> {
   await runGit(root, ['init', '--quiet']);
   await runGit(root, ['config', 'user.email', 'laya-fixture@example.test']);
   await runGit(root, ['config', 'user.name', 'Laya fixture']);
+  // As the runner's copies (`MUTATION_COPY_GIT_CONFIG`): no commit here starts a detached `git maintenance` that would
+  // still be writing below `.git/objects` when the case is removed (E2 CI round 1).
+  await runGit(root, ['config', 'maintenance.auto', 'false']);
+  await runGit(root, ['config', 'gc.auto', '0']);
   await runGit(root, ['add', '--all']);
   await runGit(root, ['rm', '--cached', '--quiet', '--', taskFragment]);
   await runGit(root, ['commit', '--quiet', '-m', 'fixture baseline']);
@@ -724,6 +729,57 @@ test('E2 mutation: a copied oracle preloads the loopback seal by file URL, as Wi
   assert.equal(fileURLToPath(preload), join(root, 'test/helpers/loopback-seal-preload.mjs'));
   assert.equal(args.at(-1), join(root, 'packages/events-daemon/test/laya-mutations.test.ts'));
   assert.ok(args.includes('--test-reporter=tap'));
+});
+
+/** Every command Git traced while `work` ran, read back from `GIT_TRACE`. */
+async function tracedGitCommands(work: () => Promise<void>): Promise<readonly string[]> {
+  const directory = await mkdtemp(join(tmpdir(), 'events-e2-git-trace-'));
+  const trace = join(directory, 'trace.txt');
+  const previous = process.env.GIT_TRACE;
+  process.env.GIT_TRACE = trace;
+  try {
+    await work();
+  } finally {
+    if (previous === undefined) delete process.env.GIT_TRACE;
+    else process.env.GIT_TRACE = previous;
+  }
+  try {
+    return (await readFile(trace, 'utf8'))
+      .split('\n')
+      .filter((line) => /trace: (?:built-in|run_command|exec): /u.test(line));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+// E2 CI round 1: `git commit` starts `git maintenance run --auto` detached, in its own session, and Git 2.55's geometric
+// strategy repacks a whole-repository copy's loose objects there; it was still writing below `.git/objects` when the
+// runner removed the copy (ENOTEMPTY on both ubuntu-latest legs). Neither the runner's copy nor a checker case may
+// start it: then nothing but the runner writes in a copy, and its removal races nothing.
+test('E2 mutation: a copied repository’s commits start no Git maintenance, so nothing writes in it while it is removed', {
+  timeout: 600_000,
+}, async () => {
+  const roots: string[] = [];
+  try {
+    const commands = await tracedGitCommands(async () => {
+      const runnerCopy = await mkdtemp(join(tmpdir(), 'events-e2-runner-copy-'));
+      roots.push(runnerCopy);
+      await copyRepositoryTree(runnerCopy, { buildsDaemon: false });
+      roots.push(await copyCase());
+    });
+    const maintenance = /: git (?:-c \S+ )*(?:maintenance|gc)(?: |$)/u;
+    assert.ok(
+      commands.filter((line) => /: git (?:-c \S+ )*commit(?: |$)/u.test(line)).length >= 2,
+      'both copies commit',
+    );
+    assert.deepEqual(
+      commands.filter((line) => maintenance.test(line)),
+      [],
+      'a throwaway copy starts no repository maintenance',
+    );
+  } finally {
+    for (const root of roots) await rm(root, { recursive: true, force: true });
+  }
 });
 
 // E2 Task 14: an oracle of the built daemon runs against its copy's own build, made again after the edit; an edit the

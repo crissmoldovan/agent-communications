@@ -86,6 +86,20 @@ async function mutationCopyRoot(prefix: string): Promise<string> {
   return process.platform === 'win32' ? realpath(root) : root;
 }
 
+/**
+ * The Git settings of every commit a copy makes: no automatic maintenance. `git commit` starts `git maintenance run
+ * --auto` detached, in a session of its own that no oracle group kill reaches, and Git 2.55's default geometric
+ * strategy repacks once a few hundred loose objects exist, which a whole-repository copy always has. It was still
+ * writing below `.git/objects` while the runner removed the copy (`ENOTEMPTY` on both ubuntu-latest legs, E2 CI round
+ * 1); a throwaway repository needs no maintenance, so none starts.
+ */
+export const MUTATION_COPY_GIT_CONFIG: readonly string[] = Object.freeze([
+  '-c',
+  'maintenance.auto=false',
+  '-c',
+  'gc.auto=0',
+]);
+
 /** The `node:test` arguments of one oracle in a copy: the preload is a file URL, which Windows needs for `--import`. */
 export function nodeOracleArguments(root: string, mutation: Pick<LayaMutation, 'testFile' | 'testName'>): string[] {
   return [
@@ -374,7 +388,7 @@ async function buildCopiedDaemon(root: string, mutation: LayaMutation, when: str
  * modules are linked as for every copy, and each package's built `dist/` (never tracked) is linked beside its sources —
  * but the daemon's, when the copy builds its own.
  */
-async function copyRepositoryTree(root: string, options: { readonly buildsDaemon: boolean }): Promise<void> {
+export async function copyRepositoryTree(root: string, options: { readonly buildsDaemon: boolean }): Promise<void> {
   const listed = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -398,6 +412,7 @@ async function copyRepositoryTree(root: string, options: { readonly buildsDaemon
         'commit.gpgsign=false',
         '-c',
         'core.hooksPath=/dev/null',
+        ...MUTATION_COPY_GIT_CONFIG,
         ...args,
       ],
       { cwd: root, stdio: 'ignore' },
