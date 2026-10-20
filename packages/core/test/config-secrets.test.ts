@@ -268,15 +268,26 @@ test('ConfigStore writes owner-only, validates before writing, and reloads chang
 });
 
 test('concurrent updates from separate stores never lose each other', async () => {
+  /*
+   * Twelve writers at once, each holding the config lock for half a second: the slow file system this failed on, on the
+   * Windows runner, where each write's read, check and fsynced rename took about that long. The half second is spent
+   * inside the lock, in the mutator, so on any machine the line lasts six seconds or more, past the lock's five-second
+   * timeout. A write has to count that timeout per holder, not from when it began to wait, or the last in line is
+   * refused with LOCK_TIMEOUT while the lock is handed on as it should be. A lost update would leave fewer than twelve.
+   */
   const dir = tempDir();
+  const holdMs = 500;
+  const started = Date.now();
   const writers = Array.from({ length: 12 }, (_, i) =>
-    new ConfigStore(dir).update((config) => ({
-      ...config,
-      inboxes: { ...config.inboxes, [`acme/gmail-${i}`]: inbox({ secretRef: `r${i}` }) },
-    })),
+    new ConfigStore(dir).update(async (config) => {
+      await new Promise((resolve) => setTimeout(resolve, holdMs));
+      return { ...config, inboxes: { ...config.inboxes, [`acme/gmail-${i}`]: inbox({ secretRef: `r${i}` }) } };
+    }),
   );
   await Promise.all(writers);
   assert.equal(Object.keys((await new ConfigStore(dir).load()).inboxes).length, 12);
+  const line = Date.now() - started;
+  assert.ok(line > 5_000, `one writer at a time, so the line outlasted the lock's five-second timeout: ${line}ms`);
 });
 
 test('withFileLock serialises critical sections and clears a stale lock', async () => {
