@@ -35,7 +35,7 @@ assertLoopbackSeal();
 const REPOSITORY = 'crissmoldovan/agent-communications';
 const RUN_ID = '18234567890';
 const COMMIT = 'c'.repeat(40);
-const TOKEN = 'synthetic-job-token';
+const TOKEN = 'fake-job-token';
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -201,7 +201,14 @@ test('E2 review round 1: a release accepts the gate results only as the protecte
     await writeFile(join(root, BOUNDARY_EVIDENCE), boundary);
     for (const [name, answer] of [
       ['an unknown run', () => ({ status: 404, body: { message: 'Not Found' } })],
-      ['a redirect', () => ({ status: 302, headers: { location: 'http://127.0.0.1:9/elsewhere' }, body: {} })],
+      // A redirect is refused, even to an answer that would pass: the check reads only what GitHub answered itself.
+      [
+        'a redirect',
+        (url) =>
+          url.startsWith('/moved/')
+            ? routes(committed)(url.slice('/moved'.length))
+            : { status: 302, headers: { location: `/moved${url}` }, body: {} },
+      ],
       ['not JSON', () => ({ body: 'not json' })],
     ]) {
       assert.equal(await codeOf(() => checkWith(root, answer)), 'LAYA_GATE_RUN_API', name);

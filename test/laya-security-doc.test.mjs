@@ -130,3 +130,24 @@ test('E2 SECURITY Laya wording: the documents state the limits, and promise no p
     );
   }
 });
+
+test('E2 review round 1: the documents claim only the checks that run, and keep the corpus key off the gate Mac', async () => {
+  const [runtimeReadme, releasing, gateWorkflow] = await Promise.all([
+    readFile(join(ROOT, 'packages/events-laya-runtime/README.md'), 'utf8'),
+    readFile(join(ROOT, 'docs/RELEASING.md'), 'utf8'),
+    readFile(join(ROOT, '.github/workflows/laya-quality-gate.yml'), 'utf8'),
+  ]);
+  const flat = (text) => text.replace(/\s+/g, ' ');
+  // B9: `pnpm verify` runs the cold-store probe's self-test; the cold-store install itself runs in no workflow.
+  const runtime = flat(runtimeReadme);
+  assert.doesNotMatch(runtime, /proves from a cold store/);
+  assert.match(runtime, /The cold-store install itself .* runs in no workflow; it is a check to run by hand/);
+  // A4 and B9: the egress step checks TCP 443 to three addresses and nothing else, and the key is a secret.
+  const procedure = flat(section(releasing, '## Laya: the local model judge'));
+  assert.match(procedure, /checks only that a TCP connection to each of three public addresses on port 443/);
+  assert.match(procedure, /it does not check DNS, another port or another address/);
+  assert.doesNotMatch(procedure, /fails if it can reach an outside address|no secret or registry credential/);
+  assert.match(procedure, /`AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret of the `laya-quality-gate` environment/);
+  assert.doesNotMatch(procedure, /AGENTCOMMS_LAYA_GATE_KEY_FILE/);
+  assert.doesNotMatch(flat(gateWorkflow), /no secret,|the egress step proves a connection elsewhere fails/);
+});

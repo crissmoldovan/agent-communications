@@ -620,7 +620,7 @@ async function layaJobStep(root) {
   const env = Object.fromEntries(
     [...step[1].matchAll(/ {10}([A-Z_]+): (?:'([^']*)'|\$\{\{ github\.token \}\})/g)].map((match) => [
       match[1],
-      match[2] ?? 'synthetic-job-token',
+      match[2] ?? 'fake-job-token',
     ]),
   );
   return { args: step[2].split(' '), env };
@@ -634,7 +634,7 @@ test("E2 release end to end: the release job's gate refuses a copied state shipp
     const step = await layaJobStep(refused.root);
     assert.deepEqual(
       step.env,
-      { AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1', GITHUB_TOKEN: 'synthetic-job-token' },
+      { AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1', GITHUB_TOKEN: 'fake-job-token' },
       'the job hands the gate its owner-only rebuild, and its token for the gate-run check',
     );
     const result = await sealedNode(step.args, { cwd: refused.root, env: { ...refused.env, ...step.env } });

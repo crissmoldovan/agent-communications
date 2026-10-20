@@ -1,0 +1,566 @@
+{
+  "schemaVersion": 1,
+  "task": 15,
+  "owners": [
+    {
+      "id": "task-15"
+    }
+  ],
+  "section5": [],
+  "traceability": [],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-15.json",
+      "owner": "task-15"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-r1-a1-confinement-process-fork",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "  '(deny process-fork) (deny appleevent-send) (deny mach-lookup) (deny file-write*) ' +\n",
+      "after": "  '(deny appleevent-send) (deny mach-lookup) (deny file-write*) ' +\n"
+    },
+    {
+      "id": "e2-r1-a1-confinement-write-anywhere",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "(allow file-write* (subpath (param \"${LAYA_WORKER_DIRECTORY_PARAMETER}\")) (literal \"/dev/null\"))",
+      "after": "(allow file-write* (subpath \"/\"))"
+    },
+    {
+      "id": "e2-r1-a1-worker-directory-parameter",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "  const sandbox = ['-D', `${LAYA_WORKER_DIRECTORY_PARAMETER}=${workerDirectory}`, '-p', LAYA_WORKER_SANDBOX_PROFILE];",
+      "after": "  const sandbox = ['-p', LAYA_WORKER_SANDBOX_PROFILE];"
+    },
+    {
+      "id": "e2-r1-a1-launch-confined-profile",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "testPattern": "E2 boundary: launch has literal profile, pipe-only fds and a closed environment",
+      "before": "'-p', LAYA_WORKER_SANDBOX_PROFILE];",
+      "after": "'-p', LAYA_SANDBOX_PROFILE];"
+    },
+    {
+      "id": "e2-r1-a1-spawn-report",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: rejects each worker escape report before load",
+      "testPattern": "E2 boundary: rejects each worker escape report before load",
+      "before": "    result.spawn === 'denied' &&\n",
+      "after": "    true &&\n"
+    },
+    {
+      "id": "e2-r1-a1-worker-spawn-attempt",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts",
+      "testFile": "packages/events-daemon/test/laya-boundary.test.ts",
+      "testName": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "testPattern": "E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order against unconfined listeners",
+      "before": "    ['spawn', () => spawnProbe()],",
+      "after": "    ['spawn', () => Promise.reject(new Error('not attempted'))],"
+    },
+    {
+      "id": "e2-r1-a1-child-process-rule",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt",
+      "testPattern": "E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt",
+      "before": "        if (file.endsWith('/worker-boundary-probe.ts') && probeStartsAnotherProcess(code))",
+      "after": "        if (false)"
+    },
+    {
+      "id": "e2-r1-a1-real-mac-spawn",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start",
+      "before": "  'spawn',\n  'tcp',\n",
+      "after": "  'tcp',\n"
+    },
+    {
+      "id": "e2-r1-a1-boundary-schema-version",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start",
+      "testPattern": "E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start",
+      "before": "export const BOUNDARY_SCHEMA_VERSION = 2;",
+      "after": "export const BOUNDARY_SCHEMA_VERSION = 1;"
+    },
+    {
+      "id": "e2-r1-b7-failure-retried",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "testPattern": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "before": "      (!this.#availability.available && now - this.#availabilityProbedAt >= AVAILABILITY_RETRY_MS)",
+      "after": "      false"
+    },
+    {
+      "id": "e2-r1-b7-success-kept",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "testPattern": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "before": "      (!this.#availability.available && now - this.#availabilityProbedAt >= AVAILABILITY_RETRY_MS)",
+      "after": "      now - this.#availabilityProbedAt >= AVAILABILITY_RETRY_MS"
+    },
+    {
+      "id": "e2-r1-b7-retry-bound",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "testPattern": "E2 review round 1: a failed sandbox probe is tried again at most once a minute, and only a success is kept",
+      "before": "const AVAILABILITY_RETRY_MS = 60_000;",
+      "after": "const AVAILABILITY_RETRY_MS = 0;"
+    },
+    {
+      "id": "e2-r1-a5-rosetta-refused",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "testPattern": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "before": "  if (translatedByRosetta(probe)) return { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' };",
+      "after": "  if (false) return { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' };"
+    },
+    {
+      "id": "e2-r1-a5-sysctl-fails-closed",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "testPattern": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "before": "    if (result.status !== 0 || result.signal !== null || result.error !== undefined) return true;",
+      "after": "    if (result.status !== 0 || result.signal !== null || result.error !== undefined) return false;"
+    },
+    {
+      "id": "e2-r1-a5-only-a-clean-answer",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/contracts.ts",
+      "testFile": "packages/events-daemon/test/laya-contract.test.ts",
+      "testName": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "testPattern": "E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe",
+      "before": "    return answer !== '0' && answer !== '';",
+      "after": "    return answer === '1';"
+    },
+    {
+      "id": "e2-r1-a2-subject-contracts",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  'packages/events-daemon/src/runtime/laya/contracts.ts',\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a2-subject-manager",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  'packages/events-daemon/src/runtime/laya/manager.ts',\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a2-subject-tar",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  'packages/events-daemon/src/runtime/laya/tar.ts',\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a2-subject-tree-verifier",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  'packages/events-daemon/src/runtime/laya/tree-verifier.ts',\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a2-subject-lockfile",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  'pnpm-lock.yaml',\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-b3-version-removed",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  const { version: _version, ...unversioned } = manifest;",
+      "after": "  const unversioned = manifest;"
+    },
+    {
+      "id": "e2-r1-b3-only-the-daemon-manifest",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "testPattern": "E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was",
+      "before": "  if (path !== GATE_SUBJECT_VERSIONED_MANIFEST) return bytes;",
+      "after": "  return bytes;"
+    },
+    {
+      "id": "e2-r1-a2-built-worker",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source",
+      "testPattern": "E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source",
+      "before": "    workerEntry: join(root, BUILT_WORKER_ENTRY),",
+      "after": "    workerEntry: join(root, 'packages/events-daemon/src/runtime/laya/worker-main.ts'),"
+    },
+    {
+      "id": "e2-r1-a2-no-build-no-checks",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/run-laya-macos-boundary-gate.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source",
+      "testPattern": "E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source",
+      "before": "    if (!existsSync(workerEntry)) return checks;",
+      "after": "    if (false) return checks;"
+    },
+    {
+      "id": "e2-r1-a8-tree-carries-needs",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "testPattern": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "before": "  assertTreeCarriesNeeds(packages);\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a8-optional-dependencies",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "testPattern": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "before": "    ...section('optionalDependencies'),\n",
+      "after": "    // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a8-optional-peers",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "testPattern": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "before": "    ...section('peerDependencies').filter((peer) => optionalPeers?.[peer]?.optional !== true),",
+      "after": "    ...section('peerDependencies'),"
+    },
+    {
+      "id": "e2-r1-a8-archive-manifest",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "testPattern": "E2 review round 1: the lock builder refuses a tree that does not carry a package one of its packages needs",
+      "before": "    if (entry.path !== 'package.json') return;",
+      "after": "    if (entry.path === 'package.json') return;"
+    },
+    {
+      "id": "e2-r1-a9-empty-file",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 review round 1: the lock builder refuses to list an empty file, and names it",
+      "testPattern": "E2 review round 1: the lock builder refuses to list an empty file, and names it",
+      "before": "          if (found.size === 0)",
+      "after": "          if (false)"
+    },
+    {
+      "id": "e2-r1-a4-key-leaves-env",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "testPattern": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "before": "  delete env[CORPUS_KEY_VARIABLE];\n",
+      "after": "  // e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a4-run-refuses-key-file",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "testPattern": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "before": "  if (options.keyFile !== undefined)",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-r1-a4-cli-refuses-key-file",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/run-laya-quality-gate.mjs",
+      "testFile": "packages/events-daemon/test/laya-quality-gate.test.ts",
+      "testName": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "testPattern": "E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child",
+      "before": "    else if (argument === '--key-file' && command === 'run')",
+      "after": "    else if (false)"
+    },
+    {
+      "id": "e2-r1-a4-key-in-quality-step",
+      "kind": "production",
+      "owner": "task-15",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "testPattern": "E2 macOS boundary gate workflow: nothing in it can publish or keep a credential",
+      "before": "          AGENTCOMMS_LAYA_GATE_CORPUS_KEY: ${{ secrets.AGENTCOMMS_LAYA_GATE_CORPUS_KEY }}\n",
+      "after": "          # e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a4-egress-wording",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "docs/RELEASING.md",
+      "testFile": "test/laya-security-doc.test.mjs",
+      "testName": "E2 review round 1: the documents claim only the checks that run, and keep the corpus key off the gate Mac",
+      "testPattern": "E2 review round 1: the documents claim only the checks that run, and keep the corpus key off the gate Mac",
+      "before": "it does not check DNS,",
+      "after": "it checks DNS,"
+    },
+    {
+      "id": "e2-r1-a3-run-passed",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (run.status !== 'completed' || run.conclusion !== 'success') fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-r1-a3-run-commit",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (run.head_sha !== commit) fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-r1-a3-run-dispatch",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (run.event !== 'workflow_dispatch') fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-r1-a3-run-workflow",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (typeof run.path !== 'string' || (run.path !== GATE_WORKFLOW && !run.path.startsWith(`${GATE_WORKFLOW}@`)))",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-r1-a3-run-candidate-tag",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (typeof run.head_branch !== 'string' || !run.head_branch.startsWith('laya-candidate-'))",
+      "after": "  if (false)"
+    },
+    {
+      "id": "e2-r1-a3-run-repository",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "  if (run.repository?.full_name !== repository) fail(",
+      "after": "  if (false) fail("
+    },
+    {
+      "id": "e2-r1-a3-copy-digest",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "    if (artifact.digest !== `sha256:${expected[kind]}`)",
+      "after": "    if (false)"
+    },
+    {
+      "id": "e2-r1-a3-no-redirect",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-gate-runs.test.mjs",
+      "testName": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "testPattern": "E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them",
+      "before": "      redirect: 'error',",
+      "after": "      redirect: 'follow',"
+    },
+    {
+      "id": "e2-r1-a3-copy-restricted",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-laya-gate-runs.mjs",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped",
+      "testPattern": "E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped",
+      "before": "  return canonicalBytes({ ...document, architectures: entries });",
+      "after": "  return canonicalBytes(document);"
+    },
+    {
+      "id": "e2-r1-a3-release-checks-runs",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/laya-release-gate.mjs",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 review round 1: a real lock whose results no recorded protected run wrote is refused, before the registry is asked",
+      "testPattern": "E2 review round 1: a real lock whose results no recorded protected run wrote is refused, before the registry is asked",
+      "before": "    await verifyRuns({ root, architectures });",
+      "after": "    void verifyRuns;"
+    },
+    {
+      "id": "e2-r1-a3-one-request-rule",
+      "kind": "production",
+      "owner": "task-15",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 static boundary: the release's gate-run check makes its one GitHub API request, and nothing else in it does",
+      "testPattern": "E2 static boundary: the release's gate-run check makes its one GitHub API request, and nothing else in it does",
+      "before": "          if (fetches > 1)\n",
+      "after": "          if (false)\n"
+    },
+    {
+      "id": "e2-r1-a3-job-actions-read",
+      "kind": "production",
+      "owner": "task-15",
+      "source": ".github/workflows/release.yml",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "testPattern": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "before": "      actions: read\n",
+      "after": "      # e2-r1 mutant: removed\n"
+    },
+    {
+      "id": "e2-r1-a3-copy-unzipped",
+      "kind": "production",
+      "owner": "task-15",
+      "source": ".github/workflows/laya-quality-gate.yml",
+      "testFile": "test/laya-boundary-gate.test.mjs",
+      "testName": "E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped",
+      "testPattern": "E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped",
+      "before": "          path: ${{ runner.temp }}/laya-quality-run.json\n          archive: false\n",
+      "after": "          path: ${{ runner.temp }}/laya-quality-run.json\n"
+    }
+  ],
+  "matrix": [
+    {
+      "row": "boundary-attempt/spawn",
+      "owner": "task-15",
+      "test": "E2 boundary: rejects each worker escape report before load",
+      "mutation": "e2-r1-a1-spawn-report"
+    },
+    {
+      "row": "real-mac-check/spawn",
+      "owner": "task-15",
+      "test": "E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start",
+      "mutation": "e2-r1-a1-real-mac-spawn"
+    },
+    {
+      "row": "fixture/task-15.json",
+      "owner": "task-15",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    }
+  ],
+  "asyncLedger": [
+    {
+      "function": "tar.ts#readPackageArchiveManifest",
+      "occurrences": 1,
+      "writes": false,
+      "why": "the release-only lock builder's reader: it holds one archive entry in memory and writes no file or state"
+    }
+  ]
+}
