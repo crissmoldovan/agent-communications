@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
+// @ts-expect-error The packed consumer check is executable ESM, copied alone into a consumer, without a declaration file.
 import { packedWorkerImports } from './consumer-check.mjs';
 
 assertLoopbackSeal();
