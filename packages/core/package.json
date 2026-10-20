@@ -39,19 +39,19 @@
     "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@sigstore/bundle": "3.1.0",
-    "@sigstore/protobuf-specs": "0.4.3",
-    "@sigstore/tuf": "3.1.1",
-    "@sigstore/verify": "2.1.1",
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/tuf": "5.0.0",
+    "@sigstore/verify": "4.1.2",
     "dom-serializer": "^3.1.1",
     "domhandler": "^6.0.1",
     "html-to-text": "^10.0.1",
     "htmlparser2": "^12.0.0",
-    "postal-mime": "^4.0.5",
+    "postal-mime": "^4.0.8",
     "zod": "catalog:"
   },
   "optionalDependencies": {
-    "@napi-rs/keyring": "^2.1.0"
+    "@napi-rs/keyring": "^2.1.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.3.1",
