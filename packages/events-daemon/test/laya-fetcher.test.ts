@@ -135,10 +135,12 @@ test('E2 fetcher: rejects altered runtime bytes against the exact SRI', async ()
   );
 });
 
+// E2 review round 1 (B6): each deadline test keeps the deadline it proves far from every other deadline and from its
+// settle guard, so a loaded runner cannot turn one deadline into another; the guard only stops a hang.
 test('E2 fetcher: aborts a sealed peer that sends no bytes at idle deadline', async () => {
   const origin = stalledLayaOrigin();
   const controller = new AbortController();
-  const instance = fetcher(origin, { idleTimeoutMs: 15, totalTimeoutMs: 80 });
+  const instance = fetcher(origin, { idleTimeoutMs: 50, totalTimeoutMs: 10_000 });
   try {
     await assert.rejects(
       () =>
@@ -146,7 +148,7 @@ test('E2 fetcher: aborts a sealed peer that sends no bytes at idle deadline', as
           instance.fetchModelFile(manifestFile('laya.onnx', Buffer.alloc(128)), undefined, {
             signal: controller.signal,
           }),
-          160,
+          5_000,
         ),
       (error: unknown) => error instanceof LayaFetchError && error.code === 'IDLE_TIMEOUT',
     );
@@ -158,14 +160,15 @@ test('E2 fetcher: aborts a sealed peer that sends no bytes at idle deadline', as
 });
 
 test('E2 fetcher: aborts a responding peer at total deadline', async () => {
+  // The peer sends a byte every 3 ms, so only a stall of a whole second could reach the idle deadline first.
   const origin = stalledLayaOrigin({ heartbeatMs: 3 });
-  const instance = fetcher(origin, { idleTimeoutMs: 30, totalTimeoutMs: 45 });
+  const instance = fetcher(origin, { idleTimeoutMs: 1_000, totalTimeoutMs: 200 });
   try {
     await assert.rejects(
       () =>
         settlesWithin(
           instance.fetchModelFile(manifestFile('laya.onnx', Buffer.alloc(256)), undefined, { signal: signal() }),
-          160,
+          5_000,
         ),
       (error: unknown) => error instanceof LayaFetchError && error.code === 'TOTAL_TIMEOUT',
     );
@@ -179,7 +182,7 @@ test('E2 fetcher: aborts a responding peer at total deadline', async () => {
 test('E2 fetcher: abort signal destroys a stalled sealed peer with a typed result', async () => {
   const origin = stalledLayaOrigin();
   const controller = new AbortController();
-  const instance = fetcher(origin, { idleTimeoutMs: 80, totalTimeoutMs: 160 });
+  const instance = fetcher(origin, { idleTimeoutMs: 10_000, totalTimeoutMs: 20_000 });
   const request = instance.fetchModelFile(manifestFile('laya.onnx', Buffer.alloc(128)), undefined, {
     signal: controller.signal,
   });
@@ -187,7 +190,7 @@ test('E2 fetcher: abort signal destroys a stalled sealed peer with a typed resul
     while (origin.journal.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
     controller.abort();
     await assert.rejects(
-      () => settlesWithin(request, 80),
+      () => settlesWithin(request, 3_000),
       (error: unknown) => error instanceof LayaFetchError && error.code === 'ABORTED',
     );
     assert.equal(origin.destroyed(), true, 'cancellation must destroy the peer immediately');
@@ -222,14 +225,14 @@ test('E2 fetcher: total deadline reaches the TCP connector before it opens', asy
   await assert.rejects(
     () =>
       settlesWithin(
-        fetcher(origin, { totalTimeoutMs: 20 }).fetchModelFile(
+        fetcher(origin, { totalTimeoutMs: 200 }).fetchModelFile(
           manifestFile('laya.onnx', Buffer.alloc(128)),
           undefined,
           {
             signal: signal(),
           },
         ),
-        80,
+        5_000,
       ),
     (error: unknown) => error instanceof LayaFetchError && error.code === 'TOTAL_TIMEOUT',
   );

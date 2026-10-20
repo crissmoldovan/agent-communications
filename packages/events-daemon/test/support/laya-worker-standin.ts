@@ -2,6 +2,12 @@ import { createSocket } from 'node:dgram';
 import { connect } from 'node:net';
 import { WorkerFrameParser, writeWorkerFrame } from '../../src/runtime/laya/worker-protocol.ts';
 
+/**
+ * How long after its all-denied report a `late-*` stand-in makes its escape: well inside the daemon's 150 ms window,
+ * so a loaded runner cannot push it past the window, and after the report, so a window of 0 ms would miss it.
+ */
+const LATE_AFTER_REPORT_MS = 30;
+
 const standinArgument = process.argv.indexOf('--standin');
 const mode = standinArgument === -1 ? 'forged' : process.argv[standinArgument + 1];
 
@@ -181,7 +187,7 @@ process.stdin.on('data', (chunk: Buffer) => {
           const socket = connect(Number(frame.tcpPort), '127.0.0.1');
           socket.on('error', () => undefined);
           socket.on('connect', () => socket.destroy());
-        }, 75);
+        }, LATE_AFTER_REPORT_MS);
       }
       if (mode === 'late-report') {
         setTimeout(() => {
@@ -191,7 +197,7 @@ process.stdin.on('data', (chunk: Buffer) => {
             attempt: 'tcp',
             outcome: 'escaped',
           });
-        }, 75);
+        }, LATE_AFTER_REPORT_MS);
       }
     };
     if (mode === 'delayed-denied') setTimeout(() => void report(), 1000);
