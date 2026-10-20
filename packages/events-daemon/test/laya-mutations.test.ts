@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ import {
   VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
-import { runStrictMutationChild } from './support/strict-mutation-child.ts';
+import { ORACLE_GROUP_KILL, runStrictMutationChild } from './support/strict-mutation-child.ts';
 
 assertLoopbackSeal();
 
@@ -918,8 +919,9 @@ test('E2 mutation: copied production checker fails only its named oracle', { ski
 });
 
 /**
- * One oracle that starts a descendant — as a test process starts a Laya worker — writes the descendant's PID to
- * `pidFile`, then hangs (`hang`), exits at once (`exit`), or exits while the descendant still holds its output (`hold`).
+ * One oracle that starts a descendant — as a test process starts a Laya worker — writes its own PID to
+ * `<pidFile>.leader` and the descendant's to `pidFile`, then hangs (`hang`), exits at once (`exit`), or exits while the
+ * descendant still holds its output (`hold`).
  */
 function oracleWithDescendant(mode: 'hang' | 'exit' | 'hold', pidFile: string): readonly string[] {
   const source = [
@@ -928,6 +930,7 @@ function oracleWithDescendant(mode: 'hang' | 'exit' | 'hold', pidFile: string): 
     `const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ${
       mode === 'hold' ? "['ignore', 'inherit', 'inherit']" : "'ignore'"
     } });`,
+    `writeFileSync(${JSON.stringify(`${pidFile}.leader`)}, String(process.pid));`,
     `writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid));`,
     mode === 'hang' ? 'setInterval(() => {}, 1000);' : 'process.exit(0);',
   ].join('\n');
@@ -976,12 +979,54 @@ async function withDescendantOracle(
       descendant: async () => Number(await readFile(pidFile, 'utf8')),
     });
   } finally {
-    // A runner that left the descendant running fails above; this only keeps that failure from leaking it.
-    const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
-    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    // A runner that left the oracle or its descendant running fails above; this only keeps that failure from leaking
+    // them. A hung oracle whose runner did not end it — as under the stop-hook mutant — would otherwise run for ever.
+    for (const file of [`${pidFile}.leader`, pidFile]) {
+      const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
+      if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+// E2 review round 1 (B1): Ubuntu's /bin/sh is dash, whose `kill` reads `-KILL --` as a signal and then `--` as a pid
+// ("Illegal number: -"), so the group kill did nothing on the Linux legs and every strict runner left its oracles
+// running. The group kill must parse, and end the whole group, under dash as under bash; macOS ships /bin/dash too.
+test('E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group', {
+  skip: WINDOWS_SKIP || (!existsSync('/bin/dash') && 'no /bin/dash on this machine'),
+}, async () => {
+  for (const shell of ['/bin/dash', '/bin/sh', '/bin/bash'].filter((path) => existsSync(path))) {
+    const directory = await mkdtemp(join(tmpdir(), 'events-e2-group-kill-'));
+    const pidFile = join(directory, 'descendant.pid');
+    const leader = spawn(process.execPath, oracleWithDescendant('hang', pidFile), { detached: true, stdio: 'ignore' });
+    const exited = new Promise<void>((resolve) => leader.once('exit', () => resolve()));
+    try {
+      let descendant: number | undefined;
+      const deadline = Date.now() + 10_000;
+      while (descendant === undefined && Date.now() < deadline) {
+        const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
+        if (Number.isSafeInteger(pid) && pid > 0) descendant = pid;
+        else await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(descendant !== undefined, `${shell}: the oracle started its descendant`);
+      const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], {
+        env: { ORACLE_GROUP: String(leader.pid) },
+        encoding: 'utf8',
+      });
+      assert.equal(killed.stderr, '', `${shell} parses the group kill`);
+      assert.equal(killed.status, 0, `${shell} signals the group`);
+      await settlesWithin(exited, 5_000);
+      assert.equal(await goneWithin(descendant, 2_000), true, `${shell} ends the oracle's whole group`);
+    } finally {
+      if (leader.exitCode === null && leader.signalCode === null) process.kill(-(leader.pid as number), 'SIGKILL');
+      for (const file of [`${pidFile}.leader`, pidFile]) {
+        const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
+        if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
 
 test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
   await withDescendantOracle('hang', async (oracle) => {
