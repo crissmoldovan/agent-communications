@@ -150,7 +150,64 @@ export function verifyExternalSources(root, fragment) {
   }
 }
 
-function verifyFragment(root, fragment, schema) {
+/**
+ * E2 review round 1: a frozen fragment's mutant whose anchored line a later fix had to change is superseded, never
+ * edited. A later fragment lists `supersedes: [{ task, mutant, replacement, reason }]`: the superseded mutant must be
+ * one task `task` registers and its anchor must match nothing any more (a live mutant is never superseded); the
+ * replacement must be a production mutant the superseding fragment registers, killed by the same named test in the
+ * same file and leg; the reason must be stated; and no mutant may be superseded twice, superseded after it replaced
+ * another, or replace one while it is itself superseded (no chain). The runner skips a superseded mutant and runs its
+ * replacement (`test/support/laya-mutants.ts`), and a matrix row naming it is satisfied only by that replacement.
+ * Returns each superseded mutant's id with its replacement's.
+ */
+function verifySupersessions(root, fragments) {
+  const registered = new Map();
+  for (const fragment of fragments)
+    for (const mutation of fragment.value.mutations ?? [])
+      if (mutation?.kind === 'production' && typeof mutation.id === 'string')
+        registered.set(mutation.id, { mutation, task: fragment.task });
+  const superseded = new Map();
+  const replacements = new Set();
+  for (const fragment of fragments) {
+    const entries = fragment.value.supersedes;
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries)) fail(`${fragment.file}.supersedes must be an array`);
+    for (const entry of entries) {
+      const row = requireObject(entry, `${fragment.file}.supersedes[]`);
+      const id = requireString(row.mutant, `${fragment.file}.supersedes[].mutant`);
+      const at = `${fragment.file} supersession of ${JSON.stringify(id)}`;
+      if (typeof row.reason !== 'string' || row.reason.trim().length === 0) fail(`${at} states no reason`);
+      if (typeof row.replacement !== 'string' || row.replacement.length === 0) fail(`${at} names no replacement`);
+      if (!Number.isSafeInteger(row.task) || row.task <= 0 || row.task >= fragment.task)
+        fail(`${at} must name the earlier task whose fragment registers it`);
+      const old = registered.get(id);
+      if (old === undefined || old.task !== row.task) fail(`${at}: task-${row.task}.json registers no such mutant`);
+      const source = resolve(root, old.mutation.source);
+      const sourceText = existsSync(source) ? readFileSync(source, 'utf8') : '';
+      if (typeof old.mutation.before === 'string' && sourceText.includes(old.mutation.before))
+        fail(`${at}: its anchor still applies, and a live mutant is never superseded`);
+      const replacement = registered.get(row.replacement);
+      if (replacement === undefined || replacement.task !== fragment.task)
+        fail(`${at}: its replacement ${JSON.stringify(row.replacement)} is not a mutant ${fragment.file} registers`);
+      if (
+        replacement.mutation.testFile !== old.mutation.testFile ||
+        replacement.mutation.testName !== old.mutation.testName ||
+        (replacement.mutation.leg ?? 'node') !== (old.mutation.leg ?? 'node')
+      )
+        fail(`${at}: its replacement must be killed by the same named test, ${JSON.stringify(old.mutation.testName)}`);
+      if (superseded.has(id) || replacements.has(id) || superseded.has(row.replacement))
+        fail(`${at} makes a supersession chain; supersede each frozen mutant once, by a live replacement`);
+      superseded.set(id, row.replacement);
+      replacements.add(row.replacement);
+    }
+  }
+  for (const replacement of replacements)
+    if (superseded.has(replacement))
+      fail(`supersession chain: ${JSON.stringify(replacement)} replaces one mutant and is itself superseded`);
+  return superseded;
+}
+
+function verifyFragment(root, fragment, schema, superseded = new Map()) {
   const value = requireObject(fragment.value, fragment.file);
   if (value.schemaVersion !== schema.schemaVersion) fail(`${fragment.file} has an unsupported schema version`);
   const task = value.task;
@@ -227,6 +284,12 @@ function verifyFragment(root, fragment, schema) {
           : testContainsName(root, testFile, testName);
     if (!named) {
       fail(`${fragment.file} has orphan mutation ${JSON.stringify(id)}: ${testFile} does not name its oracle`);
+    }
+    if (row.kind === 'production' && superseded.has(id)) {
+      // Its anchor matches nothing any more (verifySupersessions): its replacement is the mutant that runs.
+      requireString(row.before, `${fragment.file}.mutations[${id}].before`);
+      requireString(row.after, `${fragment.file}.mutations[${id}].after`);
+      continue;
     }
     const sourceText = readText(root, source);
     if (row.kind === 'production') {
@@ -798,7 +861,7 @@ function matrixRows(root, fragments, declared) {
   return rows;
 }
 
-function verifyMatrix(root, fragments) {
+function verifyMatrix(root, fragments, superseded = new Map()) {
   const declared = declaredTests(root);
   const rows = matrixRows(root, fragments, declared);
   const mutations = new Map();
@@ -844,7 +907,9 @@ function verifyMatrix(root, fragments) {
       if (entry.staleRowTest !== true || (declared.get(row.test) ?? []).length > 0)
         fail(`${entry.at} names ${JSON.stringify(test)}, but its row names ${JSON.stringify(row.test)}`);
     } else if (entry.staleRowTest !== undefined) fail(`${entry.at} marks a row test stale that is not`);
-    const mutation = mutations.get(entry.mutation);
+    // A superseded mutant no longer runs: the row it guarded is satisfied only by its replacement, which
+    // verifySupersessions proved is killed by the same named test.
+    const mutation = mutations.get(superseded.get(entry.mutation) ?? entry.mutation);
     if (mutation === undefined)
       fail(`${entry.at} names mutation ${JSON.stringify(entry.mutation)}, which no fragment registers`);
     if (mutation.testName !== test)
@@ -1214,14 +1279,15 @@ export function verifyEventsPhaseE2({ root = repositoryRoot } = {}) {
   verifyImmutableFragments(resolvedRoot, fragments);
   fragments.push(...verifyCaseFiles(resolvedRoot));
   if (fragments.length === 0) fail('no task-owned E2 proof fragment exists');
-  for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema);
+  const superseded = verifySupersessions(resolvedRoot, fragments);
+  for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema, superseded);
   verifyMutationLegsRun(resolvedRoot, fragments);
   verifyDaemonBoundary(resolvedRoot);
   verifyWorkerTestSeams(resolvedRoot);
   verifyTestsAreSealed(resolvedRoot);
   verifyInstallFence(resolvedRoot);
   verifyStaticRules(resolvedRoot);
-  verifyMatrix(resolvedRoot, fragments);
+  verifyMatrix(resolvedRoot, fragments, superseded);
   verifyAsyncLedger(resolvedRoot, fragments);
 }
 
