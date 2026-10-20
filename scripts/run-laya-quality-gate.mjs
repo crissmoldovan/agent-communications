@@ -7,8 +7,12 @@
  *
  *   keygen  --key-file <path>                       a fresh 256-bit corpus key, owner-only, outside the repository
  *   seal    --key-file <path> --corpus <directory>  encrypts one plaintext corpus read from stdin into the directory
- *   run     --attest-written-consent --corpus <directory> --key-file <path> --reference <snapshot directory>
+ *   run     --attest-written-consent --corpus <directory> --reference <snapshot directory>
  *           --python <interpreter> --runtime-tree <directory> --model-tree <directory>
+ *
+ * `run` takes the corpus key from `AGENTCOMMS_LAYA_GATE_CORPUS_KEY`, the `laya-quality-gate` environment's secret that
+ * the workflow passes in the quality step's own environment and nowhere else (E2 review round 1, A4), and never from a
+ * file: the gate Mac holds the sealed corpus, not its key.
  *
  * `run` refuses a corpus or key inside the repository and a corpus directory holding anything but sealed corpus files;
  * decrypts only in memory; builds each judge input with E's own envelope (`buildJudgeInput`); asks the candidate's
@@ -152,7 +156,29 @@ export function openCorpus(key, sealed) {
   }
 }
 
-/** The key file: outside the repository, a regular file only its owner can read, holding base64 of 32 bytes. */
+/** The corpus key's environment variable: the gate environment's secret, in the quality step's `env:` alone. */
+export const CORPUS_KEY_VARIABLE = 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY';
+
+/**
+ * The run's corpus key: base64 of 32 bytes from the environment, removed from it before it is checked, so no child the
+ * run starts later can inherit it, whatever environment it is given.
+ */
+export function takeCorpusKey(env = process.env) {
+  const text = env[CORPUS_KEY_VARIABLE];
+  delete env[CORPUS_KEY_VARIABLE];
+  if (typeof text !== 'string' || text.trim().length === 0)
+    fail('QUALITY_KEY', `the run reads the corpus key from ${CORPUS_KEY_VARIABLE}, the gate environment's secret`);
+  const trimmed = text.trim();
+  const key = Buffer.from(trimmed, 'base64');
+  if (key.length !== CORPUS_KEY_BYTES || key.toString('base64') !== trimmed)
+    fail('QUALITY_KEY', `${CORPUS_KEY_VARIABLE} holds base64 of 32 bytes`);
+  return key;
+}
+
+/**
+ * The key file `keygen` writes and `seal` reads, on the owner's own machine: outside the repository, a regular file only
+ * its owner can read, holding base64 of 32 bytes.
+ */
 export async function readCorpusKey(path, { root = repositoryRoot } = {}) {
   const target = assertOutsideRepository(path, { root, what: 'the corpus key' });
   const info = await lstat(target).catch(() => fail('QUALITY_KEY', 'the corpus key file is missing'));
@@ -752,7 +778,9 @@ export async function runQualityGate(options, dependencies = PRODUCTION_DEPENDEN
   if (options.corpus === undefined)
     fail('QUALITY_CORPUS_REQUIRED', 'the run needs an explicitly supplied corpus directory');
   assertOutsideRepository(options.corpus, { root, what: 'the corpus directory' });
-  const key = await readCorpusKey(options.keyFile, { root });
+  if (options.keyFile !== undefined)
+    fail('QUALITY_USAGE', `the run takes the corpus key from ${CORPUS_KEY_VARIABLE}, never from a file`);
+  const key = takeCorpusKey(options.env ?? process.env);
   const candidate = computeCandidate({ root, architecture });
   verifyPythonReferenceRecord(root);
   await dependencies.verifyReferenceSnapshot(options.reference);
@@ -802,6 +830,8 @@ export function parseCommand(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--attest-written-consent') options.attestWrittenConsent = true;
+    else if (argument === '--key-file' && command === 'run')
+      fail('QUALITY_USAGE', `run takes the corpus key from ${CORPUS_KEY_VARIABLE}, never --key-file`);
     else if (Object.hasOwn(COMMAND_OPTIONS, argument)) {
       const value = rest[++index];
       if (value === undefined) fail('QUALITY_USAGE', `${argument} needs a value`);

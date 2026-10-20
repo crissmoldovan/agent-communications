@@ -345,13 +345,19 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
      it, treat the Mac as compromised: discard its trees and keys, and set it up again.
 
   Keep the repository's Actions setting that requires approval before a fork's pull-request workflows run, for every
-  outside contributor. The gate Mac must deny outbound connections except to GitHub, the npm registry
-  and the Node download the job uses to check out, install and report; the job's egress step fails if it can reach an
-  outside address. Set, in the runner's own environment, `AGENTCOMMS_LAYA_GATE_RUNTIME_TREE`,
-  `AGENTCOMMS_LAYA_GATE_MODEL_TREE`, `AGENTCOMMS_LAYA_GATE_CORPUS`, `AGENTCOMMS_LAYA_GATE_KEY_FILE`,
+  outside contributor. The gate Mac must deny outbound connections except to GitHub, the npm registry and the Node
+  download the job uses to check out, install and report. The job's egress step checks only that a TCP connection to
+  each of three public addresses on port 443 (`1.1.1.1`, `8.8.8.8` and `9.9.9.9`) fails; it does not check DNS,
+  another port or another address, so the host's own firewall is what denies them. Set, in the runner's own
+  environment, `AGENTCOMMS_LAYA_GATE_RUNTIME_TREE`, `AGENTCOMMS_LAYA_GATE_MODEL_TREE`, `AGENTCOMMS_LAYA_GATE_CORPUS`,
   `AGENTCOMMS_LAYA_GATE_REFERENCE` and `AGENTCOMMS_LAYA_GATE_PYTHON`: the workflow names them and holds none of them.
-- **Nothing to publish with.** Read-only contents, no OIDC permission, no secret or registry credential, a checkout
-  that keeps no credential, and actions pinned to commits.
+- **The corpus key is the environment's secret, not the Mac's.** Store the key's base64 text (what `keygen` writes) as
+  the `AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret of the `laya-quality-gate` environment, and keep no copy of it on the
+  gate Mac. The workflow passes it only in the quality step's own `env:`, so no other step sees it and the runner's
+  environment names no key path; the run reads it, removes it from its environment before it starts any child, and
+  refuses a key file.
+- **Nothing to publish with.** Read-only contents, no OIDC permission, no registry credential, a checkout that keeps
+  no credential, actions pinned to commits, and one secret, the corpus key, which publishes nothing.
 - **The corpus is read last,** by the quality run alone, after the candidate, the trees, the egress check and the
   boundary run. Ordinary CI, `pnpm verify` and every other workflow run neither gate and read no corpus; a test fails
   if one does.
@@ -363,8 +369,9 @@ D11's quality gate measures each offered template on real, labelled Gmail and Sl
 1. **Written consent and provenance.** Everyone whose messages are in the corpus agreed in writing. The consent ledger
    stays with the corpus owner, outside any checkout; each run attests it, and its report says `written-attested`.
 2. **Encrypted, external retention.** `scripts/run-laya-quality-gate.mjs keygen` and `seal` make the key and the sealed
-   corpus outside the repository. Delete the plaintext after sealing, keep the key and the corpus apart, and upload
-   neither to CI, a fixture, a log or an artifact.
+   corpus outside the repository, on the owner's own machine. Delete the plaintext after sealing and keep the key and
+   the corpus apart: the sealed corpus goes on the gate Mac, the key only into the gate environment's secret (and
+   wherever the owner seals from), and neither into a fixture, a log or an artifact.
 3. **The items** are `{ channel, language, label, question, inputs, event }`, the event a version-1 catalogue event as a
    dry-run delivery shows it; its account's channel must be the item's.
 4. **Aggregate only.** The run prints and writes only `gate/<manifestId>.json`, which must validate with

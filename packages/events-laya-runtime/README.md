@@ -24,9 +24,14 @@ pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 ```
 
 `scripts/verify-events-phase-e2-tests.mjs` refuses any install in a tracked
-file that does not carry that filter, and `scripts/verify-laya-ci-install.mjs`
-proves from a cold store that the filtered install acquires none of the
-runtime's packages.
+file that does not carry that filter. `pnpm verify` runs
+`scripts/verify-laya-ci-install.mjs --self-test`, which checks that the
+workspace stops pnpm from reinstalling unfiltered before a script and that its
+store scanner finds a runtime package in a synthetic store. The cold-store
+install itself — `node scripts/verify-laya-ci-install.mjs`, a filtered install
+into an empty store, scanned for the runtime's three root packages — runs in
+no workflow; it is a check to run by hand, and the coordinator ran it on
+2026-10-10.
 
 ## Reviewed direct packages
 

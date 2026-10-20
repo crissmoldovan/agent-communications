@@ -1164,7 +1164,7 @@ const STATIC_RULES = [
         .slice(workflow.indexOf('\n    steps:\n'))
         .split(/\n {6}- /)
         .slice(1);
-      const corpus = /AGENTCOMMS_LAYA_GATE_(?:CORPUS|KEY_FILE|REFERENCE|PYTHON)\b/;
+      const corpus = /AGENTCOMMS_LAYA_GATE_(?:CORPUS|CORPUS_KEY|KEY_FILE|REFERENCE|PYTHON)\b/;
       const reading = steps.flatMap((step, index) => (corpus.test(step) ? [index] : []));
       const boundary = steps.findIndex((step) => /run-laya-macos-boundary-gate\.mjs run\b/.test(step));
       if (

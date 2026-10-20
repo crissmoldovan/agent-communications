@@ -477,7 +477,22 @@ test('E2 macOS boundary gate workflow: nothing in it can publish or keep a crede
   const workflow = await gateWorkflow();
   assert.match(workflow, /\npermissions: \{\}\n/);
   assert.match(workflow, /\n {4}permissions:\n {6}contents: read\n {4}steps:\n/, 'contents: read, and nothing else');
-  assert.doesNotMatch(workflow, /id-token|secrets\.|registry-url|NODE_AUTH_TOKEN|NPM_TOKEN|github\.token|write-all/);
+  assert.doesNotMatch(workflow, /id-token|registry-url|NODE_AUTH_TOKEN|NPM_TOKEN|github\.token|write-all/);
+  // E2 review round 1 (A4): one secret, the corpus key, the gate environment's own, in the quality step's env alone.
+  const secrets = steps(workflow).flatMap((step, index) =>
+    [...step.matchAll(/\$\{\{\s*secrets\.(\w+)\s*\}\}/g)].map((match) => [index, match[1], step]),
+  );
+  assert.equal([...workflow.matchAll(/secrets\./g)].length, 1, 'no secret anywhere else');
+  assert.equal(secrets.length, 1);
+  const [[, name, step]] = secrets;
+  assert.equal(name, 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY');
+  assert.match(step, /run-laya-quality-gate\.mjs run\b/, 'only the quality run is given it');
+  assert.match(
+    step,
+    /\n {8}env:\n {10}AGENTCOMMS_LAYA_GATE_CORPUS_KEY: \$\{\{ secrets\.AGENTCOMMS_LAYA_GATE_CORPUS_KEY \}\}\n/,
+    'as that step’s own environment',
+  );
+  assert.doesNotMatch(workflow, /KEY_FILE|--key-file/, 'no key path on the gate Mac');
   const checkout = steps(workflow).find((step) => step.startsWith('uses: actions/checkout@'));
   assert.match(checkout ?? '', /\n {10}persist-credentials: false/);
   for (const [, action, ref] of workflow.matchAll(/uses: ([^@\s]+)@(\S+)/g)) {
@@ -507,7 +522,7 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
     );
   }
   const corpus = list.flatMap((step, index) =>
-    /AGENTCOMMS_LAYA_GATE_(?:CORPUS|KEY_FILE|REFERENCE|PYTHON)\b/.test(step) ? [index] : [],
+    /AGENTCOMMS_LAYA_GATE_(?:CORPUS|CORPUS_KEY|KEY_FILE|REFERENCE|PYTHON)\b/.test(step) ? [index] : [],
   );
   assert.deepEqual(corpus, [quality], 'only the quality run names the corpus, its key or the reference');
   const kept = list.at(-1) ?? '';

@@ -130,6 +130,9 @@ interface Runner {
   sealCorpus(key: Buffer, plaintext: Buffer): Buffer;
   openCorpus(key: Buffer, sealed: Buffer): Buffer;
   readCorpusKey(path: string, options: { readonly root: string }): Promise<Buffer>;
+  readonly CORPUS_KEY_VARIABLE: string;
+  takeCorpusKey(env: Record<string, string | undefined>): Buffer;
+  parseCommand(argv: readonly string[]): Readonly<Record<string, unknown>>;
   generateCorpusKey(path: string, options: { readonly root: string }): Promise<void>;
   sealCorpusFile(options: {
     readonly keyFile: string;
@@ -841,6 +844,53 @@ test('E2 quality gate run: a corpus or key inside the repository is refused', { 
   });
 });
 
+test('E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const gateRunner = await runner();
+  assert.equal(gateRunner.CORPUS_KEY_VARIABLE, 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY');
+  const key = Buffer.alloc(32, 9);
+  const env: Record<string, string | undefined> = {
+    PATH: '/usr/bin',
+    AGENTCOMMS_LAYA_GATE_CORPUS_KEY: key.toString('base64'),
+  };
+  assert.deepEqual(gateRunner.takeCorpusKey(env), key);
+  assert.deepEqual(env, { PATH: '/usr/bin' }, 'read once, then gone from the environment the run passes on');
+  assert.equal(
+    codeOf(() => gateRunner.takeCorpusKey(env)),
+    'QUALITY_KEY',
+    'no key, no run',
+  );
+  for (const text of ['', 'not base64', Buffer.alloc(16).toString('base64')]) {
+    assert.equal(
+      codeOf(() => gateRunner.takeCorpusKey({ AGENTCOMMS_LAYA_GATE_CORPUS_KEY: text })),
+      'QUALITY_KEY',
+    );
+  }
+  await withFixtureRoot(async (root) => {
+    const sealed = await sealedCorpus(gateRunner, root, [gmailItem(0, 1)]);
+    try {
+      const options = {
+        root,
+        platform: 'darwin',
+        architecture: 'arm64',
+        attestWrittenConsent: true,
+        corpus: sealed.directory,
+      };
+      assert.equal(
+        await asyncCodeOf(() => gateRunner.runQualityGate({ ...options, keyFile: sealed.keyFile, env: {} }, {})),
+        'QUALITY_USAGE',
+        'a key file is refused: the key lives in the gate environment, not on its Mac',
+      );
+      assert.equal(await asyncCodeOf(() => gateRunner.runQualityGate({ ...options, env: {} }, {})), 'QUALITY_KEY');
+    } finally {
+      await sealed.remove();
+    }
+  });
+  assert.throws(() => gateRunner.parseCommand(['run', '--key-file', '/outside/corpus.key']), /QUALITY_USAGE/);
+  assert.equal(gateRunner.parseCommand(['seal', '--key-file', '/outside/corpus.key']).keyFile, '/outside/corpus.key');
+});
+
 test('E2 quality gate run: the corpus directory holds only sealed corpus files', { skip: WINDOWS_SKIP }, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
@@ -1145,7 +1195,7 @@ test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_S
           architecture: 'arm64',
           attestWrittenConsent: true,
           corpus: sealed.directory,
-          keyFile: sealed.keyFile,
+          env: { [gateRunner.CORPUS_KEY_VARIABLE]: sealed.key.toString('base64') },
           reference: '/nonexistent/reference-snapshot',
           python: '/nonexistent/python',
           runtimeTree: '/nonexistent/runtime',

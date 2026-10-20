@@ -99,8 +99,9 @@ the daemon's data directory on that Mac.
 
 ## 9. The quality report, from the consented external corpus
 
-- [ ] The corpus, its key and its consent ledger stayed outside every checkout, and nothing of them was uploaded to CI,
-      a fixture, a log or an artifact.
+- [ ] The corpus, its key and its consent ledger stayed outside every checkout; the key is only the gate environment's
+      `AGENTCOMMS_LAYA_GATE_CORPUS_KEY` secret (and wherever you seal from), never a file on the gate Mac; and nothing
+      of them went into a fixture, a log or an artifact.
 - [ ] Read `gate/<manifestId>.json` before committing it. It holds aggregates only: no message, subject, address,
       account, path, token, question or answer. Its consent is `written-attested`, Gmail and Slack are reported
       separately for every offered template, and its architectures are the Macs that ran.
