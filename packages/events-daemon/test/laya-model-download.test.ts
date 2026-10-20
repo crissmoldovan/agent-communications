@@ -225,6 +225,44 @@ test(
   },
 );
 
+// E2 CI round 1: the owner's stop and every disable fence the manager's job (its fence turns stale) and abort its
+// signal at once. A fence check that found the signal already aborted answered the abort and left the stale fence's
+// own rejection unhandled: on a loaded runner (the check after a file's hash) the daemon would end on it.
+test(
+  'E2 laya model download: a fence that goes stale as the download is cancelled is answered, never left to reject unhandled',
+  TEST_TIMEOUT,
+  async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', record);
+    try {
+      await temporary(async (root) => {
+        const controller = new AbortController();
+        const never = async () => {
+          throw new Error('a cancelled download connects nowhere');
+        };
+        const fence = {
+          // As the manager's stop does: the job's signal aborts and its fence is stale in the same moment.
+          async assertCurrent(_stage: string) {
+            controller.abort();
+            throw new Error('the fence is stale');
+          },
+          async withArtifactLock<T>(work: () => Promise<T>): Promise<T> {
+            return work();
+          },
+        };
+        const download = downloader(root, { tcpConnect: never, tlsConnect: never } as never, await testFiles(), fence);
+        await assert.rejects(download.download({ signal: controller.signal }), { code: 'CANCELLED' });
+        // An unhandled rejection is reported after the microtasks of the turn it was made in.
+        for (let turn = 0; turn < 3; turn += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+      });
+      assert.deepEqual(unhandled, [], 'a stale fence is answered even when the signal decided first');
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+  },
+);
+
 test('E2 laya model download: forwards abort into the TLS handshake primitive', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];

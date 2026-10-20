@@ -75,6 +75,9 @@ function awaitFenceWithSignal(wait: Promise<void>, signal: AbortSignal): Promise
       }
     };
     if (signal.aborted) {
+      // The abort decides, but the fence's own answer is still handled: the owner's stop and every disable make the
+      // fence stale as they abort, and its rejection left alone would escape the daemon (E2 CI round 1).
+      wait.catch(() => undefined);
       onAbort();
       return;
     }
