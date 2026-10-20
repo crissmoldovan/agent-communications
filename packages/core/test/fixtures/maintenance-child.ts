@@ -6,7 +6,8 @@ import { withFileLock } from '../../src/lock.ts';
  * `unsent-report.test.ts`): run as a child with `--experimental-strip-types`, it does what the parent asks over IPC.
  *
  * - `{ op: 'hold', id, paths }` takes each lock with the store's own `withFileLock` — exactly as a claim or a look in
- *   another process holds one — and answers `{ id, ok: true, held }` once every one is held. It keeps them all until
+ *   another process holds one — and answers `{ id, ok: true, held }` once every one is held. It keeps them all, and
+ *   renews them as a live holder does, so however slow the machine, no lock it holds is ever judged abandoned, until
  * - `{ op: 'release', id }`, which answers `{ id, ok: true }` once every lock is let go.
  * - `{ op: 'prune', id, stateDir, now }` opens its own store over `stateDir`, at the parent's time, runs the day's
  *   maintenance and answers `{ id, ok: true, status }`.
@@ -19,6 +20,9 @@ interface Request {
   stateDir?: string;
   now?: number;
 }
+
+/** How often a held lock is renewed: a third of the record locks' 30-second stale interval. */
+const HOLD_RENEW_MS = 10_000;
 
 let release: (() => void) | undefined;
 let holding: Promise<unknown> | undefined;
@@ -37,11 +41,16 @@ process.on('message', async (message: Request) => {
       });
       holding = Promise.all(
         paths.map((path) =>
-          withFileLock(path, async () => {
-            taken += 1;
-            if (taken === paths.length) allTaken();
-            await letGo;
-          }),
+          withFileLock(
+            path,
+            async () => {
+              taken += 1;
+              if (taken === paths.length) allTaken();
+              await letGo;
+            },
+            // A record lock is abandoned after 30 s without a renewal; a test on a slow machine can hold one longer.
+            { renewMs: HOLD_RENEW_MS },
+          ),
         ),
       );
       if (paths.length === 0) allTaken();
