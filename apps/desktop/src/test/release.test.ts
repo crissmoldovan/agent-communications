@@ -340,6 +340,21 @@ describe('the desktop workflows', () => {
     ]) {
       outside.add(read);
     }
+    // The Laya Rust mutants step runs E2's cargo leg from the events daemon's tests: every file that entry imports,
+    // through every relative import, decides what the step does (E2 review round 1, B10).
+    const cargoLeg = /^\s+run: node \S.* (packages\/events-daemon\/\S+\.ts) --leg cargo$/m.exec(workflow)?.[1];
+    expect(cargoLeg, 'desktop.yml runs the cargo leg').toBeDefined();
+    const pending = [cargoLeg ?? ''];
+    const imported = new Set<string>();
+    while (pending.length > 0) {
+      const file = pending.pop() ?? '';
+      if (imported.has(file)) continue;
+      imported.add(file);
+      for (const [, specifier] of read(file).matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g))
+        pending.push(join(dirname(file), specifier ?? '').replaceAll('\\', '/'));
+    }
+    expect(imported.size, 'the cargo leg and its relative imports').toBeGreaterThan(4);
+    for (const path of imported) outside.add(path);
     expect(outside.size).toBeGreaterThan(8);
     for (const path of outside) expect(covers(path), `${path} is not in desktop.yml's paths`).toBe(true);
     // And push is filtered the same way.

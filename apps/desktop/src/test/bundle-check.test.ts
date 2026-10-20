@@ -189,7 +189,7 @@ it('E2 desktop Laya contract: the bundle check refuses every file route Tauri’
     ['bundle.windows.nsis.customLanguageFiles', { English: 'en.nsh' }],
     ['bundle.icon', ['icons/icon.png', '../../packages/events-daemon/laya-manifest.json']],
     ['app.trayIcon', { iconPath: '../model.png' }],
-    ['build.frontendDist', '../../../packages/events-daemon'],
+    ['build.frontendDist', '../../packages/events-daemon/dist'],
     ['build.beforeBuildCommand', 'pnpm build && cp -r ../../packages/events-daemon/dist dist/assets'],
     ['build.beforeBundleCommand', 'cp model.onnx dist/assets'],
   ];

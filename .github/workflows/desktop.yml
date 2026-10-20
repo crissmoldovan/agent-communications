@@ -33,11 +33,13 @@ on:
       - '.gitignore'
       - '.github/workflows/release.yml'
       # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
-      # runner, fragments and child of E2's Rust mutants, which the Laya Rust mutants step runs.
+      # runner, fragments and every module the runner imports, which the Laya Rust mutants step runs.
       - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
       - 'packages/events-daemon/test/fixtures/laya/cases/**'
       - 'packages/events-daemon/test/support/laya-mutants.ts'
+      - 'packages/events-daemon/test/support/mutation-runner-exit.ts'
       - 'packages/events-daemon/test/support/run-laya-mutants.ts'
+      - 'packages/events-daemon/test/support/short-temp.ts'
       - 'packages/events-daemon/test/support/strict-mutation-child.ts'
   push:
     branches: [main]
@@ -61,11 +63,13 @@ on:
       - '.gitignore'
       - '.github/workflows/release.yml'
       # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
-      # runner, fragments and child of E2's Rust mutants, which the Laya Rust mutants step runs.
+      # runner, fragments and every module the runner imports, which the Laya Rust mutants step runs.
       - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
       - 'packages/events-daemon/test/fixtures/laya/cases/**'
       - 'packages/events-daemon/test/support/laya-mutants.ts'
+      - 'packages/events-daemon/test/support/mutation-runner-exit.ts'
       - 'packages/events-daemon/test/support/run-laya-mutants.ts'
+      - 'packages/events-daemon/test/support/short-temp.ts'
       - 'packages/events-daemon/test/support/strict-mutation-child.ts'
   workflow_call: {}
 
