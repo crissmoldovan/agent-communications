@@ -309,10 +309,11 @@ test('withFileLock serialises critical sections and clears a stale lock', async 
 
   writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date(Date.now() - 60_000).toISOString(), token: 'dead' }));
   assert.equal(await withFileLock(lock, async () => 'ran', { staleMs: 1000 }), 'ran');
-  // A live lock is never taken over, however many waiters look at it.
+  // A live lock is never taken over, however many waiters look at it. Judged on the lock's own stale interval, 30 s,
+  // not the one-second window above: a process stalled for a second would have read that as abandonment.
   writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date().toISOString(), token: 'alive' }));
   await assert.rejects(
-    withFileLock(lock, async () => 'stolen', { staleMs: 1000, timeoutMs: 150 }),
+    withFileLock(lock, async () => 'stolen', { timeoutMs: 150 }),
     /holding/,
   );
   assert.match(readFileSync(lock, 'utf8'), /alive/);
