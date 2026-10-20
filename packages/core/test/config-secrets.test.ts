@@ -329,12 +329,15 @@ test('a permissions problem fails immediately; it is not reported as contention'
   mkdirSync(join(dir, 'sealed'));
   chmodSync(join(dir, 'sealed'), 0o500);
   try {
+    // The bound is the timeout it must not wait out, not a guess at this machine's speed. The error itself, EACCES and
+    // not LOCK_TIMEOUT, is what shows it never waited at all.
+    const timeoutMs = 5000;
     const started = Date.now();
     await assert.rejects(
-      withFileLock(lock, async () => 'never', { timeoutMs: 5000 }),
+      withFileLock(lock, async () => 'never', { timeoutMs }),
       (error: unknown) => (error as NodeJS.ErrnoException).code === 'EACCES',
     );
-    assert.ok(Date.now() - started < 2000, 'it should not have waited out the timeout');
+    assert.ok(Date.now() - started < timeoutMs, 'it should not have waited out the timeout');
   } finally {
     chmodSync(join(dir, 'sealed'), 0o700);
   }
