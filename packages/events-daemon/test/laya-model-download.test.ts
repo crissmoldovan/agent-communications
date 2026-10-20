@@ -472,6 +472,44 @@ test('E2 laya model download: resumes only a rehashed exact Content-Range', asyn
   });
 });
 
+// E2 review round 1 (A7/B8): the model's data file is 1.69 GB, so a whole-file read would hold all of it in memory.
+// Node's readFile refuses a file of 2 GiB or more, so a held partial of exactly 2 GiB (sparse: no disk is used) can be
+// rehashed and resumed, and the finished file verified, only by a hash that streams.
+test('E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read', {
+  skip: process.platform === 'win32' && 'a sparse 2 GiB fixture needs a POSIX filesystem',
+  timeout: 180_000,
+}, async () => {
+  await temporary(async (root) => {
+    const held = 2 ** 31;
+    const tail = Buffer.from('tail');
+    const size = held + tail.length;
+    const expected = createHash('sha256');
+    const zeros = Buffer.alloc(2 ** 24);
+    for (let written = 0; written < held; written += zeros.length) expected.update(zeros);
+    expected.update(tail);
+    const files = [{ path: 'laya.onnx.data', size, sha256: expected.digest('hex'), bytes: Buffer.alloc(0) }];
+    const partial = join(root, 'models', `${modelId}.partial`);
+    await mkdir(partial, { recursive: true });
+    const handle = await open(join(partial, 'laya.onnx.data'), 'w');
+    await handle.truncate(held);
+    await handle.close();
+    const origin = scriptedLayaOrigin([
+      {
+        status: 206,
+        headers: { 'Content-Range': `bytes ${held}-${size - 1}/${size}`, 'Content-Length': String(tail.length) },
+        body: tail,
+      },
+    ]);
+    const result = await downloader(root, origin, files).download(
+      downloadOptions({ freeBytes: async () => Number.MAX_SAFE_INTEGER }),
+    );
+    assert.equal(origin.journal.length, 1, 'one request: the held bytes were rehashed, not fetched again');
+    assert.match(origin.journal[0]?.request ?? '', new RegExp(`Range: bytes=${held}-\\r\\n`, 'u'));
+    assert.equal(result.bytesVerified, size, 'the finished file verified at its manifest size and SHA-256');
+    assert.equal((await lstat(join(result.root, 'laya.onnx.data'))).size, size);
+  });
+});
+
 test('E2 laya model download: resets a partial on 200, mismatched Content-Range, or 416', async (t) => {
   for (const reply of [
     { status: 200, headers: { 'Content-Length': '6' }, body: Buffer.from('abcdef') },

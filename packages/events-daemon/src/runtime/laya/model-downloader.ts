@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { appendFile, chmod, lstat, mkdir, readFile, rename, rm, statfs, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { appendFile, chmod, lstat, mkdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { layaModelArtifactPaths } from './artifact-paths.ts';
 import type { CanonicalLayaManifest, LayaManifestFile } from './contracts.ts';
@@ -97,9 +98,18 @@ function downloadErrorForFetch(error: LayaFetchError): LayaModelDownloadError {
   return new LayaModelDownloadError('DOWNLOAD_FAILED');
 }
 
+/**
+ * A file's size and SHA-256, streamed one read at a time as the tree verifier does: the model's data file is 1.69 GB,
+ * which a whole-file read would hold in memory at once (and Node refuses to read a file of 2 GiB or more whole).
+ */
 async function hashFile(path: string): Promise<{ readonly size: number; readonly sha256: string }> {
-  const bytes = await readFile(path);
-  return { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  const hash = createHash('sha256');
+  let size = 0;
+  for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    hash.update(chunk);
+  }
+  return { size, sha256: hash.digest('hex') };
 }
 
 async function partialSize(path: string): Promise<number> {
