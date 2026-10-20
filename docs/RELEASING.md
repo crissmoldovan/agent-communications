@@ -314,7 +314,9 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
 4. **The boundary run, then the quality run.** Run the `Laya quality gate` workflow on the candidate tag and approve its
    environment. It verifies the candidate and the trees, checks the host's egress, runs
    `scripts/run-laya-macos-boundary-gate.mjs run` and then `scripts/run-laya-quality-gate.mjs run`, and keeps the two
-   results as an artifact for seven days.
+   results as an artifact (`laya-gate-results`) for seven days. It also uploads, unzipped, each run's own copy of its
+   result for this Mac's architecture, `laya-quality-run.json` and `laya-boundary-run.json`, kept for 90 days: those
+   are what a release checks the committed results against.
 5. **Commit the results.** Read both files, then commit them under `packages/events-laya-runtime/gate/`. The gate
    directory is outside the candidate subject, so committing them does not change what they are bound to. Changing a
    subject file does, and needs both gates run again on a new candidate: the three assets, the daemon's `package.json`
@@ -322,7 +324,35 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
    the extractor (`tar.ts`), the tree verifier, the artifact manager, or anything the worker imports. A version bump
    alone does not: the daemon's `package.json` is bound as canonical JSON without its `version`, so the release
    commit's bump keeps the evidence.
-6. **Release** as usual. The `laya` job refuses until every check above passes.
+
+   **Record the run.** Write `packages/events-laya-runtime/gate/runs-v1.json` beside them, naming for each architecture
+   the run that produced its results — its id, the number in the run's URL (`…/actions/runs/<id>`), as a string — and
+   the candidate commit it ran on, the full 40-character id the `laya-candidate-*` tag names:
+
+   ```json
+   {
+     "schemaVersion": 1,
+     "runs": [
+       {
+         "architecture": "arm64",
+         "runId": "<run id>",
+         "commit": "<candidate commit>"
+       }
+     ]
+   }
+   ```
+
+   Two-space JSON with a final newline, one entry per architecture the lock offers. For a second architecture, commit
+   the first one's results and run record, tag that commit as a new candidate (the gate directory is outside the
+   subject, so the subject is the same), run the workflow on the other Mac — its run joins the committed entry — then
+   commit its results and add its run, with its own candidate commit, to the record.
+6. **Release** as usual, within 90 days of the runs. The `laya` job refuses until every check above passes and, with
+   `actions: read` and its own token, asks GitHub about each recorded run: it must be
+   `.github/workflows/laya-quality-gate.yml`, started by `workflow_dispatch` on a `laya-candidate-*` tag of this
+   repository, `completed` with `success`, on exactly the recorded commit; and the SHA-256 digests of its two unzipped
+   copies must equal the committed results restricted to that architecture (`scripts/verify-laya-gate-runs.mjs`). A
+   result written or changed by hand, or kept from another run, is refused (`LAYA_RELEASE_RUN`). Once the copies have
+   expired, run the gate again.
 
 ### The protected gate
 

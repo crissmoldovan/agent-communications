@@ -23,8 +23,12 @@ name: Laya quality gate
 #   no credential, and one secret, the corpus key above, which publishes nothing.
 # - **The corpus is read last.** Only after the candidate and both trees verify, the host's egress is checked and the
 #   boundary run has finished does the quality run open the corpus, in memory. Both runs print and write only their
-#   content-free results, which the last step keeps for the owner to read and commit: the aggregate
+#   content-free results, which the first artifact step keeps for the owner to read and commit: the aggregate
 #   `packages/events-laya-runtime/gate/<manifestId>.json` and `packages/events-laya-runtime/gate/macos-boundary-v2.json`.
+# - **Provenance a release can check.** Each run also writes its own copy of its result for this architecture, and the
+#   last two steps upload them unzipped (`laya-quality-run.json`, `laya-boundary-run.json`), so each artifact's digest
+#   is that file's SHA-256. The owner records this run's id and commit in `gate/runs-v1.json`; a release that offers
+#   Laya asks GitHub about this run and compares those digests with the committed results (E2 review round 1, A3).
 #
 # Actions are pinned to the commit of the tag in each comment.
 
@@ -72,6 +76,7 @@ jobs:
           node --experimental-strip-types --disable-warning=ExperimentalWarning
           scripts/run-laya-macos-boundary-gate.mjs run
           --runtime-tree "$AGENTCOMMS_LAYA_GATE_RUNTIME_TREE" --model-tree "$AGENTCOMMS_LAYA_GATE_MODEL_TREE"
+          --run-copy "$RUNNER_TEMP/laya-boundary-run.json"
       - name: the labelled quality run, over the consented corpus
         env:
           AGENTCOMMS_LAYA_GATE_CORPUS_KEY: ${{ secrets.AGENTCOMMS_LAYA_GATE_CORPUS_KEY }}
@@ -81,6 +86,7 @@ jobs:
           --corpus "$AGENTCOMMS_LAYA_GATE_CORPUS"
           --reference "$AGENTCOMMS_LAYA_GATE_REFERENCE" --python "$AGENTCOMMS_LAYA_GATE_PYTHON"
           --runtime-tree "$AGENTCOMMS_LAYA_GATE_RUNTIME_TREE" --model-tree "$AGENTCOMMS_LAYA_GATE_MODEL_TREE"
+          --run-copy "$RUNNER_TEMP/laya-quality-run.json"
       - name: keep the two content-free results for the owner
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -91,3 +97,19 @@ jobs:
             packages/events-laya-runtime/gate/macos-boundary-v2.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: this run's own copy of its quality result, unzipped, for the release to check
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          path: ${{ runner.temp }}/laya-quality-run.json
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: this run's own copy of its boundary result, unzipped, for the release to check
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          path: ${{ runner.temp }}/laya-boundary-run.json
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 90

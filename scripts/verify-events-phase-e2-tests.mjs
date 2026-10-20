@@ -1000,8 +1000,10 @@ function probeStartsAnotherProcess(code) {
 
 /**
  * E2 Task 12, Step 4: the static trust boundaries. The named exceptions stay exactly these and no others: the probe's
- * one loopback `fetch`, the worker runtime's one verified-tree import (both phase E's checker's rules) and the
- * release-only raw-tarball acquirer, `scripts/fetch-laya-release-tarballs.mjs`.
+ * one loopback `fetch`, the worker runtime's one verified-tree import (both phase E's checker's rules), the
+ * release-only raw-tarball acquirer, `scripts/fetch-laya-release-tarballs.mjs`, and, from E2 review round 1, the
+ * probe's one refused process start (A1) and the release's one GitHub API request (A3,
+ * `scripts/verify-laya-gate-runs.mjs`).
  */
 const STATIC_RULES = [
   {
@@ -1021,12 +1023,17 @@ const STATIC_RULES = [
     id: 'laya-network-calls-named-only',
     check(root) {
       const acquirer = 'scripts/fetch-laya-release-tarballs.mjs';
+      // E2 review round 1 (A3): the release's check of the protected gate runs makes its GitHub API request in one place.
+      const gateRuns = 'scripts/verify-laya-gate-runs.mjs';
       const scripts = filesBelow(root, 'scripts').filter((file) => /laya/.test(file) && /\.m?[jt]s$/.test(file));
       for (const file of [...layaSources(root), ...scripts]) {
         const code = codeOnly(readText(root, file));
         const fetches = (code.match(/\bfetch\s*\(/g) ?? []).length;
         const requests = valueImports(code).filter((specifier) => /^node:https?$/.test(specifier)).length;
-        if (file.endsWith('/worker-boundary-probe.ts') ? fetches > 1 : fetches > 0)
+        if (file === gateRuns) {
+          if (fetches > 1)
+            fail(`${file} calls fetch more than once; the gate-run check makes its GitHub API request in one place`);
+        } else if (file.endsWith('/worker-boundary-probe.ts') ? fetches > 1 : fetches > 0)
           fail(`${file} calls fetch; only the boundary probe's one loopback attempt may`);
         if (requests > 0 && file !== acquirer)
           fail(`${file} makes an HTTP request; only the release-only raw-tarball acquirer may`);

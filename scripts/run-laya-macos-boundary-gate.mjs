@@ -7,8 +7,10 @@
  *   verify-candidate --runtime-tree <directory> --model-tree <directory>
  *                    the candidate ships the real lock, and both trees are exactly that candidate's
  *   egress-check     this host cannot open a connection beyond its allow-list
- *   run --runtime-tree <directory> --model-tree <directory>
- *                    the boundary run, which writes only packages/events-laya-runtime/gate/macos-boundary-v2.json
+ *   run --runtime-tree <directory> --model-tree <directory> [--run-copy <file>]
+ *                    the boundary run, which writes only packages/events-laya-runtime/gate/macos-boundary-v2.json and,
+ *                    in the protected workflow, this run's own copy of it for its architecture (E2 review round 1,
+ *                    A3), which the workflow uploads unzipped so a release can compare the committed evidence with it
  *
  * `run` drives the candidate's own worker through the production supervisor and boundary (`LayaWorkerSupervisor`, and
  * the boundary `createLayaWorkerBoundary` builds on): the built worker a release ships (`dist/laya-worker.mjs`, which
@@ -48,6 +50,7 @@ import {
   parseEvidenceBytes,
   validateBoundaryEvidence,
 } from './verify-laya-boundary-gate.mjs';
+import { runCopyBytes } from './verify-laya-gate-runs.mjs';
 import { QUALITY_ARCHITECTURES } from './verify-laya-quality-gate.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -388,6 +391,9 @@ export async function runBoundaryGate(options, dependencies = PRODUCTION_BOUNDAR
   await mkdir(dirname(path), { recursive: true });
   await writeFile(temporary, canonicalEvidenceBytes(evidence), { flag: 'wx', mode: 0o644 });
   await rename(temporary, path);
+  // The run's own copy: its architecture's entry with what the evidence shares, as a release recomputes it.
+  if (options.runCopy !== undefined)
+    await writeFile(options.runCopy, runCopyBytes(evidence, architecture, canonicalEvidenceBytes), { mode: 0o644 });
   return {
     path: BOUNDARY_EVIDENCE,
     passed: entry.passed,
@@ -400,10 +406,14 @@ export function parseCommand(argv) {
   if (!['verify-candidate', 'egress-check', 'run'].includes(command))
     fail('BOUNDARY_USAGE', 'usage: run-laya-macos-boundary-gate.mjs verify-candidate|egress-check|run');
   const options = {};
-  const named = { '--runtime-tree': 'runtimeTree', '--model-tree': 'modelTree' };
+  const named = { '--runtime-tree': 'runtimeTree', '--model-tree': 'modelTree', '--run-copy': 'runCopy' };
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
-    if (command === 'egress-check' || !Object.hasOwn(named, argument))
+    if (
+      command === 'egress-check' ||
+      !Object.hasOwn(named, argument) ||
+      (argument === '--run-copy' && command !== 'run')
+    )
       fail('BOUNDARY_USAGE', `unknown argument ${JSON.stringify(argument)}`);
     const value = rest[++index];
     if (value === undefined || value.length === 0) fail('BOUNDARY_USAGE', `${argument} needs a directory`);

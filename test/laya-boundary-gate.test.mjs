@@ -27,6 +27,7 @@ import {
   validateBoundaryEvidence,
   verifyBoundaryGate,
 } from '../scripts/verify-laya-boundary-gate.mjs';
+import { RUN_COPIES } from '../scripts/verify-laya-gate-runs.mjs';
 import {
   boundaryEvidence,
   codeOf,
@@ -513,8 +514,10 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
   const boundary = at('scripts/run-laya-macos-boundary-gate.mjs run');
   const quality = at('scripts/run-laya-quality-gate.mjs run --attest-written-consent');
   assert.ok(install < candidate && candidate < egress && egress < boundary && boundary < quality);
-  // The order protects only if every step runs: none before the results' artifact may be skipped or allowed to fail.
-  for (const [index, step] of list.slice(0, -1).entries()) {
+  // The order protects only if every step runs: none before the results' artifacts may be skipped or allowed to fail.
+  const uploads = list.flatMap((step, index) => (step.includes('uses: actions/upload-artifact@') ? [index] : []));
+  assert.deepEqual(uploads, [list.length - 3, list.length - 2, list.length - 1], 'the three artifact steps come last');
+  for (const [index, step] of list.slice(0, uploads[0]).entries()) {
     assert.doesNotMatch(
       step,
       /\n {8}(?:if|continue-on-error):/,
@@ -525,7 +528,7 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
     /AGENTCOMMS_LAYA_GATE_(?:CORPUS|CORPUS_KEY|KEY_FILE|REFERENCE|PYTHON)\b/.test(step) ? [index] : [],
   );
   assert.deepEqual(corpus, [quality], 'only the quality run names the corpus, its key or the reference');
-  const kept = list.at(-1) ?? '';
+  const kept = list[uploads[0]] ?? '';
   assert.match(kept, /packages\/events-laya-runtime\/gate\/laya-\*\.json\n/);
   assert.match(kept, /packages\/events-laya-runtime\/gate\/macos-boundary-v2\.json\n/);
   assert.equal(
@@ -533,6 +536,39 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
     2,
     'the artifact keeps the two content-free results and nothing else',
   );
+});
+
+test('E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped', async () => {
+  const list = steps(await gateWorkflow());
+  const boundaryRun = list.find((step) => step.includes('scripts/run-laya-macos-boundary-gate.mjs run')) ?? '';
+  const qualityRun = list.find((step) => step.includes('scripts/run-laya-quality-gate.mjs run')) ?? '';
+  assert.match(boundaryRun, new RegExp(`--run-copy "\\$RUNNER_TEMP/${RUN_COPIES.boundary}"(?:\n|$)`));
+  assert.match(qualityRun, new RegExp(`--run-copy "\\$RUNNER_TEMP/${RUN_COPIES.quality}"(?:\n|$)`));
+  for (const [step, name] of [
+    [list.at(-2), RUN_COPIES.quality],
+    [list.at(-1), RUN_COPIES.boundary],
+  ]) {
+    // Unzipped, the artifact is the file itself, named by it, and GitHub's digest of it is the file's SHA-256.
+    assert.match(step ?? '', new RegExp(`\\n {10}path: \\$\\{\\{ runner\\.temp \\}\\}/${name}\\n`), name);
+    assert.match(step ?? '', /\n {10}archive: false\n/, `${name} is uploaded unzipped`);
+    assert.match(step ?? '', /\n {10}retention-days: 90(?:\n|$)/, `${name} is kept as long as GitHub allows`);
+  }
+  await withOffered(async (root) => {
+    // Another architecture's entry already there: the copy is still this run's architecture alone.
+    await writeBoundaryEvidence(root, boundaryEvidence(root, ['x64']));
+    const copy = join(root, 'run-copy.json');
+    await runOn(root, standinMac().dependencies, { runCopy: copy });
+    const committed = parseEvidenceBytes(await readFile(join(root, BOUNDARY_EVIDENCE)));
+    assert.deepEqual(
+      committed.architectures.map((entry) => entry.architecture),
+      ['arm64', 'x64'],
+    );
+    assert.deepEqual(
+      await readFile(copy),
+      canonicalEvidenceBytes({ ...committed, architectures: [committed.architectures[0]] }),
+      "the run's copy is the committed evidence restricted to its architecture",
+    );
+  });
 });
 
 test('E2 macOS boundary gate workflow: ordinary CI and pnpm verify run neither gate and read no corpus', async () => {

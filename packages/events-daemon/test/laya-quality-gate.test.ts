@@ -1196,6 +1196,7 @@ test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_S
           attestWrittenConsent: true,
           corpus: sealed.directory,
           env: { [gateRunner.CORPUS_KEY_VARIABLE]: sealed.key.toString('base64') },
+          runCopy: join(sealed.directory, '..', `laya-quality-run-${process.pid}.json`),
           reference: '/nonexistent/reference-snapshot',
           python: '/nonexistent/python',
           runtimeTree: '/nonexistent/runtime',
@@ -1236,6 +1237,11 @@ test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_S
       );
       assert.deepEqual(await filesBelow(sealed.directory), corpusBefore, 'the corpus directory is untouched');
       const bytes = await readFile(join(root, result.path), 'utf8');
+      // E2 review round 1 (A3): the run's own copy, which the workflow uploads unzipped, is its architecture's entry of
+      // that same report: here, with one architecture, the report itself.
+      const runCopy = join(sealed.directory, '..', `laya-quality-run-${process.pid}.json`);
+      assert.equal(await readFile(runCopy, 'utf8'), bytes);
+      await rm(runCopy, { force: true });
       for (const output of [bytes, result.lines.join('\n')]) {
         for (const content of ['Synthetic', 'quarterly', '@', 'untrusted-content', '/subject', QUESTION]) {
           assert.equal(output.includes(content), false, `no ${content} leaves the run`);

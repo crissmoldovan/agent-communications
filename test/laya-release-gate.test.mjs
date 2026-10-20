@@ -50,7 +50,10 @@ function noDormantQuestion() {
   throw new Error('a real lock was treated as the placeholder');
 }
 
-/** The gate, on a root, with every outside dependency a test's own: no registry, no real package list. */
+/**
+ * The gate, on a root, with every outside dependency a test's own: no registry, no real package list, and no GitHub
+ * (the gate-run check's own loopback fake is `test/laya-gate-runs.test.mjs`'s).
+ */
 function gate(root, overrides = {}) {
   return layaReleaseGate({
     root,
@@ -58,6 +61,7 @@ function gate(root, overrides = {}) {
     publishLists: async () => RELEASE_LISTS,
     availability: noDormantQuestion,
     rebuildLock: async (lockText) => lockText,
+    verifyRuns: async () => [],
     ...overrides,
   });
 }
@@ -255,6 +259,38 @@ test('E2 release gate: every architecture the lock offers needs its own evidence
   });
 });
 
+test('E2 review round 1: a real lock whose results no recorded protected run wrote is refused, before the registry is asked', async () => {
+  await withOffered(async (root, metrics) => {
+    await evidenceFor(root, metrics);
+    const order = [];
+    let rebuilt = 0;
+    const refusal = await refusalOf(() =>
+      gate(root, {
+        verifyQuality: (input) => order.push(['quality', input.architectures]),
+        verifyBoundary: (input) => order.push(['boundary', input.architectures]),
+        verifyRuns: async (input) => {
+          order.push(['runs', input.architectures]);
+          throw new Error('LAYA_GATE_RUN_DIGEST: laya-boundary-run.json of run 7 is not the committed boundary result');
+        },
+        rebuildLock: async (lockText) => {
+          rebuilt += 1;
+          return lockText;
+        },
+      }),
+    );
+    assert.equal(refusal?.code, 'LAYA_RELEASE_RUN');
+    assert.match(refusal?.message ?? '', /LAYA_GATE_RUN_DIGEST/);
+    assert.deepEqual(order, [
+      ['quality', BOTH],
+      ['boundary', BOTH],
+      ['runs', BOTH],
+    ]);
+    assert.equal(rebuilt, 0, 'no registry request after a refused provenance check');
+    // With the provenance shown, the release goes on to the rebuild.
+    assert.deepEqual(await gate(root), { mode: 'offered', architectures: BOTH });
+  });
+});
+
 test('E2 release gate: a lock that does not rebuild byte for byte from its registry tarballs is refused', async () => {
   await withOffered(async (root, metrics) => {
     await evidenceFor(root, metrics);
@@ -277,7 +313,13 @@ test('E2 release gate: the real rebuild needs the owner-only acquirer, and asks 
     await evidenceFor(root, metrics);
     // The production rebuild: without the owner's flag there is no acquirer, so nothing is requested.
     const refused = await refusalOf(() =>
-      layaReleaseGate({ root, env: {}, publishLists: async () => RELEASE_LISTS, availability: noDormantQuestion }),
+      layaReleaseGate({
+        root,
+        env: {},
+        publishLists: async () => RELEASE_LISTS,
+        availability: noDormantQuestion,
+        verifyRuns: async () => [],
+      }),
     );
     assert.equal(refused?.code, 'LAYA_RELEASE_LOCK');
     assert.match(refused.message, /RUNTIME_LOCK_INPUT/);
@@ -414,12 +456,18 @@ test('E2 release gate workflow: the publish needs the Laya release gate, which h
   const workflow = await readFile(join(ROOT, '.github/workflows/release.yml'), 'utf8');
   const job = jobBlock(workflow, 'laya');
   assert.ok(job, 'there is a laya job');
-  assert.match(job, /\n {4}permissions:\n {6}contents: read\n {4}steps:\n/, 'contents: read, and nothing else');
+  // E2 review round 1 (A3): `actions: read` beside `contents: read`, for the gate-run check, and nothing more.
+  assert.match(
+    job,
+    /\n {4}permissions:\n {6}contents: read\n {6}actions: read\n {4}steps:\n/,
+    'contents and actions read, and nothing else',
+  );
   assert.doesNotMatch(job, /id-token|environment:|secrets\.|registry-url|NODE_AUTH_TOKEN/);
   assert.match(
     job,
-    /\n {6}- name: Laya ships dormant, or with every gate's evidence\n {8}env:\n {10}AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1'\n {8}run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts\/laya-release-gate\.mjs\n/,
+    /\n {6}- name: Laya ships dormant, or with every gate's evidence\n {8}env:\n {10}AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1'\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {8}run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts\/laya-release-gate\.mjs\n/,
   );
+  assert.equal(job.split('github.token').length - 1, 1, 'only the gate step is handed the job token');
   assert.ok(
     job.indexOf("pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'") <
       job.indexOf('scripts/laya-release-gate.mjs'),
@@ -564,12 +612,16 @@ async function sealedNode(args, { cwd, env }) {
 async function layaJobStep(root) {
   const job = jobBlock(await readFile(join(root, '.github/workflows/release.yml'), 'utf8'), 'laya');
   const step =
-    /\n {6}- name: Laya ships dormant, or with every gate's evidence\n {8}env:\n((?: {10}[A-Z_]+: '[^']*'\n)+) {8}run: node ([^\n]+)\n/.exec(
+    /\n {6}- name: Laya ships dormant, or with every gate's evidence\n {8}env:\n((?: {10}[A-Z_]+: (?:'[^']*'|\$\{\{ github\.token \}\})\n)+) {8}run: node ([^\n]+)\n/.exec(
       job,
     );
   assert.ok(step, 'the release job has its Laya gate step');
+  // The job token is GitHub's to fill in; here it is a synthetic one that reaches nothing.
   const env = Object.fromEntries(
-    [...step[1].matchAll(/ {10}([A-Z_]+): '([^']*)'/g)].map((match) => [match[1], match[2]]),
+    [...step[1].matchAll(/ {10}([A-Z_]+): (?:'([^']*)'|\$\{\{ github\.token \}\})/g)].map((match) => [
+      match[1],
+      match[2] ?? 'synthetic-job-token',
+    ]),
   );
   return { args: step[2].split(' '), env };
 }
@@ -582,8 +634,8 @@ test("E2 release end to end: the release job's gate refuses a copied state shipp
     const step = await layaJobStep(refused.root);
     assert.deepEqual(
       step.env,
-      { AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1' },
-      'the job hands the gate its owner-only rebuild',
+      { AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE: '1', GITHUB_TOKEN: 'synthetic-job-token' },
+      'the job hands the gate its owner-only rebuild, and its token for the gate-run check',
     );
     const result = await sealedNode(step.args, { cwd: refused.root, env: { ...refused.env, ...step.env } });
     assert.notEqual(

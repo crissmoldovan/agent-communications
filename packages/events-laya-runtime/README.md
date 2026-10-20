@@ -60,13 +60,17 @@ checks that this is so. A release that ships the real lock must first:
    `scripts/verify-laya-boundary-gate.mjs` accepts, passing.
 
 Steps 2 and 3 hold for every macOS architecture the lock offers, each with its
-own evidence: arm64 evidence never stands for Intel. Any failure stops the
+own evidence: arm64 evidence never stands for Intel. And for each, GitHub must
+show that the results are exactly what the protected gate run the owner
+recorded wrote (`scripts/verify-laya-gate-runs.mjs`). Any failure stops the
 release with nothing published.
 
 ## The gate directory
 
-`gate/` holds the two schemas and, once the owner has run the gates, the two
-results — and nothing else. Both results are aggregate and content-free: no
+`gate/` holds the schemas and, once the owner has run the gates, the two
+results and the run record (`runs-v1.json`, the protected run each
+architecture's results came from, which a release checks with GitHub) — and
+nothing else. Both results are aggregate and content-free: no
 message, subject, address, handle, event id, question, label, per-item value,
 path or secret. They come only from the owner's protected Mac
 (`.github/workflows/laya-quality-gate.yml`), over a corpus of the owner's and
