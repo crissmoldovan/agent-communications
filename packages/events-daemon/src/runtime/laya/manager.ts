@@ -242,6 +242,9 @@ export interface LayaArtifactManagerOptions {
   readonly failpoint?: LayaArtifactFailpoint | undefined;
 }
 
+/** How long a failed availability probe stands before the next request that needs it probes again. */
+const AVAILABILITY_RETRY_MS = 60_000;
+
 /**
  * The one serial owner of Laya's installation-wide artifacts. E stays the sole authority: the active Laya
  * judge-kind pointer starts every job, every post-await step rechecks that exact pointer, its embedded document and
@@ -263,6 +266,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
   readonly #mutex = new ArtifactMutex();
   readonly #tracked = new Map<string, TrackedWork>();
   #availability: ReturnType<LayaJudgeKindDefinition['availability']> | undefined;
+  #availabilityProbedAt = 0;
   /** Bumped by every disable, removal, update tightening and stop: a job captures it and stops once it moves. */
   #epoch = 0;
   #job: ArtifactJob | undefined;
@@ -290,9 +294,20 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     return this.#reviewed;
   }
 
-  /** The content-free availability probe, run once per owner: a fact about this machine, never a document input. */
+  /**
+   * The content-free availability probe: a fact about this machine, never a document input. Only a success is kept for
+   * the owner's life (E2 review round 1, B7); after a failure the next request that needs it probes again, at most once
+   * a minute, so a sandbox that failed once is not taken as missing until the daemon restarts.
+   */
   availability(): ReturnType<LayaJudgeKindDefinition['availability']> {
-    this.#availability ??= this.#definition.availability();
+    const now = this.#now();
+    if (
+      this.#availability === undefined ||
+      (!this.#availability.available && now - this.#availabilityProbedAt >= AVAILABILITY_RETRY_MS)
+    ) {
+      this.#availability = this.#definition.availability();
+      this.#availabilityProbedAt = now;
+    }
     return this.#availability;
   }
 
