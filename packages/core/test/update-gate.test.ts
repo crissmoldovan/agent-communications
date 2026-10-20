@@ -1064,20 +1064,26 @@ test("the day's first command ends when its own work does: a detached child fini
    * command takes the day's claim and hands the ask to a child of its own that holds none of its output.
    */
   const m = machine();
-  const served = await loopbackRegistry(LATEST, 8_000);
+  // Silent until the first command has closed: whether its output waited for the registry is the test's to decide.
+  const served = await loopbackRegistry(LATEST, 'held');
   // Globally installed here: nothing, so `npm ls -g` answers at once — and reads no real global folder.
   const env = { ...m.env, npm_config_registry: served.url, npm_config_prefix: tempDir('comms-update-prefix-') };
   try {
     const first = await command(env, ['channels', '--json']);
     assert.equal(first.code, 0, first.output);
-    // About three and a half seconds here: the gate's wait, and the command. Held to the registry's clock rather than
-    // to a number of seconds, so a slow machine cannot fail it — the registry answers eight seconds after it is asked,
-    // and a command whose output something else held open closes only after that.
-    assert.deepEqual(
-      served.answered,
-      [],
-      `the command's output closed after ${first.ms} ms, once the registry answered`,
+    /*
+     * About three and a half seconds here: the gate's wait, and the command. Held to the registry rather than to a
+     * number of seconds, so a slow machine cannot fail it: the registry says nothing until the command has closed. A
+     * command whose output the ask held open would close only once the ask gave up on the silent registry, its own ten
+     * seconds (`REGISTRY_TIMEOUT_MS`), and the answer released after that would never be recorded.
+     */
+    assert.deepEqual(served.answered, [], `the command's output closed after ${first.ms} ms, before any answer`);
+    assert.notEqual(
+      (await readUpdateCheck(m.stateDir)).checking,
+      null,
+      `the command's output closed after ${first.ms} ms, once the ask had ended`,
     );
+    served.release();
     // Inside the claim's lease, the next command asks nothing and hands nothing on: the child is asking.
     const second = await command(env, ['channels', '--json']);
     assert.equal(second.code, 0, second.output);
