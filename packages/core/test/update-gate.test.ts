@@ -1064,7 +1064,10 @@ test("the day's first command ends when its own work does: a detached child fini
    * command takes the day's claim and hands the ask to a child of its own that holds none of its output.
    */
   const m = machine();
-  // Silent until the first command has closed: whether its output waited for the registry is the test's to decide.
+  /*
+   * Silent until the second command has closed: whether the first one's output waited for the registry is the test's
+   * to decide, and neither can be shown the answer before the third, which is the one that must carry it.
+   */
   const served = await loopbackRegistry(LATEST, 'held');
   // Globally installed here: nothing, so `npm ls -g` answers at once — and reads no real global folder.
   const env = { ...m.env, npm_config_registry: served.url, npm_config_prefix: tempDir('comms-update-prefix-') };
@@ -1083,10 +1086,10 @@ test("the day's first command ends when its own work does: a detached child fini
       null,
       `the command's output closed after ${first.ms} ms, once the ask had ended`,
     );
-    served.release();
     // Inside the claim's lease, the next command asks nothing and hands nothing on: the child is asking.
     const second = await command(env, ['channels', '--json']);
     assert.equal(second.code, 0, second.output);
+    served.release();
     await until(() => served.requests.length > 0, 'the child to ask the registry', 15_000);
     await until(
       async () => {
