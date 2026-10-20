@@ -445,15 +445,31 @@ test('offline, the check stops nothing: it keeps the last result, says why, and 
   assert.equal(kept.behind, true);
 });
 
-test('a hanging registry never delays a tool call: the check runs in the background and the notice reads the file', async () => {
+test('a hanging registry never delays a tool call: the check runs in the background and the notice reads the file', async (t) => {
   const m = machine();
   let answer: (version: string) => void = () => undefined;
   const hanging = registry(() => new Promise<string>((resolve) => (answer = resolve)));
   const { call, close } = await connect(m, { update: deps(hanging.latestVersion) });
   try {
-    const started = Date.now();
-    const first = await call('comms_channels_available');
-    assert.ok(Date.now() - started < 2_000, 'the call waited for the registry');
+    /*
+     * Never awaited by a call (`updateToolNotice`), whatever this machine's speed: with the registry silent until told
+     * and every timeout frozen, so that no wait the call might add, for the check or for a while, could ever end, the
+     * call still answers. One that waited would never answer here; the guard, on a real timer taken before the freeze,
+     * makes that a failure rather than a hang.
+     */
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let guard: NodeJS.Timeout | undefined;
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const first = await Promise.race([
+      call('comms_channels_available'),
+      new Promise<never>((_, reject) => {
+        guard = realSetTimeout(() => reject(new Error('the call waited for the registry')), 30_000);
+      }),
+    ]).finally(() => {
+      realClearTimeout(guard);
+      t.mock.timers.reset();
+    });
     assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
     await until(() => hanging.asked.length === 1, 'the background check to ask');
     assert.ok(!noticed(first), 'nothing was known yet');
