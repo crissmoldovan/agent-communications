@@ -300,8 +300,12 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
    install — the whole package, less `onnxruntime-node`'s binaries for other platforms — and build
    `packages/events-daemon/laya-runtime.json` from them with the owner-only acquirer (`buildLayaRuntimeLock` in
    `scripts/fetch-laya-release-tarballs.mjs`, with `AGENTCOMMS_LAYA_SUPPLY_CHAIN_GATE=1`). There is no command for this
-   yet; it is the owner's step. Review the lock and commit it. Its file lists name the architectures it offers: leave
-   one empty to offer the other alone. The tests that pin the placeholder change with it.
+   yet; it is the owner's step. The builder refuses a list that names an empty file, and names it: the daemon refuses
+   a file of size 0, so leave it out. It also refuses a list where a package with files on an architecture needs, by
+   its `dependencies`, `optionalDependencies` or non-optional `peerDependencies`, a package whose `package.json` is not
+   listed there too, and names both: a bare import would otherwise leave the verified tree. Review the lock and commit
+   it. Its file lists name the architectures it offers: leave one empty to offer the other alone. The tests that pin
+   the placeholder change with it.
 2. **A candidate tag.** Tag that commit `laya-candidate-<n>` and push the tag. A candidate tag publishes nothing; only
    a `v*` tag does.
 3. **The trees.** On each gate Mac, install the candidate's runtime and model trees by enabling Laya in that

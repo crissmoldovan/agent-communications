@@ -341,6 +341,27 @@ export async function inspectPackageArchive(source: TarSource): Promise<readonly
   return files;
 }
 
+/** The largest `package.json` the release-only lock builder reads from a package archive. */
+const PACKAGE_MANIFEST_MAX_BYTES = 1024 * 1024;
+
+/**
+ * A strict package archive's own `package.json`, or null when it has none, read through the same parser as every other
+ * reader of the archive. Only the release-only lock builder calls it (E2 review round 1, A8), to refuse a tree that does
+ * not carry a package one of its packages declares; the daemon never does.
+ */
+export async function readPackageArchiveManifest(source: TarSource): Promise<Buffer | null> {
+  const archive = await archiveBytes(source);
+  const found: Buffer[] = [];
+  await parseGzippedUstar(archive, async (entry, body) => {
+    if (entry.path !== 'package.json') return;
+    if (entry.size > PACKAGE_MANIFEST_MAX_BYTES) throw new LayaTarError('TAR_SIZE');
+    const chunks: Buffer[] = [];
+    for await (const chunk of body.chunks()) chunks.push(chunk);
+    found.push(Buffer.concat(chunks));
+  });
+  return found[0] ?? null;
+}
+
 /** Extracts only expected files from a strict package archive into a caller-owned owner-only partial tree. */
 export async function extractPackageArchive(options: {
   readonly source: TarSource;

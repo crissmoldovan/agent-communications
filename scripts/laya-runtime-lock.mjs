@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { inspectPackageArchive } from '../packages/events-daemon/src/runtime/laya/tar.ts';
+import { inspectPackageArchive, readPackageArchiveManifest } from '../packages/events-daemon/src/runtime/laya/tar.ts';
 import { LAYA_TEMPLATE_IDS } from '../packages/events-daemon/src/runtime/laya/templates.ts';
 
 const RUNTIME_ROOTS = Object.freeze({
@@ -21,8 +21,9 @@ const ROOT_LOCKFILE = new URL('../pnpm-lock.yaml', import.meta.url);
 const NPM_NAME_SEGMENT = /^[a-z0-9][a-z0-9._~-]*$/;
 
 export class RuntimeLockError extends Error {
-  constructor(code) {
-    super(`Laya runtime lock refused: ${code}`);
+  /** `detail` names what the owner must change (a package, a file); it never carries archive content. */
+  constructor(code, detail) {
+    super(`Laya runtime lock refused: ${code}${detail === undefined ? '' : ` (${detail})`}`);
     this.name = 'RuntimeLockError';
     this.code = code;
   }
@@ -603,6 +604,60 @@ function assertInputClosureMatches(packages, closure) {
   }
 }
 
+function archiveSource(bytes) {
+  return (async function* () {
+    yield bytes;
+  })();
+}
+
+/**
+ * The packages one package declares it needs: every `dependencies` and `optionalDependencies` entry, and every
+ * `peerDependencies` entry its `peerDependenciesMeta` does not mark optional.
+ */
+function declaredNeeds(name, manifestBytes) {
+  if (manifestBytes === null) return [];
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestBytes.toString('utf8'));
+  } catch {
+    throw new RuntimeLockError('RUNTIME_LOCK_MANIFEST', `${name}'s package.json is not JSON`);
+  }
+  const section = (field) => {
+    const value = manifest?.[field] ?? {};
+    if (value === null || typeof value !== 'object' || Array.isArray(value))
+      throw new RuntimeLockError('RUNTIME_LOCK_MANIFEST', `${name}'s ${field} is not an object`);
+    return Object.keys(value);
+  };
+  const optionalPeers = manifest?.peerDependenciesMeta ?? {};
+  return [
+    ...section('dependencies'),
+    ...section('optionalDependencies'),
+    ...section('peerDependencies').filter((peer) => optionalPeers?.[peer]?.optional !== true),
+  ];
+}
+
+/**
+ * E2 review round 1 (A8): on each platform, every package in the tree (one with a file listed there) finds each package
+ * it needs inside the tree, by that package's own `package.json`; otherwise a bare import of it would leave the
+ * verified tree for whatever an enclosing `node_modules` holds.
+ */
+function assertTreeCarriesNeeds(packages) {
+  for (const platform of PLATFORMS) {
+    const carried = new Set(
+      packages.filter((pkg) => pkg.files[platform].some((file) => file.path === 'package.json')).map((pkg) => pkg.name),
+    );
+    for (const pkg of packages) {
+      if (pkg.files[platform].length === 0) continue;
+      for (const need of pkg.needs)
+        if (!carried.has(need))
+          throw new RuntimeLockError(
+            'RUNTIME_LOCK_DEPENDENCY',
+            `${pkg.name} needs ${need} on ${platform}, and the tree does not carry its package.json`,
+          );
+    }
+  }
+}
+
 /** Builds canonical lock bytes only from archives supplied by an already-bound entry point. */
 async function buildArchiveLock(input, acquireTarball) {
   const record = lockBuildInput(input);
@@ -625,11 +680,8 @@ async function buildArchiveLock(input, acquireTarball) {
       const bytes = await acquireTarball(metadata);
       if (!Buffer.isBuffer(bytes)) throw new RuntimeLockError('RUNTIME_LOCK_INPUT');
       assertSRI(bytes, metadata.integrity);
-      const inspected = await inspectPackageArchive(
-        (async function* () {
-          yield bytes;
-        })(),
-      );
+      const inspected = await inspectPackageArchive(archiveSource(bytes));
+      const needs = declaredNeeds(metadata.name, await readPackageArchiveManifest(archiveSource(bytes)));
       const byPath = new Map(inspected.map((entry) => [entry.path, entry]));
       const files = {};
       for (const platform of PLATFORMS) {
@@ -637,13 +689,17 @@ async function buildArchiveLock(input, acquireTarball) {
         const entries = selected.map((path) => {
           const found = byPath.get(path);
           if (found === undefined) throw new RuntimeLockError('RUNTIME_LOCK_INPUT');
+          // E2 review round 1 (A9): the daemon's strict parser refuses a size-0 file, so the owner leaves it out.
+          if (found.size === 0)
+            throw new RuntimeLockError('RUNTIME_LOCK_EMPTY_FILE', `${metadata.name} ${path} is empty; leave it out`);
           return found;
         });
         files[platform] = sorted(entries.map((entry) => entry.path)).map((path) => byPath.get(path));
       }
-      return { ...metadata, files };
+      return { ...metadata, files, needs };
     }),
   );
+  assertTreeCarriesNeeds(packages);
   const lock = runtimeLockRecord({
     schemaVersion: 1,
     packages: packages
