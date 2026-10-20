@@ -39,7 +39,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+    "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\" test/laya-runtime-package.test.mjs"
   },
   "dependencies": {
     "@agentcomms/core": "workspace:*",
