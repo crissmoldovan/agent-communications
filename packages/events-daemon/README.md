@@ -162,7 +162,8 @@ yet, so this release ships no reviewed runtime lock. `agent-events judge kinds l
 and `agent-events judge kind enable laya` refuses before anything is prepared. You can still add a Laya judge, and a
 rule that names it: both are configuration, and a Laya judge answers only once you have enabled Laya and its model is
 ready. Until then `rule enable` refuses that rule with Laya's reason: `E2_EXTERNAL_REFERENCE_BLOCKED` in this release,
-`LAYA_PLATFORM_UNAVAILABLE` on Linux and Windows, and `LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply.
+`LAYA_PLATFORM_UNAVAILABLE` on Linux and Windows and to a daemon Rosetta translates on an Apple-silicon Mac, and
+`LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply.
 The first release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a
 512-token context, on the CPU, one call at a time, in a worker whose `sandbox-exec` profile lets it open no network
 connection (Unix-domain sockets included), start no other process, send no Apple event, look up no system service and

@@ -535,7 +535,8 @@ test('E2 review round 1: a failed sandbox probe is tried again at most once a mi
     now: () => clock,
     platform: {
       ...macPlatform(),
-      spawnSync: () => {
+      spawnSync: (command) => {
+        if (command === '/usr/sbin/sysctl') return { status: 0, signal: null, error: undefined, stdout: '0\n' };
         probes += 1;
         return { status: sandbox === 'passes' ? 0 : 1, signal: null, error: undefined };
       },

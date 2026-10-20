@@ -129,12 +129,18 @@ export async function syntheticLaya(
   };
 }
 
-/** A macOS host whose content-free `sandbox-exec` probe exits as told; no real process is started. */
+/**
+ * A macOS host, native (its Rosetta query answers 0), whose content-free `sandbox-exec` probe exits as told; no real
+ * process is started.
+ */
 export function macPlatform(sandbox: 'passes' | 'fails' = 'passes'): LayaPlatformProbe {
   return {
     platform: 'darwin',
     architecture: 'arm64',
-    spawnSync: () => ({ status: sandbox === 'passes' ? 0 : 1, signal: null, error: undefined }),
+    spawnSync: (command) =>
+      command === '/usr/sbin/sysctl'
+        ? { status: 0, signal: null, error: undefined, stdout: '0\n' }
+        : { status: sandbox === 'passes' ? 0 : 1, signal: null, error: undefined },
   };
 }
 

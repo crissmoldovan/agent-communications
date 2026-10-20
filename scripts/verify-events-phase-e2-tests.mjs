@@ -1043,7 +1043,9 @@ const STATIC_RULES = [
         if (childProcess && !allowed)
           fail(`${file} imports node:child_process; only the availability probe and the sandbox launcher may`);
         if (/(?<![.\w$])(?:exec|execSync|execFile|execFileSync|fork)\s*\(|\bshell\s*:\s*true\b/.test(code))
-          fail(`${file} runs a shell or another program; the Laya modules spawn only sandbox-exec, without a shell`);
+          fail(
+            `${file} runs a shell or another program; the Laya modules start only sandbox-exec, the availability probe's sysctl and the probe's refused attempt, never through a shell`,
+          );
         if (file.endsWith('/worker-boundary-probe.ts') && probeStartsAnotherProcess(code))
           fail(`${file} starts a process beyond the sandbox launcher and the probe's one refused spawn attempt`);
       }

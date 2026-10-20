@@ -235,6 +235,19 @@ test('E2 contract: macOS availability runs the content-free sandbox boundary bef
   assert.deepEqual(definition.availability(), { available: true });
   assert.deepEqual(calls, [
     [
+      '/usr/sbin/sysctl',
+      ['-in', 'sysctl.proc_translated'],
+      {
+        cwd: '/',
+        env: { PATH: '/usr/bin:/bin' },
+        shell: false,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8',
+        timeout: 250,
+        killSignal: 'SIGKILL',
+      },
+    ],
+    [
       '/usr/bin/sandbox-exec',
       ['-p', '(version 1) (allow default) (deny network*)', '/usr/bin/true'],
       { cwd: '/', env: { PATH: '/usr/bin:/bin' }, shell: false, stdio: 'ignore', timeout: 250, killSignal: 'SIGKILL' },
@@ -247,7 +260,10 @@ test('E2 contract: macOS availability runs the content-free sandbox boundary bef
     platform: {
       platform: 'darwin',
       architecture: 'arm64',
-      spawnSync: () => ({ status: null, signal: 'SIGKILL', error: { code: 'ETIMEDOUT' } }),
+      spawnSync: (command: string) =>
+        command === '/usr/sbin/sysctl'
+          ? { status: 0, signal: null, error: undefined, stdout: '0\n' }
+          : { status: null, signal: 'SIGKILL', error: { code: 'ETIMEDOUT' } },
     } as never,
   });
   assert.deepEqual(unavailable.availability(), { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' });
@@ -257,10 +273,63 @@ test('E2 contract: macOS availability runs the content-free sandbox boundary bef
     platform: {
       platform: 'darwin',
       architecture: 'arm64',
-      spawnSync: () => ({ status: null, signal: null, error: { code: 'ENOENT' } }),
+      spawnSync: (command: string) =>
+        command === '/usr/sbin/sysctl'
+          ? { status: 0, signal: null, error: undefined, stdout: '0\n' }
+          : { status: null, signal: null, error: { code: 'ENOENT' } },
     } as never,
   });
   assert.deepEqual(missing.availability(), { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' });
+});
+
+test('E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe', async () => {
+  const run = async (sysctl: { status: number | null; signal: string | null; error?: unknown; stdout?: string }) => {
+    const calls: string[] = [];
+    const definition = createLayaJudgeKindDefinition({
+      assets: await fixtureAssets(),
+      platform: {
+        platform: 'darwin',
+        architecture: 'x64',
+        spawnSync(command: string, args: readonly string[], options: Readonly<Record<string, unknown>>) {
+          calls.push([command, ...args].join(' '));
+          if (command === '/usr/sbin/sysctl') {
+            assert.deepEqual(options, {
+              cwd: '/',
+              env: { PATH: '/usr/bin:/bin' },
+              shell: false,
+              stdio: ['ignore', 'pipe', 'ignore'],
+              encoding: 'utf8',
+              timeout: 250,
+              killSignal: 'SIGKILL',
+            });
+            return sysctl;
+          }
+          return { status: 0, signal: null, error: undefined };
+        },
+      } as never,
+    });
+    return { availability: definition.availability(), calls };
+  };
+  const translated = await run({ status: 0, signal: null, stdout: '1\n' });
+  assert.deepEqual(translated.availability, { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' });
+  assert.deepEqual(translated.calls, ['/usr/sbin/sysctl -in sysctl.proc_translated'], 'no sandbox probe under Rosetta');
+  // Natively the key is 0; on an Intel Mac whose macOS predates it, -i prints nothing. Both go on to the sandbox probe.
+  for (const stdout of ['0\n', '']) {
+    const native = await run({ status: 0, signal: null, stdout });
+    assert.deepEqual(native.availability, { available: true }, JSON.stringify(stdout));
+    assert.deepEqual(native.calls, [
+      '/usr/sbin/sysctl -in sysctl.proc_translated',
+      '/usr/bin/sandbox-exec -p (version 1) (allow default) (deny network*) /usr/bin/true',
+    ]);
+  }
+  // A sysctl that cannot answer proves nothing: closed, never offered.
+  for (const failed of [
+    { status: 1, signal: null },
+    { status: null, signal: 'SIGKILL', error: { code: 'ETIMEDOUT' } },
+    { status: 0, signal: null, stdout: 'unexpected' },
+  ]) {
+    assert.deepEqual((await run(failed)).availability, { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' });
+  }
 });
 
 test('E2 contract: the approval document embeds the reviewed D11 disclosure and preview is that same document', async () => {

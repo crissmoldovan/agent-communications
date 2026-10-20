@@ -628,7 +628,10 @@ function switchableMac(): { readonly probe: LayaPlatformProbe; offered: boolean 
     probe: {
       platform: 'darwin' as const,
       architecture: 'arm64',
-      spawnSync: () => ({ status: state.offered ? 0 : 1, signal: null, error: undefined }),
+      spawnSync: (command: string) =>
+        command === '/usr/sbin/sysctl'
+          ? { status: 0, signal: null, error: undefined, stdout: '0\n' }
+          : { status: state.offered ? 0 : 1, signal: null, error: undefined },
     },
   });
 }

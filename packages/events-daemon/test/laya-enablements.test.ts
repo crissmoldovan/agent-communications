@@ -88,7 +88,10 @@ test('E2 laya enablement: unsupported platforms and a missing macOS boundary ref
     {
       platform: 'darwin' as const,
       architecture: 'arm64',
-      spawnSync: () => ({ status: 1, signal: null, error: undefined }),
+      spawnSync: (command: string) =>
+        command === '/usr/sbin/sysctl'
+          ? { status: 0, signal: null, error: undefined, stdout: '0\n' }
+          : { status: 1, signal: null, error: undefined },
       code: 'LAYA_SANDBOX_UNAVAILABLE',
     },
   ]) {

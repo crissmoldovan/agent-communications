@@ -10,6 +10,8 @@ const LAYA_KIND: (typeof JUDGE_KINDS)[1] = JUDGE_KINDS[1];
 const PLATFORM_PREFIX = 'darwin-';
 const SANDBOX_TRIVIAL_PROGRAM = '/usr/bin/true';
 const SANDBOX_PROBE_TIMEOUT_MS = 250;
+const SYSCTL = '/usr/sbin/sysctl';
+const ROSETTA_QUERY: readonly string[] = ['-in', 'sysctl.proc_translated'];
 
 export type LayaUnavailableCode =
   | 'E2_EXTERNAL_REFERENCE_BLOCKED'
@@ -93,6 +95,8 @@ export interface LayaSandboxSpawnResult {
   readonly status: number | null;
   readonly signal: string | null;
   readonly error?: unknown;
+  /** Only the Rosetta query reads it: `sysctl`'s one-line answer. */
+  readonly stdout?: string | Buffer | null | undefined;
 }
 
 export type LayaSandboxSpawn = (
@@ -102,7 +106,8 @@ export type LayaSandboxSpawn = (
     readonly cwd: string;
     readonly env: Readonly<Record<string, string>>;
     readonly shell: false;
-    readonly stdio: 'ignore';
+    readonly stdio: 'ignore' | readonly ['ignore', 'pipe', 'ignore'];
+    readonly encoding?: 'utf8';
     readonly timeout: number;
     readonly killSignal: 'SIGKILL';
   }>,
@@ -653,6 +658,33 @@ function completeRuntimeLock(lock: RuntimeLock, probe: LayaPlatformProbe): Canon
   };
 }
 
+/**
+ * E2 review round 1 (A5): whether this process runs under Rosetta. `sysctl.proc_translated` is 1 there (a translated
+ * process's children run translated, `sysctl` among them), 0 natively, and absent on an Intel Mac whose macOS predates
+ * it, which `-i` prints as nothing. Anything but a clean 0 or nothing counts as translated: no evidence covers a
+ * translated worker, so Rosetta is never offered the Intel lock.
+ */
+export function translatedByRosetta(probe: LayaPlatformProbe): boolean {
+  if (probe.platform !== 'darwin') return false;
+  const options = {
+    cwd: '/',
+    env: { PATH: '/usr/bin:/bin' },
+    shell: false as const,
+    stdio: ['ignore', 'pipe', 'ignore'] as const,
+    encoding: 'utf8' as const,
+    timeout: SANDBOX_PROBE_TIMEOUT_MS,
+    killSignal: 'SIGKILL' as const,
+  };
+  try {
+    const result = probe.spawnSync?.(SYSCTL, ROSETTA_QUERY, options) ?? spawnSync(SYSCTL, ROSETTA_QUERY, options);
+    if (result.status !== 0 || result.signal !== null || result.error !== undefined) return true;
+    const answer = String(result.stdout ?? '').trim();
+    return answer !== '0' && answer !== '';
+  } catch {
+    return true;
+  }
+}
+
 /** The Task 1 availability probe is separate from Task 7's per-child proof and intentionally content-free. */
 export function sandboxExecAvailable(probe: LayaPlatformProbe): boolean {
   if (probe.platform !== 'darwin') return false;
@@ -681,6 +713,7 @@ function available(
   const lock = assets.runtimeLock;
   if ('blocked' in lock) return { available: false, code: lock.blocked };
   if (probe.platform !== 'darwin') return { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' };
+  if (translatedByRosetta(probe)) return { available: false, code: 'LAYA_PLATFORM_UNAVAILABLE' };
   if (!sandboxExecAvailable(probe)) return { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' };
   try {
     selectedPlatform(lock, probe);
