@@ -21,8 +21,12 @@ const { LayaModelDownloadError, LayaModelDownloader } = await import('../src/run
 const revision = 'b'.repeat(40);
 const modelId = 'tiny-model-v1';
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'laya', 'model-tiny-v1');
-const PHASE_TOTAL_TIMEOUT_MS = 250;
-const PHASE_SETTLE_GUARD_MS = 600;
+// E2 review round 1 (B6): a phase's deadline stays far above the few milliseconds its abort takes, and the settle guard
+// far above the deadline, so a loaded runner cannot turn an abort into a deadline or a slow settle into a failure; the
+// guard only stops a hang. Every wait for a test's own signal is bounded too, and each test has a timeout.
+const PHASE_TOTAL_TIMEOUT_MS = 1_000;
+const PHASE_SETTLE_GUARD_MS = 5_000;
+const TEST_TIMEOUT = { timeout: 60_000 } as const;
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -128,7 +132,8 @@ async function settlesAfter(controller: AbortController, milliseconds: number): 
 }
 
 async function waitUntil(check: () => boolean, description: string): Promise<void> {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  const deadline = Date.now() + PHASE_SETTLE_GUARD_MS;
+  while (Date.now() < deadline) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
@@ -143,76 +148,84 @@ async function assertNoLeakedResources(before: readonly string[], signal: AbortS
   assert.deepEqual(await settledResources(), before, 'the phase must leave no socket, timeout, or listener resource');
 }
 
-test('E2 laya model download: an unresolved resolver aborts or times out and removes the partial tree', async (t) => {
-  for (const mode of ['abort', 'deadline'] as const) {
-    await t.test(mode, async () => {
-      await temporary(async (root) => {
-        const files = [file('laya.onnx', 'abcdef')];
-        const partial = join(root, 'models', `${modelId}.partial`);
-        const controller = new AbortController();
-        let resolverCalls = 0;
-        const before = await settledResources();
-        const instance = downloader(root, scriptedLayaOrigin([]), files, undefined, {
-          resolver: {
-            lookup: async () => {
-              resolverCalls += 1;
-              return new Promise<readonly string[]>(() => undefined);
+test(
+  'E2 laya model download: an unresolved resolver aborts or times out and removes the partial tree',
+  TEST_TIMEOUT,
+  async (t) => {
+    for (const mode of ['abort', 'deadline'] as const) {
+      await t.test(mode, async () => {
+        await temporary(async (root) => {
+          const files = [file('laya.onnx', 'abcdef')];
+          const partial = join(root, 'models', `${modelId}.partial`);
+          const controller = new AbortController();
+          let resolverCalls = 0;
+          const before = await settledResources();
+          const instance = downloader(root, scriptedLayaOrigin([]), files, undefined, {
+            resolver: {
+              lookup: async () => {
+                resolverCalls += 1;
+                return new Promise<readonly string[]>(() => undefined);
+              },
             },
-          },
-          totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS,
+            totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS,
+          });
+          const pending = instance.download({ signal: controller.signal });
+          void pending.catch(() => undefined);
+          await waitUntil(() => resolverCalls === 1, 'the injected resolver to begin');
+          if (mode === 'abort') await settlesAfter(controller, 5);
+          await assert.rejects(
+            () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
+            (error: unknown) =>
+              error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
+          );
+          await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
+          await assertNoLeakedResources(before, controller.signal);
         });
-        const pending = instance.download({ signal: controller.signal });
-        void pending.catch(() => undefined);
-        await waitUntil(() => resolverCalls === 1, 'the injected resolver to begin');
-        if (mode === 'abort') await settlesAfter(controller, 5);
-        await assert.rejects(
-          () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
-          (error: unknown) =>
-            error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
-        );
-        await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
-        await assertNoLeakedResources(before, controller.signal);
       });
-    });
-  }
-});
+    }
+  },
+);
 
-test('E2 laya model download: a TLS handshake stall observes abort and deadline then removes the partial tree', async (t) => {
-  for (const mode of ['abort', 'deadline'] as const) {
-    await t.test(mode, async () => {
-      await temporary(async (root) => {
-        const files = [file('laya.onnx', 'abcdef')];
-        const partial = join(root, 'models', `${modelId}.partial`);
-        const origin = tlsHandshakeStallLayaOrigin();
-        const controller = new AbortController();
-        const before = await settledResources();
-        const pending = downloader(root, origin, files, undefined, { totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS }).download(
-          {
+test(
+  'E2 laya model download: a TLS handshake stall observes abort and deadline then removes the partial tree',
+  TEST_TIMEOUT,
+  async (t) => {
+    for (const mode of ['abort', 'deadline'] as const) {
+      await t.test(mode, async () => {
+        await temporary(async (root) => {
+          const files = [file('laya.onnx', 'abcdef')];
+          const partial = join(root, 'models', `${modelId}.partial`);
+          const origin = tlsHandshakeStallLayaOrigin();
+          const controller = new AbortController();
+          const before = await settledResources();
+          const pending = downloader(root, origin, files, undefined, {
+            totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS,
+          }).download({
             signal: controller.signal,
-          },
-        );
-        void pending.catch(() => undefined);
-        await waitUntil(() => origin.tlsStarted(), 'the sealed peer to begin TLS');
-        if (mode === 'abort') await settlesAfter(controller, 5);
-        await assert.rejects(
-          () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
-          (error: unknown) =>
-            error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
-        );
-        assert.equal(
-          origin.tlsSignalObserved(),
-          true,
-          'the TLS primitive must receive the fetch abort/deadline signal',
-        );
-        assert.equal(origin.destroyed(), true, 'a TLS abort/deadline must destroy the accepted TCP socket');
-        await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
-        await assertNoLeakedResources(before, controller.signal);
+          });
+          void pending.catch(() => undefined);
+          await waitUntil(() => origin.tlsStarted(), 'the sealed peer to begin TLS');
+          if (mode === 'abort') await settlesAfter(controller, 5);
+          await assert.rejects(
+            () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
+            (error: unknown) =>
+              error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
+          );
+          assert.equal(
+            origin.tlsSignalObserved(),
+            true,
+            'the TLS primitive must receive the fetch abort/deadline signal',
+          );
+          assert.equal(origin.destroyed(), true, 'a TLS abort/deadline must destroy the accepted TCP socket');
+          await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
+          await assertNoLeakedResources(before, controller.signal);
+        });
       });
-    });
-  }
-});
+    }
+  },
+);
 
-test('E2 laya model download: forwards abort into the TLS handshake primitive', async () => {
+test('E2 laya model download: forwards abort into the TLS handshake primitive', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const origin = tlsHandshakeStallLayaOrigin();
@@ -231,34 +244,38 @@ test('E2 laya model download: forwards abort into the TLS handshake primitive', 
   });
 });
 
-test('E2 laya model download: a peer with no response header aborts or times out and removes the partial tree', async (t) => {
-  for (const mode of ['abort', 'deadline'] as const) {
-    await t.test(mode, async () => {
-      await temporary(async (root) => {
-        const files = [file('laya.onnx', 'abcdef')];
-        const partial = join(root, 'models', `${modelId}.partial`);
-        const origin = stalledLayaOrigin();
-        const controller = new AbortController();
-        const before = await settledResources();
-        const pending = downloader(root, origin, files, undefined, {
-          idleTimeoutMs: PHASE_SETTLE_GUARD_MS,
-          totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS,
-        }).download({ signal: controller.signal });
-        void pending.catch(() => undefined);
-        await waitUntil(() => origin.journal.length === 1, 'the sealed peer to receive the request');
-        if (mode === 'abort') await settlesAfter(controller, 5);
-        await assert.rejects(
-          () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
-          (error: unknown) =>
-            error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
-        );
-        assert.equal(origin.destroyed(), true, 'the response-phase abort/deadline must destroy the sealed peer');
-        await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
-        await assertNoLeakedResources(before, controller.signal);
+test(
+  'E2 laya model download: a peer with no response header aborts or times out and removes the partial tree',
+  TEST_TIMEOUT,
+  async (t) => {
+    for (const mode of ['abort', 'deadline'] as const) {
+      await t.test(mode, async () => {
+        await temporary(async (root) => {
+          const files = [file('laya.onnx', 'abcdef')];
+          const partial = join(root, 'models', `${modelId}.partial`);
+          const origin = stalledLayaOrigin();
+          const controller = new AbortController();
+          const before = await settledResources();
+          const pending = downloader(root, origin, files, undefined, {
+            idleTimeoutMs: PHASE_SETTLE_GUARD_MS,
+            totalTimeoutMs: PHASE_TOTAL_TIMEOUT_MS,
+          }).download({ signal: controller.signal });
+          void pending.catch(() => undefined);
+          await waitUntil(() => origin.journal.length === 1, 'the sealed peer to receive the request');
+          if (mode === 'abort') await settlesAfter(controller, 5);
+          await assert.rejects(
+            () => settlesWithin(pending, PHASE_SETTLE_GUARD_MS),
+            (error: unknown) =>
+              error instanceof LayaModelDownloadError && error.code === (mode === 'abort' ? 'CANCELLED' : 'DEADLINE'),
+          );
+          assert.equal(origin.destroyed(), true, 'the response-phase abort/deadline must destroy the sealed peer');
+          await assert.rejects(() => lstat(partial), { code: 'ENOENT' });
+          await assertNoLeakedResources(before, controller.signal);
+        });
       });
-    });
-  }
-});
+    }
+  },
+);
 
 async function assertBlockedSinkWaitsForCleanup(mode: 'abort' | 'deadline'): Promise<void> {
   await temporary(async (root) => {
@@ -270,7 +287,7 @@ async function assertBlockedSinkWaitsForCleanup(mode: 'abort' | 'deadline'): Pro
     await writeFile(partialFile, contents.subarray(0, 3));
     const retainedPartial = await open(partialFile, 'r');
     const controller = new AbortController();
-    const totalTimeoutMs = 80;
+    const totalTimeoutMs = PHASE_TOTAL_TIMEOUT_MS;
     let retryChecks = 0;
     let releaseBlockedSink!: () => void;
     let blockedSignal: AbortSignal | undefined;
@@ -308,7 +325,7 @@ async function assertBlockedSinkWaitsForCleanup(mode: 'abort' | 'deadline'): Pro
     void first.catch(() => undefined);
 
     try {
-      await sinkEnteredPromise;
+      await settlesWithin(sinkEnteredPromise, PHASE_SETTLE_GUARD_MS);
       if (mode === 'abort') controller.abort();
       else await new Promise((resolve) => setTimeout(resolve, totalTimeoutMs + 20));
 
@@ -347,15 +364,19 @@ async function assertBlockedSinkWaitsForCleanup(mode: 'abort' | 'deadline'): Pro
   });
 }
 
-test('E2 laya model download: waits for a blocked abort sink before cleanup and re-enable', async () => {
+test('E2 laya model download: waits for a blocked abort sink before cleanup and re-enable', TEST_TIMEOUT, async () => {
   await assertBlockedSinkWaitsForCleanup('abort');
 });
 
-test('E2 laya model download: waits for a blocked deadline sink before cleanup and re-enable', async () => {
-  await assertBlockedSinkWaitsForCleanup('deadline');
-});
+test(
+  'E2 laya model download: waits for a blocked deadline sink before cleanup and re-enable',
+  TEST_TIMEOUT,
+  async () => {
+    await assertBlockedSinkWaitsForCleanup('deadline');
+  },
+);
 
-test('E2 laya model download: rechecks an abort after its lifecycle fence awaits', async () => {
+test('E2 laya model download: rechecks an abort after its lifecycle fence awaits', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const contents = Buffer.from('abcdef');
     const files = [file('laya.onnx', contents.toString('utf8'))];
@@ -411,7 +432,7 @@ test('E2 laya model download: rechecks an abort after its lifecycle fence awaits
     void first.catch(() => undefined);
 
     try {
-      await sinkEnteredPromise;
+      await settlesWithin(sinkEnteredPromise, PHASE_SETTLE_GUARD_MS);
       releaseFence();
       await assert.rejects(
         () => settlesWithin(first, PHASE_SETTLE_GUARD_MS),
@@ -442,7 +463,7 @@ test('E2 laya model download: rechecks an abort after its lifecycle fence awaits
   });
 });
 
-test('E2 laya model download: promotes only after five tiny files verify', async () => {
+test('E2 laya model download: promotes only after five tiny files verify', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = await testFiles();
     const origin = scriptedLayaOrigin(
@@ -457,7 +478,7 @@ test('E2 laya model download: promotes only after five tiny files verify', async
   });
 });
 
-test('E2 laya model download: resumes only a rehashed exact Content-Range', async () => {
+test('E2 laya model download: resumes only a rehashed exact Content-Range', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const partial = join(root, 'models', `${modelId}.partial`);
@@ -472,7 +493,45 @@ test('E2 laya model download: resumes only a rehashed exact Content-Range', asyn
   });
 });
 
-test('E2 laya model download: resets a partial on 200, mismatched Content-Range, or 416', async (t) => {
+// E2 review round 1 (A7/B8): the model's data file is 1.69 GB, so a whole-file read would hold all of it in memory.
+// Node's readFile refuses a file of 2 GiB or more, so a held partial of exactly 2 GiB (sparse: no disk is used) can be
+// rehashed and resumed, and the finished file verified, only by a hash that streams.
+test('E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read', {
+  skip: process.platform === 'win32' && 'a sparse 2 GiB fixture needs a POSIX filesystem',
+  timeout: 180_000,
+}, async () => {
+  await temporary(async (root) => {
+    const held = 2 ** 31;
+    const tail = Buffer.from('tail');
+    const size = held + tail.length;
+    const expected = createHash('sha256');
+    const zeros = Buffer.alloc(2 ** 24);
+    for (let written = 0; written < held; written += zeros.length) expected.update(zeros);
+    expected.update(tail);
+    const files = [{ path: 'laya.onnx.data', size, sha256: expected.digest('hex'), bytes: Buffer.alloc(0) }];
+    const partial = join(root, 'models', `${modelId}.partial`);
+    await mkdir(partial, { recursive: true });
+    const handle = await open(join(partial, 'laya.onnx.data'), 'w');
+    await handle.truncate(held);
+    await handle.close();
+    const origin = scriptedLayaOrigin([
+      {
+        status: 206,
+        headers: { 'Content-Range': `bytes ${held}-${size - 1}/${size}`, 'Content-Length': String(tail.length) },
+        body: tail,
+      },
+    ]);
+    const result = await downloader(root, origin, files).download(
+      downloadOptions({ freeBytes: async () => Number.MAX_SAFE_INTEGER }),
+    );
+    assert.equal(origin.journal.length, 1, 'one request: the held bytes were rehashed, not fetched again');
+    assert.match(origin.journal[0]?.request ?? '', new RegExp(`Range: bytes=${held}-\\r\\n`, 'u'));
+    assert.equal(result.bytesVerified, size, 'the finished file verified at its manifest size and SHA-256');
+    assert.equal((await lstat(join(result.root, 'laya.onnx.data'))).size, size);
+  });
+});
+
+test('E2 laya model download: resets a partial on 200, mismatched Content-Range, or 416', TEST_TIMEOUT, async (t) => {
   for (const reply of [
     { status: 200, headers: { 'Content-Length': '6' }, body: Buffer.from('abcdef') },
     { status: 206, headers: { 'Content-Range': 'bytes 2-5/6', 'Content-Length': '3' }, body: Buffer.from('def') },
@@ -495,7 +554,7 @@ test('E2 laya model download: resets a partial on 200, mismatched Content-Range,
   }
 });
 
-test('E2 laya model download: refuses insufficient free space before a request', async () => {
+test('E2 laya model download: refuses insufficient free space before a request', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const origin = scriptedLayaOrigin([]);
     const instance = downloader(root, origin, await testFiles());
@@ -507,7 +566,7 @@ test('E2 laya model download: refuses insufficient free space before a request',
   });
 });
 
-test('E2 laya model download: cleans partial data when disable aborts it', async () => {
+test('E2 laya model download: cleans partial data when disable aborts it', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const partial = join(root, 'models', `${modelId}.partial`);
@@ -520,7 +579,7 @@ test('E2 laya model download: cleans partial data when disable aborts it', async
   });
 });
 
-test('E2 laya model download: cancels a stalled sealed peer and removes its partial tree', async () => {
+test('E2 laya model download: cancels a stalled sealed peer and removes its partial tree', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const partial = join(root, 'models', `${modelId}.partial`);
@@ -545,7 +604,7 @@ test('E2 laya model download: cancels a stalled sealed peer and removes its part
   });
 });
 
-test('E2 laya model download: fails and removes a bad partial after five bad byte attempts', async () => {
+test('E2 laya model download: fails and removes a bad partial after five bad byte attempts', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const origin = scriptedLayaOrigin(
@@ -564,7 +623,7 @@ test('E2 laya model download: fails and removes a bad partial after five bad byt
   });
 });
 
-test('E2 laya model download: rechecks its final lifecycle fence before promotion', async () => {
+test('E2 laya model download: rechecks its final lifecycle fence before promotion', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     let checks = 0;
@@ -586,7 +645,7 @@ test('E2 laya model download: rechecks its final lifecycle fence before promotio
   });
 });
 
-test('E2 laya model download: requires the lifecycle fence before any artifact action', async () => {
+test('E2 laya model download: requires the lifecycle fence before any artifact action', TEST_TIMEOUT, async () => {
   await temporary(async (root) => {
     const files = [file('laya.onnx', 'abcdef')];
     const origin = scriptedLayaOrigin([]);
@@ -610,77 +669,81 @@ test('E2 laya model download: requires the lifecycle fence before any artifact a
   });
 });
 
-test('E2 laya model download: disable landing after its check cannot leave a promoted model', async () => {
-  await temporary(async (root) => {
-    const files = [file('laya.onnx', 'abcdef')];
-    const origin = scriptedLayaOrigin([
-      { status: 200, headers: { 'Content-Length': '6' }, body: Buffer.from('abcdef') },
-    ]);
-    let enabled = true;
-    let locked = false;
-    let promotionChecked!: () => void;
-    let releasePromotion!: () => void;
-    let unlocked!: () => void;
-    let disableBlocked!: () => void;
-    let disableFinished!: () => void;
-    const checked = new Promise<void>((resolve) => {
-      promotionChecked = resolve;
-    });
-    const continuePromotion = new Promise<void>((resolve) => {
-      releasePromotion = resolve;
-    });
-    const released = new Promise<void>((resolve) => {
-      unlocked = resolve;
-    });
-    const blocked = new Promise<void>((resolve) => {
-      disableBlocked = resolve;
-    });
-    const disabled = new Promise<void>((resolve) => {
-      disableFinished = resolve;
-    });
-    const fence = {
-      async assertCurrent(stage: string) {
-        if (!enabled) throw new Error('the claimed enablement was revoked');
-        if (stage === 'promotion') {
-          promotionChecked();
-          await continuePromotion;
-        }
-      },
-      async withArtifactLock<T>(work: () => Promise<T>): Promise<T> {
-        locked = true;
-        try {
-          return await work();
-        } finally {
-          locked = false;
-          unlocked();
-        }
-      },
-      async disable(): Promise<void> {
-        if (locked) {
-          disableBlocked();
-          await released;
-        }
-        enabled = false;
-        await rm(join(root, 'models', modelId), { recursive: true, force: true });
-        disableFinished();
-      },
-    };
-    const install = downloader(root, origin, files, fence).download(downloadOptions());
-    await checked;
-    const disable = fence.disable();
-    try {
-      const state = await Promise.race([
-        blocked.then(() => 'blocked' as const),
-        disabled.then(() => 'removed' as const),
+test(
+  'E2 laya model download: disable landing after its check cannot leave a promoted model',
+  TEST_TIMEOUT,
+  async () => {
+    await temporary(async (root) => {
+      const files = [file('laya.onnx', 'abcdef')];
+      const origin = scriptedLayaOrigin([
+        { status: 200, headers: { 'Content-Length': '6' }, body: Buffer.from('abcdef') },
       ]);
-      assert.equal(state, 'blocked', 'disable must wait for the promotion critical section');
-      releasePromotion();
-      await install;
-      await disable;
-      await assert.rejects(() => lstat(join(root, 'models', modelId)), { code: 'ENOENT' });
-    } finally {
-      releasePromotion();
-      await Promise.allSettled([install, disable]);
-    }
-  });
-});
+      let enabled = true;
+      let locked = false;
+      let promotionChecked!: () => void;
+      let releasePromotion!: () => void;
+      let unlocked!: () => void;
+      let disableBlocked!: () => void;
+      let disableFinished!: () => void;
+      const checked = new Promise<void>((resolve) => {
+        promotionChecked = resolve;
+      });
+      const continuePromotion = new Promise<void>((resolve) => {
+        releasePromotion = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        unlocked = resolve;
+      });
+      const blocked = new Promise<void>((resolve) => {
+        disableBlocked = resolve;
+      });
+      const disabled = new Promise<void>((resolve) => {
+        disableFinished = resolve;
+      });
+      const fence = {
+        async assertCurrent(stage: string) {
+          if (!enabled) throw new Error('the claimed enablement was revoked');
+          if (stage === 'promotion') {
+            promotionChecked();
+            await continuePromotion;
+          }
+        },
+        async withArtifactLock<T>(work: () => Promise<T>): Promise<T> {
+          locked = true;
+          try {
+            return await work();
+          } finally {
+            locked = false;
+            unlocked();
+          }
+        },
+        async disable(): Promise<void> {
+          if (locked) {
+            disableBlocked();
+            await released;
+          }
+          enabled = false;
+          await rm(join(root, 'models', modelId), { recursive: true, force: true });
+          disableFinished();
+        },
+      };
+      const install = downloader(root, origin, files, fence).download(downloadOptions());
+      await checked;
+      const disable = fence.disable();
+      try {
+        const state = await Promise.race([
+          blocked.then(() => 'blocked' as const),
+          disabled.then(() => 'removed' as const),
+        ]);
+        assert.equal(state, 'blocked', 'disable must wait for the promotion critical section');
+        releasePromotion();
+        await install;
+        await disable;
+        await assert.rejects(() => lstat(join(root, 'models', modelId)), { code: 'ENOENT' });
+      } finally {
+        releasePromotion();
+        await Promise.allSettled([install, disable]);
+      }
+    });
+  },
+);

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -31,7 +31,9 @@ function builtApp(): string {
   roots.push(app);
   cpSync(join(APP, 'package.json'), join(app, 'package.json'));
   mkdirSync(join(app, 'src-tauri'));
-  cpSync(join(APP, 'src-tauri', 'tauri.conf.json'), join(app, 'src-tauri', 'tauri.conf.json'));
+  for (const file of ['tauri.conf.json', 'Cargo.toml', 'Cargo.lock', 'build.rs'])
+    cpSync(join(APP, 'src-tauri', file), join(app, 'src-tauri', file));
+  cpSync(join(APP, 'src-tauri', 'src'), join(app, 'src-tauri', 'src'), { recursive: true });
   mkdirSync(join(app, 'dist', 'assets'), { recursive: true });
   writeFileSync(
     join(app, 'dist', 'index.html'),
@@ -134,5 +136,164 @@ it('E2 desktop Laya contract: the app may not depend on the Laya runtime, the ev
     }
   }
   cpSync(join(APP, 'package.json'), join(app, 'package.json'));
+  expect(bundleProblems({ app })).toEqual([]);
+});
+
+// E2 review round 1 (B5): every other way a file reaches the bundle. Tauri v2's configuration (tauri-utils 2.10) names
+// files for the app, its installers and its packages in many places besides `resources` and `externalBin`, under
+// camelCase keys and kebab-case aliases; a platform configuration file beside tauri.conf.json is merged into it.
+
+/** The app's tauri.conf.json with one value set at a dotted path (each segment created if absent). */
+function withConfig(app: string, path: string, value: unknown): string[] {
+  const file = join(app, 'src-tauri', 'tauri.conf.json');
+  const config = JSON.parse(readFileSync(join(APP, 'src-tauri', 'tauri.conf.json'), 'utf8')) as Record<string, unknown>;
+  const keys = path.split('.');
+  let node = config;
+  for (const key of keys.slice(0, -1)) {
+    node[key] ??= {};
+    node = node[key] as Record<string, unknown>;
+  }
+  node[keys.at(-1) as string] = value;
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const problems = bundleProblems({ app });
+  cpSync(join(APP, 'src-tauri', 'tauri.conf.json'), file);
+  return problems;
+}
+
+it('E2 desktop Laya contract: the bundle check refuses every file route Tauri’s configuration has', () => {
+  const app = builtApp();
+  const routes: readonly [string, unknown][] = [
+    ['bundle.resources', ['../../packages/events-daemon/laya-manifest.json']],
+    ['bundle.externalBin', ['binaries/laya-worker']],
+    ['bundle.licenseFile', 'LICENSE'],
+    ['bundle.macOS.frameworks', ['libonnxruntime.dylib']],
+    ['bundle.macOS.files', { 'Resources/model.bin': '../model.bin' }],
+    ['bundle.macos.files', { 'Resources/model.bin': '../model.bin' }],
+    ['bundle.macOS.dmg.background', 'background.png'],
+    ['bundle.iOS.frameworks', ['ort']],
+    ['bundle.iOS.template', 'project.yml'],
+    ['bundle.linux.deb.files', { '/usr/share/agentcomms/model.bin': '../model.bin' }],
+    ['bundle.linux.deb.changelog', 'CHANGELOG'],
+    ['bundle.linux.deb.desktopTemplate', 'app.desktop'],
+    ['bundle.linux.deb.postInstallScript', 'postinst.sh'],
+    ['bundle.linux.deb.post-install-script', 'postinst.sh'],
+    ['bundle.linux.rpm.files', { '/usr/share/agentcomms/model.bin': '../model.bin' }],
+    ['bundle.linux.rpm.preRemoveScript', 'prerm.sh'],
+    ['bundle.linux.appimage.files', { 'usr/share/model.bin': '../model.bin' }],
+    ['bundle.linux.appimage.bundleMediaFramework', true],
+    ['bundle.windows.webviewInstallMode', { type: 'fixedRuntime', path: './webview2/' }],
+    ['bundle.windows.wix.fragmentPaths', ['fragment.wxs']],
+    ['bundle.windows.wix.bannerPath', 'banner.bmp'],
+    ['bundle.windows.nsis.installerHooks', 'hooks.nsh'],
+    ['bundle.windows.nsis.install-icon', 'model.ico'],
+    ['bundle.windows.nsis.customLanguageFiles', { English: 'en.nsh' }],
+    ['bundle.icon', ['icons/icon.png', '../../packages/events-daemon/laya-manifest.json']],
+    ['app.trayIcon', { iconPath: '../model.png' }],
+    ['build.frontendDist', '../../packages/events-daemon/dist'],
+    ['build.beforeBuildCommand', 'pnpm build && cp -r ../../packages/events-daemon/dist dist/assets'],
+    ['build.beforeBundleCommand', 'cp model.onnx dist/assets'],
+  ];
+  for (const [path, value] of routes) {
+    const problems = withConfig(app, path, value);
+    expect(
+      problems.filter((problem) => problem.startsWith('tauri.conf.json:')),
+      `${path} = ${JSON.stringify(value)}`,
+    ).toHaveLength(1);
+  }
+  // A webview the system installs carries no file of the repository's, and is no route.
+  expect(withConfig(app, 'bundle.windows.webviewInstallMode', { type: 'downloadBootstrapper' })).toEqual([]);
+  for (const file of ['tauri.macos.conf.json', 'tauri.linux.conf.json', 'tauri.windows.conf.json', 'Tauri.toml']) {
+    const problems = planted(app, `src-tauri/${file}`, '{"bundle":{"macOS":{"files":{}}}}\n');
+    expect(
+      problems.filter((problem) => problem.includes(file)),
+      file,
+    ).toHaveLength(1);
+    rmSync(join(app, 'src-tauri', file));
+  }
+  expect(bundleProblems({ app })).toEqual([]);
+});
+
+it('E2 desktop Laya contract: the bundle check refuses an ONNX Runtime crate in the app’s Cargo manifest or lock', () => {
+  const app = builtApp();
+  const manifest = join(app, 'src-tauri', 'Cargo.toml');
+  const lock = join(app, 'src-tauri', 'Cargo.lock');
+  const clean = { manifest: readFileSync(manifest, 'utf8'), lock: readFileSync(lock, 'utf8') };
+  for (const addition of [
+    '\n[dependencies.ort]\nversion = "2.0.0-rc.10"\n',
+    '\n[target.\'cfg(target_os = "macos")\'.dependencies]\nonnxruntime = "0.0.14"\n',
+    '\n[dev-dependencies]\nort-sys = "2"\n',
+    '\n[build-dependencies]\nmodel = { package = "ort", version = "2" }\n',
+  ]) {
+    writeFileSync(manifest, `${clean.manifest}${addition}`);
+    expect(
+      bundleProblems({ app }).filter((problem) => problem.startsWith('src-tauri/Cargo.toml')),
+      addition,
+    ).toHaveLength(1);
+  }
+  writeFileSync(manifest, clean.manifest);
+  // A crate that brings ONNX Runtime in as a dependency of its own is in the lock, not the manifest.
+  writeFileSync(lock, `${clean.lock}\n[[package]]\nname = "ort"\nversion = "2.0.0"\n`);
+  expect(bundleProblems({ app }).filter((problem) => problem.startsWith('src-tauri/Cargo.lock'))).toHaveLength(1);
+  writeFileSync(lock, clean.lock);
+  expect(bundleProblems({ app })).toEqual([]);
+});
+
+it('E2 desktop Laya contract: the bundle check refuses a model-like file the Rust code embeds', () => {
+  const app = builtApp();
+  const tray = join(app, 'src-tauri', 'src', 'tray.rs');
+  const clean = readFileSync(tray, 'utf8');
+  for (const embed of [
+    'const MODEL: &[u8] = include_bytes!("../models/laya.onnx");',
+    'const DATA: &[u8] = include_bytes!(\n    "../models/laya.onnx.data"\n);',
+    'const TOKENIZER: &str = include_str!("../assets/tokenizer-Dx3b9AqZ.json");',
+    'const WORKER: &str = include_str!(concat!(env!("OUT_DIR"), "/laya-worker.mjs"));',
+    'const NATIVE: &[u8] = include_bytes!["../lib/onnxruntime_binding.node"];',
+  ]) {
+    writeFileSync(tray, `${clean}\n${embed}\n`);
+    expect(
+      bundleProblems({ app }).filter((problem) => problem.startsWith('src-tauri/src/tray.rs')),
+      embed,
+    ).toHaveLength(1);
+  }
+  writeFileSync(tray, clean);
+  expect(bundleProblems({ app })).toEqual([]);
+});
+
+it('E2 desktop Laya contract: the bundle check refuses each Laya file under its Vite-hashed name', () => {
+  const app = builtApp();
+  for (const path of [
+    'dist/assets/laya.onnx-BfK2a9Xc.data',
+    'dist/assets/tokenizer-Dx3b9AqZ.json',
+    'dist/assets/tokenizer_config-C9-x_2Lm.json',
+    'dist/assets/laya_config-a1B2c3D4.json',
+    'dist/assets/laya-manifest-Q8w-e7Rt.json',
+    'dist/assets/laya-runtime-Zz9Yy8Xx.json',
+    'dist/assets/laya-enablement-disclosures-Pq1Rs2Tu.json',
+    'dist/assets/laya-worker-Bk-3a9Qz.js',
+    'dist/assets/worker-boundary-probe-1a2B3c4D.js',
+  ]) {
+    const problems = planted(app, path, 'x');
+    expect(
+      problems.filter((problem) => problem.includes(path) && problem.includes('Laya')),
+      path,
+    ).toHaveLength(1);
+    rmSync(join(app, path));
+  }
+  // An ordinary chunk whose name merely has a hash is the app's own.
+  expect(planted(app, 'dist/assets/settings-BU2dAu9v.js', 'export {};\n')).toEqual([]);
+});
+
+it('E2 desktop Laya contract: the bundle check refuses a built file over its size limit without reading it', () => {
+  const app = builtApp();
+  const path = 'dist/assets/index-pmfPCMT4.js';
+  const target = join(app, path);
+  writeFileSync(target, '');
+  // Sparse, so it takes no disk; unreadable where permissions apply, so a check that read it would throw.
+  truncateSync(target, 3 * 1024 * 1024 + 1);
+  if (process.platform !== 'win32') chmodSync(target, 0o000);
+  const problems = bundleProblems({ app });
+  expect(problems.filter((problem) => problem.startsWith(path) && problem.includes('over'))).toHaveLength(1);
+  if (process.platform !== 'win32') chmodSync(target, 0o600);
+  rmSync(target);
   expect(bundleProblems({ app })).toEqual([]);
 });

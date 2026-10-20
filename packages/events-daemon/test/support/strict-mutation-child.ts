@@ -20,15 +20,21 @@ const OWN_PROCESS_GROUP = process.platform !== 'win32';
 const liveGroups = new Set<number>();
 
 /**
- * `kill -KILL -- -<group>`: a negative id names the whole process group. This module is one of phase E's adversarial
- * helpers, whose scanner admits no `process` member beyond `execPath` and `platform` and no computed string, so the
- * group is signalled by the shell's own `kill`, its id handed over in the environment. A group that has already gone
- * makes it fail, which is the same outcome.
+ * The shell command that ends an oracle's whole process group: a negative id names the group. `-s KILL` names the
+ * signal as every POSIX shell's `kill` reads it; dash, Ubuntu's `/bin/sh`, reads `kill -KILL -- -<group>` as a signal
+ * and then `--` as a pid ("Illegal number: -") and signals nothing.
+ */
+export const ORACLE_GROUP_KILL = 'kill -s KILL -- "-$ORACLE_GROUP"';
+
+/**
+ * This module is one of phase E's adversarial helpers, whose scanner admits no `process` member beyond `execPath` and
+ * `platform` and no computed string, so the group is signalled by the shell's own `kill`, its id handed over in the
+ * environment. A group that has already gone makes it fail, which is the same outcome.
  */
 function endProcessGroup(leader: number): void {
   // Node writes each environment value as text itself; the cast only says so to the type checker.
   const env = { ORACLE_GROUP: leader } as unknown as NodeJS.ProcessEnv;
-  spawnSync('/bin/sh', ['-c', 'kill -KILL -- "-$ORACLE_GROUP"'], { env, stdio: 'ignore' });
+  spawnSync('/bin/sh', ['-c', ORACLE_GROUP_KILL], { env, stdio: 'ignore' });
 }
 
 /** Ends every oracle still running; a runner calls it as it ends (`mutation-runner-exit.ts`). */

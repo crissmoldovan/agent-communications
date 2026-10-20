@@ -1,0 +1,546 @@
+{
+  "schemaVersion": 1,
+  "task": 16,
+  "owners": [
+    {
+      "id": "task-16"
+    }
+  ],
+  "section5": [],
+  "traceability": [
+    {
+      "id": "e2-r1-group-kill-parses-under-dash",
+      "owner": "task-16",
+      "test": "E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group"
+    },
+    {
+      "id": "e2-r1-supersession-replacement-runs",
+      "owner": "task-16",
+      "test": "E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row"
+    },
+    {
+      "id": "e2-r1-supersession-refuses-a-live-anchor",
+      "owner": "task-16",
+      "test": "E2 supersession: a mutant whose anchor still applies cannot be superseded"
+    },
+    {
+      "id": "e2-r1-supersession-states-its-reason",
+      "owner": "task-16",
+      "test": "E2 supersession: a supersession that states no reason is refused"
+    },
+    {
+      "id": "e2-r1-supersession-names-a-same-test-replacement",
+      "owner": "task-16",
+      "test": "E2 supersession: a supersession without a replacement killed by the same named test is refused"
+    },
+    {
+      "id": "e2-r1-supersession-refuses-a-chain",
+      "owner": "task-16",
+      "test": "E2 supersession: a chain of supersessions is refused"
+    },
+    {
+      "id": "e2-r1-runner-skips-a-superseded-mutant",
+      "owner": "task-16",
+      "test": "E2 supersession: the runner skips a superseded mutant and runs its replacement"
+    },
+    {
+      "id": "e2-r1-obsolete-trees-deleted-once-ready",
+      "owner": "task-16",
+      "test": "E2 laya update: once the re-approved entry is ready, every tree the earlier entry left is deleted"
+    },
+    {
+      "id": "e2-r1-repair-deletes-obsolete-trees",
+      "owner": "task-16",
+      "test": "E2 manager: an integrity repair that reaches ready deletes every tree its selection does not name"
+    },
+    {
+      "id": "e2-r1-removal-deletes-every-verified-tree",
+      "owner": "task-16",
+      "test": "E2 manager: removal deletes an earlier release’s verified trees even when this release installed nothing"
+    },
+    {
+      "id": "e2-r1-removal-leaves-unverified-trees",
+      "owner": "task-16",
+      "test": "E2 manager: removal while disabled deletes only this release’s trees and reports idle"
+    },
+    {
+      "id": "e2-r1-removal-sweep-stops-on-a-claim",
+      "owner": "task-16",
+      "test": "E2 race: a re-enable claimed during a removal’s sweep stops it before its next deletion"
+    },
+    {
+      "id": "e2-r1-model-hash-streamed",
+      "owner": "task-16",
+      "test": "E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read"
+    },
+    {
+      "id": "e2-r1-bundle-refuses-every-file-route",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses every file route Tauri’s configuration has"
+    },
+    {
+      "id": "e2-r1-bundle-refuses-an-onnx-crate",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses an ONNX Runtime crate in the app’s Cargo manifest or lock"
+    },
+    {
+      "id": "e2-r1-bundle-refuses-an-embedded-model",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses a model-like file the Rust code embeds"
+    },
+    {
+      "id": "e2-r1-bundle-refuses-hashed-laya-names",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses each Laya file under its Vite-hashed name"
+    },
+    {
+      "id": "e2-r1-bundle-refuses-oversized-files-unread",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses a built file over its size limit without reading it"
+    },
+    {
+      "id": "e2-r1-packed-worker-closure-walked",
+      "owner": "task-16",
+      "test": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included"
+    },
+    {
+      "id": "e2-r1-daemon-suite-runs-every-test-file",
+      "owner": "task-16",
+      "test": "E2 runtime package: the daemon suite runs every test file, the runtime package test included"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-tree-sweep-recheck",
+      "owner": "task-16",
+      "test": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "task-16.json",
+      "owner": "task-16"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t16-runner-group-signalled",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/test/support/strict-mutation-child.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: an oracle that has ended leaves no process it started running",
+      "testPattern": "E2 mutation: an oracle that has ended leaves no process it started running",
+      "before": "  spawnSync('/bin/sh', ['-c', ORACLE_GROUP_KILL], { env, stdio: 'ignore' });\n",
+      "after": "/* e2-t16 mutant: removed */\n"
+    },
+    {
+      "id": "e2-t16-group-kill-dash-syntax",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/test/support/strict-mutation-child.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group",
+      "testPattern": "E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group",
+      "before": "export const ORACLE_GROUP_KILL = 'kill -s KILL -- \"-$ORACLE_GROUP\"';",
+      "after": "export const ORACLE_GROUP_KILL = 'kill -KILL -- \"-$ORACLE_GROUP\"';"
+    },
+    {
+      "id": "e2-t16-superseded-anchor-skipped",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row",
+      "testPattern": "E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row",
+      "before": "    if (row.kind === 'production' && superseded.has(id)) {",
+      "after": "    if (false) {"
+    },
+    {
+      "id": "e2-t16-supersede-live-anchor",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a mutant whose anchor still applies cannot be superseded",
+      "testPattern": "E2 supersession: a mutant whose anchor still applies cannot be superseded",
+      "before": "      if (typeof old.mutation.before === 'string' && sourceText.includes(old.mutation.before))\n",
+      "after": "      if (false)\n"
+    },
+    {
+      "id": "e2-t16-supersede-reason",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a supersession that states no reason is refused",
+      "testPattern": "E2 supersession: a supersession that states no reason is refused",
+      "before": "      if (typeof row.reason !== 'string' || row.reason.trim().length === 0) fail(`${at} states no reason`);",
+      "after": "      void row.reason;"
+    },
+    {
+      "id": "e2-t16-supersede-same-test",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a supersession without a replacement killed by the same named test is refused",
+      "testPattern": "E2 supersession: a supersession without a replacement killed by the same named test is refused",
+      "before": "        replacement.mutation.testName !== old.mutation.testName ||\n",
+      "after": "        false ||\n"
+    },
+    {
+      "id": "e2-t16-supersede-chain",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: a chain of supersessions is refused",
+      "testPattern": "E2 supersession: a chain of supersessions is refused",
+      "before": "      if (superseded.has(id) || replacements.has(id) || superseded.has(row.replacement))\n",
+      "after": "      if (false)\n"
+    },
+    {
+      "id": "e2-t16-runner-skips-superseded",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 supersession: the runner skips a superseded mutant and runs its replacement",
+      "testPattern": "E2 supersession: the runner skips a superseded mutant and runs its replacement",
+      "before": "  return mutations.filter((mutation) => !superseded.has(mutation.id));",
+      "after": "  return mutations;"
+    },
+    {
+      "id": "e2-t16-ready-sweeps-obsolete-trees",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-update.test.ts",
+      "testName": "E2 laya update: once the re-approved entry is ready, every tree the earlier entry left is deleted",
+      "testPattern": "E2 laya update: once the re-approved entry is ready, every tree the earlier entry left is deleted",
+      "before": "        await this.#removeObsoleteTrees(job);\n      });\n    } catch (error) {",
+      "after": "      });\n    } catch (error) {"
+    },
+    {
+      "id": "e2-t16-repair-sweeps-obsolete-trees",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: an integrity repair that reaches ready deletes every tree its selection does not name",
+      "testPattern": "E2 manager: an integrity repair that reaches ready deletes every tree its selection does not name",
+      "before": "        await this.#removeObsoleteTrees(job);\n      });\n      return true;",
+      "after": "      });\n      return true;"
+    },
+    {
+      "id": "e2-t16-ready-sweep-stops-when-fenced",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion",
+      "testPattern": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion",
+      "before": "      () => this.#isCurrent(job),\n",
+      "after": "      () => true,\n"
+    },
+    {
+      "id": "e2-t16-sweep-rechecks-after-each-deletion",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion",
+      "testPattern": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion",
+      "before": "        await this.#failpoint?.('tree-sweep');\n        if (!current()) return false;\n",
+      "after": "        await this.#failpoint?.('tree-sweep');\n"
+    },
+    {
+      "id": "e2-t16-remove-sweeps-earlier-trees",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: removal deletes an earlier release’s verified trees even when this release installed nothing",
+      "testPattern": "E2 manager: removal deletes an earlier release’s verified trees even when this release installed nothing",
+      "before": "      if (!(await this.#removeEarlierVerifiedTrees())) return;\n",
+      "after": "      // e2-t16 mutant: removed\n"
+    },
+    {
+      "id": "e2-t16-remove-keeps-unverified-trees",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "testPattern": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "before": "      (directory, name) => name.endsWith('.partial') || name.endsWith('.staging') || name === own[directory],",
+      "after": "      (directory, name) => name === own[directory],"
+    },
+    {
+      "id": "e2-t16-remove-sweep-stops-on-claim",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/manager.ts",
+      "testFile": "packages/events-daemon/test/laya-manager.test.ts",
+      "testName": "E2 race: a re-enable claimed during a removal’s sweep stops it before its next deletion",
+      "testPattern": "E2 race: a re-enable claimed during a removal’s sweep stops it before its next deletion",
+      "before": "      () => this.#activeEnablement() === null,\n",
+      "after": "      () => true,\n"
+    },
+    {
+      "id": "e2-t16-model-hash-whole-read",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/src/runtime/laya/model-downloader.ts",
+      "testFile": "packages/events-daemon/test/laya-model-download.test.ts",
+      "testName": "E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read",
+      "testPattern": "E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read",
+      "before": "  for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>) {\n    size += chunk.length;\n    hash.update(chunk);\n  }\n",
+      "after": "  const whole = await (await import('node:fs/promises')).readFile(path);\n  size = whole.length;\n  hash.update(whole);\n"
+    },
+    {
+      "id": "e2-t16-bundle-takes-a-file-route",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-16",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses every file route Tauri’s configuration has",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses every file route Tauri’s configuration has",
+      "before": "    if (FILE_ROUTE_KEYS.has(key) && value !== undefined && value !== null && value !== false)\n",
+      "after": "    if (false)\n"
+    },
+    {
+      "id": "e2-t16-bundle-takes-an-onnx-crate",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-16",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses an ONNX Runtime crate in the app’s Cargo manifest or lock",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses an ONNX Runtime crate in the app’s Cargo manifest or lock",
+      "before": "      problems.push(`src-tauri/Cargo.toml: depends on ${name}; the app links nothing of ONNX Runtime`);",
+      "after": "      void name;"
+    },
+    {
+      "id": "e2-t16-bundle-takes-an-embedded-model",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-16",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses a model-like file the Rust code embeds",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses a model-like file the Rust code embeds",
+      "before": "      if (named !== undefined)\n",
+      "after": "      if (false)\n"
+    },
+    {
+      "id": "e2-t16-bundle-takes-a-hashed-name",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-16",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses each Laya file under its Vite-hashed name",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses each Laya file under its Vite-hashed name",
+      "before": "[path, ...unhashedNames(path)]",
+      "after": "[path]"
+    },
+    {
+      "id": "e2-t16-bundle-reads-an-oversized-file",
+      "kind": "production",
+      "leg": "vitest",
+      "owner": "task-16",
+      "source": "apps/desktop/scripts/bundle-check.mjs",
+      "testFile": "apps/desktop/src/test/bundle-check.test.ts",
+      "testName": "E2 desktop Laya contract: the bundle check refuses a built file over its size limit without reading it",
+      "testPattern": "E2 desktop Laya contract: the bundle check refuses a built file over its size limit without reading it",
+      "before": "    if (info.size > BUILT_FILE_LIMIT_BYTES) {",
+      "after": "    if (false) {"
+    },
+    {
+      "id": "e2-t16-packed-worker-follows-chunks",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/test/consumer-check.mjs",
+      "testFile": "packages/events-daemon/test/laya-package-checks.test.ts",
+      "testName": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included",
+      "testPattern": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included",
+      "before": " pending.push(target);",
+      "after": " void target;"
+    },
+    {
+      "id": "e2-t16-packed-worker-bare-import",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/test/consumer-check.mjs",
+      "testFile": "packages/events-daemon/test/laya-package-checks.test.ts",
+      "testName": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included",
+      "testPattern": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included",
+      "before": "\\bimport\\s*\\(\\s*|\\bimport\\s*|",
+      "after": "\\bimport\\s*\\(\\s*|"
+    },
+    {
+      "id": "e2-t16-daemon-suite-runs-runtime-package-test",
+      "kind": "production",
+      "owner": "task-16",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "packages/events-daemon/test/laya-package-checks.test.ts",
+      "testName": "E2 runtime package: the daemon suite runs every test file, the runtime package test included",
+      "testPattern": "E2 runtime package: the daemon suite runs every test file, the runtime package test included",
+      "before": " test/laya-runtime-package.test.mjs\"",
+      "after": "\""
+    }
+  ],
+  "supersedes": [
+    {
+      "task": 12,
+      "mutant": "e2-t12-runner-group-signalled",
+      "replacement": "e2-t16-runner-group-signalled",
+      "reason": "E2 review round 1, B1: dash, Ubuntu’s /bin/sh, reads `kill -KILL -- -<group>` as a pid and signals nothing, so the anchored group kill became `kill -s KILL -- \"-$ORACLE_GROUP\"`, the exported ORACLE_GROUP_KILL; the replacement removes that same call over the new line, and the same named test kills it."
+    }
+  ],
+  "matrix": [
+    {
+      "row": "traceability/task-16/e2-r1-group-kill-parses-under-dash",
+      "owner": "task-16",
+      "test": "E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group",
+      "mutation": "e2-t16-group-kill-dash-syntax"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-supersession-replacement-runs",
+      "owner": "task-16",
+      "test": "E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row",
+      "mutation": "e2-t16-superseded-anchor-skipped"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-supersession-refuses-a-live-anchor",
+      "owner": "task-16",
+      "test": "E2 supersession: a mutant whose anchor still applies cannot be superseded",
+      "mutation": "e2-t16-supersede-live-anchor"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-supersession-states-its-reason",
+      "owner": "task-16",
+      "test": "E2 supersession: a supersession that states no reason is refused",
+      "mutation": "e2-t16-supersede-reason"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-supersession-names-a-same-test-replacement",
+      "owner": "task-16",
+      "test": "E2 supersession: a supersession without a replacement killed by the same named test is refused",
+      "mutation": "e2-t16-supersede-same-test"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-supersession-refuses-a-chain",
+      "owner": "task-16",
+      "test": "E2 supersession: a chain of supersessions is refused",
+      "mutation": "e2-t16-supersede-chain"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-runner-skips-a-superseded-mutant",
+      "owner": "task-16",
+      "test": "E2 supersession: the runner skips a superseded mutant and runs its replacement",
+      "mutation": "e2-t16-runner-skips-superseded"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-obsolete-trees-deleted-once-ready",
+      "owner": "task-16",
+      "test": "E2 laya update: once the re-approved entry is ready, every tree the earlier entry left is deleted",
+      "mutation": "e2-t16-ready-sweeps-obsolete-trees"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-repair-deletes-obsolete-trees",
+      "owner": "task-16",
+      "test": "E2 manager: an integrity repair that reaches ready deletes every tree its selection does not name",
+      "mutation": "e2-t16-repair-sweeps-obsolete-trees"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-removal-deletes-every-verified-tree",
+      "owner": "task-16",
+      "test": "E2 manager: removal deletes an earlier release’s verified trees even when this release installed nothing",
+      "mutation": "e2-t16-remove-sweeps-earlier-trees"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-removal-leaves-unverified-trees",
+      "owner": "task-16",
+      "test": "E2 manager: removal while disabled deletes only this release’s trees and reports idle",
+      "mutation": "e2-t16-remove-keeps-unverified-trees"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-removal-sweep-stops-on-a-claim",
+      "owner": "task-16",
+      "test": "E2 race: a re-enable claimed during a removal’s sweep stops it before its next deletion",
+      "mutation": "e2-t16-remove-sweep-stops-on-claim"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-model-hash-streamed",
+      "owner": "task-16",
+      "test": "E2 laya model download: rehashes a held partial and verifies the finished file as a stream, never as one read",
+      "mutation": "e2-t16-model-hash-whole-read"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-bundle-refuses-every-file-route",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses every file route Tauri’s configuration has",
+      "mutation": "e2-t16-bundle-takes-a-file-route"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-bundle-refuses-an-onnx-crate",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses an ONNX Runtime crate in the app’s Cargo manifest or lock",
+      "mutation": "e2-t16-bundle-takes-an-onnx-crate"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-bundle-refuses-an-embedded-model",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses a model-like file the Rust code embeds",
+      "mutation": "e2-t16-bundle-takes-an-embedded-model"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-bundle-refuses-hashed-laya-names",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses each Laya file under its Vite-hashed name",
+      "mutation": "e2-t16-bundle-takes-a-hashed-name"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-bundle-refuses-oversized-files-unread",
+      "owner": "task-16",
+      "test": "E2 desktop Laya contract: the bundle check refuses a built file over its size limit without reading it",
+      "mutation": "e2-t16-bundle-reads-an-oversized-file"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-packed-worker-closure-walked",
+      "owner": "task-16",
+      "test": "E2 packed consumer: the Laya worker check walks every chunk the worker imports, bare imports included",
+      "mutation": "e2-t16-packed-worker-follows-chunks"
+    },
+    {
+      "row": "traceability/task-16/e2-r1-daemon-suite-runs-every-test-file",
+      "owner": "task-16",
+      "test": "E2 runtime package: the daemon suite runs every test file, the runtime package test included",
+      "mutation": "e2-t16-daemon-suite-runs-runtime-package-test"
+    },
+    {
+      "row": "awaits/task-16/e2-tree-sweep-recheck",
+      "owner": "task-16",
+      "test": "E2 race: a disable during the obsolete-tree sweep stops it before its next deletion",
+      "mutation": "e2-t16-ready-sweep-stops-when-fenced"
+    },
+    {
+      "row": "fixture/task-16.json",
+      "owner": "task-16",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    }
+  ],
+  "asyncLedger": [
+    {
+      "function": "manager.ts##sweepTrees",
+      "occurrences": 1,
+      "fence": "awaits/task-16/e2-tree-sweep-recheck"
+    }
+  ]
+}

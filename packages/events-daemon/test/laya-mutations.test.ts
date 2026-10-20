@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ import {
   VERIFY_MUTATION_LEGS,
 } from './support/laya-mutants.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
-import { runStrictMutationChild } from './support/strict-mutation-child.ts';
+import { ORACLE_GROUP_KILL, runStrictMutationChild } from './support/strict-mutation-child.ts';
 
 assertLoopbackSeal();
 
@@ -918,8 +919,9 @@ test('E2 mutation: copied production checker fails only its named oracle', { ski
 });
 
 /**
- * One oracle that starts a descendant — as a test process starts a Laya worker — writes the descendant's PID to
- * `pidFile`, then hangs (`hang`), exits at once (`exit`), or exits while the descendant still holds its output (`hold`).
+ * One oracle that starts a descendant — as a test process starts a Laya worker — writes its own PID to
+ * `<pidFile>.leader` and the descendant's to `pidFile`, then hangs (`hang`), exits at once (`exit`), or exits while the
+ * descendant still holds its output (`hold`).
  */
 function oracleWithDescendant(mode: 'hang' | 'exit' | 'hold', pidFile: string): readonly string[] {
   const source = [
@@ -928,6 +930,7 @@ function oracleWithDescendant(mode: 'hang' | 'exit' | 'hold', pidFile: string): 
     `const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ${
       mode === 'hold' ? "['ignore', 'inherit', 'inherit']" : "'ignore'"
     } });`,
+    `writeFileSync(${JSON.stringify(`${pidFile}.leader`)}, String(process.pid));`,
     `writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid));`,
     mode === 'hang' ? 'setInterval(() => {}, 1000);' : 'process.exit(0);',
   ].join('\n');
@@ -976,12 +979,54 @@ async function withDescendantOracle(
       descendant: async () => Number(await readFile(pidFile, 'utf8')),
     });
   } finally {
-    // A runner that left the descendant running fails above; this only keeps that failure from leaking it.
-    const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
-    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    // A runner that left the oracle or its descendant running fails above; this only keeps that failure from leaking
+    // them. A hung oracle whose runner did not end it — as under the stop-hook mutant — would otherwise run for ever.
+    for (const file of [`${pidFile}.leader`, pidFile]) {
+      const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
+      if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+// E2 review round 1 (B1): Ubuntu's /bin/sh is dash, whose `kill` reads `-KILL --` as a signal and then `--` as a pid
+// ("Illegal number: -"), so the group kill did nothing on the Linux legs and every strict runner left its oracles
+// running. The group kill must parse, and end the whole group, under dash as under bash; macOS ships /bin/dash too.
+test('E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group', {
+  skip: WINDOWS_SKIP || (!existsSync('/bin/dash') && 'no /bin/dash on this machine'),
+}, async () => {
+  for (const shell of ['/bin/dash', '/bin/sh', '/bin/bash'].filter((path) => existsSync(path))) {
+    const directory = await mkdtemp(join(tmpdir(), 'events-e2-group-kill-'));
+    const pidFile = join(directory, 'descendant.pid');
+    const leader = spawn(process.execPath, oracleWithDescendant('hang', pidFile), { detached: true, stdio: 'ignore' });
+    const exited = new Promise<void>((resolve) => leader.once('exit', () => resolve()));
+    try {
+      let descendant: number | undefined;
+      const deadline = Date.now() + 10_000;
+      while (descendant === undefined && Date.now() < deadline) {
+        const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
+        if (Number.isSafeInteger(pid) && pid > 0) descendant = pid;
+        else await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(descendant !== undefined, `${shell}: the oracle started its descendant`);
+      const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], {
+        env: { ORACLE_GROUP: String(leader.pid) },
+        encoding: 'utf8',
+      });
+      assert.equal(killed.stderr, '', `${shell} parses the group kill`);
+      assert.equal(killed.status, 0, `${shell} signals the group`);
+      await settlesWithin(exited, 5_000);
+      assert.equal(await goneWithin(descendant, 2_000), true, `${shell} ends the oracle's whole group`);
+    } finally {
+      if (leader.exitCode === null && leader.signalCode === null) process.kill(-(leader.pid as number), 'SIGKILL');
+      for (const file of [`${pidFile}.leader`, pidFile]) {
+        const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
+        if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
 
 test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
   await withDescendantOracle('hang', async (oracle) => {
@@ -1512,4 +1557,202 @@ test('E2 await ledger: a second async function of a ledgered name is refused unt
     await amend(root, `${LAYA_SOURCE}/tree-verifier.ts`, 'export const again = { async sha256(): Promise<void> {} };');
     await expectRejected(root, /counts 1 async tree-verifier\.ts#sha256; the source has 2: review the new one/);
   });
+});
+
+// ------------------------------------------------------------------------------------------- E2 review round 1
+
+/**
+ * A frozen mutant a later fix had to change is superseded, never edited (E2 review round 1). In the copied case the
+ * fix is simulated on Task 12's `e2-t12-runner-own-group` anchor: its line changes, so that anchor matches nothing,
+ * and a later fragment supersedes it with a replacement over the changed line, killed by the same named test.
+ */
+const OWN_GROUP = {
+  id: 'e2-t12-runner-own-group',
+  source: 'packages/events-daemon/test/support/strict-mutation-child.ts',
+  testFile: 'packages/events-daemon/test/laya-mutations.test.ts',
+  testName: 'E2 mutation: a timed-out oracle leaves no process it started running',
+  line: '      detached: OWN_PROCESS_GROUP,\n',
+} as const;
+
+/** A replacement mutant over `line`, registered by `task`, killed by `testName`. */
+function replacementMutant(task: number, id: string, line: string, testName: string = OWN_GROUP.testName) {
+  return {
+    id,
+    kind: 'production',
+    owner: `task-${task}`,
+    source: OWN_GROUP.source,
+    testFile: OWN_GROUP.testFile,
+    testName,
+    testPattern: testName,
+    before: line,
+    after: `/* ${id}: removed */\n`,
+  };
+}
+
+/** A later fragment that covers its own fixture row and carries `mutations` and `supersedes`. */
+async function supersedingFragment(
+  root: string,
+  task: number,
+  fields: { readonly mutations: readonly unknown[]; readonly supersedes: readonly unknown[] },
+): Promise<void> {
+  const fragment = {
+    schemaVersion: 1,
+    task,
+    owners: [{ id: `task-${task}` }],
+    section5: [],
+    traceability: [],
+    awaits: [],
+    fixtures: [{ path: `task-${task}.json`, owner: `task-${task}` }],
+    externalSources: [],
+    mutations: fields.mutations,
+    supersedes: fields.supersedes,
+    matrix: [
+      {
+        row: `fixture/task-${task}.json`,
+        owner: `task-${task}`,
+        test: 'E2 mutation: rejects editing a completed task fragment',
+        mutation: 'e2-immutable-fragment-history',
+      },
+    ],
+  };
+  await writeFile(
+    join(root, `packages/events-daemon/test/fixtures/laya/cases/task-${task}.json`),
+    `${JSON.stringify(fragment, null, 2)}\n`,
+  );
+}
+
+/** The simulated fix: Task 12's anchored line becomes `line`, so the frozen anchor matches nothing. */
+async function changeOwnGroupLine(root: string, line: string): Promise<void> {
+  await amend(root, OWN_GROUP.source, { before: OWN_GROUP.line, after: line });
+}
+
+const CHANGED_LINE = '      detached: OWN_PROCESS_GROUP === true,\n';
+
+test('E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row', async () => {
+  await withCase(async (root) => {
+    await changeOwnGroupLine(root, CHANGED_LINE);
+    // Without a supersession the frozen anchor is refused: a fix must not leave a frozen mutant unrunnable.
+    await expectRejected(root, /e2-t12-runner-own-group" must match one production guard/);
+    await supersedingFragment(root, 99, {
+      mutations: [replacementMutant(99, 'e2-t99-runner-own-group', CHANGED_LINE)],
+      supersedes: [
+        {
+          task: 12,
+          mutant: OWN_GROUP.id,
+          replacement: 'e2-t99-runner-own-group',
+          reason: 'the fix changed the anchored line',
+        },
+      ],
+    });
+    // Task 12's matrix row that names the superseded mutant is satisfied by its replacement.
+    await expectAccepted(root);
+  });
+});
+
+test('E2 supersession: a mutant whose anchor still applies cannot be superseded', async () => {
+  await withCase(async (root) => {
+    await supersedingFragment(root, 99, {
+      mutations: [replacementMutant(99, 'e2-t99-runner-own-group', OWN_GROUP.line)],
+      supersedes: [{ task: 12, mutant: OWN_GROUP.id, replacement: 'e2-t99-runner-own-group', reason: 'a live mutant' }],
+    });
+    await expectRejected(root, /supersession of "e2-t12-runner-own-group": its anchor still applies/);
+  });
+});
+
+test('E2 supersession: a supersession that states no reason is refused', async () => {
+  for (const reason of [undefined, '', '   ']) {
+    await withCase(async (root) => {
+      await changeOwnGroupLine(root, CHANGED_LINE);
+      await supersedingFragment(root, 99, {
+        mutations: [replacementMutant(99, 'e2-t99-runner-own-group', CHANGED_LINE)],
+        supersedes: [{ task: 12, mutant: OWN_GROUP.id, replacement: 'e2-t99-runner-own-group', reason }],
+      });
+      await expectRejected(root, /supersession of "e2-t12-runner-own-group" states no reason/);
+    });
+  }
+});
+
+test('E2 supersession: a supersession without a replacement killed by the same named test is refused', async () => {
+  await withCase(async (root) => {
+    await changeOwnGroupLine(root, CHANGED_LINE);
+    await supersedingFragment(root, 99, {
+      mutations: [],
+      supersedes: [{ task: 12, mutant: OWN_GROUP.id, reason: 'no replacement' }],
+    });
+    await expectRejected(root, /supersession of "e2-t12-runner-own-group" names no replacement/);
+    await supersedingFragment(root, 99, {
+      mutations: [],
+      supersedes: [{ task: 12, mutant: OWN_GROUP.id, replacement: 'e2-t99-nowhere', reason: 'unregistered' }],
+    });
+    await expectRejected(root, /its replacement "e2-t99-nowhere" is not a mutant .*task-99\.json registers/);
+    await supersedingFragment(root, 99, {
+      mutations: [
+        replacementMutant(
+          99,
+          'e2-t99-runner-own-group',
+          CHANGED_LINE,
+          'E2 mutation: an oracle that has ended leaves no process it started running',
+        ),
+      ],
+      supersedes: [
+        { task: 12, mutant: OWN_GROUP.id, replacement: 'e2-t99-runner-own-group', reason: 'another oracle' },
+      ],
+    });
+    await expectRejected(root, /its replacement must be killed by the same named test, "E2 mutation: a timed-out/);
+  });
+});
+
+test('E2 supersession: a chain of supersessions is refused', async () => {
+  await withCase(async (root) => {
+    const third = '      detached: OWN_PROCESS_GROUP !== false,\n';
+    await changeOwnGroupLine(root, third);
+    // Task 98 supersedes the frozen mutant; task 99 then supersedes task 98's replacement, whose anchor also moved.
+    await supersedingFragment(root, 98, {
+      mutations: [replacementMutant(98, 'e2-t98-runner-own-group', CHANGED_LINE)],
+      supersedes: [{ task: 12, mutant: OWN_GROUP.id, replacement: 'e2-t98-runner-own-group', reason: 'first fix' }],
+    });
+    await supersedingFragment(root, 99, {
+      mutations: [replacementMutant(99, 'e2-t99-runner-own-group', third)],
+      supersedes: [
+        { task: 98, mutant: 'e2-t98-runner-own-group', replacement: 'e2-t99-runner-own-group', reason: 'second fix' },
+      ],
+    });
+    await expectRejected(root, /supersession of "e2-t98-runner-own-group" makes a supersession chain/);
+  });
+});
+
+test('E2 supersession: the runner skips a superseded mutant and runs its replacement', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const frozen = mutationAccountingFixture('frozen');
+  const replacement = mutationAccountingFixture('replacement');
+  const other = mutationAccountingFixture('other');
+  assert.deepEqual(
+    mutants
+      .withoutSupersededMutations([frozen, replacement, other], [{ mutant: 'frozen', replacement: 'replacement' }])
+      .map((mutation) => mutation.id),
+    ['replacement', 'other'],
+  );
+  assert.throws(
+    () => mutants.withoutSupersededMutations([frozen, other], [{ mutant: 'frozen', replacement: 'replacement' }]),
+    /names replacement replacement, which would never run/,
+  );
+  assert.throws(
+    () =>
+      mutants.withoutSupersededMutations(
+        [frozen, { ...replacement, testName: 'another test', testPattern: 'another test' }],
+        [{ mutant: 'frozen', replacement: 'replacement' }],
+      ),
+    /is killed by another named test/,
+  );
+  assert.throws(
+    () =>
+      mutants.withoutSupersededMutations(
+        [frozen, replacement],
+        [
+          { mutant: 'frozen', replacement: 'replacement' },
+          { mutant: 'replacement', replacement: 'frozen' },
+        ],
+      ),
+    /which would never run/,
+  );
 });

@@ -89,14 +89,58 @@ async function taskFragments(): Promise<readonly { readonly task: number; readon
   return fragments.sort((left, right) => left.task - right.task);
 }
 
+/** A later fragment's `supersedes` entry: a frozen mutant whose anchor a fix changed, and the mutant that replaces it. */
+export interface LayaMutationSupersession {
+  readonly mutant: string;
+  readonly replacement: string;
+}
+
+/**
+ * The mutations the runner must execute: every registered one but a superseded mutant, whose replacement runs instead.
+ * The structural checker proves each supersession (`verifySupersessions`); the runner still refuses one that would
+ * drop a mutant unrun — an unregistered superseded mutant or replacement, a replacement killed by another named test,
+ * or a replacement that is itself superseded.
+ */
+export function withoutSupersededMutations(
+  mutations: readonly LayaMutation[],
+  supersessions: readonly LayaMutationSupersession[],
+): readonly LayaMutation[] {
+  const superseded = new Set(supersessions.map((entry) => entry.mutant));
+  for (const { mutant, replacement } of supersessions) {
+    const old = mutations.find((mutation) => mutation.id === mutant);
+    const live = mutations.find((mutation) => mutation.id === replacement);
+    if (old === undefined) throw new Error(`a supersession names ${mutant}, which no fragment registers`);
+    if (live === undefined || superseded.has(replacement))
+      throw new Error(`superseded mutant ${mutant} names replacement ${replacement}, which would never run`);
+    if (live.testFile !== old.testFile || live.testName !== old.testName || live.leg !== old.leg)
+      throw new Error(`superseded mutant ${mutant}'s replacement ${replacement} is killed by another named test`);
+  }
+  return mutations.filter((mutation) => !superseded.has(mutation.id));
+}
+
+function supersessionsOf(task: number, fragment: object): readonly LayaMutationSupersession[] {
+  const entries = (fragment as { readonly supersedes?: unknown }).supersedes;
+  if (entries === undefined) return [];
+  if (!Array.isArray(entries)) throw new Error(`task-${task}.json supersedes must be an array`);
+  return entries.map((entry, index) => {
+    const row = (entry ?? {}) as Record<string, unknown>;
+    return {
+      mutant: requiredString(row.mutant, `task-${task}.json supersession ${index}.mutant`),
+      replacement: requiredString(row.replacement, `task-${task}.json supersession ${index}.replacement`),
+    };
+  });
+}
+
 /** Loads every task-owned production mutation, never a parallel registry. */
 export async function loadLayaMutations(): Promise<readonly LayaMutation[]> {
   const result: LayaMutation[] = [];
+  const supersessions: LayaMutationSupersession[] = [];
   for (const { task, path: fragmentPath } of await taskFragments()) {
     const fragment: unknown = JSON.parse(await readFile(fragmentPath, 'utf8'));
     if (fragment === null || typeof fragment !== 'object' || Array.isArray(fragment)) {
       throw new Error(`task-${task}.json must be an object`);
     }
+    supersessions.push(...supersessionsOf(task, fragment));
     const mutations = (fragment as { readonly mutations?: unknown }).mutations;
     if (!Array.isArray(mutations)) throw new Error(`task-${task}.json must declare mutations`);
 
@@ -129,7 +173,7 @@ export async function loadLayaMutations(): Promise<readonly LayaMutation[]> {
       }),
     );
   }
-  return result;
+  return withoutSupersededMutations(result, supersessions);
 }
 
 function occurrences(text: string, needle: string): number {
@@ -247,10 +291,10 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
 
 /**
  * Oracles that read the whole checkout rather than an import closure: the structural checker run over its own
- * repository, and the release gate's command over the real package registry. Each gets a complete copy
- * (`copyRepositoryTree`); so does every oracle in the checker's own test file, whose copied cases are whole
- * checkouts too (E2 Task 12's matrix reads the plan, every fragment, test and source). Every other oracle keeps its
- * smaller closure copy.
+ * repository, the release gate's command over the real package registry, and the check that the daemon's test script
+ * runs every file in its test folder (E2 review round 1). Each gets a complete copy (`copyRepositoryTree`); so does
+ * every oracle in the checker's own test file, whose copied cases are whole checkouts too (E2 Task 12's matrix reads
+ * the plan, every fragment, test and source). Every other oracle keeps its smaller closure copy.
  */
 const WHOLE_REPOSITORY_TEST_FILES: ReadonlySet<string> = new Set([
   'packages/events-daemon/test/laya-mutations.test.ts',
@@ -258,6 +302,7 @@ const WHOLE_REPOSITORY_TEST_FILES: ReadonlySet<string> = new Set([
 export const WHOLE_REPOSITORY_ORACLES: ReadonlySet<string> = new Set([
   'laya scope: completed checker accepts the Task 3 proof fragment',
   'E2 release gate: this repository passes as dormant, through the command the release job runs',
+  'E2 runtime package: the daemon suite runs every test file, the runtime package test included',
 ]);
 
 /**

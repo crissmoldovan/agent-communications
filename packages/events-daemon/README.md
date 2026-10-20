@@ -161,8 +161,9 @@ yet, so this release ships no reviewed runtime lock. `agent-events judge kinds l
 `agent-events judge model status` show Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`,
 and `agent-events judge kind enable laya` refuses before anything is prepared. You can still add a Laya judge, and a
 rule that names it: both are configuration, and a Laya judge answers only once you have enabled Laya and its model is
-ready. Until then `rule enable` refuses that rule with Laya's reason: `E2_EXTERNAL_REFERENCE_BLOCKED` in this release,
-`LAYA_PLATFORM_UNAVAILABLE` on Linux and Windows, and `LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply.
+ready. Until then `rule enable` refuses that rule with Laya's reason: in this release that is
+`E2_EXTERNAL_REFERENCE_BLOCKED` on every platform; once a release offers Laya, it is `LAYA_PLATFORM_UNAVAILABLE` on
+Linux and Windows and `LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply.
 The first release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a
 512-token context, on the CPU, one call at a time, in a worker that a `sandbox-exec` profile keeps off the network, so
 what a rule asks it never leaves the machine. Linux and Windows show Laya as not available. Once you enable it there,
@@ -170,8 +171,9 @@ the daemon downloads the runtime (about 300 MB) and the model (about 1.69 GB) â€
 network traffic Laya has â€” and checks every file against the release's lock and manifest before each start.
 `judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,
 `ready`, `failed` or `unavailable`), its byte progress and any failure or unavailable reason;
-`judge kind disable laya` cancels a download and keeps the verified files; and `judge model remove` deletes them, only
-while Laya is disabled.
+`judge kind disable laya` cancels a download and keeps the verified files; `judge model remove` deletes every verified
+runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
+files of every entry it replaced.
 
 **Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
 turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing

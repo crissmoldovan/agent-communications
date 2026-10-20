@@ -32,8 +32,8 @@ const OWNER_ONLY_DIRECTORY_MODE = 0o700;
 
 /**
  * The points a test may pause at, each inside the artifact lock (or, for `install-start`, at a job's first locked
- * section; for `worker-start-verify`, after a worker start's walk of both trees) and before the recheck that guards
- * the effect named. Production composes no failpoint.
+ * section; for `worker-start-verify`, after a worker start's walk of both trees; for `tree-sweep`, after each tree a
+ * sweep deleted) and before the recheck that guards the effect named. Production composes no failpoint.
  */
 export type LayaArtifactEdge =
   | 'install-start'
@@ -43,7 +43,8 @@ export type LayaArtifactEdge =
   | 'repair-delete'
   | 'remove-model'
   | 'update-disable'
-  | 'worker-start-verify';
+  | 'worker-start-verify'
+  | 'tree-sweep';
 
 export type LayaArtifactFailpoint = (edge: LayaArtifactEdge) => void | Promise<void>;
 
@@ -449,9 +450,10 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
   }
 
   /**
-   * `judge model remove`: only while Laya is disabled, deletes this release's verified runtime and model trees and
-   * nothing that names another lock or manifest. Each asynchronous deletion is followed by a recheck that Laya is
-   * still disabled; an enablement claimed meanwhile stops the removal and owns what remains.
+   * `judge model remove` (D11): only while Laya is disabled, deletes every verified runtime and model tree under the
+   * Laya root — an earlier release's first, then this release's own with its unverified copies. Another selection's
+   * partial or staging tree is a disable's to delete, never a removal's. Each asynchronous deletion is followed by a
+   * recheck that Laya is still disabled; an enablement claimed meanwhile stops the removal and owns what remains.
    */
   async remove(): Promise<LayaModelStatus> {
     // The lock is held only briefly by an enabled kind's work, so a refusal is prompt; a disable already fenced every
@@ -459,6 +461,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     await this.#mutex.run(async () => {
       if (this.#activeEnablement() !== null)
         throw layaRefusal('LAYA_ENABLED', 'disable the Laya judge kind before removing its model');
+      if (!(await this.#removeEarlierVerifiedTrees())) return;
       const manifestId = this.#manifestId();
       // Trees exist only after a claimed job recorded model state: an installation that never had one has nothing here.
       const recorded = manifestId === null ? null : this.#models.get(manifestId);
@@ -860,6 +863,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
       if (!runtime.ok || !model.ok) throw new ArtifactFailure('integrity');
       await this.#locked('model-ready', async () => {
         this.#write(job, 'ready', totalBytes(selection));
+        await this.#removeObsoleteTrees(job);
       });
     } catch (error) {
       this.#recordFailure(job, error);
@@ -1000,6 +1004,7 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
       if (!runtime.ok || !model.ok) throw new ArtifactFailure('integrity');
       await this.#locked('model-ready', async () => {
         this.#write(job, 'ready', totalBytes(selection));
+        await this.#removeObsoleteTrees(job);
       });
       return true;
     } catch (error) {
@@ -1011,6 +1016,60 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
       }
       return false;
     }
+  }
+
+  /**
+   * D11 and E2-5: once a selection's model is ready, a tree no enabled entry names is obsolete. Inside the
+   * `model-ready` lock, every `runtime/` and `models/` entry but the selection's own two is deleted, partial and staging
+   * trees included, and the sweep stops at its first recheck that finds the job fenced by a disable, update or stop.
+   */
+  #removeObsoleteTrees(job: ArtifactJob): Promise<boolean> {
+    const named = { runtime: job.selection.runtimeLock.digest, models: job.selection.manifest.manifestId };
+    return this.#sweepTrees(
+      (directory, name) => name === named[directory],
+      () => this.#isCurrent(job),
+    );
+  }
+
+  /**
+   * `judge model remove`'s sweep of every verified tree but this release's own, which the removal then deletes with
+   * its unverified copies. It stops at its first recheck that finds an enablement claimed meanwhile.
+   */
+  #removeEarlierVerifiedTrees(): Promise<boolean> {
+    const own = { runtime: this.#releaseSelection()?.runtimeLock.digest, models: this.#manifestId() };
+    return this.#sweepTrees(
+      (directory, name) => name.endsWith('.partial') || name.endsWith('.staging') || name === own[directory],
+      () => this.#activeEnablement() === null,
+    );
+  }
+
+  /**
+   * Deletes, one at a time in raw-byte name order, every entry under `runtime/` and `models/` that `keep` does not
+   * name, rechecking `current` after every await: a tightening or a claim that lands meanwhile stops the sweep before
+   * its next deletion. A deletion that fails is left for the next sweep. Resolves whether the sweep finished. Its
+   * callers hold the artifact lock.
+   */
+  async #sweepTrees(
+    keep: (directory: 'runtime' | 'models', name: string) => boolean,
+    current: () => boolean,
+  ): Promise<boolean> {
+    for (const directory of ['runtime', 'models'] as const) {
+      let names: string[];
+      try {
+        names = await readdir(join(this.#root, directory));
+      } catch {
+        names = [];
+      }
+      if (!current()) return false;
+      names.sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+      for (const name of names) {
+        if (keep(directory, name)) continue;
+        await rm(join(this.#root, directory, name), { recursive: true, force: true }).catch(() => undefined);
+        await this.#failpoint?.('tree-sweep');
+        if (!current()) return false;
+      }
+    }
+    return true;
   }
 
   /** Deletes every partial and staging tree beneath the artifact root, and never a verified one. */
