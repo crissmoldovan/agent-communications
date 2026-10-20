@@ -616,6 +616,26 @@ test('E2 manager: an integrity failure before a worker start is repaired once, t
   }
 });
 
+test('E2 manager: an integrity repair that reaches ready deletes every tree its selection does not name', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const rig = await readyRig();
+  try {
+    const obsolete = join(rig.artifactRoot, 'models', 'laya-en-onnx-earlier');
+    await mkdir(obsolete, { recursive: true });
+    await writeFile(join(obsolete, 'kept'), 'an earlier manifest');
+    await appendFile(join(modelRoot(rig), 'laya_config.json'), ' ');
+    const repaired = await rig.manager.verifyForWorkerStart();
+    assert.equal(repaired.ok, true, 'the repair verified a fresh copy');
+    assert.equal(rig.manager.status().state, 'ready');
+    assert.equal(present(obsolete), false, 'once the repair is ready, the tree its selection does not name is deleted');
+    assert.deepEqual(await treeListing(modelRoot(rig)), MODEL_TREE);
+    assert.deepEqual(await treeListing(runtimeRoot(rig)), RUNTIME_TREE);
+  } finally {
+    await rig.close();
+  }
+});
+
 test('E2 manager: an integrity repair cannot replace a selection a disable changed', {
   skip: WINDOWS_SKIP,
 }, async () => {

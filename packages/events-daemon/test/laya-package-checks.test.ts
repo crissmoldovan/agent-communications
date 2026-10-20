@@ -27,6 +27,12 @@ async function plantedDist(files: Readonly<Record<string, string>>): Promise<str
   return dist;
 }
 
+/**
+ * A specifier quoted for planted module text. Quoting it here keeps this file's own text free of import-shaped
+ * specifiers, which the copied-tree mutation runner would follow as this file's imports.
+ */
+const q = (specifier: string): string => JSON.stringify(specifier);
+
 async function importsOf(files: Readonly<Record<string, string>>) {
   const dist = await plantedDist(files);
   try {
@@ -43,9 +49,9 @@ test('E2 packed consumer: the Laya worker check walks every chunk the worker imp
   // A worker that imports only Node built-ins and its own chunks, each of which does the same, passes.
   assert.deepEqual(
     await importsOf({
-      'laya-worker.mjs': 'import { spawn } from "node:child_process";\nimport { a } from "./chunk-a.mjs";\n',
-      'chunk-a.mjs': 'import"node:fs";export*from"./nested/chunk-b.mjs";export const a=1;\n',
-      'nested/chunk-b.mjs': 'const later=()=>import("../chunk-c.mjs");export{later};\n',
+      'laya-worker.mjs': `import { spawn } from ${q('node:child_process')};\nimport { a } from ${q('./chunk-a.mjs')};\n`,
+      'chunk-a.mjs': `import${q('node:fs')};export*from${q('./nested/chunk-b.mjs')};export const a=1;\n`,
+      'nested/chunk-b.mjs': `const later=()=>import(${q('../chunk-c.mjs')});export{later};\n`,
       'chunk-c.mjs': 'export const c = 3;\n',
     }),
     { chunks: ['chunk-a.mjs', 'chunk-c.mjs', 'laya-worker.mjs', 'nested/chunk-b.mjs'], refused: [] },
@@ -53,21 +59,24 @@ test('E2 packed consumer: the Laya worker check walks every chunk the worker imp
   // Whatever chunk loads it, and however: the runtime, ONNX Runtime and the tokenizer never load in the packed worker.
   for (const [files, refused] of [
     [
-      { 'laya-worker.mjs': 'import "./chunk-a.mjs";\n', 'chunk-a.mjs': 'import "onnxruntime-node";\n' },
+      { 'laya-worker.mjs': `import ${q('./chunk-a.mjs')};\n`, 'chunk-a.mjs': `import ${q('onnxruntime-node')};\n` },
       'onnxruntime-node',
     ],
     [
-      { 'laya-worker.mjs': 'export * from "./chunk-a.mjs";\n', 'chunk-a.mjs': 'import{Laya}from"@receptron/laya";\n' },
+      {
+        'laya-worker.mjs': `export * from ${q('./chunk-a.mjs')};\n`,
+        'chunk-a.mjs': `import{Laya}from${q('@receptron/laya')};\n`,
+      },
       '@receptron/laya',
     ],
     [
       {
-        'laya-worker.mjs': 'const load = () => import("./chunk-a.mjs");\n',
-        'chunk-a.mjs': 'const tokenizers = require("@huggingface/tokenizers");\n',
+        'laya-worker.mjs': `const load = () => import(${q('./chunk-a.mjs')});\n`,
+        'chunk-a.mjs': `const tokenizers = require(${q('@huggingface/tokenizers')});\n`,
       },
       '@huggingface/tokenizers',
     ],
-    [{ 'laya-worker.mjs': 'import "../outside.mjs";\n' }, '../outside.mjs'],
+    [{ 'laya-worker.mjs': `import ${q('../outside.mjs')};\n` }, '../outside.mjs'],
   ] as const) {
     const result = await importsOf(files);
     assert.deepEqual(result.refused, [refused], JSON.stringify(files));

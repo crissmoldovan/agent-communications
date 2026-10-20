@@ -291,10 +291,10 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
 
 /**
  * Oracles that read the whole checkout rather than an import closure: the structural checker run over its own
- * repository, and the release gate's command over the real package registry. Each gets a complete copy
- * (`copyRepositoryTree`); so does every oracle in the checker's own test file, whose copied cases are whole
- * checkouts too (E2 Task 12's matrix reads the plan, every fragment, test and source). Every other oracle keeps its
- * smaller closure copy.
+ * repository, the release gate's command over the real package registry, and the check that the daemon's test script
+ * runs every file in its test folder (E2 review round 1). Each gets a complete copy (`copyRepositoryTree`); so does
+ * every oracle in the checker's own test file, whose copied cases are whole checkouts too (E2 Task 12's matrix reads
+ * the plan, every fragment, test and source). Every other oracle keeps its smaller closure copy.
  */
 const WHOLE_REPOSITORY_TEST_FILES: ReadonlySet<string> = new Set([
   'packages/events-daemon/test/laya-mutations.test.ts',
@@ -302,6 +302,7 @@ const WHOLE_REPOSITORY_TEST_FILES: ReadonlySet<string> = new Set([
 export const WHOLE_REPOSITORY_ORACLES: ReadonlySet<string> = new Set([
   'laya scope: completed checker accepts the Task 3 proof fragment',
   'E2 release gate: this repository passes as dormant, through the command the release job runs',
+  'E2 runtime package: the daemon suite runs every test file, the runtime package test included',
 ]);
 
 /**
