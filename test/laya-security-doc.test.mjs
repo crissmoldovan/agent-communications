@@ -88,10 +88,23 @@ test('E2 SECURITY Laya wording: the documents state the limits, and promise no p
   ]) {
     assert.match(laya, fact, `the daemon README's Laya paragraph says ${fact}`);
   }
-  const unreleased = flat(changelog.slice(changelog.indexOf('## Unreleased'), changelog.indexOf('\n## 0.')));
-  for (const fact of [/Laya/, /nothing changes/i, /macOS/, /English/, /never leaves (?:this|your) Mac/]) {
-    assert.match(unreleased, fact, `the changelog's Unreleased entry says ${fact}`);
+  // The entry of the release that ships Laya dormant: 0.25.0's once released, `## Unreleased` until then. It says what
+  // changes when you update (review round 1, B2), so it no longer claims that nothing does.
+  const heading = changelog.includes('\n## 0.25.0\n') ? '\n## 0.25.0\n' : '\n## Unreleased\n';
+  const start = changelog.indexOf(heading);
+  assert.ok(start > -1, 'the changelog has the entry that ships Laya dormant');
+  const unreleased = flat(changelog.slice(start, changelog.indexOf('\n## ', start + heading.length)));
+  for (const fact of [
+    /Laya/,
+    /macOS/,
+    /English/,
+    /never leaves (?:this|your) Mac/,
+    /E2_EXTERNAL_REFERENCE_BLOCKED/,
+    /schema 23/,
+  ]) {
+    assert.match(unreleased, fact, `the changelog's Laya entry says ${fact}`);
   }
+  assert.doesNotMatch(unreleased, /nothing changes when you update/i, 'the entry does not claim that nothing changes');
   const runtime = flat(runtimeReadme);
   for (const fact of [
     /never published/,
