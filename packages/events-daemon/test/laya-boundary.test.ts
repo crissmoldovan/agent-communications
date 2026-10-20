@@ -3,7 +3,8 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { createSocket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
@@ -13,10 +14,13 @@ import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.
 import {
   createLayaWorkerBoundary,
   createLayaWorkerBoundaryForTest,
+  LAYA_SANDBOX_CONFINEMENT,
   LAYA_SANDBOX_EXECUTABLE,
   LAYA_SANDBOX_PROFILE,
+  LAYA_WORKER_DIRECTORY_PARAMETER,
   LAYA_WORKER_ENTRY,
   LAYA_WORKER_ENV,
+  LAYA_WORKER_SANDBOX_PROFILE,
   type LayaBoundaryListeners,
   type LayaWorkerSpawn,
 } from '../src/runtime/laya/worker-boundary-probe.ts';
@@ -43,7 +47,16 @@ async function withTemporaryDirectory(run: (directory: string) => Promise<void>)
 function runUnconfined(entry: string, mode?: string): LayaWorkerSpawn {
   const launcher: LayaWorkerSpawn = (command, args, options) => {
     assert.equal(command, LAYA_SANDBOX_EXECUTABLE);
-    assert.deepEqual(args, ['-p', LAYA_SANDBOX_PROFILE, process.execPath, '--experimental-strip-types', entry]);
+    // The worker's own directory, resolved as the kernel sees it, is the one place the profile lets it write.
+    assert.deepEqual(args, [
+      '-D',
+      `${LAYA_WORKER_DIRECTORY_PARAMETER}=${realpathSync(String(options?.cwd))}`,
+      '-p',
+      LAYA_WORKER_SANDBOX_PROFILE,
+      process.execPath,
+      '--experimental-strip-types',
+      entry,
+    ]);
     assert.deepEqual(options?.env, CLOSED_WORKER_ENV);
     assert.deepEqual(options?.stdio, ['pipe', 'pipe', 'pipe']);
     assert.equal(options?.shell, false);
@@ -196,7 +209,7 @@ function waitForWorkerFrame(
   });
 }
 
-async function expectSyntheticEscape(mode: 'tcp' | 'fetch' | 'udp' | 'uds'): Promise<void> {
+async function expectSyntheticEscape(mode: 'tcp' | 'fetch' | 'udp' | 'uds' | 'spawn'): Promise<void> {
   await withTemporaryDirectory(async (directory) => {
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -216,28 +229,50 @@ async function expectSyntheticEscape(mode: 'tcp' | 'fetch' | 'udp' | 'uds'): Pro
 test('E2 boundary: rejects each worker escape report before load', async () => {
   const { boundaryProbePassed } = await import('../src/runtime/laya/worker-boundary-probe.ts');
   const observed = { tcpConnections: 0, udpDatagrams: 0, udsConnections: 0 };
-  assert.equal(boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied' }, observed), true);
-  assert.equal(boundaryProbePassed({ tcp: 'escaped', fetch: 'denied', udp: 'denied', uds: 'denied' }, observed), false);
-  assert.equal(boundaryProbePassed({ tcp: 'denied', fetch: 'escaped', udp: 'denied', uds: 'denied' }, observed), false);
-  assert.equal(boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'escaped', uds: 'denied' }, observed), false);
-  assert.equal(boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'escaped' }, observed), false);
+  assert.equal(
+    boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied', spawn: 'denied' }, observed),
+    true,
+  );
+  assert.equal(
+    boundaryProbePassed({ tcp: 'escaped', fetch: 'denied', udp: 'denied', uds: 'denied', spawn: 'denied' }, observed),
+    false,
+  );
+  assert.equal(
+    boundaryProbePassed({ tcp: 'denied', fetch: 'escaped', udp: 'denied', uds: 'denied', spawn: 'denied' }, observed),
+    false,
+  );
+  assert.equal(
+    boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'escaped', uds: 'denied', spawn: 'denied' }, observed),
+    false,
+  );
+  assert.equal(
+    boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'escaped', spawn: 'denied' }, observed),
+    false,
+  );
+  // The fifth attempt: a process the profile let the worker start is an escape, as is any outcome but a denial.
+  for (const spawn of ['escaped', 'failed'] as const)
+    assert.equal(
+      boundaryProbePassed({ tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied', spawn }, observed),
+      false,
+      spawn,
+    );
   assert.equal(
     boundaryProbePassed(
-      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied' },
+      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied', spawn: 'denied' },
       { ...observed, tcpConnections: 1 },
     ),
     false,
   );
   assert.equal(
     boundaryProbePassed(
-      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied' },
+      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied', spawn: 'denied' },
       { ...observed, udpDatagrams: 1 },
     ),
     false,
   );
   assert.equal(
     boundaryProbePassed(
-      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied' },
+      { tcp: 'denied', fetch: 'denied', udp: 'denied', uds: 'denied', spawn: 'denied' },
       { ...observed, udsConnections: 1 },
     ),
     false,
@@ -421,6 +456,7 @@ test('E2 boundary: resources return to baseline after every boundary outcome', {
     ['fetch escape', 'fetch'],
     ['udp escape', 'udp'],
     ['uds escape', 'uds'],
+    ['spawn escape', 'spawn'],
     ['forged report', undefined],
     ['timeout', 'silence'],
   ];
@@ -567,9 +603,22 @@ test('E2 boundary: a uds-only child escape is killed before load', async () => {
   await expectSyntheticEscape('uds');
 });
 
+test('E2 boundary: a child that started a process is killed before load', async () => {
+  await expectSyntheticEscape('spawn');
+});
+
 test('E2 boundary: launch has literal profile, pipe-only fds and a closed environment', async () => {
   assert.equal(LAYA_SANDBOX_EXECUTABLE, '/usr/bin/sandbox-exec');
   assert.equal(LAYA_SANDBOX_PROFILE, '(version 1) (allow default) (deny network*)');
+  // E2 review round 1 (A1): beside the network clause, no process, no Apple event, no Mach service and no write
+  // outside the worker's own directory and /dev/null. The measured allow-list of Mach services is empty.
+  assert.equal(LAYA_WORKER_DIRECTORY_PARAMETER, 'LAYA_WORKER_DIRECTORY');
+  assert.equal(
+    LAYA_SANDBOX_CONFINEMENT,
+    '(deny process-fork) (deny appleevent-send) (deny mach-lookup) (deny file-write*) ' +
+      '(allow file-write* (subpath (param "LAYA_WORKER_DIRECTORY")) (literal "/dev/null"))',
+  );
+  assert.equal(LAYA_WORKER_SANDBOX_PROFILE, `${LAYA_SANDBOX_PROFILE} ${LAYA_SANDBOX_CONFINEMENT}`);
   assert.deepEqual(LAYA_WORKER_ENV, CLOSED_WORKER_ENV);
   await withTemporaryDirectory(async (directory) => {
     let spawns = 0;
@@ -641,6 +690,127 @@ test('E2 boundary: a real macOS sandbox proves all four attempts while pipes rem
       }
     }),
   );
+});
+
+/**
+ * One Node child under the worker's profile, or unconfined: it writes in its own directory, outside it and to
+ * /dev/null, starts a process and asks for the account database's user record (a Mach service lookup), and prints what
+ * each did. Every value it prints is a fixed word or an error code.
+ */
+async function confinementProbe(directory: string, confined: boolean): Promise<Readonly<Record<string, string>>> {
+  const inside = join(directory, 'worker');
+  await mkdir(inside, { recursive: true, mode: 0o700 });
+  const script = [
+    "const { writeFileSync } = require('node:fs');",
+    "const { spawnSync } = require('node:child_process');",
+    "const { userInfo } = require('node:os');",
+    'const result = {};',
+    'const attempt = (name, run) => { try { run(); result[name] = "done"; } catch (error) { result[name] = error.info?.code ?? error.code ?? "error"; } };',
+    `attempt('inside', () => writeFileSync(${JSON.stringify(join(inside, 'scratch'))}, 'x'));`,
+    `attempt('outside', () => writeFileSync(${JSON.stringify(join(directory, 'outside'))}, 'x'));`,
+    "attempt('devNull', () => writeFileSync('/dev/null', 'x'));",
+    "attempt('spawn', () => { const run = spawnSync('/usr/bin/true', [], { stdio: 'ignore' }); if (run.error) throw run.error; });",
+    "attempt('machLookup', () => userInfo());",
+    'process.stdout.write(JSON.stringify(result));',
+  ].join('\n');
+  const [command, args] = confined
+    ? [
+        LAYA_SANDBOX_EXECUTABLE,
+        [
+          '-D',
+          `${LAYA_WORKER_DIRECTORY_PARAMETER}=${realpathSync(inside)}`,
+          '-p',
+          LAYA_WORKER_SANDBOX_PROFILE,
+          process.execPath,
+          '-e',
+          script,
+        ],
+      ]
+    : [process.execPath, ['-e', script]];
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, { cwd: inside, env: CLOSED_WORKER_ENV, stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (code) =>
+      code === 0 ? resolve(stdout) : reject(new Error(`confinement probe exited ${code}`)),
+    );
+  });
+  await rm(join(directory, 'outside'), { force: true });
+  return JSON.parse(output) as Readonly<Record<string, string>>;
+}
+
+test('E2 boundary: under the real profile the worker writes only in its own directory, starts no process and reaches no system service, and still loads its runtime', async (t) => {
+  const { sandboxExecAvailable } = await import('../src/runtime/laya/contracts.ts');
+  if (process.platform !== 'darwin' || !sandboxExecAvailable({ platform: 'darwin', architecture: process.arch })) {
+    t.skip('requires the host macOS sandbox-exec boundary');
+    return;
+  }
+  await withTemporaryDirectory(async (directory) => {
+    // Unconfined, every act succeeds: a denial under the profile is the profile's, not this machine's.
+    assert.deepEqual(await confinementProbe(directory, false), {
+      inside: 'done',
+      outside: 'done',
+      devNull: 'done',
+      spawn: 'done',
+      machLookup: 'done',
+    });
+    assert.deepEqual(await confinementProbe(directory, true), {
+      inside: 'done',
+      outside: 'EPERM',
+      devNull: 'done',
+      spawn: 'EPERM',
+      // The user record comes from opendirectoryd over a Mach lookup the profile refuses.
+      machLookup: 'ENOENT',
+    });
+  });
+  // The production surface: the shipped worker proves all five attempts under this profile, then loads Task 8's
+  // synthetic runtime and answers over the same pipes, with no Mach service allowed.
+  const { syntheticRuntimeTree, ANSWERING_LAYA } = await import('./support/laya-synthetic-runtime.ts');
+  const { layaLayout, LAYA_NOUL_TEMPLATE_ID } = await import('../src/runtime/laya/templates.ts');
+  const tree = await syntheticRuntimeTree({ layaModule: ANSWERING_LAYA });
+  try {
+    await skipIfListenerRefused(t, () =>
+      withTemporaryDirectory(async (directory) => {
+        const boundary = await createLayaWorkerBoundary({ dataDirectory: directory });
+        try {
+          assert.equal(boundary.ok, true, boundary.ok ? undefined : `boundary refusal: ${boundary.code}`);
+          if (!boundary.ok) return;
+          const input = {
+            templateId: LAYA_NOUL_TEMPLATE_ID,
+            instructions: 'Does this synthetic message ask for a reply?',
+            state: 'three state words',
+          };
+          const words = (text: string): number => text.split(/\s+/u).filter((word) => word.length > 0).length;
+          const layout = layaLayout(input.templateId, input);
+          const inputTokens =
+            words(layout.head) +
+            layout.options.reduce((sum: number, option: string) => sum + 1 + words(option), 0) +
+            words(layout.state) +
+            4;
+          await writeFile(
+            join(tree.payload.runtimeRoot, 'node_modules', '@receptron', 'laya', 'dist', 'answer.json'),
+            JSON.stringify({ noul: 0.375, inputTokens }),
+          );
+          const loaded = waitForWorkerFrame(boundary.child, (frame) => frame.type !== 'probe-attempt', 10_000);
+          await boundary.sendLoad(tree.payload);
+          assert.equal((await loaded).type, 'loaded');
+          const answered = waitForWorkerFrame(boundary.child, (frame) => frame.type !== 'loaded', 10_000);
+          boundary.child.stdin.write(
+            encodeWorkerFrame({ type: 'request', ...boundary.binding, requestId: 'confined-1', ...input }),
+          );
+          const answer = await answered;
+          assert.deepEqual([answer.type, answer.value, answer.inputTokens], ['answer', 0.375, inputTokens]);
+        } finally {
+          if (boundary.ok) await boundary.close();
+        }
+      }),
+    );
+  } finally {
+    await rm(tree.root, { recursive: true, force: true });
+  }
 });
 
 test('E2 boundary: source has one probe-only network import boundary and no daemon authority imports', async () => {
@@ -827,6 +997,7 @@ test('E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order a
           ['probe-attempt', 'fetch', 'escaped'],
           ['probe-attempt', 'udp', 'escaped'],
           ['probe-attempt', 'uds', 'escaped'],
+          ['probe-attempt', 'spawn', 'escaped'],
           ['probe-result', undefined, undefined],
         ],
         'without a sandbox every attempt must reach its listener, or a denial under the sandbox would prove nothing',
@@ -834,8 +1005,8 @@ test('E2 boundary: the actual worker attempts TCP, fetch, UDP and UDS in order a
       assert.deepEqual(listeners.observed, { tcp: 2, udp: 1, uds: 1 });
       const result = frames.at(-1);
       assert.deepEqual(
-        [result?.tcp, result?.fetch, result?.udp, result?.uds, result?.nonce, result?.pipeGeneration],
-        ['escaped', 'escaped', 'escaped', 'escaped', 'nonce-under-test', 'pipes-under-test'],
+        [result?.tcp, result?.fetch, result?.udp, result?.uds, result?.spawn, result?.nonce, result?.pipeGeneration],
+        ['escaped', 'escaped', 'escaped', 'escaped', 'escaped', 'nonce-under-test', 'pipes-under-test'],
       );
     } finally {
       await listeners.close();
@@ -1093,7 +1264,7 @@ test("E2 boundary: phase E's fetch rule exempts only the probe's one loopback fe
     'fetch.call(null, target);',
     'Reflect.apply(fetch, null, [target]);',
     'const request = globalThis.fetch;',
-    "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds'] as const;",
+    "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds', 'spawn'] as const;",
   ]) {
     assert.deepEqual(
       verifyPhaseEJudgeSource({ file: probeFile, source: `${probeSource}\n${evasion}\n` }),
@@ -1245,6 +1416,7 @@ test('E2 boundary: the actual worker reports a refused or missing listener as fa
         ['fetch', 'failed'],
         ['udp', 'escaped'],
         ['uds', 'failed'],
+        ['spawn', 'escaped'],
         [undefined, undefined],
       ],
       'only an operating-system refusal is a denial; a refused or absent listener proves nothing',

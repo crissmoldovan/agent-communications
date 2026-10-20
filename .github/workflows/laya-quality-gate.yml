@@ -21,7 +21,7 @@ name: Laya quality gate
 # - **The corpus is read last.** Only after the candidate and both trees verify, the host's egress is checked and the
 #   boundary run has finished does the quality run open the corpus, in memory. Both runs print and write only their
 #   content-free results, which the last step keeps for the owner to read and commit: the aggregate
-#   `packages/events-laya-runtime/gate/<manifestId>.json` and `packages/events-laya-runtime/gate/macos-boundary-v1.json`.
+#   `packages/events-laya-runtime/gate/<manifestId>.json` and `packages/events-laya-runtime/gate/macos-boundary-v2.json`.
 #
 # Actions are pinned to the commit of the tag in each comment.
 
@@ -83,6 +83,6 @@ jobs:
           name: laya-gate-results
           path: |
             packages/events-laya-runtime/gate/laya-*.json
-            packages/events-laya-runtime/gate/macos-boundary-v1.json
+            packages/events-laya-runtime/gate/macos-boundary-v2.json
           if-no-files-found: ignore
           retention-days: 7

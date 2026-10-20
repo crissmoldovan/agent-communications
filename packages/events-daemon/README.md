@@ -164,8 +164,11 @@ rule that names it: both are configuration, and a Laya judge answers only once y
 ready. Until then `rule enable` refuses that rule with Laya's reason: `E2_EXTERNAL_REFERENCE_BLOCKED` in this release,
 `LAYA_PLATFORM_UNAVAILABLE` on Linux and Windows, and `LAYA_SANDBOX_UNAVAILABLE` on a Mac whose sandbox does not apply.
 The first release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a
-512-token context, on the CPU, one call at a time, in a worker that a `sandbox-exec` profile keeps off the network, so
-what a rule asks it never leaves the machine. Linux and Windows show Laya as not available. Once you enable it there,
+512-token context, on the CPU, one call at a time, in a worker whose `sandbox-exec` profile lets it open no network
+connection (Unix-domain sockets included), start no other process, send no Apple event, look up no system service and
+write nowhere but its own temporary folder, so the worker has no way of its own to send what a rule asks it anywhere.
+Each worker proves, before it loads anything, that a connection and a process start are refused. Linux and Windows
+show Laya as not available. Once you enable it there,
 the daemon downloads the runtime (about 300 MB) and the model (about 1.69 GB) — ordinary network traffic, and the only
 network traffic Laya has — and checks every file against the release's lock and manifest before each start.
 `judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,

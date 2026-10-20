@@ -496,7 +496,7 @@ test('E2 Laya supervisor: a worker’s own refusal is no-match and keeps the wor
 test('E2 Laya supervisor: a failed proof sends no load and records boundary-failed', {
   skip: WINDOWS_SKIP,
 }, async () => {
-  for (const probe of ['tcp', 'fetch', 'udp', 'uds']) {
+  for (const probe of ['tcp', 'fetch', 'udp', 'uds', 'spawn']) {
     const laya = rig('answer', { probe });
     try {
       assert.deepEqual(await laya.execute(), { kind: 'refused', code: 'boundary-failed', preIo: true });

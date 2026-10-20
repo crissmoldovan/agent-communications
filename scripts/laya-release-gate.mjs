@@ -10,7 +10,7 @@
  *   the owner-only raw-tarball acquirer (`scripts/fetch-laya-release-tarballs.mjs`) and match it byte for byte,
  *   (b) carry the aggregate quality report `packages/events-laya-runtime/gate/<manifestId>.json` that E2 Task 9's
  *   validator accepts with every offered template passing, and (c) carry the content-free real-Mac boundary evidence
- *   `packages/events-laya-runtime/gate/macos-boundary-v1.json` passing — (b) and (c) for every macOS architecture the
+ *   `packages/events-laya-runtime/gate/macos-boundary-v2.json` passing — (b) and (c) for every macOS architecture the
  *   lock offers, each with its own evidence (E2-J). Any failure stops the release with nothing published.
  *
  * Either way: the manifest offers exactly `laya-noul-v1` (`laya-choice2-v1` waits for its own task), no Laya or ONNX

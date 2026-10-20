@@ -205,7 +205,7 @@ test('E2 release gate: a real lock without passing real-Mac boundary evidence is
     assert.match(failed.message, /BOUNDARY_GATE_FAILED: the boundary run did not pass on arm64/);
     // A checklist, or the quality report, in the evidence's place is not evidence.
     await writeFile(
-      join(root, 'packages/events-laya-runtime/gate/macos-boundary-v1.json'),
+      join(root, 'packages/events-laya-runtime/gate/macos-boundary-v2.json'),
       '- [x] TCP, UDP, fetch and UDS denied\n',
     );
     assert.equal(await codeOf(() => gate(root)), 'LAYA_RELEASE_BOUNDARY');
@@ -216,7 +216,7 @@ test("E2 release gate: the owner's manual macOS checklist is supplemental: no re
   const checklist = await readFile(join(ROOT, 'test/laya-manual-macos-checklist.md'), 'utf8');
   assert.match(checklist, /cannot satisfy the release gate/u, 'the checklist says plainly what it is not');
   assert.ok(
-    checklist.includes('packages/events-laya-runtime/gate/macos-boundary-v1.json'),
+    checklist.includes('packages/events-laya-runtime/gate/macos-boundary-v2.json'),
     'and names the machine-produced boundary evidence that is the gate',
   );
   for (const file of [
@@ -231,7 +231,7 @@ test("E2 release gate: the owner's manual macOS checklist is supplemental: no re
   await withOffered(async (root, metrics) => {
     await writeQualityReport(root, metrics, BOTH);
     await mkdir(join(root, 'packages/events-laya-runtime/gate'), { recursive: true });
-    await writeFile(join(root, 'packages/events-laya-runtime/gate/macos-boundary-v1.json'), checklist);
+    await writeFile(join(root, 'packages/events-laya-runtime/gate/macos-boundary-v2.json'), checklist);
     const refused = await refusalOf(() => gate(root));
     assert.equal(refused?.code, 'LAYA_RELEASE_BOUNDARY', 'the ticked checklist in the evidence’s place is refused');
   });

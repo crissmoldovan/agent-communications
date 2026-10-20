@@ -282,7 +282,7 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
   2. the aggregate quality report `packages/events-laya-runtime/gate/<manifestId>.json`, which
      `scripts/verify-laya-quality-gate.mjs` validates, with every template the manifest offers passing on Gmail and on
      Slack;
-  3. the content-free boundary evidence `packages/events-laya-runtime/gate/macos-boundary-v1.json`, which
+  3. the content-free boundary evidence `packages/events-laya-runtime/gate/macos-boundary-v2.json`, which
      `scripts/verify-laya-boundary-gate.mjs` validates, passing.
 
   Items 2 and 3 are required for every macOS architecture the lock offers — each architecture whose platform file list
@@ -376,12 +376,21 @@ D11's quality gate measures each offered template on real, labelled Gmail and Sl
 
 On the gate Mac, through the daemon's own supervisor and boundary and the shipped worker entry, against disposable
 copies of the two trees: the production same-child proof (TCP, `fetch`, UDP with zero datagrams at the daemon's
-receiver, and a pathname Unix-domain socket all refused, with the pipes working), the real runtime and model loading
-and answering one synthetic question, a fresh proven worker after a crash, after a request past its 30-second deadline
-and after ten idle minutes, and a changed byte in either tree starting no worker until it is restored. It records
-`pass` or `fail` for each, never a path, socket, process id, request or answer. It does not exercise the daemon's own
-delete-and-reinstall repair, which downloads, or a Mac without a working `sandbox-exec`; their tests do, and the
-supplemental checklist covers them by hand. The checklist never stands in for this evidence.
+receiver, a pathname Unix-domain socket and starting another process all refused, with the pipes working), the real
+runtime and model loading and answering one synthetic question, a fresh proven worker after a crash, after a request
+past its 30-second deadline and after ten idle minutes, and a changed byte in either tree starting no worker until it is
+restored. It records `pass` or `fail` for each, never a path, socket, process id, request or answer. It does not
+exercise the daemon's own delete-and-reinstall repair, which downloads, or a Mac without a working `sandbox-exec`; their
+tests do, and the supplemental checklist covers them by hand. The checklist never stands in for this evidence.
+
+The worker's profile denies more than the network: starting another process, sending an Apple event, looking up any
+Mach service — its allow-list is empty, measured with Node and a synthetic runtime — and writing anywhere but its own
+temporary folder and `/dev/null`. No test loads the real runtime under it, so `nativeLoad` is where a real runtime
+that needs more shows. **If `nativeLoad` fails,** find what the profile refused the worker on the gate Mac (`log show
+--last 10m --predicate 'eventMessage CONTAINS "deny(1)"'`, the worker's process only), widen `LAYA_SANDBOX_CONFINEMENT`
+in `packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts` by exactly that named service, never a broader
+rule, record the name and why in the E2 plan's decisions, and re-run both gates on a new candidate tag: the profile is
+part of the candidate subject.
 
 ## If a publish fails part way through
 

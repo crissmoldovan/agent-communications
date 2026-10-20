@@ -151,12 +151,13 @@ process.stdin.on('data', (chunk: Buffer) => {
           fetch: 'denied',
           udp: 'denied',
           uds: 'denied',
+          spawn: 'denied',
         });
       }
       const attempts =
         mode === 'out-of-order-attempts'
-          ? (['fetch', 'tcp', 'udp', 'uds'] as const)
-          : (['tcp', 'fetch', 'udp', 'uds'] as const);
+          ? (['fetch', 'tcp', 'udp', 'uds', 'spawn'] as const)
+          : (['tcp', 'fetch', 'udp', 'uds', 'spawn'] as const);
       if (mode !== undefined && mode !== 'forged') {
         for (const attempt of attempts) {
           await writeWorkerFrame(process.stdout, {
@@ -174,6 +175,7 @@ process.stdin.on('data', (chunk: Buffer) => {
         fetch: mode === 'fetch' ? 'escaped' : 'denied',
         udp: mode === 'udp' ? 'escaped' : 'denied',
         uds: mode === 'uds' ? 'escaped' : 'denied',
+        spawn: mode === 'spawn' ? 'escaped' : 'denied',
       });
       if (mode === 'extra-frame') await writeWorkerFrame(process.stdout, { type: 'probe-extra', ...binding });
       if (mode === 'late-tcp') {

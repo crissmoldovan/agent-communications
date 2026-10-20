@@ -638,7 +638,7 @@ const LAYA_BOUNDARY_FETCH_ATTEMPT = ['globalThis.fetch(`http://127.0.0.1:', '$',
   '',
 );
 const LAYA_BOUNDARY_FETCH_NAMES = new Set([
-  "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds'] as const;",
+  "export const PROBE_ATTEMPTS = ['tcp', 'fetch', 'udp', 'uds', 'spawn'] as const;",
   "result.fetch === 'denied' &&",
   "['fetch', () => fetchProbe(input.tcpPort)],",
   "seal(globalThis, 'fetch', async (): Promise<never> => sealedNetwork());",

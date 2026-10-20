@@ -1162,6 +1162,22 @@ test('E2 static boundary: a shell or another program run from a Laya module is r
   });
 });
 
+test('E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt', async () => {
+  const probe = `${LAYA_SOURCE}/worker-boundary-probe.ts`;
+  const refused = /worker-boundary-probe\.ts starts a process beyond the sandbox launcher and the probe's one refused/;
+  for (const evasion of [
+    "export const open = () => spawn('/usr/bin/open', ['/Applications']);",
+    "import * as childProcess from 'node:child_process';\nexport const copy = () => childProcess.spawn('/usr/bin/pbcopy');",
+    "import { spawnSync as run } from 'node:child_process';\nvoid run;",
+    "const start = spawn;\nexport const script = () => start('/usr/bin/osascript');",
+  ]) {
+    await withCase(async (root) => {
+      await amend(root, probe, evasion);
+      await expectRejected(root, refused);
+    });
+  }
+});
+
 test('E2 static boundary: a package manager named in a Laya module is refused', async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/runtime-installer.ts`, "export const installer = 'npm';");

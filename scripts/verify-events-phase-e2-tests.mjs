@@ -977,6 +977,28 @@ function codeImportSpecifiers(source) {
 }
 
 /**
+ * E2 review round 1 (A1): the boundary probe's file starts a process in exactly two places — the launcher's
+ * `sandbox-exec`, and the worker's fifth attempt, which the profile must refuse — and in no other way: no second call,
+ * no other `child_process` entry point, no renamed, namespace, default or required import, no alias.
+ */
+const PROBE_PROCESS_STARTS = Object.freeze([
+  'spawn(command, args, spawnOptions)',
+  'spawn(LAYA_PROBE_SPAWN_COMMAND, [], PROBE_SPAWN_OPTIONS)',
+]);
+
+function probeStartsAnotherProcess(code) {
+  let rest = code;
+  for (const call of PROBE_PROCESS_STARTS) rest = rest.replace(call, '');
+  return (
+    /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/.test(rest) ||
+    /\bimport\s+(?!type\b)(?!\{)[^'"]*from\s*['"](?:node:)?child_process['"]/.test(rest) ||
+    /\b(?:require|import)\s*\(\s*['"](?:node:)?child_process['"]/.test(rest) ||
+    /\b(?:spawn|spawnSync)\s+as\b/.test(rest) ||
+    /=\s*(?:spawn|spawnSync)\s*[;,)\n]/.test(rest)
+  );
+}
+
+/**
  * E2 Task 12, Step 4: the static trust boundaries. The named exceptions stay exactly these and no others: the probe's
  * one loopback `fetch`, the worker runtime's one verified-tree import (both phase E's checker's rules) and the
  * release-only raw-tarball acquirer, `scripts/fetch-laya-release-tarballs.mjs`.
@@ -1022,6 +1044,8 @@ const STATIC_RULES = [
           fail(`${file} imports node:child_process; only the availability probe and the sandbox launcher may`);
         if (/(?<![.\w$])(?:exec|execSync|execFile|execFileSync|fork)\s*\(|\bshell\s*:\s*true\b/.test(code))
           fail(`${file} runs a shell or another program; the Laya modules spawn only sandbox-exec, without a shell`);
+        if (file.endsWith('/worker-boundary-probe.ts') && probeStartsAnotherProcess(code))
+          fail(`${file} starts a process beyond the sandbox launcher and the probe's one refused spawn attempt`);
       }
     },
   },

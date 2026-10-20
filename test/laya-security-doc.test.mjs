@@ -59,7 +59,12 @@ test("E2 SECURITY Laya wording: SECURITY.md carries D2's two Laya bullets, word 
     section(security, '## What the safety model does not claim').includes(`\n${OFFLINE}\n`),
     'the limit is under what the safety model does not claim',
   );
-  assert.equal(security.split('Laya').length - 1, 8, 'and no other Laya wording beside them');
+  // Beside D2's two bullets, SECURITY.md's own bullet on what the macOS profile denies beyond the network (E2 review
+  // round 1, A1), in scope after D2's network bullet: one Laya more, and no other.
+  const profile = lines.filter((line) => line.startsWith('- **The Laya worker acting outside its profile** — '));
+  assert.equal(profile.length, 1, "SECURITY.md's own profile bullet, exactly once");
+  assert.ok(section(security, '## Scope').includes(`\n${NETWORK}\n${profile[0]}\n`), 'right after the network bullet');
+  assert.equal(security.split('Laya').length - 1, 9, 'and no other Laya wording beside them');
 });
 
 test('E2 SECURITY Laya wording: the documents state the limits, and promise no protection from the same user', async () => {
@@ -107,7 +112,7 @@ test('E2 SECURITY Laya wording: the documents state the limits, and promise no p
     /protected/,
     /Rosetta/,
     /laya-candidate-/,
-    /macos-boundary-v1\.json/,
+    /macos-boundary-v2\.json/,
   ]) {
     assert.match(procedure, fact, `RELEASING.md's Laya section says ${fact}`);
   }

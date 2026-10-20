@@ -18,6 +18,7 @@ import {
 import {
   BOUNDARY_CHECKS,
   BOUNDARY_EVIDENCE,
+  BOUNDARY_SCHEMA,
   boundaryPassed,
   canonicalEvidenceBytes,
   computeBoundaryCandidate,
@@ -196,7 +197,8 @@ test('E2 macOS boundary gate: evidence is canonical JSON with exactly its review
     const [arm64, x64] = good.architectures;
     const { tcp: _tcp, ...withoutTcp } = arm64.checks;
     for (const [code, bad] of [
-      ['BOUNDARY_EVIDENCE_SHAPE', { ...good, schemaVersion: 2 }],
+      // Version 1 named no spawn check; no version 1 evidence was ever produced, and a release accepts only version 2.
+      ['BOUNDARY_EVIDENCE_SHAPE', { ...good, schemaVersion: 1 }],
       ['BOUNDARY_EVIDENCE_SHAPE', { ...good, architectures: [] }],
       ['BOUNDARY_EVIDENCE_SHAPE', { ...good, architectures: [{ ...arm64, checks: withoutTcp }, x64] }],
       [
@@ -218,28 +220,62 @@ test('E2 macOS boundary gate: evidence is canonical JSON with exactly its review
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from(JSON.stringify(good)))), 'BOUNDARY_EVIDENCE_JSON');
     const duplicated = bytes
       .toString('utf8')
-      .replace('"schemaVersion": 1,', '"schemaVersion": 1,\n  "schemaVersion": 1,');
+      .replace('"schemaVersion": 2,', '"schemaVersion": 2,\n  "schemaVersion": 2,');
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from(duplicated))), 'BOUNDARY_EVIDENCE_JSON');
     assert.equal(await codeOf(() => parseEvidenceBytes(Buffer.from('- [x] TCP denied\n'))), 'BOUNDARY_EVIDENCE_JSON');
   });
 });
 
-test('E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator', async () => {
+async function boundarySchema(version) {
   const require = createRequire(join(ROOT, 'packages/events-daemon/package.json'));
   const ajvModule = require('ajv/dist/2020.js');
   const Ajv2020 = ajvModule.default ?? ajvModule;
   const schema = JSON.parse(
-    await readFile(join(ROOT, 'packages/events-laya-runtime/gate/macos-boundary-v1.schema.json'), 'utf8'),
+    await readFile(join(ROOT, `packages/events-laya-runtime/gate/macos-boundary-${version}.schema.json`), 'utf8'),
   );
-  const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
+  return { schema, validate: new Ajv2020({ allErrors: true, strict: true }).compile(schema) };
+}
+
+test('E2 macOS boundary gate: macos-boundary-v1.schema.json agrees with the validator', async () => {
+  // Version 1 is kept as it was written (E2 review round 1, A1): exactly version 2's checks less the process start,
+  // and the validator, which reads version 2, refuses a version 1 document.
+  const { schema } = await boundarySchema('v1');
+  assert.equal(schema.properties.schemaVersion.const, 1);
+  assert.deepEqual(
+    schema.$defs.architecture.properties.checks.required,
+    BOUNDARY_CHECKS.filter((name) => name !== 'spawn'),
+  );
+  await withOffered(async (root) => {
+    assert.equal(
+      await codeOf(() =>
+        validateBoundaryEvidence(
+          { ...boundaryEvidence(root, ['arm64']), schemaVersion: 1 },
+          {
+            candidates: candidatesFor(root, ['arm64']),
+          },
+        ),
+      ),
+      'BOUNDARY_EVIDENCE_SHAPE',
+    );
+  });
+});
+
+test('E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the validator, and names the process start', async () => {
+  const { schema, validate } = await boundarySchema('v2');
+  assert.equal(BOUNDARY_SCHEMA, 'packages/events-laya-runtime/gate/macos-boundary-v2.schema.json');
+  assert.equal(BOUNDARY_EVIDENCE, 'packages/events-laya-runtime/gate/macos-boundary-v2.json');
+  assert.equal(schema.properties.schemaVersion.const, 2);
   await withOffered(async (root) => {
     const good = boundaryEvidence(root, BOTH);
     assert.equal(validate(good), true, JSON.stringify(validate.errors));
     assert.deepEqual(schema.$defs.architecture.properties.checks.required, [...BOUNDARY_CHECKS]);
+    assert.ok(BOUNDARY_CHECKS.includes('spawn'), 'the real-Mac run records the refused process start');
     const [arm64] = good.architectures;
+    const { spawn: _spawn, ...withoutSpawn } = arm64.checks;
     for (const bad of [
       { ...good, extra: true },
       { ...good, architectures: [{ ...arm64, checks: { ...arm64.checks, tcp: 'skipped' } }] },
+      { ...good, architectures: [{ ...arm64, checks: withoutSpawn }] },
       { ...good, architectures: [{ ...arm64, node: 'node' }] },
     ]) {
       assert.equal(validate(bad), false);
@@ -442,7 +478,7 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
   assert.deepEqual(corpus, [quality], 'only the quality run names the corpus, its key or the reference');
   const kept = list.at(-1) ?? '';
   assert.match(kept, /packages\/events-laya-runtime\/gate\/laya-\*\.json\n/);
-  assert.match(kept, /packages\/events-laya-runtime\/gate\/macos-boundary-v1\.json\n/);
+  assert.match(kept, /packages\/events-laya-runtime\/gate\/macos-boundary-v2\.json\n/);
   assert.equal(
     [...kept.matchAll(/\n {12}\S/g)].length,
     2,

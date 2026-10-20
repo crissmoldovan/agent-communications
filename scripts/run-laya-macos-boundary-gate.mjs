@@ -8,7 +8,7 @@
  *                    the candidate ships the real lock, and both trees are exactly that candidate's
  *   egress-check     this host cannot open a connection beyond its allow-list
  *   run --runtime-tree <directory> --model-tree <directory>
- *                    the boundary run, which writes only packages/events-laya-runtime/gate/macos-boundary-v1.json
+ *                    the boundary run, which writes only packages/events-laya-runtime/gate/macos-boundary-v2.json
  *
  * `run` drives the candidate's own worker through the production supervisor and boundary (`LayaWorkerSupervisor`,
  * `createLayaWorkerBoundary`): the shipped entry, the literal `sandbox-exec` profile, the same-child proof and both
@@ -26,7 +26,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sandboxExecAvailable } from '../packages/events-daemon/src/runtime/laya/contracts.ts';
 import { LAYA_NOUL_TEMPLATE_ID } from '../packages/events-daemon/src/runtime/laya/templates.ts';
-import { createLayaWorkerBoundary } from '../packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
+import {
+  createLayaWorkerBoundary,
+  PROBE_ATTEMPTS,
+} from '../packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
 import {
   LAYA_IDLE_EXIT_MS,
   LayaWorkerSupervisor,
@@ -194,10 +197,11 @@ export async function runProductionChecks({ candidate, runtimeTree, modelTree })
     if (!(await verifyCandidateTrees({ candidate, ...trees }))) return checks;
     const harness = createBoundaryHarness({ candidate, ...trees });
     try {
-      // The first start: the production same-child proof, then the native load and an answer over the same pipes.
+      // The first start: the production same-child proof (its five attempts), then the native load and an answer over
+      // the same pipes.
       const first = await harness.ask();
       const proved = harness.state.proofs[0] === true;
-      for (const name of ['tcp', 'fetch', 'udp', 'uds']) checks[name] = proved ? 'pass' : 'fail';
+      for (const name of PROBE_ATTEMPTS) checks[name] = proved ? 'pass' : 'fail';
       if (!proved || first.kind !== 'answer') return checks;
       checks.pipes = 'pass';
       checks.nativeLoad = 'pass';

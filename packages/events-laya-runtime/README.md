@@ -49,8 +49,9 @@ checks that this is so. A release that ships the real lock must first:
 2. carry the aggregate quality report `gate/<manifestId>.json`, which
    `scripts/verify-laya-quality-gate.mjs` accepts, with every offered prompt
    template passing on Gmail and on Slack;
-3. carry the real-Mac boundary evidence `gate/macos-boundary-v1.json` (schema
-   `gate/macos-boundary-v1.schema.json`), which
+3. carry the real-Mac boundary evidence `gate/macos-boundary-v2.json` (schema
+   `gate/macos-boundary-v2.schema.json`; version 1's schema is kept as it was
+   written, and no evidence was ever made under it), which
    `scripts/verify-laya-boundary-gate.mjs` accepts, passing.
 
 Steps 2 and 3 hold for every macOS architecture the lock offers, each with its
