@@ -1061,43 +1061,111 @@ async function withDescendantOracle(
   }
 }
 
+/**
+ * True once the kernel knows no process in group `group`, not even an unreaped zombie: `kill(-group, 0)` answers
+ * ESRCH on every POSIX system then. Until then Linux answers 0 (it signals zombies, a no-op), and macOS answers EPERM
+ * for a group whose every member is an unreaped zombie (XNU's process-group kill skips zombies and reports EPERM when
+ * it signalled nobody): neither is gone. Observed on GitHub's macOS 26 runners, E2 CI round 1.
+ */
+async function groupGoneWithin(group: number, milliseconds: number): Promise<boolean> {
+  const gone = (): boolean => {
+    try {
+      process.kill(-group, 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ESRCH';
+    }
+  };
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    if (gone()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return gone();
+}
+
+/** What one shell's group kill did to a real oracle group: the leader and its descendant, both running before it. */
+async function groupKillOutcome(shell: string): Promise<Readonly<Record<string, unknown>>> {
+  const directory = await mkdtemp(join(tmpdir(), 'events-e2-group-kill-'));
+  const pidFile = join(directory, 'descendant.pid');
+  const leader = spawn(process.execPath, oracleWithDescendant('hang', pidFile), { detached: true, stdio: 'ignore' });
+  const exited = new Promise<void>((resolve) => leader.once('exit', () => resolve()));
+  try {
+    let descendant: number | undefined;
+    const deadline = Date.now() + 10_000;
+    while (descendant === undefined && Date.now() < deadline) {
+      const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
+      if (Number.isSafeInteger(pid) && pid > 0) descendant = pid;
+      else await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (descendant === undefined || leader.pid === undefined) return { shell, started: false };
+    const group = leader.pid;
+    const runningBeforeKill = processAlive(group) && processAlive(descendant);
+    const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], {
+      env: { ORACLE_GROUP: String(group) },
+      encoding: 'utf8',
+    });
+    const leaderEnded = await settlesWithin(exited, 5_000).then(
+      () => leader.signalCode,
+      () => 'still running',
+    );
+    return {
+      shell,
+      started: true,
+      runningBeforeKill,
+      stderr: killed.stderr,
+      status: killed.status,
+      leaderEnded,
+      descendantGone: await goneWithin(descendant, 5_000),
+      groupGone: await groupGoneWithin(group, 5_000),
+    };
+  } finally {
+    // Cleanup only, never a verdict: it must not hide the outcome above. A group already gone answers ESRCH, and one
+    // whose members are only zombies answers EPERM on macOS; the leader's exit is then awaited, so it is reaped.
+    if (leader.exitCode === null && leader.signalCode === null && leader.pid !== undefined) {
+      try {
+        process.kill(-leader.pid, 'SIGKILL');
+      } catch {}
+      await settlesWithin(exited, 5_000).catch(() => undefined);
+    }
+    for (const file of [`${pidFile}.leader`, pidFile]) {
+      const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
+      if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {}
+      }
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 // E2 review round 1 (B1): Ubuntu's /bin/sh is dash, whose `kill` reads `-KILL --` as a signal and then `--` as a pid
 // ("Illegal number: -"), so the group kill did nothing on the Linux legs and every strict runner left its oracles
 // running. The group kill must parse, and end the whole group, under dash as under bash; macOS ships /bin/dash too.
+// E2 CI round 1: on GitHub's macOS 26 runners the cleanup's own group kill threw EPERM at a group whose members were
+// unreaped zombies, hiding the result it was cleaning up after. Each shell's whole outcome is now read, then compared.
 test('E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, and ends the whole group', {
   skip: WINDOWS_SKIP || (!existsSync('/bin/dash') && 'no /bin/dash on this machine'),
+  timeout: 120_000,
 }, async () => {
-  for (const shell of ['/bin/dash', '/bin/sh', '/bin/bash'].filter((path) => existsSync(path))) {
-    const directory = await mkdtemp(join(tmpdir(), 'events-e2-group-kill-'));
-    const pidFile = join(directory, 'descendant.pid');
-    const leader = spawn(process.execPath, oracleWithDescendant('hang', pidFile), { detached: true, stdio: 'ignore' });
-    const exited = new Promise<void>((resolve) => leader.once('exit', () => resolve()));
-    try {
-      let descendant: number | undefined;
-      const deadline = Date.now() + 10_000;
-      while (descendant === undefined && Date.now() < deadline) {
-        const pid = Number(await readFile(pidFile, 'utf8').catch(() => 'NaN'));
-        if (Number.isSafeInteger(pid) && pid > 0) descendant = pid;
-        else await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      assert.ok(descendant !== undefined, `${shell}: the oracle started its descendant`);
-      const killed = spawnSync(shell, ['-c', ORACLE_GROUP_KILL], {
-        env: { ORACLE_GROUP: String(leader.pid) },
-        encoding: 'utf8',
-      });
-      assert.equal(killed.stderr, '', `${shell} parses the group kill`);
-      assert.equal(killed.status, 0, `${shell} signals the group`);
-      await settlesWithin(exited, 5_000);
-      assert.equal(await goneWithin(descendant, 2_000), true, `${shell} ends the oracle's whole group`);
-    } finally {
-      if (leader.exitCode === null && leader.signalCode === null) process.kill(-(leader.pid as number), 'SIGKILL');
-      for (const file of [`${pidFile}.leader`, pidFile]) {
-        const pid = Number(await readFile(file, 'utf8').catch(() => 'NaN'));
-        if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) process.kill(pid, 'SIGKILL');
-      }
-      await rm(directory, { recursive: true, force: true });
-    }
-  }
+  const shells = ['/bin/dash', '/bin/sh', '/bin/bash'].filter((path) => existsSync(path));
+  const outcomes: Readonly<Record<string, unknown>>[] = [];
+  for (const shell of shells) outcomes.push(await groupKillOutcome(shell));
+  assert.deepEqual(
+    outcomes,
+    shells.map((shell) => ({
+      shell,
+      started: true,
+      runningBeforeKill: true,
+      stderr: '',
+      status: 0,
+      leaderEnded: 'SIGKILL',
+      descendantGone: true,
+      groupGone: true,
+    })),
+    'each shell parses the group kill and ends the oracle’s whole group',
+  );
 });
 
 test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
