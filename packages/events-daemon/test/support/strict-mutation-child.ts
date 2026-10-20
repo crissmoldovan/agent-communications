@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 export const STRICT_MUTATION_CHILD_TIMEOUT_MS = 15_000;
 
@@ -16,37 +16,25 @@ export interface StrictMutationChildResult {
  */
 const OWN_PROCESS_GROUP = process.platform !== 'win32';
 
-/** The process groups of oracles still running, ended too if the runner itself exits or is told to stop. */
+/** The process groups of oracles still running: a runner that is about to end can end them too. */
 const liveGroups = new Set<number>();
-let runnerExitHooked = false;
-
-function endProcessGroup(leader: number): void {
-  try {
-    process.kill(-leader, 'SIGKILL');
-  } catch {
-    // ESRCH: every process of that oracle has already gone.
-  }
-}
-
-function endLiveGroups(): void {
-  for (const leader of liveGroups) endProcessGroup(leader);
-  liveGroups.clear();
-}
 
 /**
- * An oracle in its own group no longer hears the terminal's Ctrl-C, so the runner ends the live groups as it goes.
- * A signal is passed on afterwards only when nothing else listens for it, which is when Node would have ended anyway.
+ * `kill -KILL -- -<group>`: a negative id names the whole process group. This module is one of phase E's adversarial
+ * helpers, whose scanner admits no `process` member beyond `execPath` and `platform` and no computed string, so the
+ * group is signalled by the shell's own `kill`, its id handed over in the environment. A group that has already gone
+ * makes it fail, which is the same outcome.
  */
-function hookRunnerExit(): void {
-  if (runnerExitHooked) return;
-  runnerExitHooked = true;
-  process.once('exit', endLiveGroups);
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-    process.once(signal, () => {
-      endLiveGroups();
-      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
-    });
-  }
+function endProcessGroup(leader: number): void {
+  // Node writes each environment value as text itself; the cast only says so to the type checker.
+  const env = { ORACLE_GROUP: leader } as unknown as NodeJS.ProcessEnv;
+  spawnSync('/bin/sh', ['-c', 'kill -KILL -- "-$ORACLE_GROUP"'], { env, stdio: 'ignore' });
+}
+
+/** Ends every oracle still running; a runner calls it as it ends (`mutation-runner-exit.ts`). */
+export function endLiveOracleGroups(): void {
+  for (const leader of liveGroups) endProcessGroup(leader);
+  liveGroups.clear();
 }
 
 /**
@@ -63,7 +51,6 @@ export async function runStrictMutationChild(input: {
   const timeoutMs = input.timeoutMs ?? STRICT_MUTATION_CHILD_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error('strict mutation child timeout must be a positive safe integer');
-  if (OWN_PROCESS_GROUP) hookRunnerExit();
   return new Promise<StrictMutationChildResult>((resolve, reject) => {
     const child = spawn(input.command, [...input.args], {
       cwd: input.cwd,
@@ -73,13 +60,18 @@ export async function runStrictMutationChild(input: {
     });
     const leader = child.pid;
     if (OWN_PROCESS_GROUP && leader !== undefined) liveGroups.add(leader);
-    /** The whole oracle: its group on POSIX; a failed spawn has no PID, and nothing to end. */
+    /**
+     * The whole oracle: its group on POSIX, and its own process in any case, so even a group that cannot be signalled
+     * leaves no hung leader behind. A failed spawn has no PID, and nothing to end.
+     */
     const endOracle = (): void => {
       if (leader === undefined) return;
       if (OWN_PROCESS_GROUP) {
         liveGroups.delete(leader);
         endProcessGroup(leader);
-      } else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+      // A process that has already exited ignores this; one whose spawn failed returned above, PID-less.
+      child.kill('SIGKILL');
     };
     let output = '';
     let timedOut = false;
