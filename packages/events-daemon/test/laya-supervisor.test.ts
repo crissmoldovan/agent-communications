@@ -29,6 +29,13 @@ import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const standin = fileURLToPath(new URL('./support/laya-worker-standin.ts', import.meta.url));
 const supervisorSource = new URL('../src/runtime/laya/worker-supervisor.ts', import.meta.url);
 const MANIFEST_ID = 'laya-en-onnx-tiny-v1';
@@ -233,6 +240,7 @@ async function absent(path: string): Promise<boolean> {
 
 test('E2 Laya supervisor: one framed request, after the proof, bound to the proven child and carrying no event, account or target', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('answer', { extra: ['--value-json', '0.6125', '--tokens', '41'] });
   try {
@@ -274,6 +282,7 @@ test('E2 Laya supervisor: one framed request, after the proof, bound to the prov
 
 test('E2 Laya supervisor: E gates the reservation immediately before the one write, and a refused gate writes nothing', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('answer');
   try {
@@ -309,6 +318,7 @@ test('E2 Laya supervisor: E gates the reservation immediately before the one wri
 
 test('E2 Laya supervisor timeout/crash/idle: a hung request is killed at its deadline and the next starts a fresh child', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('hang-second', { requestDeadlineMs: 400 });
   try {
@@ -331,6 +341,7 @@ test('E2 Laya supervisor timeout/crash/idle: a hung request is killed at its dea
 
 test('E2 Laya supervisor timeout/crash/idle: a crash is no-match and the next request restarts the worker', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('answer', { requestDeadlineMs: 20_000, serveFor: (start) => (start === 1 ? 'crash' : 'answer') });
   try {
@@ -350,7 +361,10 @@ test('E2 Laya supervisor timeout/crash/idle: a crash is no-match and the next re
   }
 });
 
-test('E2 late worker result is discarded', { skip: WINDOWS_SKIP }, async () => {
+test('E2 late worker result is discarded', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   // The late reply comes long after the 2-second wait below, so only the deadline's own kill can end the worker in it.
   const laya = rig('late', { requestDeadlineMs: 300, extra: ['--delay', '5000'] });
   try {
@@ -367,6 +381,7 @@ test('E2 late worker result is discarded', { skip: WINDOWS_SKIP }, async () => {
 
 test('E2 Laya supervisor timeout/crash/idle: an idle worker exits after its idle window', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('answer', { idleExitMs: 300 });
   try {
@@ -389,6 +404,7 @@ test('E2 Laya supervisor: the production deadlines are D11’s 30 seconds and te
 
 test('E2 Laya supervisor: a second request is written only after the first has settled', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('slow', { extra: ['--delay', '300'] });
   try {
@@ -411,6 +427,7 @@ test('E2 Laya supervisor: a second request is written only after the first has s
 
 test('E2 Laya supervisor: requests are serialised — the second waits in the queue while the first is in flight', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('slow', { extra: ['--delay', '400'] });
   try {
@@ -430,6 +447,7 @@ test('E2 Laya supervisor: requests are serialised — the second waits in the qu
 
 test('E2 Laya supervisor: any unexpected frame kills the worker, a late probe-attempt included', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('late-probe-attempt', { extra: ['--delay', '150'] });
   try {
@@ -446,6 +464,7 @@ test('E2 Laya supervisor: any unexpected frame kills the worker, a late probe-at
 
 test('E2 Laya supervisor: an answer outside its closed shape is malformed and kills the worker', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const cases: readonly [string, readonly string[]][] = [
     ['answer', ['--value-json', '1.5']],
@@ -477,6 +496,7 @@ test('E2 Laya supervisor: an answer outside its closed shape is malformed and ki
 
 test('E2 Laya supervisor: a worker’s own refusal is no-match and keeps the worker', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   for (const [serve, code] of [
     ['token-limit', 'laya-token-limit'],
@@ -495,6 +515,7 @@ test('E2 Laya supervisor: a worker’s own refusal is no-match and keeps the wor
 
 test('E2 Laya supervisor: a failed proof sends no load and records boundary-failed', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   for (const probe of ['tcp', 'fetch', 'udp', 'uds', 'spawn']) {
     const laya = rig('answer', { probe });
@@ -512,6 +533,7 @@ test('E2 Laya supervisor: a failed proof sends no load and records boundary-fail
 
 test('E2 Laya supervisor: a runtime that refuses to load records runtime-failed and is killed', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   for (const [serve, options] of [
     ['refuse-load', {}],
@@ -532,6 +554,7 @@ test('E2 Laya supervisor: a runtime that refuses to load records runtime-failed 
 
 test('E2 Laya supervisor: an unready model, a failed verification or unavailable Laya starts no child', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const unready = rig('answer');
   try {
@@ -583,6 +606,7 @@ test('E2 Laya supervisor: an unready model, a failed verification or unavailable
 
 test('E2 Laya supervisor: a selection changed after its trees were verified sends no load', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   let laya: Rig | undefined;
   laya = rig('answer', {
@@ -604,6 +628,7 @@ test('E2 Laya supervisor: a selection changed after its trees were verified send
 
 test('E2 Laya supervisor: a selection changed while the worker was idle refuses before any request is written', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('answer');
   try {
@@ -619,6 +644,7 @@ test('E2 Laya supervisor: a selection changed while the worker was idle refuses 
 
 test('E2 Laya supervisor: a purge of the in-flight reservation kills its worker at once', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = rig('hang', { requestDeadlineMs: 20_000 });
   try {
@@ -637,7 +663,10 @@ test('E2 Laya supervisor: a purge of the in-flight reservation kills its worker 
   }
 });
 
-test('E2 Laya supervisor: stop kills the worker and fails what waited on it', { skip: WINDOWS_SKIP }, async () => {
+test('E2 Laya supervisor: stop kills the worker and fails what waited on it', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const laya = rig('hang', { requestDeadlineMs: 20_000 });
   try {
     const pending = laya.execute('stopped-work');
@@ -653,6 +682,7 @@ test('E2 Laya supervisor: stop kills the worker and fails what waited on it', { 
 
 test('E2 Laya supervisor: each worker directory keeps the probe’s socket within macOS’s 103 bytes for any home', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   let directory: string | undefined;
   const laya = rig('answer', {
@@ -673,7 +703,7 @@ test('E2 Laya supervisor: each worker directory keeps the probe’s socket withi
   assert.equal(await absent(directory ?? ''), true, 'the directory leaves with its worker');
 });
 
-test('E2 Laya supervisor has no daemon authority', async () => {
+test('E2 Laya supervisor has no daemon authority', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   const source = await readFile(supervisorSource, 'utf8');
   // Every specifier: `from`, a dynamic `import(` and a bare side-effect `import '…'` alike.
   const imports = [...source.matchAll(/(?:from\s*|import\s*\(\s*|import\s+)(['"])([^'"]+)\1/gu)].map(
@@ -692,7 +722,9 @@ test('E2 Laya supervisor has no daemon authority', async () => {
   assert.deepEqual(LAYA_WORKER_ENV, { PATH: '/usr/bin:/bin', TZ: 'UTC' });
 });
 
-test('E2 Laya supervisor: under this Mac’s own sandbox the shipped worker proves, loads a verified runtime and answers', async (t) => {
+test('E2 Laya supervisor: under this Mac’s own sandbox the shipped worker proves, loads a verified runtime and answers', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async (t) => {
   const { sandboxExecAvailable } = await import('../src/runtime/laya/contracts.ts');
   if (process.platform !== 'darwin' || !sandboxExecAvailable({ platform: 'darwin', architecture: process.arch })) {
     t.skip('requires the host macOS sandbox-exec boundary');

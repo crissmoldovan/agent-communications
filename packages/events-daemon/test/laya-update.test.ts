@@ -32,6 +32,13 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 function pointer(rig: LayaRig): number | null {
   const row = rig.store.database
     .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
@@ -299,6 +306,7 @@ test('E2 laya update: the start-up comparison does not disable a version re-enab
 
 test('E2 laya update: the owner’s start-up applies E’s disable with its audit reason and keeps verified trees', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const root = await shortTempDir('events-e2-t6-owner-');
   const stateDir = join(root, 'state');

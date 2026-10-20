@@ -9,6 +9,13 @@ import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const taskFragmentPath = 'packages/events-daemon/test/fixtures/laya/cases/task-2.json';
 const evidencePath = 'docs/superpowers/evidence/2026-10-10-e2-external-sources.md';
@@ -60,12 +67,16 @@ async function runChecker(): Promise<{ readonly code: number | null; readonly ou
   });
 }
 
-test('laya scope: completed checker accepts the Task 3 proof fragment', async () => {
+test('laya scope: completed checker accepts the Task 3 proof fragment', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const result = await runChecker();
   assert.equal(result.code, 0, result.output);
 });
 
-test('laya scope: the checker keeps the Laya kind vocabulary owned by lifecycle', async () => {
+test('laya scope: the checker keeps the Laya kind vocabulary owned by lifecycle', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const result = await runChecker();
   assert.equal(result.code, 0, result.output);
 });

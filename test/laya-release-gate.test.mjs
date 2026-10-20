@@ -41,6 +41,13 @@ import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const exec = promisify(execFile);
 const FIXTURES = join(ROOT, 'packages/events-daemon/test/fixtures/laya');
 const BOTH = ['arm64', 'x64'];
@@ -432,7 +439,9 @@ test('E2 release gate: the private runtime declaration is never published', asyn
   });
 });
 
-test('E2 release gate: this repository passes as dormant, through the command the release job runs', async () => {
+test('E2 release gate: this repository passes as dormant, through the command the release job runs', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const { stdout } = await exec(
     process.execPath,
     ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', 'scripts/laya-release-gate.mjs'],
@@ -452,7 +461,9 @@ function jobBlock(workflow, name) {
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
-test('E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential', async () => {
+test('E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const workflow = await readFile(join(ROOT, '.github/workflows/release.yml'), 'utf8');
   const job = jobBlock(workflow, 'laya');
   assert.ok(job, 'there is a laya job');
@@ -628,6 +639,7 @@ async function layaJobStep(root) {
 
 test("E2 release end to end: the release job's gate refuses a copied state shipping a real lock without gate evidence, before any registry request", {
   skip: POSIX_ONLY,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const refused = await releaseState({ lock: REAL_LOCK });
   try {
@@ -670,6 +682,7 @@ test("E2 release end to end: the release job's gate refuses a copied state shipp
 
 test('E2 release end to end: the local release refuses a copied state shipping a real lock without gate evidence, before its verify and any publish', {
   skip: POSIX_ONLY,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const state = await releaseState({ lock: REAL_LOCK, release: true });
   try {
@@ -692,6 +705,7 @@ test('E2 release end to end: the local release refuses a copied state shipping a
 
 test('E2 release end to end: the local release rehearses the shipped placeholder state to its end, with Laya checked unavailable', {
   skip: POSIX_ONLY,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const state = await releaseState({ release: true });
   try {

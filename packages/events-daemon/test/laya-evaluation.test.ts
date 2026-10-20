@@ -32,6 +32,13 @@ import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const standin = fileURLToPath(new URL('./support/laya-worker-standin.ts', import.meta.url));
 const NOW = 1_800_000_000_000;
 const ACCOUNT_A = 'ibx_E2T8LAYAA';
@@ -338,7 +345,10 @@ async function waitUntil(condition: () => boolean, ms: number, what: string): Pr
   }
 }
 
-test('E2 Laya evaluation uses coordinator answer', { skip: WINDOWS_SKIP }, async () => {
+test('E2 Laya evaluation uses coordinator answer', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = await evaluation({ extra: ['--value-json', '0.8125', '--tokens', '41'] });
   try {
     assert.equal(await run.admit(), 'terminal');
@@ -378,6 +388,7 @@ test('E2 Laya evaluation uses coordinator answer', { skip: WINDOWS_SKIP }, async
 
 test('E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unavailable Laya or no budget', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const prefilter = await evaluation({
     condition: { path: '/subject', op: 'equals', value: 'never', caseSensitive: false },
@@ -420,6 +431,7 @@ test('E2 Laya evaluation: no worker for a false prefilter, a disabled kind, unav
 
 test('E2 Laya evaluation: a timeout, crash or malformed answer is no-match and charges the estimate', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   for (const [serve, extra] of [
     ['hang', []],
@@ -442,7 +454,10 @@ test('E2 Laya evaluation: a timeout, crash or malformed answer is no-match and c
   }
 });
 
-test('E2 purge kills only its in-flight Laya work', { skip: WINDOWS_SKIP }, async () => {
+test('E2 purge kills only its in-flight Laya work', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = await evaluation({ serve: 'hang', requestDeadlineMs: 30_000 });
   try {
     const admitted = run.admit(ACCOUNT_A);
@@ -466,7 +481,10 @@ test('E2 purge kills only its in-flight Laya work', { skip: WINDOWS_SKIP }, asyn
   }
 });
 
-test('E2 Laya evaluation: a kind disable stops the idle worker', { skip: WINDOWS_SKIP }, async () => {
+test('E2 Laya evaluation: a kind disable stops the idle worker', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = await evaluation();
   try {
     assert.equal(await run.admit(), 'terminal');
@@ -478,7 +496,10 @@ test('E2 Laya evaluation: a kind disable stops the idle worker', { skip: WINDOWS
   }
 });
 
-test('E2 no worker before approved synthetic call', { skip: WINDOWS_SKIP }, async () => {
+test('E2 no worker before approved synthetic call', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = await evaluation({ extra: ['--value-json', '0.25', '--tokens', '19'] });
   try {
     const database = run.rig.store.database;
@@ -544,7 +565,10 @@ test('E2 Laya judge document: one exact shape, and none where Laya is not offere
   }
 });
 
-test('E2 Laya judge document: B3 v1’s judge inventory carries no Laya row', { skip: WINDOWS_SKIP }, async () => {
+test('E2 Laya judge document: B3 v1’s judge inventory carries no Laya row', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = await evaluation();
   try {
     const operator = new B3OperatorControl({
@@ -561,6 +585,7 @@ test('E2 Laya judge document: B3 v1’s judge inventory carries no Laya row', { 
 
 test('E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed, and no second child starts', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const run = await evaluation({ probe: 'tcp' });
   try {
@@ -582,6 +607,7 @@ test('E2 Laya evaluation: a failed proof leaves Laya failed with boundary-failed
 
 test('E2 Laya evaluation: a worker failure is recorded only for the selection its trees were verified for', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const run = await evaluation();
   try {
@@ -604,6 +630,7 @@ test('E2 Laya evaluation: a worker failure is recorded only for the selection it
 
 test('E2 Laya judge test: where Laya is not offered it is refused with Laya’s own reason, before any reservation or worker', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const run = await evaluation({ availability: () => ({ available: false, code: 'E2_EXTERNAL_REFERENCE_BLOCKED' }) });
   try {
@@ -623,6 +650,7 @@ test('E2 Laya judge test: where Laya is not offered it is refused with Laya’s 
 
 test('E2 race: a budget swapped while a Laya worker starts lets no request reach the worker', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   let reached!: () => void;
   let release!: () => void;

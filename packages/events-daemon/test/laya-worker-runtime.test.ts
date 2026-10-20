@@ -33,6 +33,13 @@ import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const workerRuntimeSource = new URL('../src/runtime/laya/worker-runtime.ts', import.meta.url);
 const shippedManifest = new URL('../laya-manifest.json', import.meta.url);
 
@@ -84,7 +91,9 @@ function expectedTokens(input: LayaWorkerRequest): number {
   );
 }
 
-test('E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count', async () => {
+test('E2 Laya worker runtime vectors: one noul question, its value unchanged and the uncut token count', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('{"version":1,"inputs":[{"pointer":"/subject","value":"synthetic subject words"}]}');
   const tokens = expectedTokens(input);
   const runtime = standinRuntime(() => noulAnswer(0.734_56, tokens));
@@ -103,7 +112,9 @@ test('E2 Laya worker runtime vectors: one noul question, its value unchanged and
   }
 });
 
-test('E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated', async () => {
+test('E2 Laya worker runtime: an input the 512-token context would cut is refused, never truncated', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const base = request('x');
   const room = LAYA_MAX_SEQUENCE_TOKENS - expectedTokens(base) + 1;
   const fits = request(Array.from({ length: room }, () => 'w').join(' '));
@@ -123,7 +134,9 @@ test('E2 Laya worker runtime: an input the 512-token context would cut is refuse
   assert.equal(refused.asked.length, 0, 'the runtime is never asked to cut an over-long input');
 });
 
-test('E2 Laya worker runtime: an option over 48 tokens is refused, never cut', async () => {
+test('E2 Laya worker runtime: an option over 48 tokens is refused, never cut', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('short state');
   const layout = layaLayout(LAYA_NOUL_TEMPLATE_ID, input);
   const first = layout.options[0] ?? '';
@@ -134,7 +147,9 @@ test('E2 Laya worker runtime: an option over 48 tokens is refused, never cut', a
   assert.equal(runtime.asked.length, 0);
 });
 
-test('E2 Laya worker runtime: a head over its 192-token budget is refused, never cut', async () => {
+test('E2 Laya worker runtime: a head over its 192-token budget is refused, never cut', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('short state');
   const layout = layaLayout(LAYA_NOUL_TEMPLATE_ID, input);
   // The head is [CLS], its text and [SEP], then one [MASK] and the text of each option.
@@ -147,7 +162,9 @@ test('E2 Laya worker runtime: a head over its 192-token budget is refused, never
   assert.equal(runtime.asked.length, 0);
 });
 
-test('E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped', async () => {
+test('E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is malformed, never clamped', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('synthetic state');
   const tokens = expectedTokens(input);
   for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0.01, 1.01, '0.5', null]) {
@@ -160,7 +177,9 @@ test('E2 Laya worker runtime: a non-finite, out-of-range or non-numeric value is
   }
 });
 
-test('E2 Laya worker runtime: the runtime must report the uncut count and no output tokens', async () => {
+test('E2 Laya worker runtime: the runtime must report the uncut count and no output tokens', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('synthetic state');
   const tokens = expectedTokens(input);
   for (const [inputTokens, outputTokens] of [
@@ -173,7 +192,9 @@ test('E2 Laya worker runtime: the runtime must report the uncut count and no out
   }
 });
 
-test('E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed', async () => {
+test('E2 Laya worker runtime: an answer outside the closed noul shape, or a runtime that throws, is malformed', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('synthetic state');
   const tokens = expectedTokens(input);
   const shapes: unknown[] = [
@@ -213,14 +234,18 @@ test('E2 Laya worker runtime: an answer outside the closed noul shape, or a runt
   assert.equal(badCount.asked.length, 0);
 });
 
-test('E2 Laya worker runtime: an answer that names a decision or reason is still only its probability', async () => {
+test('E2 Laya worker runtime: an answer that names a decision or reason is still only its probability', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const input = request('synthetic state');
   const tokens = expectedTokens(input);
   const runtime = standinRuntime(() => noulAnswer(0.25, tokens, 0, { match: true, reason: 'the provider says match' }));
   assert.deepEqual(await evaluateLayaRequest(runtime, input), { kind: 'answer', value: 0.25, inputTokens: tokens });
 });
 
-test('E2 Laya worker runtime: every literal [MASK] is counted as the space the runtime replaces it with', async () => {
+test('E2 Laya worker runtime: every literal [MASK] is counted as the space the runtime replaces it with', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const masked = request('alpha[MASK]beta', 'Is[MASK]this urgent?');
   const layout = layaLayout(LAYA_NOUL_TEMPLATE_ID, masked);
   assert.equal(layout.state, 'alpha beta');
@@ -439,6 +464,7 @@ function workerProcess(cwd: string): {
 
 test('E2 Laya worker runtime: the real worker entry loads only the verified trees and answers each bound request', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const tree = await syntheticRuntimeTree({ layaModule: ANSWERING_LAYA });
   const worker = workerProcess(tree.root);
@@ -481,6 +507,7 @@ test('E2 Laya worker runtime: the real worker entry loads only the verified tree
 
 test('E2 Laya worker runtime: the real worker entry refuses a request frame with any field beyond its own', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const tree = await syntheticRuntimeTree({ layaModule: ANSWERING_LAYA });
   const worker = workerProcess(tree.root);

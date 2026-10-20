@@ -42,6 +42,13 @@ import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const BOTH = ['arm64', 'x64'];
 const TREES = { runtimeTree: '/nonexistent/laya-runtime-tree', modelTree: '/nonexistent/laya-model-tree' };
 
@@ -288,7 +295,9 @@ test('E2 macOS boundary gate: macos-boundary-v2.schema.json agrees with the vali
 
 // ------------------------------------------------------------------------------------------------ the run
 
-test("E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees", async () => {
+test("E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the real lock, or with another candidate's trees", {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withOffered(async (root) => {
     const before = await filesBelow(root);
     for (const [code, mac, options] of [
@@ -314,7 +323,9 @@ test("E2 macOS boundary gate run: refuses off macOS, under Rosetta, without the 
   }
 });
 
-test('E2 macOS boundary gate run: writes only the validated, content-free evidence', async () => {
+test('E2 macOS boundary gate run: writes only the validated, content-free evidence', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withOffered(async (root) => {
     const before = await filesBelow(root);
     const mac = standinMac();
@@ -334,7 +345,9 @@ test('E2 macOS boundary gate run: writes only the validated, content-free eviden
   });
 });
 
-test('E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source', async () => {
+test('E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   assert.equal(BUILT_WORKER_ENTRY, 'packages/events-daemon/dist/laya-worker.mjs');
   await withOffered(async (root) => {
     const given = [];
@@ -367,7 +380,9 @@ test('E2 review round 1: the real-Mac boundary run starts the built worker a rel
   });
 });
 
-test('E2 macOS boundary gate run: a check that fails is recorded, and the run does not pass', async () => {
+test('E2 macOS boundary gate run: a check that fails is recorded, and the run does not pass', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withOffered(async (root) => {
     const mac = standinMac({ runChecks: async () => ({ ...passingChecks(), idleRestart: 'fail', uds: 'maybe' }) });
     const result = await runOn(root, mac.dependencies);
@@ -380,7 +395,9 @@ test('E2 macOS boundary gate run: a check that fails is recorded, and the run do
   });
 });
 
-test("E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate", async () => {
+test("E2 macOS boundary gate run: an architecture's run joins the other's evidence only for the same candidate", {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withOffered(async (root) => {
     const path = join(root, BOUNDARY_EVIDENCE);
     await writeBoundaryEvidence(root, boundaryEvidence(root, ['x64']));
@@ -400,7 +417,9 @@ test("E2 macOS boundary gate run: an architecture's run joins the other's eviden
   });
 });
 
-test('E2 macOS boundary gate run: the egress check refuses a host that reaches an outside address', async () => {
+test('E2 macOS boundary gate run: the egress check refuses a host that reaches an outside address', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   assert.ok(
     EGRESS_PROBES.every((probe) => /^\d+\.\d+\.\d+\.\d+$/.test(probe.host)),
     'literal addresses, no lookup',
@@ -425,7 +444,9 @@ test('E2 macOS boundary gate run: the egress check refuses a host that reaches a
   );
 });
 
-test('E2 macOS boundary gate run: the production checks fail closed when the trees do not verify', async () => {
+test('E2 macOS boundary gate run: the production checks fail closed when the trees do not verify', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withOffered(async (root) => {
     const empty = await mkdtemp(join(tmpdir(), 'laya-boundary-empty-'));
     try {
@@ -452,7 +473,9 @@ function steps(workflow) {
   return body.split(/\n {6}- /).slice(1);
 }
 
-test('E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input', async () => {
+test('E2 macOS boundary gate workflow: only the owner starts it, by hand, with no input', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const workflow = await gateWorkflow();
   const on = /\non:\n([\s\S]*?)\n\S/.exec(workflow)?.[1];
   assert.equal(on, '  workflow_dispatch:\n', 'workflow_dispatch alone, with nothing beneath it');
@@ -538,7 +561,9 @@ test('E2 macOS boundary gate workflow: the corpus is read last, after the candid
   );
 });
 
-test('E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped', async () => {
+test('E2 review round 1: each gate run writes its own copy of its result, which the workflow uploads unzipped', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const list = steps(await gateWorkflow());
   const boundaryRun = list.find((step) => step.includes('scripts/run-laya-macos-boundary-gate.mjs run')) ?? '';
   const qualityRun = list.find((step) => step.includes('scripts/run-laya-quality-gate.mjs run')) ?? '';

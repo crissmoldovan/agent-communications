@@ -32,6 +32,13 @@ import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const REPOSITORY = 'crissmoldovan/agent-communications';
 const RUN_ID = '18234567890';
 const COMMIT = 'c'.repeat(40);
@@ -136,7 +143,9 @@ async function checkWith(root, answer, architectures = ['arm64']) {
   }
 }
 
-test('E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them', async () => {
+test('E2 review round 1: a release accepts the gate results only as the protected run the owner recorded wrote them', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCommittedResults(async ({ root, quality, boundary }) => {
     const committed = { quality, boundary };
     const { checked, requests } = await checkWith(root, routes(committed));
@@ -216,7 +225,9 @@ test('E2 review round 1: a release accepts the gate results only as the protecte
   });
 });
 
-test('E2 review round 1: each offered architecture is checked against its own run’s copies', async () => {
+test('E2 review round 1: each offered architecture is checked against its own run’s copies', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCommittedResults(
     async ({ root, quality, boundary }) => {
       const committed = { quality, boundary };
@@ -237,7 +248,9 @@ test('E2 review round 1: each offered architecture is checked against its own ru
   );
 });
 
-test('E2 review round 1: the run record names one protected run per architecture, in its exact shape', async () => {
+test('E2 review round 1: the run record names one protected run per architecture, in its exact shape', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const good = recordBytes([{ architecture: 'arm64', runId: RUN_ID, commit: COMMIT }]);
   assert.deepEqual(parseRunRecordBytes(Buffer.from(good)).runs, [
     { architecture: 'arm64', runId: RUN_ID, commit: COMMIT },

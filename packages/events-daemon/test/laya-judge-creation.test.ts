@@ -43,6 +43,13 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 /*
  * E2 Task 10a: the Laya judge-creation surface (B3 control v3). A Laya judge is configuration: `judge add` and
  * `rule create` keep one whatever Laya's state, and it evaluates only once Laya is enabled and ready. With the shipped
@@ -180,6 +187,7 @@ async function production(prefix: string): Promise<Production> {
 
 test('E2 Laya judge creation: with the shipped placeholder lock, a Laya judge and its rule are kept as configuration', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const running = await production('events-e2-t10a-create-');
   try {
@@ -247,6 +255,7 @@ test('E2 Laya judge creation: with the shipped placeholder lock, a Laya judge an
 
 test('E2 Laya judge test: where Laya is not offered, a Laya judge test names Laya’s own reason before any rule authority', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const running = await production('events-e2-t13-judge-test-');
   try {
@@ -325,6 +334,7 @@ test('E2 Laya judge test: where Laya is not offered, a Laya judge test names Lay
 
 test('E2 Laya judge creation: only the binary template on this release’s reviewed manifest can be created', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const running = await production('events-e2-t10a-refuse-');
   try {
@@ -434,6 +444,7 @@ async function cli(argv: readonly string[], stateDir: string) {
 
 test('E2 Laya judge creation: the CLI and MCP add, list and refuse a Laya judge alike', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const running = await production('events-e2-t10a-parity-');
   const { server } = await createEventsMcpServer({ stateDir: running.stateDir });
@@ -786,6 +797,7 @@ test('E2 Laya judge creation: a rule whose Laya stops being offered after its cl
 
 test('E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const laya = await syntheticLaya();
   const root = await shortTempDir('events-e2-t12-offered-');

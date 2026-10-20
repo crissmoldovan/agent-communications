@@ -28,6 +28,13 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const NOW = 1_800_000_000_000;
 const ACCOUNT_A = 'ibx_E2T6PURGEAAAAAA';
 const ACCOUNT_B = 'ibx_E2T6PURGEBBBBBB';
@@ -182,6 +189,7 @@ async function verifiedTrees(rig: LayaRig): Promise<readonly (readonly string[] 
 
 test('E2 laya purge: an E purge stops only the tracked work whose reservation it terminalised', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const rig = await seededRig();
   try {
@@ -647,6 +655,7 @@ async function withT12Scopes(run: (setup: T12Scopes) => Promise<void>): Promise<
 
 test('E2 laya purge scope: removing a Gmail account stops only that account’s work, not a same-looking id or the same id elsewhere', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     setup.rig.store.immediate(() =>
@@ -656,7 +665,10 @@ test('E2 laya purge scope: removing a Gmail account stops only that account’s 
   });
 });
 
-test('E2 laya purge scope: revoking the Laya rule stops only its own request', { skip: WINDOWS_SKIP }, async () => {
+test('E2 laya purge scope: revoking the Laya rule stops only its own request', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withT12Scopes(async (setup) => {
     setup.rig.store.immediate(() => purgeRevokedRuleWork(setup.rig.store.database, 'rule-t12-laya', [1], NOW + 1));
     await assertExactPurge(setup, ['laya-g-a'], 'Laya rule revocation');
@@ -665,6 +677,7 @@ test('E2 laya purge scope: revoking the Laya rule stops only its own request', {
 
 test('E2 laya purge scope: revoking another rule leaves the in-flight Laya request alone', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     setup.rig.store.immediate(() => purgeRevokedRuleWork(setup.rig.store.database, 'rule-t12-r1', [1], NOW + 1));
@@ -674,6 +687,7 @@ test('E2 laya purge scope: revoking another rule leaves the in-flight Laya reque
 
 test('E2 laya purge scope: removing the Laya judge stops only the work that names it', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     await setup.operator.handle({ operation: 'removeJudge', args: { judgeId: 'judge-e2-t12-laya' } });
@@ -683,6 +697,7 @@ test('E2 laya purge scope: removing the Laya judge stops only the work that name
 
 test('E2 laya purge scope: disabling the Laya kind stops only Laya work and keeps its verified trees', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     await setup.rig.disable();
@@ -692,6 +707,7 @@ test('E2 laya purge scope: disabling the Laya kind stops only Laya work and keep
 
 test('E2 laya purge scope: disable-all stops every scope’s work and leaves Laya enabled and ready', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     await new EventLifecycle(setup.rig.store, () => NOW + 1).disableAll();
@@ -705,6 +721,7 @@ test('E2 laya purge scope: disable-all stops every scope’s work and leaves Lay
 
 test('E2 laya purge scope: an expired decision deadline stops only that event’s Laya request', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     setup.rig.store.database
@@ -717,6 +734,7 @@ test('E2 laya purge scope: an expired decision deadline stops only that event’
 
 test('E2 laya purge scope: a tightened retention stops only the expired projection’s work', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     setup.rig.store.database
@@ -736,6 +754,7 @@ test('E2 laya purge scope: a tightened retention stops only the expired projecti
 
 test('E2 laya purge scope: hiding a WhatsApp message stops only that event’s work', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     const fence = new WhatsAppVisibilityFence({
@@ -761,6 +780,7 @@ function makeLayaRuleInert(setup: T12Scopes): void {
 
 test('E2 laya purge scope: removing the Laya judge stops its work even where no active rule names it', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     // Removal also revokes every active rule naming the judge, whose purge would stop the request too. With its rule
@@ -773,6 +793,7 @@ test('E2 laya purge scope: removing the Laya judge stops its work even where no 
 
 test('E2 laya purge scope: disabling the Laya kind stops its work even where no active rule names it', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withT12Scopes(async (setup) => {
     // The kind disable also purges every active rule naming a Laya judge. With the rule inert, only the kind's own

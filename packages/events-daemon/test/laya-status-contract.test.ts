@@ -23,6 +23,13 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 function ajv(): Ajv2020Class {
   const Ajv2020 = Ajv2020Runtime as unknown as new (options?: Options) => Ajv2020Class;
   const instance = new Ajv2020({ allErrors: true, strict: false });
@@ -175,6 +182,7 @@ test('E2 laya status contract: the B3 control v2 Laya vectors are the live opera
 
 test('E2 laya status contract: the shipped placeholder lock says Laya is not offered yet and refuses enablement first', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const root = await shortTempDir('events-e2-t6-dormant-');
   const stateDir = join(root, 'state');

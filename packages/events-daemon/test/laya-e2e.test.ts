@@ -29,6 +29,13 @@ import {
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
+
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
 const refusedNetwork = loopbackSealAttempts();
 
 /*
@@ -459,6 +466,7 @@ async function cli(argv: readonly string[], stateDir: string) {
 
 test('E2 end to end held path: with the shipped placeholder lock a Laya rule is configuration, every way to run it refuses, and a restart changes nothing', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   refusedNetwork.length = 0;
   const rig = await laya();
@@ -556,6 +564,7 @@ test('E2 end to end held path: with the shipped placeholder lock a Laya rule is 
 
 test('E2 end to end: an approved Laya enablement installs only after its claim, and a synthetic rule matches through E into its target', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   refusedNetwork.length = 0;
   const rig = await laya({ laya: await syntheticLaya() });
@@ -664,6 +673,7 @@ test('E2 end to end: an approved Laya enablement installs only after its claim, 
 
 test('E2 end to end: a Laya value in the uncertain band is held, survives a restart, and the kind disable purges it and keeps the verified trees', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const rig = await laya({ laya: await syntheticLaya() });
   try {
@@ -724,6 +734,7 @@ test('E2 end to end: a Laya value in the uncertain band is held, survives a rest
 
 test('E2 end to end: a crashed worker is no-match with its estimate charged, and the next call starts a freshly proved child', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const rig = await laya({ laya: await syntheticLaya() });
   try {
@@ -792,6 +803,7 @@ test(
   'E2 end to end: the Laya kind disable kills the in-flight Laya worker, settles its reservation and keeps the verified trees',
   {
     skip: WINDOWS_SKIP,
+    timeout: CHILD_TEST_TIMEOUT_MS,
   },
   () => purgesInFlightWork('the Laya kind disable', (rig) => rig.control.request('disableJudgeKind', { kind: LAYA })),
 );
@@ -800,6 +812,7 @@ test(
   'E2 end to end: disable-all kills the in-flight Laya worker, settles its reservation and keeps the verified trees',
   {
     skip: WINDOWS_SKIP,
+    timeout: CHILD_TEST_TIMEOUT_MS,
   },
   () => purgesInFlightWork('disable-all', (rig) => rig.control.request('disable-all')),
 );
@@ -808,6 +821,7 @@ test(
   'E2 end to end: the rule’s disable kills the in-flight Laya worker, settles its reservation and keeps the verified trees',
   {
     skip: WINDOWS_SKIP,
+    timeout: CHILD_TEST_TIMEOUT_MS,
   },
   () =>
     purgesInFlightWork('the rule’s disable', (rig) => rig.control.request('rule-disable', { ruleId: 'rule-laya-e2e' })),
@@ -817,6 +831,7 @@ test(
   'E2 end to end: the judge’s removal kills the in-flight Laya worker, settles its reservation and keeps the verified trees',
   {
     skip: WINDOWS_SKIP,
+    timeout: CHILD_TEST_TIMEOUT_MS,
   },
   () =>
     purgesInFlightWork('the judge’s removal', (rig) =>
@@ -826,6 +841,7 @@ test(
 
 test('E2 end to end: a stop during the download resumes the install at the next start, and a disable during it deletes the partial', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const synthetic = await syntheticLaya();
   const origin = layaArtifactOrigin(synthetic);
@@ -870,6 +886,7 @@ test('E2 end to end: a stop during the download resumes the install at the next 
 
 test('E2 end to end: a failed boundary proof leaves Laya failed across a restart until its person disables and re-enables it', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const rig = await laya({ laya: await syntheticLaya() });
   try {
@@ -905,6 +922,7 @@ test('E2 end to end: a failed boundary proof leaves Laya failed across a restart
 
 test('E2 end to end: the owner’s stop kills its idle Laya worker and leaves no worker directory behind', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const rig = await laya({ laya: await syntheticLaya() });
   try {

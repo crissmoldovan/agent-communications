@@ -14,6 +14,13 @@ import {
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'laya');
 
 async function fixtureAssets(): Promise<LayaReviewedAssets> {
@@ -218,7 +225,9 @@ test('E2 contract: canonical Laya enablement binds every reviewed asset and dige
   );
 });
 
-test('E2 contract: macOS availability runs the content-free sandbox boundary before preparation', async () => {
+test('E2 contract: macOS availability runs the content-free sandbox boundary before preparation', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const calls: Array<readonly [string, readonly string[], Readonly<Record<string, unknown>>]> = [];
   const definition = createLayaJudgeKindDefinition({
     assets: await fixtureAssets(),
@@ -282,7 +291,9 @@ test('E2 contract: macOS availability runs the content-free sandbox boundary bef
   assert.deepEqual(missing.availability(), { available: false, code: 'LAYA_SANDBOX_UNAVAILABLE' });
 });
 
-test('E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe', async () => {
+test('E2 review round 1: a process Rosetta translates is not offered Laya, and sysctl decides before any sandbox probe', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const run = async (sysctl: { status: number | null; signal: string | null; error?: unknown; stdout?: string }) => {
     const calls: string[] = [];
     const definition = createLayaJudgeKindDefinition({

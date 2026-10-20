@@ -16,6 +16,13 @@ import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 120_000;
+
 /*
  * D11's quality gate (E2-8, Task 9) on synthetic data only: tiny labelled vectors prove the arithmetic, a synthetic
  * report and its bad edits prove the validator, and stand-ins prove the owner run's protocol. Nothing here is a
@@ -328,7 +335,9 @@ test('E2 quality gate: Gmail and Slack are measured and judged separately, never
   assert.equal(template.passed, false, 'a template passes only when each channel passes on its own');
 });
 
-test('E2 quality gate: a report with one channel, or without a manifest template, is refused', async () => {
+test('E2 quality gate: a report with one channel, or without a manifest template, is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) => expectBadCases(gate, root, ['one-channel-only', 'missing-template']));
 });
 
@@ -369,13 +378,15 @@ test('E2 quality gate: a channel passes only within every D11 threshold and with
   assert.equal(refused({ crashed: 1 }), false);
 });
 
-test('E2 quality gate: model-card or refitted calibration is refused', async () => {
+test('E2 quality gate: model-card or refitted calibration is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, ['model-card-calibration', 'refitted-temperatures']),
   );
 });
 
-test('E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused', async () => {
+test('E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
       'manifest-id',
@@ -392,7 +403,9 @@ test('E2 quality gate: a report bound to another manifest, lock, platform list, 
   );
 });
 
-test('E2 quality gate: the subject digest binds the worker source and ignores the report', async () => {
+test('E2 quality gate: the subject digest binds the worker source and ignores the report', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot(async (root, gate) => {
     assert.deepEqual(gate.gateSubjectFiles(root), [
       'packages/events-daemon/laya-enablement-disclosures.json',
@@ -428,7 +441,9 @@ test('E2 quality gate: the subject digest binds the worker source and ignores th
   );
 });
 
-test('E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was', async () => {
+test('E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   // A2: the tree checks, the strict extractor, the artifact manager, the strict parsers and the lockfile that pins the
   // toolchain each change what a passing run measured, so each is in the subject.
   const measured = [
@@ -466,7 +481,9 @@ test('E2 review round 1: the subject binds every file the evidence measures, and
   });
 });
 
-test('E2 quality gate: a candidate subject that includes the report is refused', async () => {
+test('E2 quality gate: a candidate subject that includes the report is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gate = await verifier();
   assert.equal(
     codeOf(() => gate.assertSubjectExcludesReport(['packages/events-laya-runtime/gate/laya-en-onnx-68f27dfe.json'])),
@@ -489,7 +506,9 @@ test('E2 quality gate: a candidate subject that includes the report is refused',
   );
 });
 
-test('E2 quality gate: an absent or mutable Python reference record is refused', async () => {
+test('E2 quality gate: an absent or mutable Python reference record is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gate = await verifier();
   assert.doesNotThrow(() => gate.verifyPythonReferenceRecord(), 'the repository record pins the reference');
   const pinned = '- immutable: `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`';
@@ -514,7 +533,9 @@ test('E2 quality gate: an absent or mutable Python reference record is refused',
   }
 });
 
-test('E2 quality gate: a guessed reference invocation, tokenizer or model input is refused', async () => {
+test('E2 quality gate: a guessed reference invocation, tokenizer or model input is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
       'reference-revision',
@@ -527,7 +548,9 @@ test('E2 quality gate: a guessed reference invocation, tokenizer or model input 
   );
 });
 
-test('E2 quality gate: corpus content, secrets and per-item values are refused before any shape check', async () => {
+test('E2 quality gate: corpus content, secrets and per-item values are refused before any shape check', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
       'message-text-in-a-token-field',
@@ -545,7 +568,9 @@ test('E2 quality gate: corpus content, secrets and per-item values are refused b
   );
 });
 
-test('E2 quality gate: an unknown field, a missing field or a duplicate is refused', async () => {
+test('E2 quality gate: an unknown field, a missing field or a duplicate is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
       'unknown-field',
@@ -559,7 +584,9 @@ test('E2 quality gate: an unknown field, a missing field or a duplicate is refus
   );
 });
 
-test('E2 quality gate: a synthetic fixture report is never release evidence', async () => {
+test('E2 quality gate: a synthetic fixture report is never release evidence', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) => {
     assert.equal(refusal(gate, root, []), null, 'the synthetic report is valid fixture evidence');
     assert.equal(refusal(gate, root, [], 'release'), 'QUALITY_REPORT_FIXTURE');
@@ -572,7 +599,9 @@ test('E2 quality gate: a synthetic fixture report is never release evidence', as
   });
 });
 
-test('E2 quality gate: a passing flag its numbers do not give is refused', async () => {
+test('E2 quality gate: a passing flag its numbers do not give is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
       '199-pairs-marked-passing',
@@ -604,7 +633,9 @@ async function writeReleaseShaped(gate: Verifier, root: string, edits: readonly 
   return path;
 }
 
-test('E2 quality gate: a release offers an architecture only when every manifest template passed there', async () => {
+test('E2 quality gate: a release offers an architecture only when every manifest template passed there', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withFixtureRoot(async (root, gate) => {
     assert.equal(
       codeOf(() => gate.verifyQualityGate({ root })),
@@ -642,7 +673,9 @@ test('E2 quality gate: a release offers an architecture only when every manifest
   });
 });
 
-test('E2 quality gate: the shipped placeholder lock leaves no candidate to gate', async () => {
+test('E2 quality gate: the shipped placeholder lock leaves no candidate to gate', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gate = await verifier();
   assert.equal(
     codeOf(() => gate.computeCandidate({ architecture: 'arm64' })),
@@ -670,7 +703,9 @@ test('E2 quality gate: schema-v1.json agrees with the validator on the synthetic
   }
 });
 
-test('E2 quality gate: the fixture command recomputes every vector and refuses every bad report', async () => {
+test('E2 quality gate: the fixture command recomputes every vector and refuses every bad report', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gate = await verifier();
   assert.deepEqual(await gate.verifyQualityFixtures(), { vectors: 10, refusals: badReports.cases.length });
   const result = await run(verifierScript, ['--fixture']);
@@ -777,6 +812,7 @@ async function filesBelow(root: string): Promise<string[]> {
 
 test('E2 quality gate run: refuses without written-consent attestation or an explicit corpus directory', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
@@ -799,7 +835,10 @@ test('E2 quality gate run: refuses without written-consent attestation or an exp
   assert.match(result.stderr, /^QUALITY_CONSENT_REQUIRED: [^\n]+\n$/);
 });
 
-test('E2 quality gate run: a corpus or key inside the repository is refused', { skip: WINDOWS_SKIP }, async () => {
+test('E2 quality gate run: a corpus or key inside the repository is refused', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
     const inside = join(root, 'corpus');
@@ -846,6 +885,7 @@ test('E2 quality gate run: a corpus or key inside the repository is refused', { 
 
 test('E2 review round 1: the quality run takes its corpus key from the gate environment, never a file, and keeps it from every child', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   assert.equal(gateRunner.CORPUS_KEY_VARIABLE, 'AGENTCOMMS_LAYA_GATE_CORPUS_KEY');
@@ -891,7 +931,10 @@ test('E2 review round 1: the quality run takes its corpus key from the gate envi
   assert.equal(gateRunner.parseCommand(['seal', '--key-file', '/outside/corpus.key']).keyFile, '/outside/corpus.key');
 });
 
-test('E2 quality gate run: the corpus directory holds only sealed corpus files', { skip: WINDOWS_SKIP }, async () => {
+test('E2 quality gate run: the corpus directory holds only sealed corpus files', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
     const sealed = await sealedCorpus(gateRunner, root, [gmailItem(0, 1)]);
@@ -932,6 +975,7 @@ test('E2 quality gate run: the corpus directory holds only sealed corpus files',
 
 test('E2 quality gate run: the corpus key is an owner-only file outside the repository and opens only its corpus', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root) => {
@@ -978,6 +1022,7 @@ test('E2 quality gate run: the corpus key is an owner-only file outside the repo
 
 test('E2 quality reference gate: only the pinned snapshot runs, and its value is read where the record puts it', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   assert.match(gateRunner.REFERENCE_DRIVER, /agent = RLAgent\(snapshot, device="cpu"\)/u);
@@ -1050,7 +1095,10 @@ test('E2 quality reference gate: only the pinned snapshot runs, and its value is
   }
 });
 
-test('E2 quality gate run: an aggregate that does not validate is never written', { skip: WINDOWS_SKIP }, async () => {
+test('E2 quality gate run: an aggregate that does not validate is never written', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root, gate) => {
     const synthetic = gate.applyFixtureEdits(metrics.report, [
@@ -1108,6 +1156,7 @@ function standinReference(environment: Readonly<Record<string, string>> = {}): R
 
 test('E2 quality gate run: refusals are counted and a worker that cannot run stops the run', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   assert.deepEqual(gateRunner.workerOutcome({ kind: 'answer', value: 0.4, inputTokens: 9 }), {
@@ -1147,6 +1196,7 @@ test('E2 quality gate run: refusals are counted and a worker that cannot run sto
 
 test("E2 quality gate run: a sealed corpus holds only labelled pairs whose event is their channel's", {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   const gateRunner = await runner();
   assert.equal(gateRunner.parseCorpusItems(corpus([gmailItem(0, 1), slackItem(1, 0)])).length, 2);
@@ -1176,7 +1226,10 @@ test("E2 quality gate run: a sealed corpus holds only labelled pairs whose event
   }
 });
 
-test('E2 quality gate run: only the aggregate leaves the run', { skip: WINDOWS_SKIP }, async () => {
+test('E2 quality gate run: only the aggregate leaves the run', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const gateRunner = await runner();
   await withFixtureRoot(async (root, gate) => {
     const items = [

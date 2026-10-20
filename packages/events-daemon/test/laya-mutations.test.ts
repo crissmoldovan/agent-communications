@@ -24,6 +24,15 @@ import { ORACLE_GROUP_KILL, runStrictMutationChild } from './support/strict-muta
 
 assertLoopbackSeal();
 
+/**
+ * E2 CI round 1: every test here that starts or awaits a child, a listener, an owner or a worker has a bound of its own.
+ * `node --test` has none, and Node 24 keeps a test whose awaited promise never settles pending for ever (Node 22
+ * cancels it once the event loop drains): a hang must fail in minutes, not at the job limit hours later.
+ */
+const CHILD_TEST_TIMEOUT_MS = 600_000;
+/** The full strict pass runs every registered oracle, each bounded at 120 s; it takes about 25 minutes on CI. */
+const STRICT_PASS_TIMEOUT_MS = 5_400_000;
+
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
 const runtimeName = '@agentcomms/events-laya-runtime';
@@ -158,14 +167,16 @@ async function withCase(run: (root: string) => Promise<void>): Promise<void> {
   }
 }
 
-test('E2 mutation: negative workspace filter is mandatory', async () => {
+test('E2 mutation: negative workspace filter is mandatory', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(root, '.github/workflows/release.yml', normalInstall, unsafeInstall('--frozen-lockfile'));
     await expectRejected(root, new RegExp(`${unsafeInstall()} must exclude @agentcomms/events-laya-runtime`));
   });
 });
 
-test('E2 mutation: only the three frozen record locations are excluded from install scanning', async () => {
+test('E2 mutation: only the three frozen record locations are excluded from install scanning', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     const exclusions = [
       {
@@ -189,21 +200,27 @@ test('E2 mutation: only the three frozen record locations are excluded from inst
   });
 });
 
-test('E2 mutation: rejects an unfiltered install in the post-clone setup hook', async () => {
+test('E2 mutation: rejects an unfiltered install in the post-clone setup hook', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await makeInstallUnsafe(root, '.blocks/post-clone.sh');
     await expectRejected(root, /\.blocks\/post-clone\.sh/);
   });
 });
 
-test('E2 mutation: rejects an unfiltered install in the release skill', async () => {
+test('E2 mutation: rejects an unfiltered install in the release skill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await makeInstallUnsafe(root, '.claude/skills/release/SKILL.md');
     await expectRejected(root, /\.claude\/skills\/release\/SKILL\.md/);
   });
 });
 
-test('E2 mutation: rejects an unfiltered install in the pull-request review skill', async () => {
+test('E2 mutation: rejects an unfiltered install in the pull-request review skill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await makeInstallUnsafe(root, '.claude/skills/review-pr/SKILL.md');
     await expectRejected(root, /\.claude\/skills\/review-pr\/SKILL\.md/);
@@ -216,7 +233,9 @@ async function expectUnsafeInstallSpelling(root: string, name: string, command: 
   await expectRejected(root, new RegExp(file.replaceAll('.', '\\.')));
 }
 
-test('E2 mutation: rejects a version-pinned pnpm executable in an otherwise unlisted tracked text file', async () => {
+test('E2 mutation: rejects a version-pinned pnpm executable in an otherwise unlisted tracked text file', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase((root) =>
     expectUnsafeInstallSpelling(
       root,
@@ -226,7 +245,9 @@ test('E2 mutation: rejects a version-pinned pnpm executable in an otherwise unli
   );
 });
 
-test('E2 mutation: rejects options before the install subcommand in an otherwise unlisted tracked text file', async () => {
+test('E2 mutation: rejects options before the install subcommand in an otherwise unlisted tracked text file', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase((root) =>
     expectUnsafeInstallSpelling(
       root,
@@ -236,7 +257,9 @@ test('E2 mutation: rejects options before the install subcommand in an otherwise
   );
 });
 
-test('E2 mutation: rejects options after the install subcommand in an otherwise unlisted tracked text file', async () => {
+test('E2 mutation: rejects options after the install subcommand in an otherwise unlisted tracked text file', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase((root) =>
     expectUnsafeInstallSpelling(
       root,
@@ -246,13 +269,17 @@ test('E2 mutation: rejects options after the install subcommand in an otherwise 
   );
 });
 
-test('E2 mutation: rejects the short install subcommand in an otherwise unlisted tracked text file', async () => {
+test('E2 mutation: rejects the short install subcommand in an otherwise unlisted tracked text file', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase((root) =>
     expectUnsafeInstallSpelling(root, 'the short install subcommand', ['pnpm', 'i', '--frozen-lockfile'].join(' ')),
   );
 });
 
-test('E2 mutation: rejects a backslash-continued install command in an otherwise unlisted tracked text file', async () => {
+test('E2 mutation: rejects a backslash-continued install command in an otherwise unlisted tracked text file', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase((root) =>
     expectUnsafeInstallSpelling(
       root,
@@ -262,7 +289,9 @@ test('E2 mutation: rejects a backslash-continued install command in an otherwise
   );
 });
 
-test('E2 mutation: rejects an unfiltered install printed by a copied script', async () => {
+test('E2 mutation: rejects an unfiltered install printed by a copied script', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     const releaseCi = await readFile(join(root, 'scripts/release-ci.mjs'), 'utf8');
     await writeFile(
@@ -274,14 +303,16 @@ test('E2 mutation: rejects an unfiltered install printed by a copied script', as
   });
 });
 
-test('E2 mutation: cold-store assertion is mandatory', async () => {
+test('E2 mutation: cold-store assertion is mandatory', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(root, 'scripts/verify-laya-ci-install.mjs', 'assertNoRuntimeClosure(store);', 'void store;');
     await expectRejected(root, /must prove the runtime closure is absent/);
   });
 });
 
-test('E2 mutation: source-record requirement blocks without coordinator evidence', async () => {
+test('E2 mutation: source-record requirement blocks without coordinator evidence', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -293,7 +324,7 @@ test('E2 mutation: source-record requirement blocks without coordinator evidence
   });
 });
 
-test('E2 mutation: source record requires every reviewed fact', async () => {
+test('E2 mutation: source record requires every reviewed fact', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const url = ['https:/', '/registry.invalid/runtime'].join('');
     const source = JSON.stringify([
@@ -319,7 +350,7 @@ test('E2 mutation: source record requires every reviewed fact', async () => {
   });
 });
 
-test('E2 mutation: source record rejects a mutable revision', async () => {
+test('E2 mutation: source record rejects a mutable revision', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const url = ['https:/', '/registry.invalid/runtime'].join('');
     const source = JSON.stringify([
@@ -345,7 +376,7 @@ test('E2 mutation: source record rejects a mutable revision', async () => {
   });
 });
 
-test('E2 mutation: task fragment ownership is immutable', async () => {
+test('E2 mutation: task fragment ownership is immutable', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -357,7 +388,7 @@ test('E2 mutation: task fragment ownership is immutable', async () => {
   });
 });
 
-test('E2 mutation: rejects unowned section 5 row', async () => {
+test('E2 mutation: rejects unowned section 5 row', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -369,7 +400,7 @@ test('E2 mutation: rejects unowned section 5 row', async () => {
   });
 });
 
-test('E2 mutation: rejects unowned traceability row', async () => {
+test('E2 mutation: rejects unowned traceability row', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -381,7 +412,7 @@ test('E2 mutation: rejects unowned traceability row', async () => {
   });
 });
 
-test('E2 mutation: rejects unowned await row', async () => {
+test('E2 mutation: rejects unowned await row', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -393,7 +424,7 @@ test('E2 mutation: rejects unowned await row', async () => {
   });
 });
 
-test('E2 mutation: rejects duplicate owner', async () => {
+test('E2 mutation: rejects duplicate owner', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -405,14 +436,16 @@ test('E2 mutation: rejects duplicate owner', async () => {
   });
 });
 
-test('E2 mutation: rejects a shared mutable case manifest', async () => {
+test('E2 mutation: rejects a shared mutable case manifest', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await writeFile(join(root, 'packages/events-daemon/test/fixtures/laya/cases/index.json'), '{}\n');
     await expectRejected(root, /shared mutable case manifest/);
   });
 });
 
-test('E2 mutation: rejects deleting a completed task fragment from history', async () => {
+test('E2 mutation: rejects deleting a completed task fragment from history', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     const taskFragment = 'packages/events-daemon/test/fixtures/laya/cases/task-3.json';
     await commitTaskFragment(root, 'add task fragment');
@@ -422,7 +455,9 @@ test('E2 mutation: rejects deleting a completed task fragment from history', asy
   });
 });
 
-test('E2 mutation: an unmerged task fragment is not immutable in this branch', async () => {
+test('E2 mutation: an unmerged task fragment is not immutable in this branch', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     const taskFragment = 'packages/events-daemon/test/fixtures/laya/cases/task-3.json';
     const source = await readFile(join(root, taskFragment), 'utf8');
@@ -434,7 +469,9 @@ test('E2 mutation: an unmerged task fragment is not immutable in this branch', a
   });
 });
 
-test('E2 mutation: rejects a task fragment nested beneath the cases directory', async () => {
+test('E2 mutation: rejects a task fragment nested beneath the cases directory', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     const source = await readFile(join(root, 'packages/events-daemon/test/fixtures/laya/cases/task-3.json'), 'utf8');
     await writeTracked(root, 'packages/events-daemon/test/fixtures/laya/cases/extra/task-3.json', source);
@@ -442,7 +479,7 @@ test('E2 mutation: rejects a task fragment nested beneath the cases directory', 
   });
 });
 
-test('E2 mutation: rejects a second file for the same task', async () => {
+test('E2 mutation: rejects a second file for the same task', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const source = await readFile(join(root, 'packages/events-daemon/test/fixtures/laya/cases/task-3.json'), 'utf8');
     // A task number no fragment has: the copied case is the whole checkout, whose own fragments are frozen.
@@ -453,7 +490,7 @@ test('E2 mutation: rejects a second file for the same task', async () => {
   });
 });
 
-test('E2 mutation: rejects editing a completed task fragment', async () => {
+test('E2 mutation: rejects editing a completed task fragment', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await commitTaskFragment(root, 'add task fragment');
     await change(
@@ -467,7 +504,9 @@ test('E2 mutation: rejects editing a completed task fragment', async () => {
   });
 });
 
-test('E2 mutation: a shallow checkout must fetch full history before it validates a committed fragment', async () => {
+test('E2 mutation: a shallow checkout must fetch full history before it validates a committed fragment', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await commitTaskFragment(root, 'add task fragment');
     const head = (await runGit(root, ['rev-parse', 'HEAD'])).trim();
@@ -476,7 +515,7 @@ test('E2 mutation: a shallow checkout must fetch full history before it validate
   });
 });
 
-test('E2 mutation: rejects an orphan mutation mapping', async () => {
+test('E2 mutation: rejects an orphan mutation mapping', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -488,7 +527,7 @@ test('E2 mutation: rejects an orphan mutation mapping', async () => {
   });
 });
 
-test('E2 mutation: rejects a non-exact test pattern', async () => {
+test('E2 mutation: rejects a non-exact test pattern', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -500,7 +539,7 @@ test('E2 mutation: rejects a non-exact test pattern', async () => {
   });
 });
 
-test('E2 mutation: loopback preload is mandatory', async () => {
+test('E2 mutation: loopback preload is mandatory', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -512,7 +551,7 @@ test('E2 mutation: loopback preload is mandatory', async () => {
   });
 });
 
-test('E2 mutation: rejects an external hostname in Laya tests', async () => {
+test('E2 mutation: rejects an external hostname in Laya tests', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const hostname = ['https:/', '/provider.invalid'].join('');
     await change(root, 'packages/events-daemon/test/laya-scope.test.ts', 'repositoryRoot', hostname);
@@ -520,7 +559,7 @@ test('E2 mutation: rejects an external hostname in Laya tests', async () => {
   });
 });
 
-test('E2 mutation: rejects raw corpus content in a Laya case', async () => {
+test('E2 mutation: rejects raw corpus content in a Laya case', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -532,7 +571,7 @@ test('E2 mutation: rejects raw corpus content in a Laya case', async () => {
   });
 });
 
-test('E2 mutation: rejects a test-local ledger', async () => {
+test('E2 mutation: rejects a test-local ledger', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -544,7 +583,7 @@ test('E2 mutation: rejects a test-local ledger', async () => {
   });
 });
 
-test('E2 mutation: rejects a daemon Laya dependency', async () => {
+test('E2 mutation: rejects a daemon Laya dependency', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -556,7 +595,7 @@ test('E2 mutation: rejects a daemon Laya dependency', async () => {
   });
 });
 
-test('E2 mutation: rejects a duplicate judge-kind literal', async () => {
+test('E2 mutation: rejects a duplicate judge-kind literal', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const target = join(root, 'packages/events-daemon/src/runtime/laya/duplicate.ts');
     await mkdir(dirname(target), { recursive: true });
@@ -565,7 +604,9 @@ test('E2 mutation: rejects a duplicate judge-kind literal', async () => {
   });
 });
 
-test('E2 mutation: rejects production use of test-only Laya worker seams', async () => {
+test('E2 mutation: rejects production use of test-only Laya worker seams', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const cases: readonly [string, string, RegExp][] = [
     [
       'test-only boundary import',
@@ -629,14 +670,16 @@ test('E2 mutation: the five Windows filesystem oracles declare the common Window
   }
 });
 
-test('E2 mutation: rejects a warm-store assumption', async () => {
+test('E2 mutation: rejects a warm-store assumption', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await writeFile(join(root, 'scripts/verify-laya-ci-install.mjs'), 'export const coldStore = false;\n');
     await expectRejected(root, /fresh pnpm store/);
   });
 });
 
-test('E2 mutation: runtime workspace is explicitly excluded from ordinary CI', async () => {
+test('E2 mutation: runtime workspace is explicitly excluded from ordinary CI', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await change(
       root,
@@ -652,7 +695,7 @@ test('E2 mutation: runtime workspace is explicitly excluded from ordinary CI', a
   });
 });
 
-test('E2 mutation: rejects a skipped production-copy mutant', async () => {
+test('E2 mutation: rejects a skipped production-copy mutant', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(root, 'packages/events-daemon/test/support/laya-mutants.ts', 'assert.notEqual(', 'assert.equal(');
     await expectRejected(root, /must fail when a mutant passes/);
@@ -692,7 +735,9 @@ function runnerProbe(overrides: Partial<LayaMutation>): LayaMutation {
   };
 }
 
-test('E2 mutation: a copy whose named oracle fails to load is not a kill', async () => {
+test('E2 mutation: a copy whose named oracle fails to load is not a kill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   // node:test reports a file that cannot load as one failed test under the file's name: `# tests 1` and `# fail 1`.
   await assert.rejects(
     expectLayaMutationToFail(
@@ -705,14 +750,16 @@ test('E2 mutation: a copy whose named oracle fails to load is not a kill', async
   );
 });
 
-test('E2 mutation: an oracle that does not pass unmutated is not a kill', async () => {
+test('E2 mutation: an oracle that does not pass unmutated is not a kill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await assert.rejects(
     expectLayaMutationToFail(runnerProbe({ testName: 'E2 mutation: an oracle this file does not have' })),
     /the unmutated copy did not/u,
   );
 });
 
-test('E2 mutation: a mutant its oracle accepts is not a kill', async () => {
+test('E2 mutation: a mutant its oracle accepts is not a kill', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await assert.rejects(expectLayaMutationToFail(runnerProbe({})), /unexpectedly accepted mutant/u);
 });
 
@@ -784,7 +831,10 @@ test('E2 mutation: a copied repository’s commits start no Git maintenance, so 
 
 // E2 Task 14: an oracle of the built daemon runs against its copy's own build, made again after the edit; an edit the
 // daemon cannot be built from runs no oracle at all. (The tarball oracle skips on Windows, as this runner does.)
-test('E2 mutation: a built-daemon copy whose edit does not build is not a kill', { skip: WINDOWS_SKIP }, async () => {
+test('E2 mutation: a built-daemon copy whose edit does not build is not a kill', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await assert.rejects(
     expectLayaMutationToFail(
       runnerProbe({
@@ -909,7 +959,9 @@ test('E2 mutation: a production row cannot be both platform-skipped and executed
   );
 });
 
-test('E2 mutation: the copied boundary-source oracle passes its unmutated baseline before its guard is mutated', async () => {
+test('E2 mutation: the copied boundary-source oracle passes its unmutated baseline before its guard is mutated', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const mutation = (await loadLayaMutations()).find(
     (candidate) => candidate.id === 'e2-boundary-source-network-import',
   );
@@ -940,7 +992,9 @@ function vitestProbe(overrides: Partial<LayaMutation>): LayaMutation {
   };
 }
 
-test('E2 mutation: a Vitest copy whose named test fails to load is not a kill', async () => {
+test('E2 mutation: a Vitest copy whose named test fails to load is not a kill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   // Vitest reports a file that cannot load with no test in it: no named test ran, so nothing failed it.
   await assert.rejects(
     expectLayaMutationToFail(
@@ -953,14 +1007,16 @@ test('E2 mutation: a Vitest copy whose named test fails to load is not a kill', 
   );
 });
 
-test('E2 mutation: a Vitest oracle that does not pass unmutated is not a kill', async () => {
+test('E2 mutation: a Vitest oracle that does not pass unmutated is not a kill', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await assert.rejects(
     expectLayaMutationToFail(vitestProbe({ testName: 'an oracle the desktop app does not have' })),
     /the unmutated copy did not/u,
   );
 });
 
-test('E2 mutation: a Vitest mutant its oracle accepts is not a kill', async () => {
+test('E2 mutation: a Vitest mutant its oracle accepts is not a kill', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await assert.rejects(expectLayaMutationToFail(vitestProbe({})), /unexpectedly accepted mutant/u);
 });
 
@@ -984,7 +1040,10 @@ test('E2 mutation: every registered mutation names a leg a runner executes', asy
 // The runner proves each named oracle green in its copied tree before it mutates anything, and Laya is macOS-only in v1:
 // several oracles skip on Windows (WINDOWS_SKIP), so there is no baseline to prove there, as for phase E's runners.
 // Every registered mutant is credited on macOS and Linux.
-test('E2 mutation: copied production checker fails only its named oracle', { skip: WINDOWS_SKIP }, async (context) => {
+test('E2 mutation: copied production checker fails only its named oracle', {
+  skip: WINDOWS_SKIP,
+  timeout: STRICT_PASS_TIMEOUT_MS,
+}, async (context) => {
   for (const { mutation, changedLine } of await expectEveryLayaMutationToFail()) {
     context.diagnostic(`${mutation.id}: ${mutation.source}:${changedLine} -> ${mutation.testName}`);
   }
@@ -1168,7 +1227,10 @@ test('E2 mutation: the oracle group kill parses under dash, Ubuntu’s /bin/sh, 
   );
 });
 
-test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
+test('E2 mutation: a timed-out oracle leaves no process it started running', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withDescendantOracle('hang', async (oracle) => {
     await assert.rejects(
       settlesWithin(
@@ -1190,6 +1252,7 @@ test('E2 mutation: a timed-out oracle leaves no process it started running', { s
 
 test('E2 mutation: an oracle that has ended leaves no process it started running', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withDescendantOracle('exit', async (oracle) => {
     const result = await settlesWithin(
@@ -1210,6 +1273,7 @@ test('E2 mutation: an oracle that has ended leaves no process it started running
 
 test('E2 mutation: a process an ended oracle left holding its output does not hold the runner to its bound', {
   skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
   await withDescendantOracle('hold', async (oracle) => {
     const started = Date.now();
@@ -1229,7 +1293,10 @@ test('E2 mutation: a process an ended oracle left holding its output does not ho
   });
 });
 
-test('E2 mutation: a runner that is told to stop ends every oracle it started', { skip: WINDOWS_SKIP }, async () => {
+test('E2 mutation: a runner that is told to stop ends every oracle it started', {
+  skip: WINDOWS_SKIP,
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withDescendantOracle('hang', async (oracle) => {
     const support = join(repositoryRoot, 'packages/events-daemon/test/support');
     const script = join(await mkdtemp(join(tmpdir(), 'events-e2-runner-stop-')), 'runner.mjs');
@@ -1270,7 +1337,9 @@ test('E2 mutation: a runner that is told to stop ends every oracle it started', 
   });
 });
 
-test('E2 mutation: cold-store self-test holds the exact normal install command', async () => {
+test('E2 mutation: cold-store self-test holds the exact normal install command', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const result = await new Promise<{ readonly code: number | null; readonly output: string }>((resolve, reject) => {
     const child = spawn(process.execPath, ['scripts/verify-laya-ci-install.mjs', '--self-test'], {
       cwd: repositoryRoot,
@@ -1308,14 +1377,18 @@ async function amend(
 
 const LAYA_SOURCE = 'packages/events-daemon/src/runtime/laya';
 
-test('E2 static boundary: a network built-in imported outside the boundary probe is refused', async () => {
+test('E2 static boundary: a network built-in imported outside the boundary probe is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/fetcher.ts`, "import { connect as leak } from 'node:net';\nvoid leak;");
     await expectRejected(root, /fetcher\.ts imports a network built-in; only the boundary probe may/);
   });
 });
 
-test('E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused', async () => {
+test('E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/manager.ts`, "export const leak = () => fetch('http://127.0.0.1/');");
     await expectRejected(root, /manager\.ts calls fetch; only the boundary probe's one loopback attempt may/);
@@ -1329,7 +1402,9 @@ test('E2 static boundary: fetch or an HTTP request outside the probe and the rel
   });
 });
 
-test('E2 static boundary: a shell or another program run from a Laya module is refused', async () => {
+test('E2 static boundary: a shell or another program run from a Laya module is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(
       root,
@@ -1347,14 +1422,18 @@ test('E2 static boundary: a shell or another program run from a Laya module is r
   });
 });
 
-test('E2 static boundary: a package manager named in a Laya module is refused', async () => {
+test('E2 static boundary: a package manager named in a Laya module is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/runtime-installer.ts`, "export const installer = 'npm';");
     await expectRejected(root, /runtime-installer\.ts names a package manager/);
   });
 });
 
-test('E2 static boundary: a Laya test that does not assert the loopback seal is refused', async () => {
+test('E2 static boundary: a Laya test that does not assert the loopback seal is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, 'packages/events-daemon/test/laya-tar.test.ts', {
       before: '\nassertLoopbackSeal();\n',
@@ -1364,14 +1443,18 @@ test('E2 static boundary: a Laya test that does not assert the loopback seal is 
   });
 });
 
-test('E2 static boundary: a Laya template id spelled outside templates.ts is refused', async () => {
+test('E2 static boundary: a Laya template id spelled outside templates.ts is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/worker-supervisor.ts`, "export const template = 'laya-noul-v1';");
     await expectRejected(root, /worker-supervisor\.ts spells a Laya template id; templates\.ts owns that vocabulary/);
   });
 });
 
-test('E2 static boundary: production source that names a test worker is refused', async () => {
+test('E2 static boundary: production source that names a test worker is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(
       root,
@@ -1385,7 +1468,9 @@ test('E2 static boundary: production source that names a test worker is refused'
   });
 });
 
-test('E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start', async () => {
+test('E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   // E2 Task 13's pass-through, as the owner carries it since Task 13 joined: the option, and the line handing it on.
   const passThrough =
     '  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: options.laya?.startWorker });';
@@ -1418,14 +1503,18 @@ test('E2 static boundary: only the owner’s laya test seam may hand the Laya su
   });
 });
 
-test('E2 static boundary: any file that imports the Laya runtime or its private package is refused', async () => {
+test('E2 static boundary: any file that imports the Laya runtime or its private package is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await writeTracked(root, 'scripts/laya-load-runtime.mjs', "import '@receptron/laya';\n");
     await expectRejected(root, /laya-load-runtime\.mjs imports @receptron\/laya/);
   });
 });
 
-test('E2 static boundary: a Laya gate workflow another event or an input can start is refused', async () => {
+test('E2 static boundary: a Laya gate workflow another event or an input can start is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, '.github/workflows/laya-quality-gate.yml', {
       before: 'on:\n  workflow_dispatch:\n',
@@ -1435,14 +1524,18 @@ test('E2 static boundary: a Laya gate workflow another event or an input can sta
   });
 });
 
-test('E2 static boundary: another workflow that names the owner’s gate runner is refused', async () => {
+test('E2 static boundary: another workflow that names the owner’s gate runner is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, '.github/workflows/release.yml', '# a job could ask for the agentcomms-laya-gate runner');
     await expectRejected(root, /release\.yml names the owner's Laya gate runner, its inputs or its scripts/);
   });
 });
 
-test('E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused', async () => {
+test('E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, '.github/workflows/laya-quality-gate.yml', {
       before: '      - name: the real-Mac boundary run\n',
@@ -1453,7 +1546,9 @@ test('E2 static boundary: a Laya gate step before the boundary run that reads th
   });
 });
 
-test('E2 static boundary: Laya state keyed on a raw identity is refused', async () => {
+test('E2 static boundary: Laya state keyed on a raw identity is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(
       root,
@@ -1464,7 +1559,9 @@ test('E2 static boundary: Laya state keyed on a raw identity is refused', async 
   });
 });
 
-test('E2 static boundary: a desktop app that calls a third Laya operation is refused', async () => {
+test('E2 static boundary: a desktop app that calls a third Laya operation is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, 'apps/desktop/src/ipc.ts', {
       before: "  | { kind: 'eventsJudgeKindDisable' };",
@@ -1474,14 +1571,16 @@ test('E2 static boundary: a desktop app that calls a third Laya operation is ref
   });
 });
 
-test('E2 mutation: the release workflow installs with exactly the ordinary command', async () => {
+test('E2 mutation: the release workflow installs with exactly the ordinary command', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await change(root, '.github/workflows/release.yml', normalInstall, `${normalInstall} --prefer-offline`);
     await expectRejected(root, /ordinary CI install must be exactly/);
   });
 });
 
-test('E2 mutation: pnpm verify runs the E2 structural checker', async () => {
+test('E2 mutation: pnpm verify runs the E2 structural checker', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await change(root, 'package.json', 'pnpm verify:events-phase-e2 && ', '');
     await expectRejected(root, /pnpm verify must run the E2 structural checker/);
@@ -1527,7 +1626,7 @@ const T99_ROW = {
   test: 'E2 mutation: a timed-out oracle leaves no process it started running',
 };
 
-test('E2 matrix: a later fragment’s fully covered row is accepted', async () => {
+test('E2 matrix: a later fragment’s fully covered row is accepted', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       section5: [T99_ROW],
@@ -1544,14 +1643,14 @@ test('E2 matrix: a later fragment’s fully covered row is accepted', async () =
   });
 });
 
-test('E2 matrix: a row with no owner and red mutant is refused', async () => {
+test('E2 matrix: a row with no owner and red mutant is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await laterFragment(root, { section5: [T99_ROW] });
     await expectRejected(root, /matrix row "section5\/task-99\/e2-t99-row" has no owner and red mutant/);
   });
 });
 
-test('E2 matrix: a row two entries claim is refused', async () => {
+test('E2 matrix: a row two entries claim is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       matrix: [
@@ -1567,7 +1666,9 @@ test('E2 matrix: a row two entries claim is refused', async () => {
   });
 });
 
-test('E2 matrix: an entry whose red mutant its named test does not kill is refused', async () => {
+test('E2 matrix: an entry whose red mutant its named test does not kill is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       section5: [T99_ROW],
@@ -1587,7 +1688,7 @@ test('E2 matrix: an entry whose red mutant its named test does not kill is refus
   });
 });
 
-test('E2 matrix: an entry that names another owner is refused', async () => {
+test('E2 matrix: an entry that names another owner is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       section5: [T99_ROW],
@@ -1604,7 +1705,9 @@ test('E2 matrix: an entry that names another owner is refused', async () => {
   });
 });
 
-test('E2 matrix: an entry for a row this repository does not have is refused', async () => {
+test('E2 matrix: an entry for a row this repository does not have is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       matrix: [
@@ -1620,7 +1723,9 @@ test('E2 matrix: an entry for a row this repository does not have is refused', a
   });
 });
 
-test('E2 matrix: a row whose test no file declares needs its correction named, and a declared one cannot be renamed', async () => {
+test('E2 matrix: a row whose test no file declares needs its correction named, and a declared one cannot be renamed', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const stale = { ...T99_ROW, test: 'E2 mutation: a test this repository never declared' };
   await withCase(async (root) => {
     await laterFragment(root, {
@@ -1668,7 +1773,7 @@ test('E2 matrix: a row whose test no file declares needs its correction named, a
   });
 });
 
-test('E2 matrix: an entry whose test no file declares is refused', async () => {
+test('E2 matrix: an entry whose test no file declares is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     await laterFragment(root, {
       section5: [T99_ROW],
@@ -1685,14 +1790,18 @@ test('E2 matrix: an entry whose test no file declares is refused', async () => {
   });
 });
 
-test('E2 await ledger: an async Laya function not in the ledger is refused', async () => {
+test('E2 await ledger: an async Laya function not in the ledger is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/tree-verifier.ts`, 'export async function unledgered(): Promise<void> {}');
     await expectRejected(root, /async Laya function tree-verifier\.ts#unledgered is not in the E2 await ledger/);
   });
 });
 
-test('E2 await ledger: a second async function of a ledgered name is refused until it is reviewed', async () => {
+test('E2 await ledger: a second async function of a ledgered name is refused until it is reviewed', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, `${LAYA_SOURCE}/tree-verifier.ts`, 'export const again = { async sha256(): Promise<void> {} };');
     await expectRejected(root, /counts 1 async tree-verifier\.ts#sha256; the source has 2: review the new one/);
@@ -1768,7 +1877,9 @@ async function changeOwnGroupLine(root: string, line: string): Promise<void> {
 
 const CHANGED_LINE = '      detached: OWN_PROCESS_GROUP === true,\n';
 
-test('E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row', async () => {
+test('E2 supersession: a later fragment supersedes a frozen mutant whose anchor no longer applies, and its replacement covers its row', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await changeOwnGroupLine(root, CHANGED_LINE);
     // Without a supersession the frozen anchor is refused: a fix must not leave a frozen mutant unrunnable.
@@ -1789,7 +1900,9 @@ test('E2 supersession: a later fragment supersedes a frozen mutant whose anchor 
   });
 });
 
-test('E2 supersession: a mutant whose anchor still applies cannot be superseded', async () => {
+test('E2 supersession: a mutant whose anchor still applies cannot be superseded', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await supersedingFragment(root, 99, {
       mutations: [replacementMutant(99, 'e2-t99-runner-own-group', OWN_GROUP.line)],
@@ -1799,7 +1912,9 @@ test('E2 supersession: a mutant whose anchor still applies cannot be superseded'
   });
 });
 
-test('E2 supersession: a supersession that states no reason is refused', async () => {
+test('E2 supersession: a supersession that states no reason is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   for (const reason of [undefined, '', '   ']) {
     await withCase(async (root) => {
       await changeOwnGroupLine(root, CHANGED_LINE);
@@ -1812,7 +1927,9 @@ test('E2 supersession: a supersession that states no reason is refused', async (
   }
 });
 
-test('E2 supersession: a supersession without a replacement killed by the same named test is refused', async () => {
+test('E2 supersession: a supersession without a replacement killed by the same named test is refused', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await changeOwnGroupLine(root, CHANGED_LINE);
     await supersedingFragment(root, 99, {
@@ -1842,7 +1959,7 @@ test('E2 supersession: a supersession without a replacement killed by the same n
   });
 });
 
-test('E2 supersession: a chain of supersessions is refused', async () => {
+test('E2 supersession: a chain of supersessions is refused', { timeout: CHILD_TEST_TIMEOUT_MS }, async () => {
   await withCase(async (root) => {
     const third = '      detached: OWN_PROCESS_GROUP !== false,\n';
     await changeOwnGroupLine(root, third);
@@ -1897,7 +2014,9 @@ test('E2 supersession: the runner skips a superseded mutant and runs its replace
   );
 });
 
-test('E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt', async () => {
+test('E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   const probe = `${LAYA_SOURCE}/worker-boundary-probe.ts`;
   // The apostrophe is matched as any character: the checker's import scanner reads quotes, not regular expressions.
   const refused = /worker-boundary-probe\.ts starts a process beyond the sandbox launcher and the probe.s one refused/;
@@ -1914,7 +2033,9 @@ test('E2 static boundary: the boundary probe starts no process beyond the launch
   }
 });
 
-test("E2 static boundary: the release's gate-run check makes its one GitHub API request, and nothing else in it does", async () => {
+test("E2 static boundary: the release's gate-run check makes its one GitHub API request, and nothing else in it does", {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
   await withCase(async (root) => {
     await amend(root, 'scripts/verify-laya-gate-runs.mjs', "export const again = () => fetch('http://127.0.0.1/');");
     await expectRejected(root, /verify-laya-gate-runs\.mjs calls fetch more than once; the gate-run check makes/);
