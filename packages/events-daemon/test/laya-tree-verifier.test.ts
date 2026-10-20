@@ -3,9 +3,12 @@ import { chmod, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import type { RuntimeInstallFile } from '../src/runtime/laya/runtime-installer.ts';
 import { archiveChunks, runtimeFile, writeUstarFixture } from './support/laya-ustar.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 async function installerModule() {
   return import('../src/runtime/laya/runtime-installer.ts');

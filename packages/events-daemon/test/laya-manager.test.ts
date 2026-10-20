@@ -486,3 +486,40 @@ test('E2 manager: an integrity repair cannot replace a selection a disable chang
     await rig.close();
   }
 });
+
+test('E2 race: a disable and re-enable during a worker start’s tree walk leave the re-enabled trees alone', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const pause = pauseAt('worker-start-verify');
+  const rig = await readyRig({ failpoint: pause.failpoint });
+  let verifying: Promise<unknown> | undefined;
+  try {
+    const config = join(modelRoot(rig), 'laya_config.json');
+    const reviewed = rig.laya.modelFiles.find((file) => file.path === 'laya_config.json')?.bytes;
+    await appendFile(config, ' ');
+    // A worker start walks both trees and finds the altered file; it is paused before it decides what to repair.
+    verifying = rig.manager.verifyForWorkerStart();
+    await within(pause.reached, 5_000, 'the worker-start walk');
+    // Meanwhile the person disables Laya and enables the same reviewed entry again: the re-enable claims the same
+    // version and digest, and its own install replaces the altered model from the pinned source.
+    await within(rig.disable(), 5_000, 'the disable');
+    await rig.enable();
+    assert.equal(pointer(rig), 1, 'the re-enable claimed the same reviewed version');
+    await within(rig.manager.ensureInstalled(), 10_000, 'the re-enabled install');
+    assert.equal(rig.manager.status().state, 'ready', 'the re-enabled install verified both trees');
+    assert.deepEqual(await readFile(config), reviewed, 'the re-enabled install restored the reviewed bytes');
+    const requested = modelRequests(rig).length;
+
+    pause.release();
+    // The walk compared a selection a disable has since fenced: it vouches for nothing and repairs nothing.
+    assert.deepEqual(await within(verifying, 5_000, 'the stale worker start'), { ok: false, failureCode: null });
+    assert.equal(modelRequests(rig).length, requested, 'the stale walk downloaded nothing again');
+    assert.deepEqual(await readFile(config), reviewed, 'the re-enabled model was not deleted');
+    assert.equal((rig.modelRow() as { state: string }).state, 'ready', 'the stale walk recorded nothing');
+    assert.equal(rig.manager.status().state, 'ready');
+  } finally {
+    pause.release();
+    await verifying?.catch(() => undefined);
+    await rig.close();
+  }
+});

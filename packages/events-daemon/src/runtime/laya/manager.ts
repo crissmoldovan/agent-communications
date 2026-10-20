@@ -32,7 +32,8 @@ const OWNER_ONLY_DIRECTORY_MODE = 0o700;
 
 /**
  * The points a test may pause at, each inside the artifact lock (or, for `install-start`, at a job's first locked
- * section) and before the recheck that guards the effect named. Production composes no failpoint.
+ * section; for `worker-start-verify`, after a worker start's walk of both trees) and before the recheck that guards
+ * the effect named. Production composes no failpoint.
  */
 export type LayaArtifactEdge =
   | 'install-start'
@@ -41,7 +42,8 @@ export type LayaArtifactEdge =
   | 'model-ready'
   | 'repair-delete'
   | 'remove-model'
-  | 'update-disable';
+  | 'update-disable'
+  | 'worker-start-verify';
 
 export type LayaArtifactFailpoint = (edge: LayaArtifactEdge) => void | Promise<void>;
 
@@ -496,11 +498,16 @@ export class LayaArtifactManager implements JudgeWorkPurgeListener {
     const row = selection === null ? null : this.#models.get(selection.manifest.manifestId);
     if (selection === null || row?.state !== 'ready' || this.#job !== undefined)
       return { ok: false, failureCode: row?.failureCode ?? null };
+    // The walks below are awaits. A disable and re-enable claims the same version and digest again, so only the epoch
+    // shows that the selection they compared was fenced; a job begun meanwhile owns the trees after them.
+    const walkedEpoch = this.#epoch;
     const runtimeRoot = this.#runtimeRoot(selection);
     const modelRoot = layaModelArtifactPaths(this.#root, selection.manifest.manifestId).complete;
     const runtimeOk = (await verifyRuntimeTree({ root: runtimeRoot, files: runtimeFiles(selection) })).ok;
     const modelOk = (await verifyRuntimeTree({ root: modelRoot, files: modelFiles(selection) })).ok;
+    await this.#failpoint?.('worker-start-verify');
     if (runtimeOk && modelOk) return { ok: true, runtimeRoot, modelRoot };
+    if (walkedEpoch !== this.#epoch || this.#job !== undefined) return { ok: false, failureCode: null };
     const job = this.#repairJob(active, selection);
     const settled = this.#repair(job, { runtime: !runtimeOk, model: !modelOk });
     job.settled = settled.then(

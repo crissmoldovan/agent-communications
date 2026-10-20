@@ -3,8 +3,11 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { normaliseActivationDocument } from '../src/domain/activation-documents.ts';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
+
+assertLoopbackSeal();
 
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'laya');
 const repositoryRoot = join(import.meta.dirname, '..', '..', '..');

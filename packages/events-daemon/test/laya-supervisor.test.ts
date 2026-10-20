@@ -4,6 +4,7 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import type { LayaWorkerSelection } from '../src/runtime/laya/manager.ts';
 import { LAYA_CHOICE2_TEMPLATE_ID, LAYA_NOUL_TEMPLATE_ID } from '../src/runtime/laya/templates.ts';
 import {
@@ -25,6 +26,8 @@ import {
 } from '../src/runtime/laya/worker-supervisor.ts';
 import { ANSWERING_LAYA, syntheticRuntimeTree } from './support/laya-synthetic-runtime.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 const standin = fileURLToPath(new URL('./support/laya-worker-standin.ts', import.meta.url));
 const supervisorSource = new URL('../src/runtime/laya/worker-supervisor.ts', import.meta.url);
@@ -348,7 +351,8 @@ test('E2 Laya supervisor timeout/crash/idle: a crash is no-match and the next re
 });
 
 test('E2 late worker result is discarded', { skip: WINDOWS_SKIP }, async () => {
-  const laya = rig('late', { requestDeadlineMs: 300, extra: ['--delay', '900'] });
+  // The late reply comes long after the 2-second wait below, so only the deadline's own kill can end the worker in it.
+  const laya = rig('late', { requestDeadlineMs: 300, extra: ['--delay', '5000'] });
   try {
     assert.deepEqual(await laya.execute(), { kind: 'refused', code: 'laya-timeout', preIo: false });
     const late = laya.started[0]?.child as ChildProcessWithoutNullStreams;
@@ -671,7 +675,10 @@ test('E2 Laya supervisor: each worker directory keeps the probe’s socket withi
 
 test('E2 Laya supervisor has no daemon authority', async () => {
   const source = await readFile(supervisorSource, 'utf8');
-  const imports = [...source.matchAll(/(?:from\s*|import\s*\(\s*)(['"])([^'"]+)\1/gu)].map((match) => match[2] ?? '');
+  // Every specifier: `from`, a dynamic `import(` and a bare side-effect `import '…'` alike.
+  const imports = [...source.matchAll(/(?:from\s*|import\s*\(\s*|import\s+)(['"])([^'"]+)\1/gu)].map(
+    (match) => match[2] ?? '',
+  );
   for (const specifier of imports)
     assert.ok(
       /^node:(?:child_process|fs\/promises|path|sqlite)$/u.test(specifier) || /^\.\/[a-z-]+\.ts$/u.test(specifier),

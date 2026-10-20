@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type SecretStore, TaintStore } from '@agentcomms/core';
 import { gmailMessageReceivedV1 } from '@agentcomms/events';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { canonicalJudge, layaEnablementInputsFor, registerLayaEnablementInputs } from '../src/domain/judges.ts';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
@@ -28,6 +29,8 @@ import { EventRecordCipher } from '../src/store/records.ts';
 import { LAYA, type LayaRig, layaRig, macPlatform, syntheticLaya } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
+
+assertLoopbackSeal();
 
 const standin = fileURLToPath(new URL('./support/laya-worker-standin.ts', import.meta.url));
 const NOW = 1_800_000_000_000;
@@ -154,6 +157,8 @@ async function evaluation(
     readonly availability?: LayaWorkerArtifacts['availability'];
     /** Task 7's stand-in probe behaviour; `all-denied` passes the proof. */
     readonly probe?: string;
+    /** Awaited at each worker start, before its proof: a test pauses the start there (E2 Task 12). */
+    readonly beforeStart?: () => Promise<void>;
   } = {},
 ): Promise<Evaluation> {
   const laya = await syntheticLaya();
@@ -223,6 +228,7 @@ async function evaluation(
     ...(options.requestDeadlineMs === undefined ? {} : { requestDeadlineMs: options.requestDeadlineMs }),
     startWorker: async ({ dataDirectory, signal }) => {
       attempts.push(attempts.length + 1);
+      await options.beforeStart?.();
       const result = await createLayaWorkerBoundaryForTest({
         platform: 'darwin',
         dataDirectory,
@@ -592,6 +598,76 @@ test('E2 Laya evaluation: a worker failure is recorded only for the selection it
     run.rig.manager.recordWorkerFailure(current, 'runtime-failed');
     assert.equal(run.rig.manager.status().failureCode, 'runtime-failed');
   } finally {
+    await run.close();
+  }
+});
+
+test('E2 Laya judge test: where Laya is not offered it is refused with Laya’s own reason, before any reservation or worker', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const run = await evaluation({ availability: () => ({ available: false, code: 'E2_EXTERNAL_REFERENCE_BLOCKED' }) });
+  try {
+    // An active rule names the judge, so E grants the synthetic test; only the executor's own check refuses it.
+    assert.deepEqual(await run.judgeTest.test({ judgeId: 'judge-laya-t8', version: 1 }), {
+      kind: 'refused',
+      judgeId: 'judge-laya-t8',
+      version: 1,
+      code: 'E2_EXTERNAL_REFERENCE_BLOCKED',
+    });
+    assert.equal(run.count('judge_budget_reservations'), 0, 'nothing was reserved');
+    assert.equal(run.attempts.length, 0, 'no worker was started');
+  } finally {
+    await run.close();
+  }
+});
+
+test('E2 race: a budget swapped while a Laya worker starts lets no request reach the worker', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let reached!: () => void;
+  let release!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const run = await evaluation({
+    extra: ['--value-json', '0.9', '--tokens', '20'],
+    beforeStart: async () => {
+      reached();
+      await released;
+    },
+  });
+  try {
+    const admitted = run.admit();
+    // E has reserved the request against budget version 1; the worker's start is paused before its proof.
+    await paused;
+    assert.equal(run.reservation()?.state, 'reserved');
+    const versions = new ImmutableVersions(run.rig.store.database);
+    versions.createJudgeBudget({
+      budgetId: 'judge-budget',
+      version: 2,
+      global: { callsPerRollingHour: 5, inputTokensPerRolling30Days: 50_000, concurrency: 2 },
+      providers: [{ provider: LAYA, callsPerRollingHour: 5, inputTokensPerRolling30Days: 50_000, concurrency: 1 }],
+    });
+    // The person approves a new budget through E's own activation; its pointer swaps at once.
+    const prepared = await run.rig.activations.prepareJudgeBudget({ version: 2 });
+    const answer = await run.rig.activations.issueChallenge(prepared.approvalId);
+    await run.rig.activations.approve({ approvalId: prepared.approvalId, answer });
+    release();
+    assert.equal(await admitted, 'terminal');
+    assert.deepEqual(
+      run.written.filter((entry) => entry.frame.type === 'request'),
+      [],
+      'E’s final gate refused the stale reservation, so no request frame was written',
+    );
+    assert.equal(run.reservation()?.state, 'released', 'nothing reached the worker: E released the reservation');
+    const decision = run.rig.store.database.prepare('SELECT outcome FROM decisions').get() as { outcome: string };
+    assert.equal(decision.outcome, 'no-match', 'D5 records no-match');
+    assert.equal(run.count('deliveries'), 0);
+  } finally {
+    release();
     await run.close();
   }
 });

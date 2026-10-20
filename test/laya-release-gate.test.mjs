@@ -37,6 +37,9 @@ import {
   writeBoundaryEvidence,
   writeQualityReport,
 } from './helpers/laya-release-fixture.mjs';
+import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
+
+assertLoopbackSeal();
 
 const exec = promisify(execFile);
 const FIXTURES = join(ROOT, 'packages/events-daemon/test/fixtures/laya');

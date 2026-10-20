@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { archiveChunks, runtimeFile, type UstarFixtureEntry, writeUstarFixture } from './support/laya-ustar.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 type TarCode =
   | 'TAR_CHECKSUM'

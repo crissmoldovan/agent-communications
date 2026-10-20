@@ -8,6 +8,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ROOT } from './helpers/laya-release-fixture.mjs';
+import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
+
+assertLoopbackSeal();
 
 const SPEC = 'docs/superpowers/specs/2026-10-05-local-event-emission-design.md';
 

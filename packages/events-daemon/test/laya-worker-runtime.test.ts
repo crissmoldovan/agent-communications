@@ -4,6 +4,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
   canonicalLayaTemplate,
   LAYA_CHOICE2_TEMPLATE_ID,
@@ -29,6 +30,8 @@ import {
 } from '../src/runtime/laya/worker-runtime.ts';
 import { ANSWERING_LAYA, syntheticRuntimeTree } from './support/laya-synthetic-runtime.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 const workerRuntimeSource = new URL('../src/runtime/laya/worker-runtime.ts', import.meta.url);
 const shippedManifest = new URL('../laya-manifest.json', import.meta.url);

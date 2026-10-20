@@ -7,11 +7,14 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gmailMessageReceivedV1, slackMessagePostedV1 } from '@agentcomms/events';
 import Ajv2020Runtime, { type Ajv2020 as Ajv2020Class, type Options } from 'ajv/dist/2020.js';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import gateSchema from '../../events-laya-runtime/gate/schema-v1.json' with { type: 'json' };
 import { LAYA_CHOICE2_TEMPLATE_ID, LAYA_NOUL_TEMPLATE_ID, layaTemplateDigest } from '../src/runtime/laya/templates.ts';
 import badReports from './fixtures/laya/quality/bad-report-v1.json' with { type: 'json' };
 import metrics from './fixtures/laya/quality/metrics-v1.json' with { type: 'json' };
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 /*
  * D11's quality gate (E2-8, Task 9) on synthetic data only: tiny labelled vectors prove the arithmetic, a synthetic
@@ -371,10 +374,13 @@ test('E2 quality gate: model-card or refitted calibration is refused', async () 
 test('E2 quality gate: a report bound to another manifest, lock, platform list, runtime, runner or template is refused', async () => {
   await withFixtureRoot((root, gate) =>
     expectBadCases(gate, root, [
+      'manifest-id',
       'manifest-digest',
       'runtime-lock-digest',
       'platform-file-list-digest',
       'runtime-version',
+      'runtime-version-onnxruntime-node',
+      'runtime-version-tokenizers',
       'runner-digest',
       'x64-claimed-with-arm64-evidence',
       'template-digest',

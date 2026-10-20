@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
+
+assertLoopbackSeal();
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 

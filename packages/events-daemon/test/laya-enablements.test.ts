@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ApprovalStore, ConfigStore, emptyConfig } from '@agentcomms/core';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { canonicalJudgeKindEnablement } from '../src/domain/judges.ts';
 import { EventDomainError, JUDGE_KINDS } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
@@ -17,6 +18,8 @@ import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { LayaModelRepository } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'laya');
 
