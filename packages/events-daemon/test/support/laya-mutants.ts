@@ -51,6 +51,12 @@ export interface LayaMutation {
   readonly testPattern: string;
   readonly before: string;
   readonly after: string;
+  /**
+   * E2 CI round 1: where a confined mutant's oracle can run, and so where it is credited (the structural checker allows
+   * it only on the identical replacement of a live frozen mutant). Elsewhere its oracle's baseline must skip, and the
+   * row is accounted for, never credited. Absent: every platform the full strict pass runs on.
+   */
+  readonly platforms?: readonly NodeJS.Platform[] | undefined;
 }
 
 export interface LayaMutationExecution {
@@ -114,6 +120,25 @@ export function nodeOracleArguments(root: string, mutation: Pick<LayaMutation, '
     exactTestName(mutation.testName),
     join(root, mutation.testFile),
   ];
+}
+
+/** A confined mutant's platforms: some, not all, of those the full strict pass runs on. */
+function mutationPlatforms(value: unknown, name: string): readonly NodeJS.Platform[] {
+  const confinable: readonly string[] = ['darwin', 'linux'];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length >= confinable.length ||
+    new Set(value).size !== value.length ||
+    !value.every((platform) => typeof platform === 'string' && confinable.includes(platform))
+  )
+    throw new Error(`${name} must name some, not all, of ${confinable.join(', ')}`);
+  return Object.freeze([...value] as NodeJS.Platform[]);
+}
+
+/** True where a confined mutant's oracle cannot run: off the platforms it names. */
+function confinedAway(mutation: LayaMutation, platform: NodeJS.Platform): boolean {
+  return mutation.platforms !== undefined && !mutation.platforms.includes(platform);
 }
 
 function requiredString(value: unknown, name: string): string {
@@ -210,6 +235,9 @@ export async function loadLayaMutations(): Promise<readonly LayaMutation[]> {
             testPattern,
             before: requiredString(mutation.before, `task-${task}.json mutation ${index}.before`),
             after: requiredString(mutation.after, `task-${task}.json mutation ${index}.after`),
+            ...(mutation.platforms === undefined
+              ? {}
+              : { platforms: mutationPlatforms(mutation.platforms, `task-${task}.json mutation ${index}.platforms`) }),
           },
         ];
       }),
@@ -489,11 +517,16 @@ function hasTapSkip(output: string): boolean {
   return /^# skipped [1-9]\d*$/m.test(output);
 }
 
-/** A Windows exemption is credit only for the exact named test and the shared B1-G reason. */
+/**
+ * A Windows exemption is credit only for the exact named test and the shared B1-G reason. E2 CI round 1: so is a
+ * confined mutant's skip off the platforms it names, for its exact named test and that test's own reason; on a platform
+ * it names, a skip is refused like any other.
+ */
 export function isAllowedLayaMutationPlatformSkip(mutation: LayaMutation, skip: LayaMutationPlatformSkip): boolean {
-  if (skip.platform !== 'win32') return false;
+  const confined = skip.platform !== 'win32' && confinedAway(mutation, skip.platform);
+  if (skip.platform !== 'win32' && !confined) return false;
   const test = escapeExpression(mutation.testName);
-  const reason = escapeExpression(WINDOWS_SKIP_REASON);
+  const reason = confined ? '\\S.*' : escapeExpression(WINDOWS_SKIP_REASON);
   return (
     new RegExp(`^ok 1 - ${test} # SKIP ${reason}$`, 'm').test(skip.baselineOutput) &&
     (skip.baselineOutput.match(/# SKIP /g) ?? []).length === 1 &&
@@ -511,7 +544,8 @@ const namedBaselines = new WeakMap<LayaMutation, { readonly output: string; read
 
 /**
  * The unmutated copy must pass exactly its named test, or a later failure would not be evidence about the mutant. The
- * one other baseline accepted is a skip on Windows with B1-G's exact reason: that row is accounted for, never credited.
+ * other baselines accepted are a skip on Windows with B1-G's exact reason, and a confined mutant's skip off the
+ * platforms it names: that row is accounted for, never credited.
  */
 function assertNamedBaselinePasses(mutation: LayaMutation, result: StrictMutationChildResult): void {
   const tail = result.output.slice(-2000);
@@ -524,6 +558,12 @@ function assertNamedBaselinePasses(mutation: LayaMutation, result: StrictMutatio
     namedBaselines.set(mutation, { output: result.output, platformSkipped: true });
     return;
   }
+  // A confined mutant's oracle that runs where its confinement says it cannot makes the confinement untrue.
+  assert.equal(
+    confinedAway(mutation, process.platform),
+    false,
+    `${mutation.id}: its oracle did not skip on ${process.platform}, which its platforms leave out: credit it here and drop the confinement\n${tail}`,
+  );
   assert.equal(result.code, 0, `${mutation.id}: the unmutated copy did not pass ${mutation.testName}\n${tail}`);
   assert.equal(
     namedTapResult(result.output, 'ok', mutation.testName),

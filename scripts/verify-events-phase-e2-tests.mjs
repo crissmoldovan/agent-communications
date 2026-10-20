@@ -19,6 +19,11 @@ const installCommand = ['pnpm', 'install'].join(' ');
  * `pnpm verify`, the desktop app's Rust unit tests in desktop.yml, which must run this exact command.
  */
 const mutationLegs = ['node', 'vitest', 'cargo'];
+/**
+ * The platforms the full strict pass credits mutants on (it skips on Windows, B1-G). A confined mutant names some, not
+ * all, of them: those where its oracle can run (E2 CI round 1).
+ */
+const confinablePlatforms = ['darwin', 'linux'];
 const cargoLegCommand =
   'node --experimental-strip-types --disable-warning=ExperimentalWarning packages/events-daemon/test/support/run-laya-mutants.ts --leg cargo';
 const normalInstall = `${installCommand} --frozen-lockfile --filter '!${runtimeName}'`;
@@ -151,6 +156,19 @@ export function verifyExternalSources(root, fragment) {
 }
 
 /**
+ * E2 CI round 1: a live mutant is superseded only to confine it, by the identical edit (source, anchor and replacement
+ * text) whose `platforms` name where its oracle runs. Returns the replacement that confines it.
+ */
+function confiningReplacement(at, old, replacement, replacementId) {
+  const identical = ['source', 'before', 'after'].every((key) => replacement?.[key] === old[key]);
+  if (replacement?.platforms === undefined || !identical)
+    fail(
+      `${at}: its anchor still applies, and a live mutant is superseded only to confine it, by the identical edit naming its platforms`,
+    );
+  return replacementId;
+}
+
+/**
  * E2 review round 1: a frozen fragment's mutant whose anchored line a later fix had to change is superseded, never
  * edited. A later fragment lists `supersedes: [{ task, mutant, replacement, reason }]`: the superseded mutant must be
  * one task `task` registers and its anchor must match nothing any more (a live mutant is never superseded); the
@@ -158,7 +176,11 @@ export function verifyExternalSources(root, fragment) {
  * same file and leg; the reason must be stated; and no mutant may be superseded twice, superseded after it replaced
  * another, or replace one while it is itself superseded (no chain). The runner skips a superseded mutant and runs its
  * replacement (`test/support/laya-mutants.ts`), and a matrix row naming it is satisfied only by that replacement.
- * Returns each superseded mutant's id with its replacement's.
+ * E2 CI round 1: a live mutant whose oracle can run only on some platforms (a real-sandbox test, macOS only) is
+ * superseded only to confine it: by the identical edit (source, anchor and replacement text), killed by the same named
+ * test, whose `platforms` name where it runs; elsewhere the runner proves its oracle skips and accounts for it, never
+ * crediting it. A replacement names platforms only so.
+ * Returns each superseded mutant's id with its replacement's, and the replacements that confine.
  */
 function verifySupersessions(root, fragments) {
   const registered = new Map();
@@ -168,6 +190,7 @@ function verifySupersessions(root, fragments) {
         registered.set(mutation.id, { mutation, task: fragment.task });
   const superseded = new Map();
   const replacements = new Set();
+  const confining = new Set();
   for (const fragment of fragments) {
     const entries = fragment.value.supersedes;
     if (entries === undefined) continue;
@@ -184,9 +207,11 @@ function verifySupersessions(root, fragments) {
       if (old === undefined || old.task !== row.task) fail(`${at}: task-${row.task}.json registers no such mutant`);
       const source = resolve(root, old.mutation.source);
       const sourceText = existsSync(source) ? readFileSync(source, 'utf8') : '';
-      if (typeof old.mutation.before === 'string' && sourceText.includes(old.mutation.before))
-        fail(`${at}: its anchor still applies, and a live mutant is never superseded`);
       const replacement = registered.get(row.replacement);
+      if (typeof old.mutation.before === 'string' && sourceText.includes(old.mutation.before))
+        confining.add(confiningReplacement(at, old.mutation, replacement?.mutation, row.replacement));
+      else if (replacement?.mutation.platforms !== undefined)
+        fail(`${at}: its anchor no longer applies, so its replacement runs everywhere and names no platforms`);
       if (replacement === undefined || replacement.task !== fragment.task)
         fail(`${at}: its replacement ${JSON.stringify(row.replacement)} is not a mutant ${fragment.file} registers`);
       if (
@@ -204,10 +229,10 @@ function verifySupersessions(root, fragments) {
   for (const replacement of replacements)
     if (superseded.has(replacement))
       fail(`supersession chain: ${JSON.stringify(replacement)} replaces one mutant and is itself superseded`);
-  return superseded;
+  return { superseded, confining };
 }
 
-function verifyFragment(root, fragment, schema, superseded = new Map()) {
+function verifyFragment(root, fragment, schema, superseded = new Map(), confining = new Set()) {
   const value = requireObject(fragment.value, fragment.file);
   if (value.schemaVersion !== schema.schemaVersion) fail(`${fragment.file} has an unsupported schema version`);
   const task = value.task;
@@ -275,6 +300,21 @@ function verifyFragment(root, fragment, schema, superseded = new Map()) {
     if (leg !== 'node' && !(source.startsWith('apps/desktop/') && testFile.startsWith('apps/desktop/'))) {
       fail(`${fragment.file} mutation ${JSON.stringify(id)}: a ${leg} mutation edits and tests only the desktop app`);
     }
+    if (row.platforms !== undefined) {
+      const platforms = row.platforms;
+      if (
+        !Array.isArray(platforms) ||
+        platforms.length === 0 ||
+        platforms.length >= confinablePlatforms.length ||
+        new Set(platforms).size !== platforms.length ||
+        !platforms.every((platform) => confinablePlatforms.includes(platform))
+      )
+        fail(
+          `${fragment.file} mutation ${JSON.stringify(id)} must name its platforms as some, not all, of ${confinablePlatforms.join(', ')}`,
+        );
+      if (row.kind !== 'production' || leg !== 'node' || !confining.has(id))
+        fail(`${fragment.file} mutation ${JSON.stringify(id)} names platforms, but confines no live frozen mutant`);
+    }
     // A Vitest test is named by its path, each describe title then its own joined by ` > `: each is in the file.
     const named =
       leg === 'cargo'
@@ -286,7 +326,8 @@ function verifyFragment(root, fragment, schema, superseded = new Map()) {
       fail(`${fragment.file} has orphan mutation ${JSON.stringify(id)}: ${testFile} does not name its oracle`);
     }
     if (row.kind === 'production' && superseded.has(id)) {
-      // Its anchor matches nothing any more (verifySupersessions): its replacement is the mutant that runs.
+      // Its anchor matches nothing any more, or an identical replacement confines it (verifySupersessions): its
+      // replacement is the mutant that runs.
       requireString(row.before, `${fragment.file}.mutations[${id}].before`);
       requireString(row.after, `${fragment.file}.mutations[${id}].after`);
       continue;
@@ -1312,8 +1353,8 @@ export function verifyEventsPhaseE2({ root = repositoryRoot } = {}) {
   verifyImmutableFragments(resolvedRoot, fragments);
   fragments.push(...verifyCaseFiles(resolvedRoot));
   if (fragments.length === 0) fail('no task-owned E2 proof fragment exists');
-  const superseded = verifySupersessions(resolvedRoot, fragments);
-  for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema, superseded);
+  const { superseded, confining } = verifySupersessions(resolvedRoot, fragments);
+  for (const fragment of fragments) verifyFragment(resolvedRoot, fragment, schema, superseded, confining);
   verifyMutationLegsRun(resolvedRoot, fragments);
   verifyDaemonBoundary(resolvedRoot);
   verifyWorkerTestSeams(resolvedRoot);

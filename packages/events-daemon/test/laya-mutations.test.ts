@@ -2014,6 +2014,121 @@ test('E2 supersession: the runner skips a superseded mutant and runs its replace
   );
 });
 
+/** Task 12's frozen own-group mutant, confined by task 99 to `platforms`, with `changes` made to its identical edit. */
+function confiningMutant(platforms: unknown, changes: Readonly<Record<string, unknown>> = {}) {
+  return {
+    ...replacementMutant(99, 'e2-t99-runner-own-group', OWN_GROUP.line),
+    after: '/* e2-t12 mutant: removed */\n',
+    platforms,
+    ...changes,
+  };
+}
+
+const CONFINES_OWN_GROUP = {
+  task: 12,
+  mutant: OWN_GROUP.id,
+  replacement: 'e2-t99-runner-own-group',
+  reason: 'its oracle runs only on Linux',
+} as const;
+
+// E2 CI round 1: a frozen mutant whose oracle can run only on some platforms (Task 12's real-sandbox row, macOS only)
+// is confined, never edited: superseded by the identical edit, killed by the same named test, naming its platforms.
+test('E2 supersession: a live mutant is confined only by the identical edit, killed by its named test, that names its platforms', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
+  const live = /its anchor still applies, and a live mutant is superseded only to confine it/;
+  await withCase(async (root) => {
+    await supersedingFragment(root, 99, { mutations: [confiningMutant(['linux'])], supersedes: [CONFINES_OWN_GROUP] });
+    await expectAccepted(root);
+    // Another edit over the same anchor is not a confinement of this mutant.
+    await supersedingFragment(root, 99, {
+      mutations: [confiningMutant(['linux'], { after: '/* another edit */\n' })],
+      supersedes: [CONFINES_OWN_GROUP],
+    });
+    await expectRejected(root, live);
+    // The identical edit that names no platforms confines nothing.
+    await supersedingFragment(root, 99, { mutations: [confiningMutant(undefined)], supersedes: [CONFINES_OWN_GROUP] });
+    await expectRejected(root, live);
+  });
+});
+
+test('E2 supersession: a mutant names platforms only as some, not all, of darwin and linux, and only to confine one', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
+  const platforms = /must name its platforms as some, not all, of darwin, linux/;
+  for (const named of [['win32'], ['darwin', 'linux'], [], ['linux', 'linux'], 'linux']) {
+    await withCase(async (root) => {
+      await supersedingFragment(root, 99, { mutations: [confiningMutant(named)], supersedes: [CONFINES_OWN_GROUP] });
+      await expectRejected(root, platforms);
+    });
+  }
+  await withCase(async (root) => {
+    // Platforms on a mutant that replaces nothing.
+    await supersedingFragment(root, 99, {
+      mutations: [{ ...confiningMutant(['linux']), before: '  liveGroups.clear();\n' }],
+      supersedes: [],
+    });
+    await expectRejected(root, /names platforms, but confines no live frozen mutant/);
+    // Platforms on the replacement of a mutant whose anchor a fix changed: that replacement runs everywhere.
+    await changeOwnGroupLine(root, CHANGED_LINE);
+    await supersedingFragment(root, 99, {
+      mutations: [{ ...confiningMutant(['linux']), before: CHANGED_LINE }],
+      supersedes: [CONFINES_OWN_GROUP],
+    });
+    await expectRejected(
+      root,
+      /its anchor no longer applies, so its replacement runs everywhere and names no platforms/,
+    );
+  });
+});
+
+test('E2 mutation: a confined mutant is accounted for off its platforms, never credited, and refused a skip on them', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const name = 'E2 boundary: a real macOS sandbox proves all four attempts while pipes remain live';
+  const confined = { ...mutationAccountingFixture('confined', name), platforms: ['darwin'] as const };
+  const skipped = (platform: NodeJS.Platform, baselineOutput = skippedBaseline(name, 'requires the host sandbox')) =>
+    new Map([[confined.id, { platform, baselineOutput }]]);
+  assert.doesNotThrow(() => mutants.assertEveryLayaMutationExecuted([confined], new Set(), skipped('linux')));
+  for (const [platform, output] of [
+    ['darwin', undefined],
+    ['linux', skippedBaseline('another test', 'requires the host sandbox')],
+    ['linux', `${skippedBaseline(name, 'requires the host sandbox')}\nok 2 - another # SKIP twice`],
+  ] as const)
+    assert.throws(
+      () => mutants.assertEveryLayaMutationExecuted([confined], new Set(), skipped(platform, output)),
+      /unapproved platform skip/,
+      `${platform}: ${output ?? 'its own platform'}`,
+    );
+  assert.throws(
+    () =>
+      mutants.assertEveryLayaMutationExecuted(
+        [mutationAccountingFixture('unconfined', name)],
+        new Set(),
+        new Map([['unconfined', { platform: 'linux', baselineOutput: skippedBaseline(name, 'any reason') }]]),
+      ),
+    /unapproved platform skip/,
+  );
+  // The repository's one confinement is loaded with its platforms, and the frozen mutant it confines does not run.
+  const loaded = await loadLayaMutations();
+  assert.deepEqual(loaded.find((mutation) => mutation.id === 'e2-t17-real-sandbox-denial-codes')?.platforms, [
+    'darwin',
+  ]);
+  assert.equal(
+    loaded.some((mutation) => mutation.id === 'e2-t12-row-t7-real-sandbox-denial-codes'),
+    false,
+  );
+});
+
+test('E2 mutation: a confined mutant whose oracle runs off its platforms is refused, never credited there', {
+  timeout: CHILD_TEST_TIMEOUT_MS,
+}, async () => {
+  const elsewhere: NodeJS.Platform = process.platform === 'darwin' ? 'linux' : 'darwin';
+  await assert.rejects(
+    expectLayaMutationToFail({ ...runnerProbe({}), platforms: [elsewhere] }),
+    /its oracle did not skip on [a-z0-9]+, which its platforms leave out/u,
+  );
+});
+
 test('E2 static boundary: the boundary probe starts no process beyond the launcher and its one refused spawn attempt', {
   timeout: CHILD_TEST_TIMEOUT_MS,
 }, async () => {
