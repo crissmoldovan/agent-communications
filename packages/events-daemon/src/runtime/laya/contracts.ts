@@ -676,7 +676,9 @@ export function translatedByRosetta(probe: LayaPlatformProbe): boolean {
     killSignal: 'SIGKILL' as const,
   };
   try {
-    const result = probe.spawnSync?.(SYSCTL, ROSETTA_QUERY, options) ?? spawnSync(SYSCTL, ROSETTA_QUERY, options);
+    const result =
+      probe.spawnSync?.(SYSCTL, ROSETTA_QUERY, options) ??
+      spawnSync(SYSCTL, ROSETTA_QUERY, { ...options, stdio: [...options.stdio] });
     if (result.status !== 0 || result.signal !== null || result.error !== undefined) return true;
     const answer = String(result.stdout ?? '').trim();
     return answer !== '0' && answer !== '';
