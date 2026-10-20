@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
   createLayaWorkerBoundary,
   createLayaWorkerBoundaryForTest,
@@ -21,6 +22,8 @@ import {
 } from '../src/runtime/laya/worker-boundary-probe.ts';
 import { encodeWorkerFrame, WorkerFrameParser } from '../src/runtime/laya/worker-protocol.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+
+assertLoopbackSeal();
 
 const workerMain = fileURLToPath(new URL('../src/runtime/laya/worker-main.ts', import.meta.url));
 const boundaryProbe = fileURLToPath(new URL('../src/runtime/laya/worker-boundary-probe.ts', import.meta.url));

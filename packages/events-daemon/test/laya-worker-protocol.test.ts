@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
   createWorkerProbeId,
   createWorkerRequestId,
@@ -8,6 +9,8 @@ import {
   WORKER_FRAME_MAX_BYTES,
   WorkerFrameParser,
 } from '../src/runtime/laya/worker-protocol.ts';
+
+assertLoopbackSeal();
 
 test('laya worker protocol: length-prefixed frames survive arbitrary pipe chunking', () => {
   const parser = new WorkerFrameParser();

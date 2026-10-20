@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
+import { endOracleGroupsWithThisRunner } from './mutation-runner-exit.ts';
 import { WINDOWS_SKIP_REASON } from './short-temp.ts';
 import { runStrictMutationChild, type StrictMutationChildResult } from './strict-mutation-child.ts';
 
@@ -235,6 +237,78 @@ async function copyFixtureTree(root: string, mutation: LayaMutation): Promise<vo
 }
 
 /**
+ * Oracles that read the whole checkout rather than an import closure: the structural checker run over its own
+ * repository, and the release gate's command over the real package registry. Each gets a complete copy
+ * (`copyRepositoryTree`); so does every oracle in the checker's own test file, whose copied cases are whole
+ * checkouts too (E2 Task 12's matrix reads the plan, every fragment, test and source). Every other oracle keeps its
+ * smaller closure copy.
+ */
+const WHOLE_REPOSITORY_TEST_FILES: ReadonlySet<string> = new Set([
+  'packages/events-daemon/test/laya-mutations.test.ts',
+]);
+export const WHOLE_REPOSITORY_ORACLES: ReadonlySet<string> = new Set([
+  'laya scope: completed checker accepts the Task 3 proof fragment',
+  'E2 release gate: this repository passes as dormant, through the command the release job runs',
+]);
+
+/**
+ * Every file Git tracks or would track, copied below `root` and committed once in a fresh repository there, so the
+ * checker's tracked-file scan and fragment-history rule read the copy as they read this checkout. The installed
+ * modules are linked as for every copy, and each package's built `dist/` (never tracked) is linked beside its sources.
+ */
+async function copyRepositoryTree(root: string): Promise<void> {
+  const listed = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter(Boolean);
+  for (const file of listed) {
+    // A tracked file deleted in this working tree is absent from the copy too.
+    if ((await lstat(join(repositoryRoot, file)).catch(() => undefined)) === undefined) continue;
+    await copyFile(root, file);
+  }
+  const git = (args: readonly string[]) =>
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.email=laya-mutation@example.test',
+        '-c',
+        'user.name=Laya mutation copy',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...args,
+      ],
+      { cwd: root, stdio: 'ignore' },
+    );
+  git(['init', '--quiet']);
+  // The links added below are installed trees, not the checkout: `.gitignore`'s `node_modules/` and `dist/` match
+  // directories only, so name the links here, or a copy of this copy would take them for files.
+  await mkdir(join(root, '.git', 'info'), { recursive: true });
+  await writeFile(
+    join(root, '.git', 'info', 'exclude'),
+    '/node_modules\n/packages/events-daemon/node_modules\n/packages/*/dist\n',
+    'utf8',
+  );
+  git(['add', '--all']);
+  git(['commit', '--quiet', '--no-verify', '-m', 'the mutation copy']);
+  for (const directory of ['', 'packages/events-daemon']) {
+    const installed = join(repositoryRoot, directory, 'node_modules');
+    if (!(await stat(installed).catch(() => undefined))?.isDirectory())
+      throw new Error(`the mutation runner needs the installed ${directory || 'root'} modules`);
+    await symlink(installed, join(root, directory, 'node_modules'), 'dir');
+  }
+  for (const name of await readdir(join(repositoryRoot, 'packages'))) {
+    const built = join(repositoryRoot, 'packages', name, 'dist');
+    if ((await stat(built).catch(() => undefined))?.isDirectory())
+      await symlink(built, join(root, 'packages', name, 'dist'), 'dir');
+  }
+}
+
+/**
  * A copied tree has no install of its own. Without these links every workspace or third-party import fails to load,
  * and node:test reports a file that fails to load as one failed test: a crash would then "kill" every mutant. Only the
  * oracle's mutable daemon source/test closure is copied; the installed modules and the sibling workspace packages keep
@@ -353,6 +427,8 @@ export function assertEveryLayaMutationExecuted(
 
 /** Copies one production module, proves its named oracle first, then makes one exact destructive edit, in its leg. */
 export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
+  // Whatever ends this runner ends the oracles it started.
+  endOracleGroupsWithThisRunner();
   switch (mutation.leg) {
     case 'node':
       return expectNodeMutationToFail(mutation);
@@ -367,7 +443,9 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
 async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMutationExecution> {
   const root = await mkdtemp(join(tmpdir(), `events-e2-mutant-${mutation.id}-`));
   try {
-    await copyFixtureTree(root, mutation);
+    if (WHOLE_REPOSITORY_ORACLES.has(mutation.testName) || WHOLE_REPOSITORY_TEST_FILES.has(mutation.testFile))
+      await copyRepositoryTree(root);
+    else await copyFixtureTree(root, mutation);
     const target = join(root, mutation.source);
     const original = await readFile(target, 'utf8');
     assert.equal(

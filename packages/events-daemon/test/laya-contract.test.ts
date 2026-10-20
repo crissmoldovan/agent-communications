@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { activationDocumentDigest, canonicalActivationDocument } from '../src/domain/activation-documents.ts';
 import { canonicalJudgeBudget } from '../src/domain/judges.ts';
 import { JUDGE_KINDS } from '../src/domain/lifecycle.ts';
@@ -10,6 +11,8 @@ import {
   LayaContractError,
   type LayaReviewedAssets,
 } from '../src/runtime/laya/contracts.ts';
+
+assertLoopbackSeal();
 
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'laya');
 

@@ -252,6 +252,39 @@
       ]
     },
     {
+      "name": "manifest-id",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/manifestId",
+          "value": "laya-en-onnx-00000000"
+        }
+      ]
+    },
+    {
+      "name": "runtime-version-onnxruntime-node",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runtime/onnxruntimeNode",
+          "value": "1.30.1"
+        }
+      ]
+    },
+    {
+      "name": "runtime-version-tokenizers",
+      "code": "QUALITY_REPORT_CANDIDATE",
+      "edits": [
+        {
+          "op": "set",
+          "pointer": "/runtime/tokenizers",
+          "value": "0.2.1"
+        }
+      ]
+    },
+    {
       "name": "runner-digest",
       "code": "QUALITY_REPORT_CANDIDATE",
       "edits": [

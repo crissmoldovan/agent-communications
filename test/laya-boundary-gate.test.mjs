@@ -35,6 +35,9 @@ import {
   removeRoot,
   writeBoundaryEvidence,
 } from './helpers/laya-release-fixture.mjs';
+import { assertLoopbackSeal } from './helpers/loopback-seal-preload.mjs';
+
+assertLoopbackSeal();
 
 const BOTH = ['arm64', 'x64'];
 const TREES = { runtimeTree: '/nonexistent/laya-runtime-tree', modelTree: '/nonexistent/laya-model-tree' };

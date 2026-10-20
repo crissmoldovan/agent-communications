@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
   CARGO_LEG_COMMAND,
   expectEveryLayaMutationToFail,
@@ -18,37 +19,31 @@ import {
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 
+assertLoopbackSeal();
+
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
 const runtimeName = '@agentcomms/events-laya-runtime';
 const normalInstall = ['pnpm', 'install', '--frozen-lockfile', '--filter', `'!${runtimeName}'`].join(' ');
 
+/**
+ * The whole checkout, as Git lists it (tracked, and untracked but not ignored), in a fresh repository whose history
+ * holds every file but Task 3's fragment: E2 Task 12's matrix reads the plan, every fragment, test and source, so a
+ * case is a complete copy that each test changes in one place.
+ */
 async function copyCase(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'events-e2-proof-'));
-  const files = [
-    'package.json',
-    'README.md',
-    'CONTRIBUTING.md',
-    'docs/RELEASING.md',
-    '.blocks/post-clone.sh',
-    '.claude/skills/release/SKILL.md',
-    '.claude/skills/review-pr/SKILL.md',
-    '.github/workflows/release.yml',
-    'packages/events-daemon/package.json',
-    'packages/events-daemon/test/laya-mutations.test.ts',
-    'packages/events-daemon/test/laya-scope.test.ts',
-    'packages/events-daemon/test/support/laya-mutants.ts',
-    'test/helpers/loopback-seal-preload.mjs',
-    'scripts/verify-events-phase-e2-tests.mjs',
-    'scripts/verify-laya-ci-install.mjs',
-    'scripts/release-ci.mjs',
-    'packages/events-daemon/test/fixtures/laya/cases/schema-v1.json',
-    'packages/events-daemon/test/fixtures/laya/cases/task-3.json',
-  ];
-  for (const relative of files) {
+  const listed = (await runGit(repositoryRoot, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']))
+    .split('\0')
+    .filter(Boolean);
+  for (const relative of listed) {
+    const source = join(repositoryRoot, relative);
+    // The repository tracks no symbolic link: one listed here is an installed tree linked into a copy, never a file.
+    const info = await lstat(source).catch(() => undefined);
+    if (info === undefined || info.isSymbolicLink()) continue;
     const destination = join(root, relative);
     await mkdir(dirname(destination), { recursive: true });
-    await cp(join(repositoryRoot, relative), destination, { recursive: true });
+    await cp(source, destination);
   }
   await initialiseCaseHistory(root);
   return root;
@@ -443,10 +438,11 @@ test('E2 mutation: rejects a task fragment nested beneath the cases directory', 
 test('E2 mutation: rejects a second file for the same task', async () => {
   await withCase(async (root) => {
     const source = await readFile(join(root, 'packages/events-daemon/test/fixtures/laya/cases/task-3.json'), 'utf8');
-    const taskFive = source.replaceAll('task-3', 'task-5').replace('"task": 3', '"task": 5');
-    await writeTracked(root, 'packages/events-daemon/test/fixtures/laya/cases/task-5.json', taskFive);
-    await writeTracked(root, 'packages/events-daemon/test/fixtures/laya/cases/second-task-5.json', taskFive);
-    await expectRejected(root, /duplicate task fragment for task 5/);
+    // A task number no fragment has: the copied case is the whole checkout, whose own fragments are frozen.
+    const taskLater = source.replaceAll('task-3', 'task-98').replace('"task": 3', '"task": 98');
+    await writeTracked(root, 'packages/events-daemon/test/fixtures/laya/cases/task-98.json', taskLater);
+    await writeTracked(root, 'packages/events-daemon/test/fixtures/laya/cases/second-task-98.json', taskLater);
+    await expectRejected(root, /duplicate task fragment for task 98/);
   });
 });
 
@@ -939,6 +935,17 @@ async function goneWithin(pid: number, milliseconds: number): Promise<boolean> {
   return !processAlive(pid);
 }
 
+/** The runner under test must settle within `milliseconds`: one that cannot end its oracle fails here, never hangs. */
+function settlesWithin<T>(work: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`the runner did not settle within ${milliseconds}ms`)), milliseconds);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function withDescendantOracle(
   mode: 'hang' | 'exit' | 'hold',
   run: (oracle: { readonly args: readonly string[]; readonly descendant: () => Promise<number> }) => Promise<void>,
@@ -961,13 +968,16 @@ async function withDescendantOracle(
 test('E2 mutation: a timed-out oracle leaves no process it started running', { skip: WINDOWS_SKIP }, async () => {
   await withDescendantOracle('hang', async (oracle) => {
     await assert.rejects(
-      runStrictMutationChild({
-        command: process.execPath,
-        args: oracle.args,
-        cwd: tmpdir(),
-        env: process.env,
-        timeoutMs: 1_500,
-      }),
+      settlesWithin(
+        runStrictMutationChild({
+          command: process.execPath,
+          args: oracle.args,
+          cwd: tmpdir(),
+          env: process.env,
+          timeoutMs: 1_500,
+        }),
+        8_000,
+      ),
       /timed out after 1500ms/u,
     );
     const descendant = await oracle.descendant();
@@ -979,13 +989,16 @@ test('E2 mutation: an oracle that has ended leaves no process it started running
   skip: WINDOWS_SKIP,
 }, async () => {
   await withDescendantOracle('exit', async (oracle) => {
-    const result = await runStrictMutationChild({
-      command: process.execPath,
-      args: oracle.args,
-      cwd: tmpdir(),
-      env: process.env,
-      timeoutMs: 10_000,
-    });
+    const result = await settlesWithin(
+      runStrictMutationChild({
+        command: process.execPath,
+        args: oracle.args,
+        cwd: tmpdir(),
+        env: process.env,
+        timeoutMs: 10_000,
+      }),
+      15_000,
+    );
     assert.equal(result.code, 0, result.output);
     const descendant = await oracle.descendant();
     assert.equal(await goneWithin(descendant, 2_000), true, 'nothing the oracle started outlives it');
@@ -997,16 +1010,60 @@ test('E2 mutation: a process an ended oracle left holding its output does not ho
 }, async () => {
   await withDescendantOracle('hold', async (oracle) => {
     const started = Date.now();
-    const result = await runStrictMutationChild({
-      command: process.execPath,
-      args: oracle.args,
-      cwd: tmpdir(),
-      env: process.env,
-      timeoutMs: 10_000,
-    });
+    const result = await settlesWithin(
+      runStrictMutationChild({
+        command: process.execPath,
+        args: oracle.args,
+        cwd: tmpdir(),
+        env: process.env,
+        timeoutMs: 10_000,
+      }),
+      15_000,
+    );
     assert.equal(result.code, 0, result.output);
     assert.ok(Date.now() - started < 5_000, 'the runner ended the leftover and read the oracle’s result at once');
     assert.equal(await goneWithin(await oracle.descendant(), 2_000), true, 'the leftover holding the pipe was ended');
+  });
+});
+
+test('E2 mutation: a runner that is told to stop ends every oracle it started', { skip: WINDOWS_SKIP }, async () => {
+  await withDescendantOracle('hang', async (oracle) => {
+    const support = join(repositoryRoot, 'packages/events-daemon/test/support');
+    const script = join(await mkdtemp(join(tmpdir(), 'events-e2-runner-stop-')), 'runner.mjs');
+    await writeFile(
+      script,
+      [
+        `import { runStrictMutationChild } from ${JSON.stringify(pathToFileURL(join(support, 'strict-mutation-child.ts')).href)};`,
+        `import { endOracleGroupsWithThisRunner } from ${JSON.stringify(pathToFileURL(join(support, 'mutation-runner-exit.ts')).href)};`,
+        'endOracleGroupsWithThisRunner();',
+        `void runStrictMutationChild({ command: process.execPath, args: ${JSON.stringify(oracle.args)}, cwd: ${JSON.stringify(tmpdir())}, env: process.env, timeoutMs: 60_000 });`,
+      ].join('\n'),
+    );
+    const runner = spawn(
+      process.execPath,
+      ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', script],
+      {
+        stdio: 'ignore',
+      },
+    );
+    try {
+      const deadline = Date.now() + 10_000;
+      let descendant: number | undefined;
+      while (descendant === undefined && Date.now() < deadline) {
+        descendant = await oracle.descendant().then(
+          (pid) => (Number.isSafeInteger(pid) && pid > 0 ? pid : undefined),
+          () => undefined,
+        );
+        if (descendant === undefined) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(descendant !== undefined, 'the oracle started its descendant');
+      runner.kill('SIGTERM');
+      await new Promise((resolve) => runner.once('exit', resolve));
+      assert.equal(await goneWithin(descendant, 2_000), true, 'the stopped runner ended its oracle’s whole tree');
+    } finally {
+      if (runner.exitCode === null && runner.signalCode === null) runner.kill('SIGKILL');
+      await rm(dirname(script), { recursive: true, force: true });
+    }
   });
 });
 
@@ -1027,4 +1084,415 @@ test('E2 mutation: cold-store self-test holds the exact normal install command',
     child.once('close', (code) => resolve({ code, output }));
   });
   assert.equal(result.code, 0, result.output);
+});
+
+// ------------------------------------------------------------------------------------------------ E2 Task 12
+
+/** Appends `text` to a copied file, or replaces `before` in it, and returns the copied file's path. */
+async function amend(
+  root: string,
+  relative: string,
+  edit: string | { readonly before: string; readonly after: string },
+) {
+  const path = join(root, relative);
+  const source = await readFile(path, 'utf8');
+  if (typeof edit === 'string') await writeFile(path, `${source}\n${edit}\n`, 'utf8');
+  else {
+    assert.ok(source.includes(edit.before), `${relative} does not contain ${JSON.stringify(edit.before)}`);
+    await writeFile(path, source.replace(edit.before, edit.after), 'utf8');
+  }
+}
+
+const LAYA_SOURCE = 'packages/events-daemon/src/runtime/laya';
+
+test('E2 static boundary: a network built-in imported outside the boundary probe is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/fetcher.ts`, "import { connect as leak } from 'node:net';\nvoid leak;");
+    await expectRejected(root, /fetcher\.ts imports a network built-in; only the boundary probe may/);
+  });
+});
+
+test('E2 static boundary: fetch or an HTTP request outside the probe and the release acquirer is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/manager.ts`, "export const leak = () => fetch('http://127.0.0.1/');");
+    await expectRejected(root, /manager\.ts calls fetch; only the boundary probe's one loopback attempt may/);
+  });
+  await withCase(async (root) => {
+    await amend(root, 'scripts/laya-runtime-lock.mjs', "import { request as leak } from 'node:https';\nvoid leak;");
+    await expectRejected(
+      root,
+      /laya-runtime-lock\.mjs makes an HTTP request; only the release-only raw-tarball acquirer may/,
+    );
+  });
+});
+
+test('E2 static boundary: a shell or another program run from a Laya module is refused', async () => {
+  await withCase(async (root) => {
+    await amend(
+      root,
+      `${LAYA_SOURCE}/tar.ts`,
+      "import { execSync } from 'node:child_process';\nexport const run = () => execSync('true');",
+    );
+    await expectRejected(
+      root,
+      /tar\.ts imports node:child_process; only the availability probe and the sandbox launcher may/,
+    );
+  });
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/worker-boundary-probe.ts`, { before: 'shell: false', after: 'shell: true' });
+    await expectRejected(root, /worker-boundary-probe\.ts runs a shell or another program/);
+  });
+});
+
+test('E2 static boundary: a package manager named in a Laya module is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/runtime-installer.ts`, "export const installer = 'npm';");
+    await expectRejected(root, /runtime-installer\.ts names a package manager/);
+  });
+});
+
+test('E2 static boundary: a Laya test that does not assert the loopback seal is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, 'packages/events-daemon/test/laya-tar.test.ts', {
+      before: '\nassertLoopbackSeal();\n',
+      after: '\n',
+    });
+    await expectRejected(root, /laya-tar\.test\.ts does not assert the loopback seal at load/);
+  });
+});
+
+test('E2 static boundary: a Laya template id spelled outside templates.ts is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/worker-supervisor.ts`, "export const template = 'laya-noul-v1';");
+    await expectRejected(root, /worker-supervisor\.ts spells a Laya template id; templates\.ts owns that vocabulary/);
+  });
+});
+
+test('E2 static boundary: production source that names a test worker is refused', async () => {
+  await withCase(async (root) => {
+    await amend(
+      root,
+      `${LAYA_SOURCE}/worker-supervisor.ts`,
+      "export const entry = '../../../test/support/laya-worker-standin.ts';",
+    );
+    await expectRejected(
+      root,
+      /worker-supervisor\.ts names a test worker; production launches only the shipped worker entry/,
+    );
+  });
+});
+
+test('E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start', async () => {
+  const ownerSeam = async (root: string, start: string) => {
+    await amend(root, 'packages/events-daemon/src/runtime/owner.ts', {
+      before: '        readonly failpoint?: LayaArtifactFailpoint | undefined;\n',
+      after:
+        '        readonly failpoint?: LayaArtifactFailpoint | undefined;\n        readonly startWorker?: LayaWorkerStart | undefined;\n',
+    });
+    await amend(root, 'packages/events-daemon/src/runtime/owner.ts', {
+      before: '  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts });',
+      after: `  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: ${start} });`,
+    });
+  };
+  // E2 Task 13's pass-through, as it is written there.
+  await withCase(async (root) => {
+    await ownerSeam(root, 'options.laya?.startWorker');
+    await expectAccepted(root);
+  });
+  await withCase(async (root) => {
+    await amend(
+      root,
+      'packages/events-daemon/src/runtime/judge-test.ts',
+      'export const forged = { startWorker: undefined };',
+    );
+    await expectRejected(
+      root,
+      /judge-test\.ts hands the Laya supervisor a worker start; only the owner's laya test seam/,
+    );
+  });
+  await withCase(async (root) => {
+    await ownerSeam(root, 'forgedStart');
+    await expectRejected(root, /owner\.ts hands the Laya supervisor a worker start; only the owner's laya test seam/);
+  });
+});
+
+test('E2 static boundary: any file that imports the Laya runtime or its private package is refused', async () => {
+  await withCase(async (root) => {
+    await writeTracked(root, 'scripts/laya-load-runtime.mjs', "import '@receptron/laya';\n");
+    await expectRejected(root, /laya-load-runtime\.mjs imports @receptron\/laya/);
+  });
+});
+
+test('E2 static boundary: a Laya gate workflow another event or an input can start is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, '.github/workflows/laya-quality-gate.yml', {
+      before: 'on:\n  workflow_dispatch:\n',
+      after: 'on:\n  workflow_dispatch:\n  pull_request:\n',
+    });
+    await expectRejected(root, /the Laya gate workflow must start only by hand, with no input/);
+  });
+});
+
+test('E2 static boundary: another workflow that names the owner’s gate runner is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, '.github/workflows/release.yml', '# a job could ask for the agentcomms-laya-gate runner');
+    await expectRejected(root, /release\.yml names the owner's Laya gate runner, its inputs or its scripts/);
+  });
+});
+
+test('E2 static boundary: a Laya gate step before the boundary run that reads the corpus is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, '.github/workflows/laya-quality-gate.yml', {
+      before: '      - name: the real-Mac boundary run\n',
+      after:
+        '      - name: an early look at the corpus\n        run: ls "$AGENTCOMMS_LAYA_GATE_CORPUS"\n      - name: the real-Mac boundary run\n',
+    });
+    await expectRejected(root, /the Laya gate reads the corpus in one step, the quality run, after the boundary run/);
+  });
+});
+
+test('E2 static boundary: Laya state keyed on a raw identity is refused', async () => {
+  await withCase(async (root) => {
+    await amend(
+      root,
+      `${LAYA_SOURCE}/manager.ts`,
+      "export const raw = (db: { prepare(sql: string): unknown }) => db.prepare('SELECT state FROM laya_models WHERE account_id = ?');",
+    );
+    await expectRejected(root, /manager\.ts keys Laya state on a raw identity/);
+  });
+});
+
+test('E2 static boundary: a desktop app that calls a third Laya operation is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, 'apps/desktop/src/ipc.ts', {
+      before: "  | { kind: 'eventsJudgeKindDisable' };",
+      after: "  | { kind: 'eventsJudgeKindDisable' }\n  | { kind: 'eventsJudgeKindEnable' };",
+    });
+    await expectRejected(root, /the desktop app calls exactly two Laya operations: status and disable/);
+  });
+});
+
+test('E2 mutation: the release workflow installs with exactly the ordinary command', async () => {
+  await withCase(async (root) => {
+    await change(root, '.github/workflows/release.yml', normalInstall, `${normalInstall} --prefer-offline`);
+    await expectRejected(root, /ordinary CI install must be exactly/);
+  });
+});
+
+test('E2 mutation: pnpm verify runs the E2 structural checker', async () => {
+  await withCase(async (root) => {
+    await change(root, 'package.json', 'pnpm verify:events-phase-e2 && ', '');
+    await expectRejected(root, /pnpm verify must run the E2 structural checker/);
+  });
+});
+
+/**
+ * A later task's fragment, uncommitted in the copied case: one fixture row it covers with an existing red mutant, and
+ * whatever rows and matrix entries a test adds. Task 12's matrix covers every earlier row already.
+ */
+async function laterFragment(
+  root: string,
+  overrides: { readonly section5?: unknown[]; readonly matrix?: unknown[]; readonly asyncLedger?: unknown[] },
+): Promise<void> {
+  const own = {
+    row: 'fixture/task-99.json',
+    owner: 'task-99',
+    test: 'E2 mutation: an oracle that has ended leaves no process it started running',
+    mutation: 'e2-t12-runner-group-signalled',
+  };
+  const fragment = {
+    schemaVersion: 1,
+    task: 99,
+    owners: [{ id: 'task-99' }],
+    section5: overrides.section5 ?? [],
+    traceability: [],
+    awaits: [],
+    fixtures: [{ path: 'task-99.json', owner: 'task-99' }],
+    externalSources: [],
+    mutations: [],
+    matrix: [own, ...(overrides.matrix ?? [])],
+    ...(overrides.asyncLedger === undefined ? {} : { asyncLedger: overrides.asyncLedger }),
+  };
+  await writeFile(
+    join(root, 'packages/events-daemon/test/fixtures/laya/cases/task-99.json'),
+    `${JSON.stringify(fragment, null, 2)}\n`,
+  );
+}
+
+const T99_ROW = {
+  id: 'e2-t99-row',
+  owner: 'task-99',
+  test: 'E2 mutation: a timed-out oracle leaves no process it started running',
+};
+
+test('E2 matrix: a later fragment’s fully covered row is accepted', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [T99_ROW],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectAccepted(root);
+  });
+});
+
+test('E2 matrix: a row with no owner and red mutant is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, { section5: [T99_ROW] });
+    await expectRejected(root, /matrix row "section5\/task-99\/e2-t99-row" has no owner and red mutant/);
+  });
+});
+
+test('E2 matrix: a row two entries claim is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      matrix: [
+        {
+          row: 'fixture/task-99.json',
+          owner: 'task-99',
+          test: 'E2 mutation: a timed-out oracle leaves no process it started running',
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectRejected(root, /matrix row "fixture\/task-99\.json" has 2 entries; exactly one owns it/);
+  });
+});
+
+test('E2 matrix: an entry whose red mutant its named test does not kill is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [T99_ROW],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-group-signalled',
+        },
+      ],
+    });
+    await expectRejected(
+      root,
+      /mutation "e2-t12-runner-group-signalled" is killed by "E2 mutation: an oracle that has ended/,
+    );
+  });
+});
+
+test('E2 matrix: an entry that names another owner is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [T99_ROW],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-3',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectRejected(root, /names owner "task-3"; this row's owner is one of task-99/);
+  });
+});
+
+test('E2 matrix: an entry for a row this repository does not have is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      matrix: [
+        {
+          row: 'section5/task-99/no-such-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectRejected(root, /matrix entry "section5\/task-99\/no-such-row" names no row this repository has/);
+  });
+});
+
+test('E2 matrix: a row whose test no file declares needs its correction named, and a declared one cannot be renamed', async () => {
+  const stale = { ...T99_ROW, test: 'E2 mutation: a test this repository never declared' };
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [stale],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectRejected(root, /but its row names "E2 mutation: a test this repository never declared"/);
+  });
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [stale],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+          staleRowTest: true,
+        },
+      ],
+    });
+    await expectAccepted(root);
+  });
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [{ ...T99_ROW, test: 'E2 mutation: an oracle that has ended leaves no process it started running' }],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: T99_ROW.test,
+          mutation: 'e2-t12-runner-own-group',
+          staleRowTest: true,
+        },
+      ],
+    });
+    await expectRejected(root, /but its row names "E2 mutation: an oracle that has ended/);
+  });
+});
+
+test('E2 matrix: an entry whose test no file declares is refused', async () => {
+  await withCase(async (root) => {
+    await laterFragment(root, {
+      section5: [T99_ROW],
+      matrix: [
+        {
+          row: 'section5/task-99/e2-t99-row',
+          owner: 'task-99',
+          test: 'E2 mutation: not a declared test',
+          mutation: 'e2-t12-runner-own-group',
+        },
+      ],
+    });
+    await expectRejected(root, /names test "E2 mutation: not a declared test", which no file declares/);
+  });
+});
+
+test('E2 await ledger: an async Laya function not in the ledger is refused', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/tree-verifier.ts`, 'export async function unledgered(): Promise<void> {}');
+    await expectRejected(root, /async Laya function tree-verifier\.ts#unledgered is not in the E2 await ledger/);
+  });
+});
+
+test('E2 await ledger: a second async function of a ledgered name is refused until it is reviewed', async () => {
+  await withCase(async (root) => {
+    await amend(root, `${LAYA_SOURCE}/tree-verifier.ts`, 'export const again = { async sha256(): Promise<void> {} };');
+    await expectRejected(root, /counts 1 async tree-verifier\.ts#sha256; the source has 2: review the new one/);
+  });
 });

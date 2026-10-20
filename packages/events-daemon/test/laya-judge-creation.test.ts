@@ -3,14 +3,18 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { CommsError, ConfigStore, emptyConfig } from '@agentcomms/core';
+import { ApprovalStore, CommsError, ConfigStore, emptyConfig } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import Ajv2020Runtime, { type Ajv2020 as Ajv2020Class, type Options } from 'ajv/dist/2020.js';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
-import { registerLayaEnablementInputs } from '../src/domain/judges.ts';
+import {
+  type LayaPlatformProbe,
+  layaJudgeKindDefinitionFor,
+  registerLayaEnablementInputs,
+} from '../src/domain/judges.ts';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
@@ -19,12 +23,21 @@ import { assertB3ControlV3LayaJudgeResult } from '../src/operations/b3-control-v
 import b3ControlV1Schema from '../src/operations/contracts/b3-control-v1.schema.json' with { type: 'json' };
 import b3ControlV3Schema from '../src/operations/contracts/b3-control-v3.schema.json' with { type: 'json' };
 import doctorV1Schema from '../src/operations/contracts/doctor-v1.schema.json' with { type: 'json' };
+import { ActivationRuntime, type PreparedActivation } from '../src/runtime/activations.ts';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
 import { createOwnerB3ControlService, startEventOwner } from '../src/runtime/owner.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
+import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
-import { LAYA, layaRig, macPlatform, syntheticLaya, treeListing } from './support/laya-artifacts.ts';
+import {
+  LAYA,
+  layaArtifactOrigin,
+  layaRig,
+  macPlatform,
+  syntheticLaya,
+  treeListing,
+} from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
@@ -489,5 +502,257 @@ test('E2 Laya judge preview: a rule activation naming a Laya judge shows its tem
   } finally {
     unregister();
     await rig.close();
+  }
+});
+
+test('E2 Laya judge creation: a reviewed entry that lists the choice template still creates no choice judge', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // The fixture entry lists both templates; only the worker's noul rule decides which a judge may use.
+  const laya = await syntheticLaya();
+  const stateDir = await shortTempDir('events-e2-t12-choice-');
+  const store = await openEventDatabase({ stateDir });
+  const unregister = registerLayaEnablementInputs(store.database, {
+    layaAssetSource: laya.assets,
+    layaPlatformProbe: macPlatform(),
+  });
+  try {
+    const versions = ImmutableVersions.forJudgeContract(store.database, 'b3-control-v3');
+    assert.deepEqual(
+      layaJudgeKindDefinitionFor({ layaAssetSource: laya.assets, layaPlatformProbe: macPlatform() }).judgeTerms()
+        .promptTemplates,
+      ['laya-choice2-v1', 'laya-noul-v1'],
+      'the reviewed entry lists the choice template',
+    );
+    assert.throws(
+      () => versions.createJudge(layaJudge({ model: laya.manifestId, promptTemplate: 'laya-choice2-v1' })),
+      refusedWith('LAYA_TEMPLATE_BLOCKED'),
+      'a listed template the worker refuses is not creatable',
+    );
+    versions.createJudge(layaJudge({ model: laya.manifestId }));
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS count FROM judge_versions').get() as { count: number }).count,
+      1,
+      'only the noul judge was kept',
+    );
+  } finally {
+    unregister();
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+/** A macOS host whose content-free sandbox probe can stop passing between two phases of one activation. */
+function switchableMac(): { readonly probe: LayaPlatformProbe; offered: boolean } {
+  const state = { offered: true };
+  return Object.assign(state, {
+    probe: {
+      platform: 'darwin' as const,
+      architecture: 'arm64',
+      spawnSync: () => ({ status: state.offered ? 0 : 1, signal: null, error: undefined }),
+    },
+  });
+}
+
+/**
+ * E's own rule activation path over the synthetic reviewed bytes: the Laya kind enabled through its approval, a Laya
+ * judge and its rule kept through B3 v3, and E's core approval store bridged so a test can act after the core claim
+ * and immediately before the final pointer swap.
+ */
+async function ruleActivation(hooks: {
+  readonly afterCoreClaim?: (() => void) | undefined;
+  readonly beforeFinalise?: (() => void) | undefined;
+}) {
+  const root = await shortTempDir('events-e2-t12-rule-');
+  const configDir = join(root, 'config');
+  await mkdir(configDir, { recursive: true });
+  const config = emptyConfig();
+  config.inboxes['events/gmail'] = {
+    id: ACCOUNT,
+    provider: 'gmail',
+    email: 'laya-rule@example.test',
+    identity: 'oidc',
+    client: 'laya-rule-client',
+    tier: 'read',
+    contacts: false,
+    grantedScopes: [],
+    secretRef: `gmail:none:${ACCOUNT}`,
+    internalDomains: [],
+    createdAt: '2026-10-20T00:00:00.000Z',
+  };
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
+  const laya = await syntheticLaya();
+  const mac = switchableMac();
+  const inputs = { layaAssetSource: laya.assets, layaPlatformProbe: mac.probe };
+  const store = await openEventDatabase({ stateDir: join(root, 'state') });
+  const unregister = registerLayaEnablementInputs(store.database, inputs);
+  const configStore = new ConfigStore(configDir);
+  const approvals = new ApprovalStore(join(root, 'approvals'), { loadConfig: () => configStore.load() });
+  let reachedFinalise = false;
+  const runtime = new ActivationRuntime({
+    store,
+    approvals: {
+      createDisclosure: approvals.createDisclosure.bind(approvals),
+      approveDisclosure: approvals.approveDisclosure.bind(approvals),
+      claimForDisclosure: async (...args: Parameters<typeof approvals.claimForDisclosure>) => {
+        const claimed = await approvals.claimForDisclosure(...args);
+        hooks.afterCoreClaim?.();
+        return claimed;
+      },
+      get: approvals.get.bind(approvals),
+      issueDisclosureChallenge: approvals.issueDisclosureChallenge.bind(approvals),
+      list: approvals.list.bind(approvals),
+    },
+    config: configStore,
+    gmailSourceFor: async () => ({
+      getProfile: async () => ({
+        emailAddress: 'laya-rule@example.test',
+        messagesTotal: 0,
+        threadsTotal: 0,
+        historyId: '404',
+      }),
+    }),
+    encryptBaseline: async (_intent, _account, position) => Buffer.from(JSON.stringify(position)),
+    decryptBaseline: async (_intent, _account, stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+    encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
+    decryptPoint: async ({ stored }) => JSON.parse(Buffer.from(stored).toString('utf8')),
+    mailboxLock: new MailboxLock(),
+    ...inputs,
+    failpoint: (edge) => {
+      if (edge !== 'before-finalise') return;
+      reachedFinalise = true;
+      hooks.beforeFinalise?.();
+    },
+  });
+  const approve = async (prepared: PreparedActivation) => {
+    const answer = await runtime.issueChallenge(prepared.approvalId);
+    return runtime.approve({ approvalId: prepared.approvalId, answer });
+  };
+  new ImmutableVersions(store.database, inputs).createJudgeKind(
+    layaJudgeKindDefinitionFor(inputs).prepareEnablement({ version: 1 }),
+  );
+  await approve(await runtime.prepareJudgeKind({ kind: LAYA, version: 1 }));
+  const versions = ImmutableVersions.forJudgeContract(store.database, 'b3-control-v3');
+  const judge = layaJudge({ model: laya.manifestId });
+  versions.createTarget(target);
+  versions.createJudge(judge);
+  versions.createRule(ruleNaming(judge));
+  reachedFinalise = false;
+  const pointer = (kind: string, objectId: string) =>
+    store.database
+      .prepare('SELECT version FROM active_versions WHERE kind = ? AND object_id = ?')
+      .get(kind, objectId) ?? null;
+  return {
+    mac,
+    runtime,
+    approve,
+    pointer,
+    reachedFinalise: () => reachedFinalise,
+    /** Laya stops being offered here, and the kind is disabled too: only Laya's own reason may answer first. */
+    withdraw: () => {
+      mac.offered = false;
+      store.database.prepare("DELETE FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?").run(LAYA);
+    },
+    async close() {
+      unregister();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test('E2 Laya judge creation: a rule whose Laya stops being offered after it was prepared is refused at its claim, with Laya’s reason first', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let afterCoreClaim: (() => void) | undefined;
+  const setup = await ruleActivation({ afterCoreClaim: () => afterCoreClaim?.() });
+  try {
+    assert.ok(setup.pointer('judge-kind', LAYA) !== null, 'the Laya kind is enabled');
+    const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-laya-10a', version: 1 })) as PreparedActivation;
+    afterCoreClaim = setup.withdraw;
+    await assert.rejects(
+      setup.approve(prepared),
+      (error: unknown) => error instanceof Error && error.message.includes('(LAYA_SANDBOX_UNAVAILABLE)'),
+      'the local claim re-reads the rule and refuses with Laya’s reason before the kind’s own state',
+    );
+    assert.equal(setup.reachedFinalise(), false, 'the claim refused it: the final pointer swap was never reached');
+    assert.equal(setup.pointer('rule', 'rule-laya-10a'), null, 'no rule pointer exists');
+  } finally {
+    await setup.close();
+  }
+});
+
+test('E2 Laya judge creation: a rule whose Laya stops being offered after its claim is refused at finalise, with Laya’s reason first', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let beforeFinalise: (() => void) | undefined;
+  const setup = await ruleActivation({ beforeFinalise: () => beforeFinalise?.() });
+  try {
+    const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-laya-10a', version: 1 })) as PreparedActivation;
+    beforeFinalise = setup.withdraw;
+    await assert.rejects(
+      setup.approve(prepared),
+      (error: unknown) => error instanceof Error && error.message.includes('(LAYA_SANDBOX_UNAVAILABLE)'),
+      'the final pointer swap re-reads the rule and refuses with Laya’s reason before the kind’s own state',
+    );
+    assert.equal(setup.reachedFinalise(), true, 'the refusal came at the final swap');
+    assert.equal(setup.pointer('rule', 'rule-laya-10a'), null, 'no rule pointer exists');
+  } finally {
+    await setup.close();
+  }
+});
+
+test('E2 Laya judge creation: where Laya is offered, judge add and rule create still enable, intend, record and install nothing', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const laya = await syntheticLaya();
+  const root = await shortTempDir('events-e2-t12-offered-');
+  const stateDir = join(root, 'state');
+  const dataDir = join(root, 'data');
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined = await startEventOwner({
+    stateDir,
+    configDir: await emptyConfigDir(root),
+    dataDir,
+    tickMs: 60_000,
+    laya: {
+      assets: laya.assets,
+      platform: macPlatform(),
+      network: layaArtifactOrigin(laya).network,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+    },
+  });
+  try {
+    const control = new EventControlClient({ stateDir, clientName: 'events-e2-t12-offered' });
+    const judge = layaJudge({ model: laya.manifestId });
+    await control.request('addJudge', { document: judge });
+    await control.request('target-add', { document: target });
+    await control.request('rule-create', { document: ruleNaming(judge) });
+    assert.equal(await treeListing(join(dataDir, 'events', LAYA)), null, 'no Laya runtime, model or directory exists');
+    await owner.stop();
+    owner = undefined;
+    const store = await openEventDatabase({ stateDir });
+    try {
+      assert.deepEqual(
+        {
+          ...(store.database
+            .prepare(
+              `SELECT (SELECT count(*) FROM judge_versions) AS judges,
+                      (SELECT count(*) FROM rule_versions) AS rules,
+                      (SELECT count(*) FROM judge_kind_versions WHERE kind = 'laya') AS layaKinds,
+                      (SELECT count(*) FROM activation_intents) AS intents,
+                      (SELECT count(*) FROM active_versions) AS pointers,
+                      (SELECT count(*) FROM laya_models) AS models`,
+            )
+            .get() as Record<string, number>),
+        },
+        { judges: 1, rules: 1, layaKinds: 0, intents: 0, pointers: 0, models: 0 },
+        'configuration only, even where Laya could be enabled',
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await owner?.stop();
+    await rm(root, { recursive: true, force: true });
   }
 });
