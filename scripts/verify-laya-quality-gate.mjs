@@ -112,17 +112,30 @@ export const PYTHON_REFERENCE = Object.freeze({
 export const EVIDENCE_RECORD = 'docs/superpowers/evidence/2026-10-10-e2-external-sources.md';
 export const GATE_REPORT_DIRECTORY = 'packages/events-laya-runtime/gate';
 export const GATE_RUNNER = 'scripts/run-laya-quality-gate.mjs';
-/** The candidate subject: the reviewed assets, the daemon's build inputs, the daemon-side code that builds and frames
- * the worker's input, and the worker entry with everything it imports. Never the gate's own report. */
+/**
+ * The candidate subject: the reviewed assets, the daemon's build inputs and the lockfile that pins its toolchain, the
+ * daemon-side code that builds and frames the worker's input, the code that checks and installs the trees the gates
+ * measure (the strict parsers, the extractor, the tree verifier and the artifact manager: E2 review round 1, A2), and
+ * the worker entry with everything it imports. Never the gate's own report. A release that changes any of these needs
+ * both gates run again; a version bump alone does not, because the daemon's `package.json` is bound without its
+ * `version` (B3).
+ */
 export const GATE_SUBJECT_FILES = Object.freeze([
   'packages/events-daemon/laya-enablement-disclosures.json',
   'packages/events-daemon/laya-manifest.json',
   'packages/events-daemon/laya-runtime.json',
   'packages/events-daemon/package.json',
   'packages/events-daemon/src/runtime/judge-coordinator.ts',
+  'packages/events-daemon/src/runtime/laya/contracts.ts',
+  'packages/events-daemon/src/runtime/laya/manager.ts',
+  'packages/events-daemon/src/runtime/laya/tar.ts',
+  'packages/events-daemon/src/runtime/laya/tree-verifier.ts',
   'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
   'packages/events-daemon/tsdown.config.ts',
+  'pnpm-lock.yaml',
 ]);
+/** The one subject file bound by its meaning rather than its bytes: canonical JSON, without its `version` (B3). */
+export const GATE_SUBJECT_VERSIONED_MANIFEST = 'packages/events-daemon/package.json';
 export const GATE_WORKER_ENTRY = 'packages/events-daemon/src/runtime/laya/worker-main.ts';
 const ASSETS = Object.freeze({
   manifest: 'packages/events-daemon/laya-manifest.json',
@@ -437,9 +450,38 @@ export function gateSubjectFiles(root) {
   return assertSubjectExcludesReport([...files].sort(rawByteCompare));
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object')
+    return `{${Object.keys(value)
+      .sort(rawByteCompare)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(',')}}`;
+  return JSON.stringify(value);
+}
+
+/**
+ * The bytes a subject file is bound by: its own, except the daemon's `package.json`, which is bound as canonical JSON
+ * with only its `version` removed, so a release's version bump keeps the evidence and every other change does not.
+ */
+export function gateSubjectBytes(root, path) {
+  const bytes = readRootFile(root, path);
+  if (path !== GATE_SUBJECT_VERSIONED_MANIFEST) return bytes;
+  let manifest;
+  try {
+    manifest = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    fail('QUALITY_CANDIDATE', `${path} is not JSON`);
+  }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest))
+    fail('QUALITY_CANDIDATE', `${path} is not a package manifest`);
+  const { version: _version, ...unversioned } = manifest;
+  return Buffer.from(canonicalJson(unversioned), 'utf8');
+}
+
 /** The report-excluding candidate subject for one architecture: every subject file's path and SHA-256. */
 export function gateSubjectDigest(root, architecture) {
-  const files = gateSubjectFiles(root).map((path) => ({ path, sha256: sha256(readRootFile(root, path)) }));
+  const files = gateSubjectFiles(root).map((path) => ({ path, sha256: sha256(gateSubjectBytes(root, path)) }));
   return sha256(JSON.stringify({ schemaVersion: 1, architecture, files }));
 }
 

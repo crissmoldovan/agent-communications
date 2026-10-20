@@ -10,9 +10,10 @@
  *   run --runtime-tree <directory> --model-tree <directory>
  *                    the boundary run, which writes only packages/events-laya-runtime/gate/macos-boundary-v2.json
  *
- * `run` drives the candidate's own worker through the production supervisor and boundary (`LayaWorkerSupervisor`,
- * `createLayaWorkerBoundary`): the shipped entry, the literal `sandbox-exec` profile, the same-child proof and both
- * whole-tree checks before every start. It observes only the proven child's process id, to end it, and works on
+ * `run` drives the candidate's own worker through the production supervisor and boundary (`LayaWorkerSupervisor`, and
+ * the boundary `createLayaWorkerBoundary` builds on): the built worker a release ships (`dist/laya-worker.mjs`, which
+ * the workflow builds from the candidate), the literal `sandbox-exec` profile, the same-child proof and both whole-tree
+ * checks before every start. It observes only the proven child's process id, to end it, and works on
  * disposable clones of the two trees, so the originals are never changed. It asks one synthetic, content-free question;
  * no event, message or corpus item is read. It writes the evidence only after it validates for this checkout.
  */
@@ -27,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { sandboxExecAvailable } from '../packages/events-daemon/src/runtime/laya/contracts.ts';
 import { LAYA_NOUL_TEMPLATE_ID } from '../packages/events-daemon/src/runtime/laya/templates.ts';
 import {
-  createLayaWorkerBoundary,
+  createLayaWorkerBoundaryForTest,
   PROBE_ATTEMPTS,
 } from '../packages/events-daemon/src/runtime/laya/worker-boundary-probe.ts';
 import {
@@ -65,6 +66,12 @@ export const EGRESS_PROBES = Object.freeze([
   Object.freeze({ host: '8.8.8.8', port: 443 }),
   Object.freeze({ host: '9.9.9.9', port: 443 }),
 ]);
+/**
+ * What a release ships and what the run starts (E2 review round 1, A2): the daemon's built worker, from the candidate
+ * checkout's own build. Production derives exactly this entry when it runs from `dist/`; run from source, the production
+ * surface would derive `worker-main.ts` instead, so the run hands the boundary this one, and nothing else of its own.
+ */
+export const BUILT_WORKER_ENTRY = 'packages/events-daemon/dist/laya-worker.mjs';
 const EGRESS_TIMEOUT_MS = 3_000;
 const EXIT_WAIT_MS = 10_000;
 /** Ten idle minutes, and a margin for the timer and the exit to land. */
@@ -110,10 +117,11 @@ function macosVersion() {
 }
 
 /**
- * The candidate's worker through the production supervisor and boundary, over the given trees. `startWorker` calls the
- * production `createLayaWorkerBoundary` and only records whether its proof passed and the proven child's process id.
+ * The candidate's worker through the production supervisor and boundary, over the given trees. `startWorker` starts the
+ * built worker through the boundary's own proof — every option but the entry is production's — and only records
+ * whether its proof passed and the proven child's process id.
  */
-export function createBoundaryHarness({ candidate, runtimeTree, modelTree }) {
+export function createBoundaryHarness({ candidate, runtimeTree, modelTree, workerEntry }) {
   const selection = {
     epoch: 1,
     version: 1,
@@ -138,7 +146,11 @@ export function createBoundaryHarness({ candidate, runtimeTree, modelTree }) {
     artifacts,
     startWorker: async (options) => {
       state.starts += 1;
-      const boundary = await createLayaWorkerBoundary(options);
+      const boundary = await createLayaWorkerBoundaryForTest({
+        dataDirectory: options.dataDirectory,
+        signal: options.signal,
+        workerEntry,
+      });
       state.proofs.push(boundary.ok);
       if (boundary.ok) {
         const child = boundary.child;
@@ -186,8 +198,15 @@ async function alterOneByte(path) {
 }
 
 /** Every check of the real-Mac run, each `pass` or `fail`; a check that cannot run is a `fail`. */
-export async function runProductionChecks({ candidate, runtimeTree, modelTree }) {
+export async function runProductionChecks({
+  candidate,
+  runtimeTree,
+  modelTree,
+  workerEntry = join(repositoryRoot, BUILT_WORKER_ENTRY),
+}) {
   const checks = Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'fail']));
+  // No build, no worker a release would ship: nothing runs, and every check is recorded as failed.
+  if (!existsSync(workerEntry)) return checks;
   const work = await mkdtemp(join(tmpdir(), 'laya-boundary-gate-'));
   try {
     // Disposable clones (copy-on-write on APFS): the altered-tree checks change a byte in these, never the originals.
@@ -195,7 +214,7 @@ export async function runProductionChecks({ candidate, runtimeTree, modelTree })
     await cp(runtimeTree, trees.runtimeTree, { recursive: true, mode: constants.COPYFILE_FICLONE });
     await cp(modelTree, trees.modelTree, { recursive: true, mode: constants.COPYFILE_FICLONE });
     if (!(await verifyCandidateTrees({ candidate, ...trees }))) return checks;
-    const harness = createBoundaryHarness({ candidate, ...trees });
+    const harness = createBoundaryHarness({ candidate, ...trees, workerEntry });
     try {
       // The first start: the production same-child proof (its five attempts), then the native load and an answer over
       // the same pipes.
@@ -333,6 +352,7 @@ export async function runBoundaryGate(options, dependencies = PRODUCTION_BOUNDAR
     candidate: boundaryCandidate.candidate,
     runtimeTree: options.runtimeTree,
     modelTree: options.modelTree,
+    workerEntry: join(root, BUILT_WORKER_ENTRY),
   });
   const entry = {
     architecture,

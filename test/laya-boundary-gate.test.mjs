@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import {
+  BUILT_WORKER_ENTRY,
   EGRESS_PROBES,
   egressCheck,
   runBoundaryGate,
@@ -329,6 +330,39 @@ test('E2 macOS boundary gate run: writes only the validated, content-free eviden
       assert.equal(text.includes(content), false, `${content} never reaches the evidence`);
     }
     assert.doesNotThrow(() => verifyBoundaryGate({ root, architectures: ['arm64'] }));
+  });
+});
+
+test('E2 review round 1: the real-Mac boundary run starts the built worker a release ships, not its source', async () => {
+  assert.equal(BUILT_WORKER_ENTRY, 'packages/events-daemon/dist/laya-worker.mjs');
+  await withOffered(async (root) => {
+    const given = [];
+    const mac = standinMac({
+      runChecks: async (options) => {
+        given.push(options.workerEntry);
+        return passingChecks();
+      },
+    });
+    await runOn(root, mac.dependencies);
+    assert.deepEqual(given, [join(root, BUILT_WORKER_ENTRY)], 'the checks run the candidate checkout’s own build');
+  });
+  // The harness hands that entry to the boundary itself: every other option is the production one.
+  const runner = await readFile(join(ROOT, 'scripts/run-laya-macos-boundary-gate.mjs'), 'utf8');
+  assert.match(
+    runner,
+    /createLayaWorkerBoundaryForTest\(\{\s*dataDirectory: options\.dataDirectory,\s*signal: options\.signal,\s*workerEntry,\s*\}\)/u,
+  );
+  assert.doesNotMatch(runner, /\bcreateLayaWorkerBoundary\(/u, 'never the source entry the production surface derives');
+  // A candidate whose daemon was not built runs no check: every one is recorded as failed.
+  await withOffered(async (root) => {
+    const { candidate } = computeBoundaryCandidate({ root, architecture: 'arm64' });
+    const checks = await runProductionChecks({
+      candidate,
+      runtimeTree: TREES.runtimeTree,
+      modelTree: TREES.modelTree,
+      workerEntry: join(root, BUILT_WORKER_ENTRY),
+    });
+    assert.deepEqual(checks, Object.fromEntries(BOUNDARY_CHECKS.map((name) => [name, 'fail'])));
   });
 });
 

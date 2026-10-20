@@ -312,9 +312,12 @@ its Phase-E gates, as one of its refusals, before its verify and any publish.
    `scripts/run-laya-macos-boundary-gate.mjs run` and then `scripts/run-laya-quality-gate.mjs run`, and keeps the two
    results as an artifact for seven days.
 5. **Commit the results.** Read both files, then commit them under `packages/events-laya-runtime/gate/`. The gate
-   directory is outside the candidate subject, so committing them does not change what they are bound to; changing a
-   subject file — the three assets, the daemon's `package.json` and `tsdown.config.ts`, E's judge envelope, the
-   supervisor or anything the worker imports — does, and needs a new run.
+   directory is outside the candidate subject, so committing them does not change what they are bound to. Changing a
+   subject file does, and needs both gates run again on a new candidate: the three assets, the daemon's `package.json`
+   and `tsdown.config.ts`, `pnpm-lock.yaml`, E's judge envelope, the supervisor, the strict parsers (`contracts.ts`),
+   the extractor (`tar.ts`), the tree verifier, the artifact manager, or anything the worker imports. A version bump
+   alone does not: the daemon's `package.json` is bound as canonical JSON without its `version`, so the release
+   commit's bump keeps the evidence.
 6. **Release** as usual. The `laya` job refuses until every check above passes.
 
 ### The protected gate
@@ -374,11 +377,12 @@ D11's quality gate measures each offered template on real, labelled Gmail and Sl
 
 ### What the boundary run proves
 
-On the gate Mac, through the daemon's own supervisor and boundary and the shipped worker entry, against disposable
-copies of the two trees: the production same-child proof (TCP, `fetch`, UDP with zero datagrams at the daemon's
-receiver, a pathname Unix-domain socket and starting another process all refused, with the pipes working), the real
-runtime and model loading and answering one synthetic question, a fresh proven worker after a crash, after a request
-past its 30-second deadline and after ten idle minutes, and a changed byte in either tree starting no worker until it is
+On the gate Mac, through the daemon's own supervisor and boundary, running the built worker a release ships
+(`packages/events-daemon/dist/laya-worker.mjs`, which the workflow builds from the candidate), against disposable copies
+of the two trees: the production same-child proof (TCP, `fetch`, UDP with zero datagrams at the daemon's receiver, a
+pathname Unix-domain socket and starting another process all refused, with the pipes working), the real runtime and
+model loading and answering one synthetic question, a fresh proven worker after a crash, after a request past its
+30-second deadline and after ten idle minutes, and a changed byte in either tree starting no worker until it is
 restored. It records `pass` or `fail` for each, never a path, socket, process id, request or answer. It does not
 exercise the daemon's own delete-and-reinstall repair, which downloads, or a Mac without a working `sandbox-exec`; their
 tests do, and the supplemental checklist covers them by hand. The checklist never stands in for this evidence.

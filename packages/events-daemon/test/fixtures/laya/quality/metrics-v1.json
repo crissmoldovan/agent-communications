@@ -94,10 +94,15 @@
   "candidateFiles": {
     "packages/events-daemon/package.json": "{ \"name\": \"synthetic-candidate\", \"private\": true }\n",
     "packages/events-daemon/src/runtime/judge-coordinator.ts": "// Synthetic stand-in for the envelope source; not daemon code.\n",
+    "packages/events-daemon/src/runtime/laya/contracts.ts": "// Synthetic stand-in for the strict parsers; not daemon code.\n",
+    "packages/events-daemon/src/runtime/laya/manager.ts": "// Synthetic stand-in for the artifact manager; not daemon code.\n",
+    "packages/events-daemon/src/runtime/laya/tar.ts": "// Synthetic stand-in for the strict extractor; not daemon code.\n",
+    "packages/events-daemon/src/runtime/laya/tree-verifier.ts": "// Synthetic stand-in for the tree verifier; not daemon code.\n",
     "packages/events-daemon/src/runtime/laya/worker-main.ts": "import { answer } from \"./worker-runtime.ts\";\n\nanswer();\n",
     "packages/events-daemon/src/runtime/laya/worker-runtime.ts": "export function answer(): void {}\n",
     "packages/events-daemon/src/runtime/laya/worker-supervisor.ts": "// Synthetic stand-in for the supervisor source; not daemon code.\n",
     "packages/events-daemon/tsdown.config.ts": "// Synthetic stand-in for a build input.\n",
+    "pnpm-lock.yaml": "# Synthetic stand-in for the lockfile; not a real lock.\n",
     "scripts/run-laya-quality-gate.mjs": "// Synthetic stand-in for the runner; its digest is the fixture report runnerSha256.\n"
   },
   "report": {
@@ -137,7 +142,7 @@
       {
         "architecture": "arm64",
         "platformFileListDigest": "66fc435dd8e2c6ffe25ae24cbccf7012d76d625894e74dbd2f2d7eeba88c2202",
-        "subjectDigest": "9bccec13c074d7845effabe338103f6398d46dd625e742e652c78740ec73a8e8",
+        "subjectDigest": "4cc03499adf9914cccfc7847b1e436c86dfb98c8cd5b2ab74d85dbcecf50970b",
         "node": "0.0.0-fixture",
         "referenceEnvironment": {
           "python": "0.0.0-fixture",

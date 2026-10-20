@@ -69,6 +69,7 @@ interface Verifier {
   readonly QUALITY_THRESHOLDS: Readonly<Record<string, number>>;
   readonly QUALITY_CORPUS_RELEASE: Readonly<Record<string, string>>;
   readonly GATE_REPORT_DIRECTORY: string;
+  readonly GATE_SUBJECT_FILES: readonly string[];
   readonly EVIDENCE_RECORD: string;
   calibrationBin(probability: number, bins?: number): number;
   expectedCalibrationError(probabilities: readonly number[], labels: readonly number[]): number;
@@ -396,10 +397,15 @@ test('E2 quality gate: the subject digest binds the worker source and ignores th
       'packages/events-daemon/laya-runtime.json',
       'packages/events-daemon/package.json',
       'packages/events-daemon/src/runtime/judge-coordinator.ts',
+      'packages/events-daemon/src/runtime/laya/contracts.ts',
+      'packages/events-daemon/src/runtime/laya/manager.ts',
+      'packages/events-daemon/src/runtime/laya/tar.ts',
+      'packages/events-daemon/src/runtime/laya/tree-verifier.ts',
       'packages/events-daemon/src/runtime/laya/worker-main.ts',
       'packages/events-daemon/src/runtime/laya/worker-runtime.ts',
       'packages/events-daemon/src/runtime/laya/worker-supervisor.ts',
       'packages/events-daemon/tsdown.config.ts',
+      'pnpm-lock.yaml',
     ]);
     const before = gate.gateSubjectDigest(root, 'arm64');
     assert.notEqual(before, gate.gateSubjectDigest(root, 'x64'), 'the subject is bound to its architecture');
@@ -417,6 +423,44 @@ test('E2 quality gate: the subject digest binds the worker source and ignores th
         'export function answer(): void {\n  // changed\n}\n',
     },
   );
+});
+
+test('E2 review round 1: the subject binds every file the evidence measures, and a version bump alone leaves it as it was', async () => {
+  // A2: the tree checks, the strict extractor, the artifact manager, the strict parsers and the lockfile that pins the
+  // toolchain each change what a passing run measured, so each is in the subject.
+  const measured = [
+    'packages/events-daemon/src/runtime/laya/contracts.ts',
+    'packages/events-daemon/src/runtime/laya/manager.ts',
+    'packages/events-daemon/src/runtime/laya/tar.ts',
+    'packages/events-daemon/src/runtime/laya/tree-verifier.ts',
+    'pnpm-lock.yaml',
+  ];
+  for (const file of measured) {
+    await withFixtureRoot(async (root, gate) => {
+      assert.ok(gate.GATE_SUBJECT_FILES.includes(file), `${file} is a subject file`);
+      const before = gate.gateSubjectDigest(root, 'arm64');
+      await writeFile(join(root, file), `${await readFile(join(root, file), 'utf8')}\n// changed\n`);
+      assert.notEqual(gate.gateSubjectDigest(root, 'arm64'), before, `a change to ${file} is another candidate`);
+    });
+  }
+  // B3: the daemon's package.json is bound without its version: a release's bump keeps the evidence; nothing else does.
+  await withFixtureRoot(async (root, gate) => {
+    const path = join(root, 'packages/events-daemon/package.json');
+    const original = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    const before = gate.gateSubjectDigest(root, 'arm64');
+    await writeFile(path, `${JSON.stringify({ ...original, version: '9.9.9' }, null, 2)}\n`);
+    assert.equal(gate.gateSubjectDigest(root, 'arm64'), before, 'a version bump alone is the same candidate');
+    await writeFile(path, `${JSON.stringify({ version: '0.25.0', ...original })}\n`);
+    assert.equal(gate.gateSubjectDigest(root, 'arm64'), before, 'nor do the order of its keys or its layout');
+    await writeFile(path, `${JSON.stringify({ ...original, version: '0.25.0', files: ['dist'] }, null, 2)}\n`);
+    assert.notEqual(gate.gateSubjectDigest(root, 'arm64'), before, 'any other change is another candidate');
+    await writeFile(path, 'not json\n');
+    assert.equal(
+      codeOf(() => gate.gateSubjectDigest(root, 'arm64')),
+      'QUALITY_CANDIDATE',
+      'broken JSON is refused',
+    );
+  });
 });
 
 test('E2 quality gate: a candidate subject that includes the report is refused', async () => {
