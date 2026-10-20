@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -925,16 +925,29 @@ test('the migration takes the credentials lock before the config lock', async ()
   const store = storeWith(machine());
   const plan = ready(planNamesMigration(await store.load()));
   let running: Promise<unknown> | undefined;
+  let configLockFree = false;
   let updatedWhileWaiting = false;
   await withFileLock(credentialsLockPath(join(store.path, '..')), async () => {
     running = migrateNames(store, plan);
+    // Awaited below, after what it is checked for: a failure of its own is still reported then.
+    running.catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const update = store.update((config) => config).then(() => true);
-    const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000));
-    updatedWhileWaiting = await Promise.race([update, timeout]);
+    /*
+     * Looked at, not raced against a clock: the migration cannot get past the credentials lock until this lets it go,
+     * after the update, so a config lock it held now would still be held. The update then lands only through a free
+     * config lock, however slow the machine, and an update that could not would end in LOCK_TIMEOUT, not in a race lost.
+     */
+    configLockFree = !existsSync(join(store.path, '..', '.config.lock'));
+    updatedWhileWaiting = await store
+      .update((config) => config)
+      .then(
+        () => true,
+        () => false,
+      );
   });
-  await running;
+  assert.equal(configLockFree, true, 'the config lock was free while the migration waited');
   assert.equal(updatedWhileWaiting, true);
+  await running;
 });
 
 // ── Former names are permanent ───────────────────────────────────────────────────────────────────────────────────
