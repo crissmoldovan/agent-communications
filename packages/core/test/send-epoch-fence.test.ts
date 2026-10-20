@@ -255,11 +255,13 @@ test('lock order: a claim holds no config lock while it reads, and a change to n
     return revoke(...args);
   };
   await applySendPolicyChange(core, async (current) => {
-    // The config lock is held here: a record's lock can still be taken, so the writer holds none.
-    recordLockFree = await Promise.race([
-      core.approvals.inspect(second.approvalId).then(() => true),
-      sleep(2000).then(() => false),
-    ]);
+    // The config lock is held here: a record's lock can still be taken, so the writer holds none. Awaited, not raced
+    // against a clock: the writer is held up in here, so a record lock it held would never come free, and the look
+    // would end in LOCK_TIMEOUT however fast the machine; a free one is taken however slow.
+    recordLockFree = await core.approvals.inspect(second.approvalId).then(
+      () => true,
+      () => false,
+    );
     return setPolicy('never')(current);
   });
   assert.equal(recordLockFree, true, 'no record lock is held under the config lock');
