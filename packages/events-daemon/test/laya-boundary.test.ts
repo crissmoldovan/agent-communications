@@ -1356,10 +1356,13 @@ test('E2 boundary: a socket path macOS would truncate fails closed before any ch
   skip: WINDOWS_SKIP,
 }, async () => {
   await withTemporaryDirectory(async (directory) => {
-    // 105 bytes: past macOS's 103, inside Linux's 107, so an unguarded listener binds on both and the child starts.
+    // 104 bytes: one past the guard's 103, and the longest path every supported Node binds on macOS, so an unguarded
+    // listener binds and the child starts on every runner. Past 104 Node 24 refuses the bind itself on macOS (EINVAL)
+    // while Node 22 binds it truncated: at 105 the guard was unseen on macos-latest with Node 24, and its mutant lived
+    // (E2 CI round 1). Linux binds up to 107.
     const suffix = '/laya-boundary-XXXXXX/boundary.sock';
-    const dataDirectory = join(directory, 'd'.repeat(105 - Buffer.byteLength(directory) - 1 - suffix.length));
-    assert.equal(Buffer.byteLength(`${dataDirectory}${suffix}`), 105);
+    const dataDirectory = join(directory, 'd'.repeat(104 - Buffer.byteLength(directory) - 1 - suffix.length));
+    assert.equal(Buffer.byteLength(`${dataDirectory}${suffix}`), 104);
     let spawns = 0;
     const boundary = await createLayaWorkerBoundaryForTest({
       platform: 'darwin',
@@ -1496,6 +1499,9 @@ test('E2 boundary: a sandbox launcher that cannot start is never signalled, so t
   await withTemporaryDirectory(async (directory) => {
     // Node gives a failed spawn no PID; signalling it reaches PID 0, the caller's whole process group. The run is in
     // a detached child, its own process group, so a regression kills only that child.
+    // E2 CI round 1: that is libuv's answer on macOS, the one platform Laya runs on, but not on Linux, where Node 24
+    // answers the same kill with ESRCH and the mutant lived on ubuntu-latest. The launcher seam hands the probe the
+    // real failed spawn with macOS's answer to a signal, so the guard is what keeps the group alive on every runner.
     const script = [
       `import { createLayaWorkerBoundaryForTest } from ${JSON.stringify(pathToFileURL(boundaryProbe).href)};`,
       "import { spawn } from 'node:child_process';",
@@ -1503,7 +1509,12 @@ test('E2 boundary: a sandbox launcher that cannot start is never signalled, so t
       "  platform: 'darwin',",
       `  dataDirectory: ${JSON.stringify(directory)},`,
       "  workerEntry: '/nonexistent/laya-worker.mjs',",
-      "  spawn: (command, args, options) => spawn('/nonexistent/laya-sandbox-exec', args, options),",
+      '  spawn: (command, args, options) => {',
+      "    const child = spawn('/nonexistent/laya-sandbox-exec', args, options);",
+      '    // As libuv on macOS: a signal for a child that never started goes to PID 0, this process group.',
+      "    child.kill = (signal) => { process.kill(0, signal ?? 'SIGTERM'); return true; };",
+      '    return child;',
+      '  },',
       '  startListeners: async () => ({',
       "    tcpPort: 1, udpPort: 2, udsPath: '/tmp/laya-boundary-unspawned.sock',",
       '    observed: { tcpConnections: 0, udpDatagrams: 0, udsConnections: 0 },',
