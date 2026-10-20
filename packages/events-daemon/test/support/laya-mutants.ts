@@ -82,10 +82,10 @@ const repositoryRoot = join(packageRoot, '..', '..');
 const casesRoot = join(repositoryRoot, 'packages/events-daemon/test/fixtures/laya/cases');
 
 /**
- * A fresh folder for one copy. On Windows the temporary directory is often an 8.3 short name (`C:\Users\RUNNER~1\…`):
- * Node's native `realpath` and the tools that use it (Vite among them) answer the long one, so a copy rooted at the
- * short name sees its own files as somewhere else. The copy is rooted at the long name there. Elsewhere it is the
- * folder `mkdtemp` made, as before (E2 CI round 1).
+ * A fresh folder for one copy. On Windows the temporary directory often names the profile folder by its 8.3 short
+ * name (GitHub's `RUNNER~1`): Node's native `realpath` and the tools that use it (Vite among them) answer the long
+ * one, so a copy rooted at the short name sees its own files as somewhere else. The copy is rooted at the long name
+ * there. Elsewhere it is the folder `mkdtemp` made, as before (E2 CI round 1).
  */
 async function mutationCopyRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
