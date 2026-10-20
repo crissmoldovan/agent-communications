@@ -403,7 +403,7 @@ const FAILURE_LINES: Readonly<Record<LayaFailure, string>> = {
   'boundary-failed': 'Its network boundary could not be proven, so it does not run.',
   'download-failed': 'Its model could not be downloaded.',
   integrity: 'Its files no longer match the reviewed ones.',
-  'runtime-failed': 'Its runtime could not be installed.',
+  'runtime-failed': 'Its runtime could not be installed, or would not load, crashed or ran out of time while loading.',
 };
 
 /** What each closed reason means, beside the reason itself. */
