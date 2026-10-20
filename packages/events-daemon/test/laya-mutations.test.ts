@@ -709,6 +709,24 @@ test('E2 mutation: a mutant its oracle accepts is not a kill', async () => {
   await assert.rejects(expectLayaMutationToFail(runnerProbe({})), /unexpectedly accepted mutant/u);
 });
 
+// E2 Task 14: an oracle of the built daemon runs against its copy's own build, made again after the edit; an edit the
+// daemon cannot be built from runs no oracle at all. (The tarball oracle skips on Windows, as this runner does.)
+test('E2 mutation: a built-daemon copy whose edit does not build is not a kill', { skip: WINDOWS_SKIP }, async () => {
+  await assert.rejects(
+    expectLayaMutationToFail(
+      runnerProbe({
+        source: 'packages/events-daemon/tsdown.config.ts',
+        testFile: 'test/release-packages.test.mjs',
+        testName:
+          'E2: the daemon tarball carries Laya’s reviewed assets, the placeholder lock and its worker, and no runtime or model',
+        before: "index: 'src/index.ts',",
+        after: "index: 'src/no-such-entry.ts',",
+      }),
+    ),
+    /the copy's daemon did not build mutated, so nothing ran/u,
+  );
+});
+
 function mutationAccountingFixture(
   id: string,
   testName = 'E2 runtime installer: writes owner-only files and directories',
@@ -1183,20 +1201,19 @@ test('E2 static boundary: production source that names a test worker is refused'
 });
 
 test('E2 static boundary: only the owner’s laya test seam may hand the Laya supervisor a worker start', async () => {
+  // E2 Task 13's pass-through, as the owner carries it since Task 13 joined: the option, and the line handing it on.
+  const passThrough =
+    '  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: options.laya?.startWorker });';
   const ownerSeam = async (root: string, start: string) => {
     await amend(root, 'packages/events-daemon/src/runtime/owner.ts', {
-      before: '        readonly failpoint?: LayaArtifactFailpoint | undefined;\n',
-      after:
-        '        readonly failpoint?: LayaArtifactFailpoint | undefined;\n        readonly startWorker?: LayaWorkerStart | undefined;\n',
-    });
-    await amend(root, 'packages/events-daemon/src/runtime/owner.ts', {
-      before: '  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts });',
-      after: `  const layaWorker = new LayaWorkerSupervisor({ artifacts: layaArtifacts, startWorker: ${start} });`,
+      before: passThrough,
+      after: passThrough.replace('startWorker: options.laya?.startWorker', `startWorker: ${start}`),
     });
   };
-  // E2 Task 13's pass-through, as it is written there.
   await withCase(async (root) => {
-    await ownerSeam(root, 'options.laya?.startWorker');
+    const owner = await readFile(join(root, 'packages/events-daemon/src/runtime/owner.ts'), 'utf8');
+    assert.ok(owner.includes('        readonly startWorker?: LayaWorkerStart | undefined;\n'), 'the owner’s option');
+    assert.ok(owner.includes(passThrough), 'and its one pass-through');
     await expectAccepted(root);
   });
   await withCase(async (root) => {
