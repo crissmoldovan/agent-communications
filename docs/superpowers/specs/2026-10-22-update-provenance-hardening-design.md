@@ -101,8 +101,11 @@ install it compares the runtime's `package-lock.json` with that digest (`runtime
 **Reading them:**
 - Only core reads them, because only core carries the verifier.
 - **The download:** for each release whose flags matter (the newest version, and each version in range for
-  `needsDecision`), core downloads the tarball from the packument's `dist.tarball`. The URL must be `https:`, on the
-  registry's own origin, and must answer without redirect. The response must be at most 32 MiB.
+  `needsDecision`), core downloads the tarball from the packument's `dist.tarball`. That may be any `http:` or `https:`
+  URL a registry or mirror names, followed through at most 5 redirects. Where the bytes come from doesn't matter,
+  because their sha512 must equal the verified provenance digest (§7). If that download fails, core tries npm's
+  canonical `https://registry.npmjs.org/<name>/-/<file>-<version>.tgz` once. The response must be at most 32 MiB, and
+  arrive within 60 seconds.
 - **The checks:**
   - the tarball's sha512 must equal the **verified** provenance digest;
   - it is gunzipped with `node:zlib`, stopping past 128 MiB;
@@ -169,7 +172,9 @@ install it compares the runtime's `package-lock.json` with that digest (`runtime
   verified against the trusted root's Rekor key.
 - **Check what sigstore-js verifies:** the builder confirms, from `@sigstore/verify` 2.1.1's source, whether that SET
   is what `tlogThreshold: 1` verified. If it isn't guaranteed, or not exposed, core verifies the SET itself.
-- **No signed time:** a release without one is held, as one without a publish time is today.
+- **No signed time (lead's call, §7):** a release without one counts its hold from the moment this machine first saw
+  that release. That moment is recorded, content-free, in the background run's state. A registry can't make it
+  earlier, so the hold is never shorter than intended, and never permanent.
 
 **How the hold is counted:**
 - For the set (core and every package behind), the hold counts from the latest of their signed times.
@@ -255,8 +260,8 @@ None reaches npm, Sigstore or GitHub.
 
 **P4, holds:**
 - Holds count from each release's own `signedAt`, so a registry `time` set back by days changes nothing.
-- No signed time, or two tlog entries, means held.
-- A SET that doesn't verify means held.
+- No signed time, two tlog entries, or a SET that doesn't verify: the hold counts from this machine's first sight of
+  the release, which a registry `time` set back cannot shorten.
 - The rest of the set is verified before the hold.
 
 **P5:** no input, flag, environment variable or approval installs a release that fails verification (a test for each
@@ -300,3 +305,26 @@ Windows skips R1).
 
 **What doesn't change:** nothing that succeeded before now fails, except installs and holds that rested on the
 registry's word alone.
+
+## 7. Settled after the builder check (2026-10-22)
+
+A fresh builder read this design cold and asked three questions. Each is settled as the lead's call:
+
+1. **Mirrors keep working.** P1's first draft would have refused an `http:` mirror, a `dist.tarball` on another
+   origin, and a redirect to a store or CDN. That would have stopped background and global updates for people who
+   use a mirror, though they worked in 0.25.0. The tarball's sha512 must equal the verified provenance digest, so its
+   origin adds nothing. npm itself trusts the integrity value, not where the bytes came from, and attestations already
+   come from npm's own registry. So any `http(s)` URL is accepted, with redirects and a single fallback to npm's
+   canonical URL (P1), and P3 follows the same rule.
+2. **A release with no signed time is held from first sight, not forever.**
+   - **Today's bundles carry one:** npm's real provenance for `@agentcomms/core@0.25.0`, read on 2026-10-22, has
+     exactly one tlog entry, with an inclusion promise (SET) and an inclusion proof, and no RFC 3161 timestamp.
+   - **A future change could drop it:** a Rekor v2 bundle might carry only a timestamp authority's time. Holding
+     every such release for ever would stop background updates everywhere.
+   - **So:** P4 falls back to the moment this machine first saw the release, which a registry can't make earlier.
+     Accepting a timestamp-authority time is left for when npm ships one.
+3. **0.26.0 declares neither flag.**
+   - **Why:** it hardens against registry tampering, but nobody is known to be exploiting that. Declaring
+     `security: true` would give every 0.20–0.25 machine the urgent notice and the 24-hour hold for a precaution.
+     And with question 1 settled, no setup stops updating, so `needsDecision` isn't warranted either.
+   - **The owner may overrule this before the tag.**
