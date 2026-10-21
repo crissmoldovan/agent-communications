@@ -200,6 +200,10 @@ jobs:
           # The GitHub release is made from this section after the publish. Missing, it would fail there — with the
           # packages already out. Here it fails with nothing sent.
           node scripts/release-ci.mjs notes "$tag" > /dev/null
+          # What core declares this release to be, a security fix or one that needs a decision, must be what that
+          # section says, both ways: an update believes the flags from the verified release, and flags left in core's
+          # package.json from the last release would otherwise apply to this one.
+          node scripts/release-flags.mjs "$tag"
 
       # Provenance is attested against a public source repository; npm refuses it for a private one with a 422 that
       # arrives only after the tarball has been uploaded. Cheaper to find out here.

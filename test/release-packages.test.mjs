@@ -609,11 +609,14 @@ test('the publish sends only what this commit has not already published, and ask
 // execute them, and cannot run the fake `git`, `npm` and `gh` below, which are shell scripts.
 const bashOnly = { skip: process.platform === 'win32' };
 
-/** One step's `run: |` block from the workflow, as the script bash runs, or '' when there is no such step. */
+/**
+ * One step's `run: |` block from the workflow, as the script bash runs, or '' when there is no such step. The step may
+ * carry an `if:` line and an `env:` block before its `run:`.
+ */
 function stepScript(workflow, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const body = new RegExp(
-    `- name: ${escaped}\\n(?:\\s+env:\\n(?:\\s{10}.*\\n)+)?\\s+run: \\|\\n([\\s\\S]*?)(?:\\n\\n|$)`,
+    `- name: ${escaped}\\n(?:\\s+if: .*\\n)?(?:\\s+env:\\n(?:\\s{10}.*\\n)+)?\\s+run: \\|\\n([\\s\\S]*?)(?:\\n\\n|$)`,
   ).exec(workflow)?.[1];
   return body ? `${body.replace(/^ {10}/gm, '')}\n` : '';
 }
@@ -971,6 +974,107 @@ test('a tag gets its GitHub release from the changelog, after the publish is con
   // with nothing sent rather than after the packages are out.
   const gate = workflow.indexOf('node scripts/release-ci.mjs notes "$tag"');
   assert.ok(gate !== -1 && gate < stepIndex(workflow, 'node scripts/release-ci.mjs preflight'));
+});
+
+// ── What a release declares (update provenance, hardened, P1) ───────────────────────────────────────────────────
+
+/*
+ * Core may declare a release a security fix or one that needs a decision before it installs, and an update believes
+ * either only from the verified release: they move its hold, turn its urgent notice on, or keep it from installing in
+ * the background. Flags left in `packages/core/package.json` from the last release would apply to the next one, so
+ * both release paths hold them to the version's changelog section (`scripts/release-flags.mjs`), with nothing sent.
+ */
+const TAG_GATE = 'the tag must be the version the repository declares';
+
+test('the tag gate checks the release flags before anything is sent', async () => {
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const gate = stepScript(workflow, TAG_GATE);
+  const notes = gate.indexOf('node scripts/release-ci.mjs notes "$tag"');
+  const flags = gate.indexOf('node scripts/release-flags.mjs "$tag"');
+  assert.ok(notes !== -1, 'the tag gate no longer reads the changelog section');
+  assert.ok(flags !== -1, 'the tag gate does not check the release flags');
+  assert.ok(notes < flags, 'the flags are checked once the section is known to be there');
+  // The tag gate keeps its condition: a manual dry run has no tag, and so no version to check.
+  assert.match(
+    workflow,
+    new RegExp(
+      `- name: ${escapeRegExp(TAG_GATE)}\\n {8}if: startsWith\\(github\\.ref, 'refs/tags/v'\\)\\n {8}run: \\|\\n`,
+    ),
+  );
+  // In the publish job, before the OIDC preflight and before the first publish.
+  const at = stepIndex(workflow, 'node scripts/release-flags.mjs "$tag"');
+  assert.ok(stepIndex(workflow, '\n  publish:\n') < at, 'the check runs in the publish job');
+  assert.ok(at < stepIndex(workflow, 'node scripts/release-ci.mjs preflight'), 'checked after the OIDC preflight');
+  assert.ok(at < stepIndex(workflow, '--filter "@agentcomms/$package" publish'), 'checked after a publish');
+});
+
+test('the tag gate refuses, with nothing sent, flags its changelog section does not say, both ways', {
+  skip:
+    process.platform === 'win32' &&
+    'the tag gate is a bash step of the ubuntu publish runner; the Windows verify legs never run it',
+}, async () => {
+  // On a copy of the release's scripts, manifests and changelog: never this checkout's.
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const root = await treeWithShelf({ full: true });
+  const step = join(root, 'tag-gate.sh');
+  await writeFile(step, stepScript(workflow, TAG_GATE));
+  const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const corePath = join(root, 'packages', 'core', 'package.json');
+  const { agentcommsRelease: _none, ...core } = JSON.parse(await readFile(corePath, 'utf8'));
+
+  async function gate(release, lines) {
+    const manifest = release === undefined ? core : { ...core, agentcommsRelease: release };
+    await writeFile(corePath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const section = ['**A release.** In a line.', ...lines].join('\n\n');
+    await writeFile(join(root, 'CHANGELOG.md'), `# Changelog\n\n## ${version}\n\n${section}\n\n## 0.0.1\n\nOlder.\n`);
+    const env = { ...process.env, GITHUB_REF_NAME: `v${version}` };
+    delete env.RELEASE_CHANGELOG;
+    return runStepScript(step, { cwd: root, env });
+  }
+  const errors = (stderr) => stderr.split('\n').filter((line) => line.startsWith('::error::'));
+
+  const plain = await gate(undefined, []);
+  assert.equal(plain.status, 0, plain.stderr);
+
+  // Left from the last release: declared, and this version's section does not say so.
+  const left = await gate({ security: true }, []);
+  assert.equal(left.status, 1);
+  assert.deepEqual(errors(left.stderr), [
+    `::error::packages/core/package.json declares "security": true, but the ## ${version} section of CHANGELOG.md has no line starting **Security fix.**`,
+  ]);
+
+  const said = await gate({ security: true }, ['**Security fix.** What it fixes.']);
+  assert.equal(said.status, 0, said.stderr);
+
+  // Said, and not declared: the release would install in the background as an ordinary one.
+  const unsaid = await gate(undefined, ['**Needs a decision before it installs.** A migration.']);
+  assert.equal(unsaid.status, 1);
+  assert.deepEqual(errors(unsaid.stderr), [
+    `::error::the ## ${version} section of CHANGELOG.md has a line starting **Needs a decision before it installs.**, but packages/core/package.json does not declare "needsDecision": true`,
+  ]);
+});
+
+test('scripts/release.mjs refuses flags that do not match the changelog', async () => {
+  const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
+  // Core's declaration and the check both come from the one module, so a copied release state stands in for the whole
+  // check with one file, as `test/laya-release-gate.test.mjs` does for Phase E's gates.
+  assert.match(
+    script,
+    /^import \{ coreReleaseFlags, releaseFlagProblems \} from '\.\/release-flags\.mjs';$/m,
+    'it does not import the flag check',
+  );
+  assert.doesNotMatch(script, /from '\.\/channels\.mjs'/, 'it reads the registry itself, past the flag check');
+  // Core's own declaration, against this version's section of the repository's changelog, each problem a refusal.
+  const check =
+    /for \(const problem of releaseFlagProblems\(\{ version, changelog, flags: coreReleaseFlags\(\) \}\)\) \{\n\s+refuse\(\s*problem,/.exec(
+      script,
+    );
+  assert.ok(check, 'its flag problems are not each a refusal');
+  assert.match(script, /^const changelog = quiet\(\(\) => readFileSync\('CHANGELOG\.md', 'utf8'\), ''\);$/m);
+  // Gathered with the rest, before any is printed: nothing is verified or sent past one.
+  const printed = script.indexOf('if (failures.length > 0) {');
+  assert.ok(printed !== -1 && check.index < printed, 'the flags are checked after the refusals are printed');
+  assert.ok(check.index > script.indexOf('const version = '), 'the flags are checked before the version is read');
 });
 
 test('the release documents say a pushed tag publishes, and that it must not move once a package is out', async () => {

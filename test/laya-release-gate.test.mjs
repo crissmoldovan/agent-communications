@@ -524,10 +524,13 @@ const SEAL_URL = pathToFileURL(join(ROOT, 'test/helpers/loopback-seal-preload.mj
 const REAL_LOCK = 'packages/events-daemon/test/fixtures/laya/lock-expected.json';
 
 /**
- * Phase E's two release gates and the release list, replaced in the copy: their own proofs are E3's and E13's and
- * `release-packages.test.mjs`'s; here the question is only where Laya's gate stands in a release.
+ * Phase E's two release gates, the release list and the release-flag check, replaced in the copy: their own proofs are
+ * E3's and E13's, `release-packages.test.mjs`'s and `release-flags.test.mjs`'s; here the question is only where Laya's
+ * gate stands in a release.
  */
 const RELEASE_STAND_INS = Object.freeze({
+  'scripts/release-flags.mjs':
+    '// The release-flag check is proved by release-flags.test.mjs; this copy declares nothing and passes it.\nexport function coreReleaseFlags() {\n  return { security: false, needsDecision: false };\n}\nexport function releaseFlagProblems() {\n  return [];\n}\n',
   'scripts/packages.mjs':
     "// The copied state's release list: the daemon alone.\nexport const SCOPE = '@agentcomms';\nexport const PUBLISHABLE = Object.freeze(['events-daemon']);\nexport const PACKAGES = Object.freeze(['events-daemon']);\n",
   'scripts/verify-events-phase-e-prerequisites.mjs':

@@ -9,7 +9,9 @@
  * publishable package is missing from it, if the order breaks a dependency, or if any consumer stops reading it.
  *
  * **Two widths** (events phase A plan, decision 1). A package can be held back from a release with
- * `"agentcommsRelease": { "hold": "<why>" }` in its own `package.json` (`scripts/channels.mjs` reads it):
+ * `"agentcommsRelease": { "hold": "<why>" }` in its own `package.json` (`scripts/channels.mjs` reads it). Any package
+ * but core: core's field declares a security fix or a needed decision instead, never a hold
+ * (`scripts/release-flags.mjs`).
  *
  * - `PUBLISHABLE` — every package the registry publishes, held or not: what is proven publishable, by being built,
  *   version-synced, licence-checked and consumer-checked on every `pnpm verify`. `scripts/sync-versions.mjs`,
