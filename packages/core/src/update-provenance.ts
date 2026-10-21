@@ -20,6 +20,23 @@
  * certificate, the statement or the endpoint held instead. Provenance proves where a package was built,
  * not that it is safe (§2): the hold before a background install is the other half.
  *
+ * **Rekor's signed time** (design 2026-10-22 P4 and §7.2): a hold counts from the time Rekor signed, `signedAt`, never
+ * from the registry's `time`. How @sigstore/verify 2.1.1 verifies it, read in this repository's installed copy on
+ * 2026-10-22 (`dist/bundle/index.js`, `dist/verifier.js`, `dist/timestamp/index.js`, `dist/timestamp/set.js`):
+ * - `toSignedEntity` makes each of the bundle's tlog entries one of the entity's timestamps: the same objects as the
+ *   entity's `tlogEntries`. `Verifier.verify` verifies every one (`verifyTLogTimestamp`), and `tlogThreshold: 1` asks
+ *   for at least one.
+ * - An entry that carries an inclusion promise (`inclusionPromise !== undefined`) has that SET verified against the
+ *   trusted root's tlog keys. The SET signs the entry's body, integrated time, log index and log id. A SET that does
+ *   not verify throws `TLOG_INCLUSION_PROMISE_ERROR`, and the whole bundle is refused.
+ * - An entry with only an inclusion proof passes on its Merkle proof and its checkpoint's signature. Neither covers
+ *   the integrated time, so that time is not signed.
+ * - `verify` returns the signer, and no timestamps.
+ * So `signedTimeOf` reads the time from the very entity sigstore-js has just verified, and only when that entity has
+ * exactly one entry and the entry carries a promise. Anything else gives no signed time, and a hold then counts from
+ * this machine's first sight of the release (`release-first-seen.ts`). `integratedTime`, read from the raw bundle,
+ * is kept for display only: it is not verified, and no hold counts from it.
+ *
  * Nothing here installs or writes anything. The fetch and the verifier are injectable, so a test reads fixtures and no
  * test reaches npm or Sigstore.
  */
@@ -83,9 +100,17 @@ export interface VerifiedProvenance {
   ref: string;
   /** The tarball's SHA-512, hex: what the attestation signs and the registry's integrity names. */
   sha512: string;
-  /** The transparency-log entry that recorded the signing, when the bundle says: its index and its time. */
+  /**
+   * The transparency-log entry that recorded the signing, when the bundle says: its index and its time. Both are read
+   * from the bundle as it came, unverified, for display: no hold counts from `integratedTime`.
+   */
   logIndex: string | null;
   integratedTime: string | null;
+  /**
+   * The time Rekor signed, ISO, from the bundle verifier's facts: the integrated time of the one tlog entry whose
+   * inclusion promise sigstore-js verified (`signedTimeOf`). Null when there is none, or the verifier says nothing.
+   */
+  signedAt: string | null;
 }
 
 export type ProvenanceVerdict =
@@ -102,8 +127,18 @@ export interface BundlePolicy {
   identity: RegExp;
 }
 
-/** Verifies a Sigstore bundle cryptographically and against `policy`; throws when it does not verify. */
-export type BundleVerifier = (bundle: unknown, policy: BundlePolicy) => Promise<void>;
+/** What a bundle verifier found in a bundle it verified. */
+export interface BundleFacts {
+  /** Rekor's integrated time, ISO: one tlog entry whose inclusion promise sigstore-js verified. */
+  signedAt: string | null;
+}
+
+/**
+ * Verifies a Sigstore bundle cryptographically and against `policy`, and says what it found; throws when it does not
+ * verify. A verifier that says nothing gives no signed time.
+ */
+// biome-ignore lint/suspicious/noConfusingVoidType: a verifier that returns nothing, as each did before 0.26.0, still fits.
+export type BundleVerifier = (bundle: unknown, policy: BundlePolicy) => Promise<BundleFacts | undefined | void>;
 
 export interface ProvenanceDeps {
   fetch?: AttestationFetch | undefined;
@@ -284,6 +319,33 @@ function firstLogEntry(bundle: Record<string, unknown>): { logIndex: string | nu
   };
 }
 
+/**
+ * The signed time of an entity sigstore-js has just verified: exactly one `tlogEntries[0]` with an
+ * `inclusionPromise`, and a positive `integratedTime` in whole seconds. sigstore-js verifies a promise whenever an
+ * entry carries one, so the entry's time is the one Rekor signed (see the top of this module). Null for anything
+ * else: no entry, two or more, a proof without a promise, or a time that is not one.
+ */
+export function signedTimeOf(entity: unknown): string | null {
+  const entries = record(entity)?.tlogEntries;
+  if (!Array.isArray(entries) || entries.length !== 1) return null;
+  const entry = record(entries[0]);
+  if (entry === null || record(entry.inclusionPromise) === null) return null;
+  const time = entry.integratedTime;
+  // Read as sigstore-js reads it into the SET's payload: `Number(integratedTime)`.
+  const seconds = typeof time === 'string' || typeof time === 'number' ? Number(time) : Number.NaN;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return null;
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+/** The signed time a bundle verifier gave, when it gave one: an ISO time, as `toISOString` writes it. */
+function signedAtOf(facts: unknown): string | null {
+  const said = record(facts)?.signedAt;
+  if (typeof said !== 'string') return null;
+  const at = new Date(said);
+  return !Number.isNaN(at.getTime()) && at.toISOString() === said ? said : null;
+}
+
 function refuse(release: ProvenanceRelease, field: ProvenanceField, reason: string): ProvenanceVerdict {
   return { ok: false, package: release.packageName, version: release.version, field, reason };
 }
@@ -410,8 +472,10 @@ export async function verifyProvenance(
     return refuse(release, 'subject', "what it signs is not the registry's tarball for it");
   }
 
+  /** What the verifier says it found: read only as far as `signedAtOf` reads it. */
+  let found: unknown;
   try {
-    await (deps.verifyBundle ?? sigstoreBundleVerifier())(bundle, { issuer: pins.issuer, identity });
+    found = await (deps.verifyBundle ?? sigstoreBundleVerifier())(bundle, { issuer: pins.issuer, identity });
   } catch (error) {
     // sigstore-js's own message can quote the certificate ("expected …, got …"): only its fixed code is said.
     const code = (error as { code?: unknown } | null)?.code;
@@ -430,6 +494,7 @@ export async function verifyProvenance(
       ref: facts.sourceRef,
       sha512: wanted,
       ...firstLogEntry(bundle),
+      signedAt: signedAtOf(found),
     },
   };
 }
@@ -500,6 +565,7 @@ export async function loadSigstore(): Promise<SigstoreModules> {
  * The verifier a run uses: sigstore-js's own, with Sigstore's public-good trust root read through TUF into
  * `cachePath`, one transparency-log entry and one certificate-transparency proof required, and the policy given as
  * the anchored pattern. `trustedRoot` and `load` are for tests, which hand in a trust root and never reach TUF.
+ * Once the entity has verified, it says the time Rekor signed for it, read from that same entity (`signedTimeOf`).
  */
 export function sigstoreBundleVerifier(
   options: {
@@ -520,5 +586,7 @@ export function sigstoreBundleVerifier(
     });
     const entity = sigstore.verify.toSignedEntity(sigstore.bundle.bundleFromJSON(bundle));
     verifier.verify(entity, { subjectAlternativeName: policy.identity, extensions: { issuer: policy.issuer } });
+    // Only once it has verified, and from the entity it verified: never from the bundle as it came.
+    return { signedAt: signedTimeOf(entity) };
   };
 }
