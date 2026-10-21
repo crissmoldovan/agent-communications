@@ -666,5 +666,7 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
     lines.push(paint(color, 'yellow', `Left for you: ${describeItem(item)}`), `  ${item.reason ?? ''}`);
   }
   if (result.next) lines.push('', result.next);
+  // On its own line, last, as a sentence: the update was installed, and only the daily check's file lags behind it.
+  if (result.recordNote) lines.push(`${result.recordNote.charAt(0).toUpperCase()}${result.recordNote.slice(1)}.`);
   return lines.join('\n');
 }

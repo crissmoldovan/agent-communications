@@ -4,7 +4,7 @@ import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './c
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { APPROVAL_ID_PATTERN } from './ids.ts';
-import { withFileLock } from './lock.ts';
+import { type LockOptions, withFileLock } from './lock.ts';
 import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPlainVersion, isVersion } from './versions.ts';
@@ -290,6 +290,21 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
 }
 
 /**
+ * How every writer of the record takes the lock beside it: 2 s for each holder, and 15 s in all (design 2026-10-22, R2).
+ *
+ * Every server's tool call takes this lock for its refresh, so on a busy machine a writer often waits behind several
+ * holders in turn, each holding it for a moment. Counted from the start of the wait, 2 s was a budget for that whole
+ * queue, and a writer at the back of it gave up while the lock was being handed on exactly as it should be: a
+ * person's update was installed and its record dropped. Counted per holder, a writer gives up only on one holder that
+ * kept the lock for 2 s, which is a stuck lock; 15 s bounds a queue that never empties, as config writes are bounded.
+ */
+export const UPDATE_CHECK_LOCK: LockOptions = Object.freeze({
+  timeoutPerHolder: true,
+  timeoutMs: 2_000,
+  maxWaitMs: 15_000,
+});
+
+/**
  * Reads the record, changes it and writes it back, under a lock beside it, atomically — so a server recording a check
  * and a person's "not now" arriving at the same moment each keep what the other wrote. Returns what `change` returned
  * alongside the record written; `change` returning `null` writes nothing.
@@ -307,7 +322,7 @@ export async function changeUpdateCheck<T = void>(
       await writeFileAtomic(updateCheckPath(stateDir), `${JSON.stringify(next.record, null, 2)}\n`);
       return { record: next.record, result: next.result, written: true };
     },
-    { timeoutMs: 2_000 },
+    UPDATE_CHECK_LOCK,
   );
 }
 
