@@ -52,6 +52,10 @@ Also:
 - **The desktop release** waits out GitHub's list of releases lagging behind a draft it has just made, which failed the
   first attempt of `desktop-v0.24.0`.
 - **On Linux,** the tests now end every process a mutation test starts.
+- **Config changes made at the same moment no longer refuse each other on a slow machine.** A config write now waits
+  up to five seconds for each holder of the config lock, thirty in all, instead of five seconds for the whole queue
+  ahead of it. An agent working on several channels at once could otherwise be told "another agent-communications
+  process is holding" a lock that was only busy.
 
 ## 0.24.0
 

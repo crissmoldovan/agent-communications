@@ -321,23 +321,37 @@ test('the claim and the ask are two steps: one claim a day, and the ask handed i
 /**
  * A registry on the loopback address that answers `latest` for core after `delayMs`, and counts every request — and
  * every answer, once it is given.
+ *
+ * `'held'` answers nothing until `release()`, so that whether something waited for the registry is decided by the
+ * test, not by how fast this machine is. It lets go by itself after a minute, only so that something that does wait
+ * for it ends, and fails, rather than hanging the test.
  */
-async function loopbackRegistry(latest: string, delayMs: number) {
+async function loopbackRegistry(latest: string, delayMs: number | 'held') {
   const requests: string[] = [];
   /** Which document each request asked for: npm's abbreviated one (the `latest` tag), or the full one (manifests). */
   const documents: string[] = [];
   const answered: string[] = [];
+  let released = delayMs !== 'held';
+  const waiting: (() => void)[] = [];
+  const release = () => {
+    released = true;
+    for (const answer of waiting.splice(0)) answer();
+  };
+  const lettingGo = delayMs === 'held' ? setTimeout(release, 60_000) : undefined;
   const server: Server = createServer((request, response) => {
     requests.push(request.url ?? '');
     documents.push(
       String(request.headers.accept ?? '').startsWith('application/vnd.npm.install-v1+json') ? 'abbreviated' : 'full',
     );
-    setTimeout(() => {
+    const answer = () => {
       answered.push(request.url ?? '');
       response
         .writeHead(200, { 'content-type': 'application/json' })
         .end(JSON.stringify({ name: CORE, 'dist-tags': { latest }, versions: { [latest]: {} } }));
-    }, delayMs);
+    };
+    if (delayMs !== 'held') setTimeout(answer, delayMs);
+    else if (released) answer();
+    else waiting.push(answer);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -346,8 +360,10 @@ async function loopbackRegistry(latest: string, delayMs: number) {
     requests,
     documents,
     answered,
+    release,
     close: () =>
       new Promise<void>((resolve) => {
+        clearTimeout(lettingGo);
         server.closeAllConnections();
         server.close(() => resolve());
       }),
@@ -445,15 +461,31 @@ test('offline, the check stops nothing: it keeps the last result, says why, and 
   assert.equal(kept.behind, true);
 });
 
-test('a hanging registry never delays a tool call: the check runs in the background and the notice reads the file', async () => {
+test('a hanging registry never delays a tool call: the check runs in the background and the notice reads the file', async (t) => {
   const m = machine();
   let answer: (version: string) => void = () => undefined;
   const hanging = registry(() => new Promise<string>((resolve) => (answer = resolve)));
   const { call, close } = await connect(m, { update: deps(hanging.latestVersion) });
   try {
-    const started = Date.now();
-    const first = await call('comms_channels_available');
-    assert.ok(Date.now() - started < 2_000, 'the call waited for the registry');
+    /*
+     * Never awaited by a call (`updateToolNotice`), whatever this machine's speed: with the registry silent until told
+     * and every timeout frozen, so that no wait the call might add, for the check or for a while, could ever end, the
+     * call still answers. One that waited would never answer here; the guard, on a real timer taken before the freeze,
+     * makes that a failure rather than a hang.
+     */
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let guard: NodeJS.Timeout | undefined;
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const first = await Promise.race([
+      call('comms_channels_available'),
+      new Promise<never>((_, reject) => {
+        guard = realSetTimeout(() => reject(new Error('the call waited for the registry')), 30_000);
+      }),
+    ]).finally(() => {
+      realClearTimeout(guard);
+      t.mock.timers.reset();
+    });
     assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
     await until(() => hanging.asked.length === 1, 'the background check to ask');
     assert.ok(!noticed(first), 'nothing was known yet');
@@ -971,10 +1003,14 @@ test('at a terminal the check waits about three seconds at most, then the comman
 
 test('a registry slower than the terminal waits is still heard from: the check finishes beside the command', async () => {
   const m = machine();
-  const served = await loopbackRegistry(LATEST, 1_500);
+  /*
+   * Silent until the gate has gone on, so "slower than the gate's wait" holds whatever this machine's speed. A gate that
+   * waited for the check instead would wait until the check gave up on the silent registry, and the answer released
+   * after it would never be recorded.
+   */
+  const served = await loopbackRegistry(LATEST, 'held');
   const env = { ...m.env, npm_config_registry: served.url };
   try {
-    const started = Date.now();
     const output = { json: true, color: false };
     const streams = terminal([]).streams;
     await updateNoticeAtTerminal({
@@ -987,7 +1023,8 @@ test('a registry slower than the terminal waits is still heard from: the check f
       ...terminalUpdateHooks(m.core, env, { deps: { globalPackages: async () => ({}) } }),
       waitMs: 200,
     });
-    assert.ok(Date.now() - started < 1_400, `the command waited ${Date.now() - started} ms for the registry`);
+    assert.deepEqual(served.answered, [], 'the command went on before the registry answered');
+    served.release();
     // The ask was not cut off at the wait: its answer lands, and the day's check is a real one.
     await until(async () => (await readUpdateCheck(m.stateDir)).latest === LATEST, 'the answer to be recorded', 15_000);
     const record = await readUpdateCheck(m.stateDir);
@@ -1027,23 +1064,32 @@ test("the day's first command ends when its own work does: a detached child fini
    * command takes the day's claim and hands the ask to a child of its own that holds none of its output.
    */
   const m = machine();
-  const served = await loopbackRegistry(LATEST, 8_000);
+  /*
+   * Silent until the second command has closed: whether the first one's output waited for the registry is the test's
+   * to decide, and neither can be shown the answer before the third, which is the one that must carry it.
+   */
+  const served = await loopbackRegistry(LATEST, 'held');
   // Globally installed here: nothing, so `npm ls -g` answers at once — and reads no real global folder.
   const env = { ...m.env, npm_config_registry: served.url, npm_config_prefix: tempDir('comms-update-prefix-') };
   try {
     const first = await command(env, ['channels', '--json']);
     assert.equal(first.code, 0, first.output);
-    // About three and a half seconds here: the gate's wait, and the command. Held to the registry's clock rather than
-    // to a number of seconds, so a slow machine cannot fail it — the registry answers eight seconds after it is asked,
-    // and a command whose output something else held open closes only after that.
-    assert.deepEqual(
-      served.answered,
-      [],
-      `the command's output closed after ${first.ms} ms, once the registry answered`,
+    /*
+     * About three and a half seconds here: the gate's wait, and the command. Held to the registry rather than to a
+     * number of seconds, so a slow machine cannot fail it: the registry says nothing until the command has closed. A
+     * command whose output the ask held open would close only once the ask gave up on the silent registry, its own ten
+     * seconds (`REGISTRY_TIMEOUT_MS`), and the answer released after that would never be recorded.
+     */
+    assert.deepEqual(served.answered, [], `the command's output closed after ${first.ms} ms, before any answer`);
+    assert.notEqual(
+      (await readUpdateCheck(m.stateDir)).checking,
+      null,
+      `the command's output closed after ${first.ms} ms, once the ask had ended`,
     );
     // Inside the claim's lease, the next command asks nothing and hands nothing on: the child is asking.
     const second = await command(env, ['channels', '--json']);
     assert.equal(second.code, 0, second.output);
+    served.release();
     await until(() => served.requests.length > 0, 'the child to ask the registry', 15_000);
     await until(
       async () => {

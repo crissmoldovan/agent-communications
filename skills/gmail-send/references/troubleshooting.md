@@ -43,7 +43,7 @@ it stands without a second call; one before any approval existed carries none.
 | `SECRET_STORE_UNAVAILABLE` | 69 | The keychain cannot be read, or a secret did not read back as written | `agentcomms secrets migrate --to file`, or fix the keychain | Do not print or re-enter a secret in the conversation |
 | `TRANSIENT` | 75 | Google is rate-limiting the account, or returned a 5xx, before anything was sent — or eight waits are already running in this process ("too many waits") | Wait a minute | A send whose answer was lost is `SEND_OUTCOME_UNKNOWN`, not this: do not retry a *send* on either |
 | `KEYCHAIN_APPROVAL_PENDING` | 75 | The system keychain is waiting for the user to allow access | Answer the keychain prompt | Nothing else |
-| `LOCK_TIMEOUT` | 75 | Another process is holding the lock on the same approval, ledger or config file | Retry once the other command finishes | Do not delete a lock file |
+| `LOCK_TIMEOUT` | 75 | Another process is holding the lock on the same approval, ledger or config file. A config change waits up to five seconds for each holder, thirty in all, before it says so | Retry once the other command finishes | Do not delete a lock file |
 | `CONFIG` | 78 | A configuration problem: the config file is unreadable or of another version, the OAuth client for this mailbox is not registered, the Gmail API is not enabled for the Cloud project | Follow the hint; `agent-gmail doctor --json` names the failing check | Do not edit `config.json` by hand to get past it |
 | `UNEXPECTED` | 1 | Something that was not classified | Report it with the message | Do not retry blindly |
 

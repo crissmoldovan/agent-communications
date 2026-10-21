@@ -26,7 +26,7 @@ import { CommsError } from './errors.ts';
 import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { type CliHandoffs, handoffSentence, requiredHandoffs } from './handoff-text.ts';
 import { namesItsPlace } from './jail.ts';
-import { withCredentialsLock, withFileLock } from './lock.ts';
+import { type LockOptions, withCredentialsLock, withFileLock } from './lock.ts';
 import {
   NAME_MESSAGE,
   NAME_PATTERN,
@@ -1137,6 +1137,22 @@ export function parseConfig(text: string, source = 'config.json'): Config {
   return parsed.data;
 }
 
+/**
+ * How a config write waits for the config lock: five seconds for each holder, thirty seconds in all.
+ *
+ * The lock is a queue. Every send prepare, claim and approval on every channel runs `ensureSendEpochConfig` first, and
+ * while a legacy drain is open that is a config write or two per call, so an agent's parallel calls across several MCP
+ * servers arrive at this lock together, each holding it for one read, check and fsynced rename (and the drain's, for a
+ * list of the approvals too). Counted from when each waiter began, the lock's five seconds were a budget for the whole
+ * line ahead: on the Windows runner a line of twelve writes gave up at the ninth, "another agent-communications process
+ * is holding", while the lock was being handed on exactly as it should be. A holder there took about half a second, and
+ * on Windows a rename alone may retry for one. Counted per holder, as Resend's throttle and Gmail's history caches count
+ * theirs, a write gives up only on a holder that keeps the lock for the whole five seconds: the stuck lock the timeout is
+ * for. The lock is polled rather than queued, so thirty seconds in all bounds the rest, and leaves room inside the minute
+ * an MCP client waits for a tool call.
+ */
+const CONFIG_WRITE_LOCK: LockOptions = { timeoutPerHolder: true, maxWaitMs: 30_000 };
+
 export class ConfigStore {
   readonly path: string;
   readonly #lockPath: string;
@@ -1172,6 +1188,11 @@ export class ConfigStore {
     );
   }
 
+  /** Runs `fn` holding the config lock, waited for as a write waits for it (`CONFIG_WRITE_LOCK`). */
+  #withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return withFileLock(this.#lockPath, fn, CONFIG_WRITE_LOCK);
+  }
+
   /** The current config; an empty one when the file does not exist yet. */
   async load(): Promise<Config> {
     let key: string;
@@ -1205,7 +1226,7 @@ export class ConfigStore {
     let committed: ConfigUpdateResult | undefined;
     let result: ConfigUpdateResult;
     try {
-      result = await withFileLock(this.#lockPath, async () => {
+      result = await this.#withWriteLock(async () => {
         options.signal?.throwIfAborted();
         this.#cache = null;
         const current = structuredClone(await this.load());

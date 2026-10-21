@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { bindingDigestOf } from '../src/approval-binding.ts';
-import { MAINTENANCE_INTERVAL_MS, PRUNE_STATE_FILE, parsePruneState } from '../src/approval-maintenance.ts';
+import {
+  MAINTENANCE_INTERVAL_MS,
+  MAINTENANCE_RENEW_MS,
+  PRUNE_STATE_FILE,
+  parsePruneState,
+} from '../src/approval-maintenance.ts';
 import { SEND_EPOCH_REASON } from '../src/approval-outcome.ts';
 import { type ApprovalRecord, ApprovalStore } from '../src/approvals.ts';
 import { CHANNEL_SNAPSHOT } from '../src/channels.generated.ts';
@@ -654,15 +659,20 @@ test('all 500 selected record locks held by another process: each tried once, no
       send({ n: index + 1, state: 'expired', at: NOW - 30 * MINUTE, draftId: `r-${index}` }),
     ),
   );
+  /*
+   * Counted, and timed on the store's own clock: the wall clock measured only this machine's speed. "Tried once
+   * without polling" is the count of each lock's tries, and none taken over; "about five seconds at most" is the one
+   * shared deadline, shown on a machine too slow for 500 tries in five seconds — the store's clock moving on 4 ms with
+   * every file operation — where no step of the report starts after it.
+   */
   const other = await child();
   try {
     await other.ask({ op: 'hold', paths: ids.map((id) => lockOf(w, id)) });
-    const began = Date.now();
     const result = await report(w);
-    assert.ok(Date.now() - began < 5_500, `took ${Date.now() - began} ms`);
     assert.equal(result.scanned.busy.length, UNSENT_WINDOW);
     assert.equal(result.scanned.opened, 0);
     assert.equal(w.fs.started('read', isRecordFile).length, 0, 'not one record opened');
+    assert.equal(w.fs.started('lock.rename').length, 0, 'no busy lock taken over');
     assert.deepEqual(result.rows, []);
     assert.equal(result.evidence, 'indeterminate');
     const reportPhase = w.fs.log.slice(w.fs.log.findLastIndex((op) => op.kind === 'readdir'));
@@ -673,6 +683,25 @@ test('all 500 selected record locks held by another process: each tried once, no
         1,
       );
     }
+
+    // The same report on a slow machine: the deadline ends it, and nothing starts after it.
+    const from = w.fs.log.length;
+    const began = w.clock.t;
+    w.fs.before = () => {
+      w.clock.t += 4;
+    };
+    const slow = await report(w);
+    const ops = w.fs.log.slice(from).filter((op) => op.phase === 'start');
+    const tries = ops.filter((op) => op.kind === 'lock.create' && isRecordLock(op.path));
+    assert.ok(tries.length > 0 && tries.length < UNSENT_WINDOW, `the deadline ended it: ${tries.length} tried`);
+    assert.equal(new Set(tries.map((op) => op.path)).size, tries.length, 'each busy lock tried once at most');
+    for (const op of ops.filter((each) => each.kind === 'stat' || each.kind === 'lock.create')) {
+      assert.ok(op.at < began + 5_000, `${op.kind} ${op.path} started at +${op.at - began} ms`);
+    }
+    assert.equal(ops.filter((op) => op.kind === 'read' && isRecordFile(op.path)).length, 0, 'not one record opened');
+    assert.ok(slow.truncated.includes('deadline'));
+    assert.deepEqual(slow.rows, []);
+    assert.equal(slow.evidence, 'indeterminate');
   } finally {
     await other.ask({ op: 'release' });
     other.close();
@@ -1064,7 +1093,16 @@ test('a channel’s wrapper is told whose approval each sender-written field is 
   assert.deepEqual(result.rows[0]?.approvals[1]?.expect?.to, [`[${OWNER} ${idOf(1)} to: 16]`]);
 });
 
-test('with maintenance due, prune plus report stays within every stated maximum: two enumerations, 700 opens, 701 locks, 200 appends, 400 artifact and 701 lock unlinks (D9c-j)', async () => {
+test('with maintenance due, prune plus report stays within every stated maximum: two enumerations, 700 opens, 701 locks, 200 appends, 400 artifact and 701 lock unlinks (D9c-j)', async (t) => {
+  /*
+   * The store's clock stands still here, so its five-second budget never cuts the work short and every maximum is
+   * counted in full. The maintenance lock's renewal is a timer, though, and on the wall clock it renewed once per ten
+   * seconds of however long this machine took: more than once on a Windows runner that took a minute. In use one clock
+   * drives both, and a batch stops starting work at five seconds, half the renewal interval. So the renewal timer runs
+   * on this test's time instead: exactly one renewal interval passes while maintenance holds the lock, the most the
+   * "one renewed maintenance lock" maximum allows, and many more after the batch has let it go.
+   */
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const w = world(everyone(), { due: true });
   // 250 used sends long past retention, the oldest files; 450 recent expiries.
   plant(w, [
@@ -1076,8 +1114,19 @@ test('with maintenance due, prune plus report stays within every stated maximum:
     ),
   ]);
   const entriesBefore = readdirSync(w.approvals).length;
+  let enumerations = 0;
+  let renewalPassed = false;
+  w.fs.before = (op) => {
+    if (op.kind === 'readdir') enumerations += 1;
+    // Part-way through maintenance's own record reads, with its lock held: one renewal interval goes by.
+    if (!renewalPassed && enumerations === 1 && op.kind === 'read' && isRecordFile(op.path)) {
+      renewalPassed = true;
+      t.mock.timers.tick(MAINTENANCE_RENEW_MS);
+    }
+  };
   const result = await report(w);
   const entriesAfter = readdirSync(w.approvals).length;
+  assert.ok(renewalPassed, 'a renewal interval passed during maintenance');
   assert.equal(result.maintenance.pruned, 200);
   const split = w.fs.log.findLastIndex((op) => op.kind === 'readdir');
   const started = (kind: string, from: number, to: number, filter: (path: string) => boolean = () => true) =>
@@ -1094,6 +1143,10 @@ test('with maintenance due, prune plus report stays within every stated maximum:
   assert.equal(started('lock.remove', 0, all), 701);
   assert.ok(started('unlink', 0, all) + started('lock.remove', 0, all) <= 1101);
   assert.ok(started('lock.touch', 0, all) <= 1, 'one renewed maintenance lock at most');
+  assert.equal(started('lock.touch', 0, all, isMaintenanceLock), 1, 'renewed once, over the interval it held');
+  // Renewal ends with the batch: however long passes once the lock is let go, it is never touched again.
+  t.mock.timers.tick(10 * MAINTENANCE_RENEW_MS);
+  assert.equal(w.fs.started('lock.touch').length, 1, 'no renewal after the lock was released');
 });
 
 test('with maintenance not due, the report is one pass: one enumeration, at most 500 opens and lock tries, no append and no unlink (D9c-k)', async () => {

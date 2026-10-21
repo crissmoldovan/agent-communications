@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { storeInternals } from '../src/approval-internals.ts';
 import {
+  MAINTENANCE_BUDGET_MS,
   MAINTENANCE_INTERVAL_MS,
   MAINTENANCE_SLOTS,
   type MaintenanceStatus,
@@ -955,46 +956,94 @@ test('with the clock advancing during the work, no step starts after five second
 });
 
 test('200 record locks held by another process: each tried once without waiting; creation and status go on within five seconds; the earliest busy record is next (D9r-h)', async () => {
-  const { core, clock } = coreWorld();
+  /*
+   * Counted, and timed on the stores' own clocks: the wall clock measured only this machine's speed, and a Windows
+   * runner took four seconds for the 200 tries this allowed two. "Without waiting" is what the design says it is (§D9: a
+   * non-blocking try, no polling sleep, never the ordinary five-second lock timeout): each busy lock is created once and
+   * never taken over. A lock that waited would try again, and the waiting lock, `withFileLock`, does not go through the
+   * counted operations at all. "Within five seconds" is the batch's work-start budget: for the creation and the status,
+   * the core's clock moves on 10 ms with every file operation, a machine too slow for 200 tries in five seconds, and no
+   * step of either batch starts after five seconds on it.
+   */
+  const { core, clock, config } = coreWorld();
   mkdirSync(core.approvals.directory, { recursive: true });
   const w = world(NOW, { dir: join(core.paths.stateDir) });
+  // The core's own store, through counted file operations, on the core's clock.
+  const fs = instrumentedIo({ stateDir: core.paths.stateDir, now: () => clock.t });
+  core.approvals = new ApprovalStore(core.paths.stateDir, {
+    now: () => new Date(clock.t),
+    loadConfig: config.loadConfig,
+    io: fs.io,
+    audit: fs.audit,
+    handoffs: core.handoffs,
+  });
   const ids = kept(w, MAINTENANCE_SLOTS);
+  const lockOf = (id: string) => join(w.approvals, `${id}.json.lock`);
+  const locks = new Set(ids.map(lockOf));
+  const busy = new Set(ids);
+  /** The core's batch since `from`: each busy lock tried once at most, and no step started after its five seconds. */
+  const withinBudget = (from: number, what: string) => {
+    const ops = fs.log.slice(from).filter((op) => op.phase === 'start');
+    // Its deadline is set as it begins, just before this first look at the prune state.
+    const begun = ops.find((op) => op.kind === 'read' && op.path.endsWith(PRUNE_STATE_FILE));
+    assert.ok(begun, `${what} ran the day's batch`);
+    const tries = ops.filter((op) => op.kind === 'lock.create' && locks.has(op.path));
+    const steps = [
+      ...tries,
+      ...ops.filter((op) => op.kind === 'stat' && busy.has(artifactOf(op.path)?.approvalId ?? '')),
+    ];
+    assert.ok(
+      tries.length > 0 && tries.length < MAINTENANCE_SLOTS,
+      `${what}: the budget ended it, ${tries.length} tried`,
+    );
+    assert.equal(new Set(tries.map((op) => op.path)).size, tries.length, `${what}: each busy lock tried once at most`);
+    for (const op of steps) {
+      assert.ok(op.at < begun.at + MAINTENANCE_BUDGET_MS, `${what}: ${op.kind} started at +${op.at - begun.at} ms`);
+    }
+    assert.equal(
+      ops.filter((op) => op.kind === 'read' && busy.has(artifactOf(op.path)?.approvalId ?? '')).length,
+      0,
+      `${what}: no busy record is opened`,
+    );
+  };
   const other = await child();
   try {
-    const held = await other.ask({ op: 'hold', paths: ids.map((id) => join(w.approvals, `${id}.json.lock`)) });
+    const held = await other.ask({ op: 'hold', paths: ids.map(lockOf) });
     assert.equal(held.held, MAINTENANCE_SLOTS);
-    const began = Date.now();
     const status = await w.store.ensurePruned();
-    assert.ok(Date.now() - began < 2_000, `took ${Date.now() - began} ms`);
     assert.equal(status.skippedBusy, MAINTENANCE_SLOTS);
     assert.equal(status.processed, 0);
     for (const id of ids) {
-      assert.equal(
-        w.fs.started('lock.create', (path) => path === join(w.approvals, `${id}.json.lock`)).length,
-        1,
-        `${id} tried once`,
-      );
+      assert.equal(w.fs.started('lock.create', (path) => path === lockOf(id)).length, 1, `${id} tried once`);
     }
+    assert.equal(w.fs.started('lock.rename').length, 0, 'no busy lock is taken over');
     assert.equal(opened(w.fs).length, 0, 'no busy record is opened');
     assert.equal(stateOf(w).cursor, null, 'the cursor stays before the earliest busy slot');
 
-    // A creation and a status that run the batch go on, all locks still held.
+    // A creation and a status that run the batch go on, all locks still held, on a machine too slow for all 200.
+    fs.before = () => {
+      clock.t += 10;
+    };
     makeDue(w);
     clock.t = NOW;
-    let began2 = Date.now();
+    let from = fs.log.length;
     const made = await sendFor(core);
-    assert.ok(Date.now() - began2 < 5_500, `creation took ${Date.now() - began2} ms`);
+    withinBudget(from, 'creation');
     makeDue(w);
-    began2 = Date.now();
+    from = fs.log.length;
     const looked = await waitForApproval(core, made.approvalId, { waitSeconds: 0 });
-    assert.ok(Date.now() - began2 < 5_500, `status took ${Date.now() - began2} ms`);
+    withinBudget(from, 'status');
     assert.equal(looked.state, 'pending');
+    assert.ok(
+      ids.every((id) => has(w, id)),
+      'every busy record remains',
+    );
   } finally {
     await other.ask({ op: 'release' });
     other.close();
   }
-  // Released, and a day on: the earliest busy record is the first one looked at.
-  w.clock.t += MAINTENANCE_INTERVAL_MS;
+  // Released, and a day after the last batch began: the earliest busy record is the first one looked at.
+  w.clock.t = clock.t + MAINTENANCE_INTERVAL_MS;
   const next = w.open();
   await next.store.ensurePruned();
   assert.equal(opened(next.fs)[0], ids[0]);
@@ -1031,7 +1080,13 @@ test('old active, corrupt and unreadable records do not starve the slots after t
 
 // ── Lock ownership ───────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a batch held past the stale interval keeps its lock by renewal: another process never takes it, and only the first batch prunes and commits its cursor (D9r-j)', async () => {
+test('a batch held past the stale interval keeps its lock by renewal: another process never takes it, and only the first batch prunes and commits its cursor (D9r-j)', async (t) => {
+  /*
+   * On the test's time, not the wall clock's: a lock's age is `Date.now()` against its file's times, and its renewal a
+   * timer, so both are mocked and move only when the test says. On the wall clock, a stall of a fifth of a second
+   * between a renewal and the other process's look was enough to make a live holder look abandoned.
+   */
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const w = world(NOW);
   storeInternals(w.store).timings = { staleMs: 300, renewMs: 80, recordStaleMs: 30_000 };
   const ids = kept(w, 3);
@@ -1042,15 +1097,28 @@ test('a batch held past the stale interval keeps its lock by renewal: another pr
   const held = new Promise<void>((settle) => {
     release = settle;
   });
+  let reached!: () => void;
+  const hanging = new Promise<void>((settle) => {
+    reached = settle;
+  });
   let hung = false;
   w.fs.before = async (op) => {
     if (!hung && op.kind === 'read' && isRecordFile(op.path)) {
       hung = true;
+      reached();
       await held;
     }
   };
   const running = w.store.ensurePruned();
-  await sleep(700);
+  await hanging;
+  // 700 ms held, one renewal interval at a time, each renewal's touch landed before the next is due.
+  const touches = (phase: 'start' | 'end') =>
+    w.fs.log.filter((op) => op.kind === 'lock.touch' && op.phase === phase).length;
+  for (let elapsed = 0; elapsed + 80 <= 700; elapsed += 80) {
+    t.mock.timers.tick(80);
+    while (touches('end') < touches('start')) await new Promise((settle) => setImmediate(settle));
+  }
+  t.mock.timers.tick(700 % 80);
   // A process for which the next batch is due — a day on — so it does try the lock.
   const second = w.open({ clock: { t: NOW + DAY } });
   storeInternals(second.store).timings = { staleMs: 300, renewMs: 80, recordStaleMs: 30_000 };
@@ -1061,7 +1129,7 @@ test('a batch held past the stale interval keeps its lock by renewal: another pr
   assert.equal(theirs.skipped, 'busy', 'the lock was renewed, so it was not abandoned');
   assert.equal(second.fs.started('lock.rename').length, 0, 'no takeover was tried');
   assert.equal(second.fs.started('unlink').length + second.fs.started('write').length, 0);
-  assert.ok(w.fs.started('lock.touch', isMaintenanceLock).length >= 3, 'renewed while it held on');
+  assert.equal(w.fs.started('lock.touch', isMaintenanceLock).length, 8, 'renewed every 80 ms while it held on');
   assert.deepEqual(ours.errors, []);
   assert.equal(ours.complete, true);
   assert.equal(ours.pruned, 1);

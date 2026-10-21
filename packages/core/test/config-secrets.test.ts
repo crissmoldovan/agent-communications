@@ -268,15 +268,26 @@ test('ConfigStore writes owner-only, validates before writing, and reloads chang
 });
 
 test('concurrent updates from separate stores never lose each other', async () => {
+  /*
+   * Twelve writers at once, each holding the config lock for half a second: the slow file system this failed on, on the
+   * Windows runner, where each write's read, check and fsynced rename took about that long. The half second is spent
+   * inside the lock, in the mutator, so on any machine the line lasts six seconds or more, past the lock's five-second
+   * timeout. A write has to count that timeout per holder, not from when it began to wait, or the last in line is
+   * refused with LOCK_TIMEOUT while the lock is handed on as it should be. A lost update would leave fewer than twelve.
+   */
   const dir = tempDir();
+  const holdMs = 500;
+  const started = Date.now();
   const writers = Array.from({ length: 12 }, (_, i) =>
-    new ConfigStore(dir).update((config) => ({
-      ...config,
-      inboxes: { ...config.inboxes, [`acme/gmail-${i}`]: inbox({ secretRef: `r${i}` }) },
-    })),
+    new ConfigStore(dir).update(async (config) => {
+      await new Promise((resolve) => setTimeout(resolve, holdMs));
+      return { ...config, inboxes: { ...config.inboxes, [`acme/gmail-${i}`]: inbox({ secretRef: `r${i}` }) } };
+    }),
   );
   await Promise.all(writers);
   assert.equal(Object.keys((await new ConfigStore(dir).load()).inboxes).length, 12);
+  const line = Date.now() - started;
+  assert.ok(line > 5_000, `one writer at a time, so the line outlasted the lock's five-second timeout: ${line}ms`);
 });
 
 test('withFileLock serialises critical sections and clears a stale lock', async () => {
@@ -298,10 +309,11 @@ test('withFileLock serialises critical sections and clears a stale lock', async 
 
   writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date(Date.now() - 60_000).toISOString(), token: 'dead' }));
   assert.equal(await withFileLock(lock, async () => 'ran', { staleMs: 1000 }), 'ran');
-  // A live lock is never taken over, however many waiters look at it.
+  // A live lock is never taken over, however many waiters look at it. Judged on the lock's own stale interval, 30 s,
+  // not the one-second window above: a process stalled for a second would have read that as abandonment.
   writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date().toISOString(), token: 'alive' }));
   await assert.rejects(
-    withFileLock(lock, async () => 'stolen', { staleMs: 1000, timeoutMs: 150 }),
+    withFileLock(lock, async () => 'stolen', { timeoutMs: 150 }),
     /holding/,
   );
   assert.match(readFileSync(lock, 'utf8'), /alive/);
@@ -317,12 +329,15 @@ test('a permissions problem fails immediately; it is not reported as contention'
   mkdirSync(join(dir, 'sealed'));
   chmodSync(join(dir, 'sealed'), 0o500);
   try {
+    // The bound is the timeout it must not wait out, not a guess at this machine's speed. The error itself, EACCES and
+    // not LOCK_TIMEOUT, is what shows it never waited at all.
+    const timeoutMs = 5000;
     const started = Date.now();
     await assert.rejects(
-      withFileLock(lock, async () => 'never', { timeoutMs: 5000 }),
+      withFileLock(lock, async () => 'never', { timeoutMs }),
       (error: unknown) => (error as NodeJS.ErrnoException).code === 'EACCES',
     );
-    assert.ok(Date.now() - started < 2000, 'it should not have waited out the timeout');
+    assert.ok(Date.now() - started < timeoutMs, 'it should not have waited out the timeout');
   } finally {
     chmodSync(join(dir, 'sealed'), 0o700);
   }
