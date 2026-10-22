@@ -209,8 +209,9 @@ async function ask(
   // from its verified tarball (design 2026-10-22 P1), where this process can verify: core's hands in its verifier, a
   // channel's has none, and reads nothing (P2). Read first for the releases since this one, so a machine that cannot be
   // read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
-  // registry hands in its own, or none is read. Null: read, and not known — the record makes no claim. Undefined: not
-  // read here — the record keeps what core's verified check found of the same release.
+  // registry hands in its own, or none is read. Null: read, and not known now. Undefined: not read here. For either, the
+  // record keeps what core's verified check found of the same version — a version npm never publishes twice — and
+  // otherwise makes no claim.
   const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps, core.paths.stateDir);
   const release: ReleaseFacts | null | undefined =
     read === null
@@ -241,9 +242,9 @@ async function ask(
       behind: null,
       current: null,
       lastError: reason(error),
-      // As `recordFound` keeps it: read here, what was read; not read here, what core's verified check found of this
-      // same release, and nothing of another (design 2026-10-22 P2).
-      release: release !== undefined ? release : record.release?.version === latest ? record.release : null,
+      // As `recordFound` keeps it: read here and known, what was read; not read here, or not known now, what core's
+      // verified check found of this same version, and nothing of another (design 2026-10-22 P2).
+      release: release ?? (record.release?.version === latest ? record.release : null),
     }));
   }
 }

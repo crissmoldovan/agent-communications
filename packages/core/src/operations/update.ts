@@ -692,10 +692,10 @@ export async function updateCheck(
 
 /**
  * What the latest release's core manifest declares, for the daily check's file, as its verified tarball says (design
- * 2026-10-22 P1): the facts when both flags were read; null when this check read them and either could not be read —
- * then the record makes no claim; and undefined where this process reads none — a channel's, with no verifier, or a
- * test's stand-in registry (P2) — so the record keeps what core's verified check found of the same release. Never a
- * reason for the check to fail.
+ * 2026-10-22 P1): the facts when both flags were read; null when this check read them and either could not be read;
+ * and undefined where this process reads none — a channel's, with no verifier, or a test's stand-in registry (P2). For
+ * null and undefined alike the record keeps what core's verified check found of the same version, and otherwise makes
+ * no claim. Never a reason for the check to fail.
  */
 async function releaseOf(
   core: Core,
@@ -817,9 +817,11 @@ async function recordFound(
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const { behind, current } = updateCheckFindings(report, latest, after);
   const moves = movesLeft(report, after);
-  // What the release declares, when this read it; what an earlier read found of another release counts for nothing.
+  // What the release declares, when this read it. Not read here, or read and not known now: what an earlier verified
+  // read found of this same version, which a version npm never publishes twice cannot make untrue (design 2026-10-22
+  // P2). What an earlier read found of another release counts for nothing.
   const facts = (record: { release: ReleaseFacts | null }) =>
-    release !== undefined ? release : record.release?.version === latest ? record.release : null;
+    release ?? (record.release?.version === latest ? record.release : null);
   try {
     const { written } = await changeUpdateCheck(core.paths.stateDir, (record) =>
       claim !== undefined && record.checking !== claim

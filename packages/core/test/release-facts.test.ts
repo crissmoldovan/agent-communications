@@ -311,6 +311,66 @@ test('a check with no verifier that cannot finish keeps the verified release of 
   }
 });
 
+test('a check whose declaration read fails keeps the facts already verified for that version, and no other', async () => {
+  /*
+   * A version on npm is never published twice, so what was verified of 99.0.0's tarball stays true: a read that fails
+   * now — a tarball that cannot be had, an attestation that does not answer — leaves it as it was. A read that fails
+   * for another version knows nothing of that one, and the record makes no claim.
+   */
+  const VERIFIED = { version: LATEST, security: true, needsDecision: false };
+  const NEXT = '100.0.0';
+  const unreadable = (version: string) =>
+    releaseWorld({ [CORE]: version }, [{ version, declares: { security: true }, serve: 'missing' }]);
+  const readers = (m: Machine, world: World, version: string): UpdateDeps => ({
+    latestVersion: async () => version,
+    globalPackages: async () => ({}),
+    releaseFacts: releaseFactsReader(
+      m.env,
+      { registry: world.registry, verifyRelease: world.verifyRelease, tarballs: world.tarballs },
+      m.stateDir,
+    ),
+  });
+  for (const [version, expected] of [
+    [LATEST, VERIFIED],
+    [NEXT, null],
+  ] as const) {
+    // Through the check's own record.
+    const m = machine();
+    await seed(m, { latest: LATEST, behind: true, release: { ...VERIFIED } });
+    const world = unreadable(version);
+    await updateCheck(m.core, m.env, readers(m, world, version));
+    assert.ok(world.tarballsAsked.length > 0, `${version}: its tarball was asked for`);
+    const record = await readUpdateCheck(m.stateDir);
+    assert.equal(record.latest, version);
+    assert.deepEqual(record.release, expected, `${version}: the check's record`);
+
+    // Through a check that cannot finish once the registry answered: what it knows is recorded by the same rule.
+    const served = await loopbackRegistry(unreadable(version));
+    try {
+      const halfway = machine({ npm_config_registry: served.url });
+      await seed(halfway, { latest: LATEST, release: { ...VERIFIED } }, new Date(Date.now() - 25 * 3_600_000));
+      const inner = unreadable(version);
+      const bare = openCore({ env: halfway.env });
+      const outcome = await checkForUpdates(bare, halfway.env, {
+        deps: {
+          registry: inner.registry,
+          verifyRelease: inner.verifyRelease,
+          tarballs: inner.tarballs,
+          globalPackages: async () => ({}),
+        },
+      });
+      assert.equal(outcome.asked, true);
+      assert.ok(inner.tarballsAsked.length > 0, `${version}: its tarball was asked for, halfway`);
+      const after = await readUpdateCheck(halfway.stateDir);
+      assert.equal(after.latest, version);
+      assert.match(String(after.lastError), /opened without its caller/);
+      assert.deepEqual(after.release, expected, `${version}: the record of a check that could not finish`);
+    } finally {
+      await served.close();
+    }
+  }
+});
+
 test("core's update-check-child writes the verified flags, and a channel's unverified check after it keeps them", async () => {
   // The same world the fixture CLI verifies with: 99.0.0 declares a security fix in its tarball, and its registry
   // document says nothing. The tarball's bytes are deterministic, so what is served here is what the child verifies.
