@@ -229,14 +229,16 @@ again that day. A prerelease never counts as an update. A command at a terminal 
 answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from; a server never
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
-`jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. The registry's `latest` counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version
-with build metadata is the registry's own text, so the check records none, no notice, doctor row, `--check` or
-refusal says it, and `update` refuses it without repeating it. Where that process cannot be started, the command
-asks in its own process, as before, and ends once the ask has. An ask cut short — a process ended part-way — does
-not use up the day: another process asks a couple of minutes later. Nor does a busy machine get in the way: deciding a
-tool call's or a command's line, or a preview's security line, waits at most 2 seconds for the lock on
-`update-check.json`; busy past that, the call goes on without it, and a later one says it.
+`jq` or an agent's shell tool waits at most about three seconds longer than usual (two more on a machine so busy that
+the lock below stays taken throughout), and never for npm's registry or `npm ls` behind it. The registry's `latest`
+counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version with build metadata is the registry's own text,
+so the check records none, no notice, doctor row, `--check` or refusal says it, and `update` refuses it without
+repeating it. Where that process cannot be started, the command asks in its own process, as before, and ends once the
+ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple of
+minutes later. Nor does a busy machine get in the way: claiming the day's check, and deciding a tool call's or a
+command's line or a preview's security line, each wait at most 2 seconds for the lock on `update-check.json`, however
+often it changes hands meanwhile; busy past that, the call goes on without it, and a later one claims the check or
+says the line.
 
 **What a release declares comes from the release itself.** The check reads core's full document too, for which
 releases there are: a decision that any release since the oldest one here needs, and whether the latest is a security

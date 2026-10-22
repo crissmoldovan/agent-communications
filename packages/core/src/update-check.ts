@@ -17,6 +17,7 @@ import {
   type ReleaseFacts,
   readUpdateCheck,
   UPDATE_CHECK_LEASE_MS,
+  UPDATE_NOTICE_LOCK,
   type UpdateCheckRecord,
   updateCheckDue,
   updateCheckEnabled,
@@ -122,6 +123,11 @@ export async function checkForUpdates(
  * claim written before anyone asks, so of two processes that both found it a day old, one asks. The time is read under
  * the lock too: read before it, the second process's time could be earlier than the first's claim, which reads as a
  * clock gone back.
+ *
+ * A claim is best effort, as a notice is (`UPDATE_NOTICE_LOCK`): 2 s at most for the lock, however often it changes
+ * hands meanwhile, then null, and a later process claims. Every command's and every tool call's check claims here,
+ * before the person's output is done; waited out holder by holder, as a record that matters waits, a busy machine's
+ * refreshes kept a finished command's process and its stdout open for up to 15 s (0.26.0 review B).
  */
 export async function claimUpdateCheck(
   core: Core,
@@ -131,12 +137,16 @@ export async function claimUpdateCheck(
   // Due by the machine's level: a day on `auto`, 14 days on `every-14-days` (design 2026-10-16, U2).
   const enabled = options.intervalMs === undefined ? await updateCheckEnabled(core, {}).catch(() => null) : null;
   const intervalMs = options.intervalMs ?? (enabled?.on ? enabled.intervalMs : undefined);
-  const claim = await changeUpdateCheck<string>(core.paths.stateDir, (record) => {
-    const claimedAt = now();
-    if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
-    const checking = claimedAt.toISOString();
-    return { record: { ...record, checking }, result: checking };
-  }).catch(() => null);
+  const claim = await changeUpdateCheck<string>(
+    core.paths.stateDir,
+    (record) => {
+      const claimedAt = now();
+      if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
+      const checking = claimedAt.toISOString();
+      return { record: { ...record, checking }, result: checking };
+    },
+    UPDATE_NOTICE_LOCK,
+  ).catch(() => null);
   return claim?.result ?? null;
 }
 

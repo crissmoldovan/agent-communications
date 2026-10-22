@@ -72,8 +72,9 @@ Also:
 - **A person's update no longer loses its record when the machine is busy.** After it installs, the update's record
   of what is on the machine waits up to 2 seconds for each process ahead of it on `update-check.json`, 15 seconds in
   all, and is tried twice. Still busy, the result says `the update was installed; its record will be corrected by the
-  next check` (`recordNote`), and the next check does so. A notice still waits 2 seconds at most for that file, so it
-  never holds a tool call or a command longer than that.
+  next check` (`recordNote`), and the next check does so. A notice, and the claim of the day's check, still wait 2
+  seconds at most for that file, so neither holds a tool call or a command longer than that: busy past it, a later
+  call gives the notice, and a later process claims the check.
 - **The release's check of the event-service tests** reads imports with TypeScript's own scanner, so an apostrophe
   inside a regular expression no longer hides an import that comes after it.
 

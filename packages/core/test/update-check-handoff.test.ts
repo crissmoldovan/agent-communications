@@ -25,6 +25,7 @@ import {
   type UpdateCheckRecord,
 } from '../src/update-state.ts';
 import { moduleUrl, realTemp, writeManaged, writePackage } from './fixtures/cli-command/trees.ts';
+import { holdLock } from './helpers/hold-lock.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -165,6 +166,45 @@ test("the server's check is handed on too, and waits no longer than the lease", 
   const again = recorder();
   assert.equal((await checkForUpdates(m.core, m.env, { handOff: { start: again.start } })).asked, false);
   assert.equal(again.calls.length, 0);
+});
+
+test('a claim waits 2 s at most for a lock handed on, so the command can end while the lock still changes hands', async () => {
+  /*
+   * 0.26.0 review B, finding 1. Holders of 1 s each, back to back, as a busy machine's refreshes hand the lock on.
+   * Waited out holder by holder, as a record that matters waits (`UPDATE_CHECK_LOCK`), the claim kept the command's
+   * process, and its stdout, for up to 15 s after the command had finished, and a `$(…)`, a pipe or an agent's shell
+   * waited with it. A claim is best effort, as a notice is: busy past 2 s, nothing is claimed, and a later process
+   * claims the day's check.
+   */
+  const m = machine();
+  await due(m);
+  const held = holdLock(
+    join(m.stateDir, '.update-check.lock'),
+    Array.from({ length: 8 }, () => 1_000),
+  );
+  await held.taken;
+  let over = false;
+  void held.then(() => {
+    over = true;
+  });
+  const handed = recorder();
+  const started = Date.now();
+  await terminalUpdateHooks(m.core, m.env, { handOff: { start: handed.start }, childEntry: OWN }).check?.();
+  const waited = Date.now() - started;
+  assert.equal(over, false, `the command's check waited ${waited} ms, until the lock was free`);
+  assert.ok(waited < 4_000, `the command's check waited ${waited} ms`);
+  // A server's check claims the same way: it goes on, and a later call claims.
+  const outcome = await checkForUpdates(m.core, m.env, { handOff: { start: handed.start } });
+  assert.equal(over, false, "the server's check waited until the lock was free");
+  assert.equal(outcome.asked, false);
+  assert.deepEqual(handed.calls, [], 'a check was started with no claim');
+  await held;
+  assert.equal((await readUpdateCheck(m.stateDir)).checking, null, 'nothing was claimed while the lock was busy');
+  // Once the lock is free, the next process claims the check, and hands it on.
+  const later = recorder();
+  await terminalUpdateHooks(m.core, m.env, { handOff: { start: later.start }, childEntry: OWN }).check?.();
+  assert.equal(later.calls.length, 1);
+  assertCoreWords(m, (later.calls[0] as Started).words, (await readUpdateCheck(m.stateDir)).checking as string);
 });
 
 test('with no core located, the channel checks as before', async () => {

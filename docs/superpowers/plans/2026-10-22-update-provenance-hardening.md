@@ -1469,3 +1469,9 @@ a wave before the next starts.
   - `UPDATE_CHECK_LOCK` and `RECORD_DEFERRED` are Task 3's.
   - `GLOBAL_MISMATCH` and `installVerifiedGlobal` are Task 9's, read in 11.
 - **Review Focus:** each of the five lines has its test in its owning task (1, 2, 4, 9, 10).
+
+## Decisions made during the build
+
+| Question | Decision | Reason |
+| --- | --- | --- |
+| 0.26.0 review B — how long does claiming the day's check wait for its lock? | As a notice does: `claimUpdateCheck` passes `UPDATE_NOTICE_LOCK`, 2 s in all however often the lock changes hands. Busy past it, nothing is claimed, and a later process claims the check. R2's per-holder wait (`UPDATE_CHECK_LOCK`) stays for the writes that matter: an update's record and a check's findings. | Every command and tool call claims before its output is done. Waited out holder by holder, the claim kept a finished command's process and its stdout open for up to 15 s (review B measured `audit tail --json` printing at 3.2 s and exiting at 15.1 s), and `$(…)`, pipes and agents' shell tools waited with it. A claim missed costs nothing: the check is still due, and the next process claims it. |
