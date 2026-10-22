@@ -1547,6 +1547,71 @@ test('agentcomms update --background [--dry-run]: the run, as the job starts it;
   assert.deepEqual(await pointerOf(m, GMAIL), { current: `${LATEST}-gmail`, previous: `${OLD}-gmail` });
 });
 
+test("agentcomms update --background says what the hold counts from: the time Rekor signed, or this machine's first sight", async () => {
+  // Since 0.26.0 (design 2026-10-22 P4) a hold never counts from the registry's `time`. The printed run used to say
+  // the release "came out" at the hold's start, and, without one, "at a time the registry does not give".
+  const printed = async (m: Machine, deps: BackgroundDeps) => {
+    const written: string[] = [];
+    const write = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      if (typeof chunk === 'string') {
+        written.push(chunk);
+        return true;
+      }
+      return (write as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+    }) as typeof process.stdout.write;
+    try {
+      const code = await main(['update', '--background', '--dry-run'], { ...m.env, CLAUDECODE: '1' }, 'linux', {
+        updateBackground: deps,
+      });
+      return { code, lines: written.join('').split('\n') };
+    } finally {
+      process.stdout.write = write;
+    }
+  };
+  const after = (at: Date, hours: number) => new Date(at.getTime() + hours * 3_600_000).toISOString();
+
+  // Signed 10 hours ago, though the registry says 500: held from the signed time.
+  const m = await launched();
+  const signed = await printed(
+    m,
+    world(m, { releases: [{ version: LATEST, publishedAt: hoursAgo(500), signedAt: hoursAgo(10) }] }).deps,
+  );
+  assert.equal(signed.code, 0, signed.lines.join('\n'));
+  assert.equal(
+    signed.lines[2],
+    `${LATEST}: its hold counts from ${hoursAgo(10).toISOString()}, when Rekor signed for it; it may install 72 hours after, at ${after(hoursAgo(10), 72)}.`,
+  );
+
+  // A security fix, signed 10 hours ago: the same, with its own hold.
+  const s = await launched();
+  const security = await printed(
+    s,
+    world(s, { releases: [{ version: LATEST, signedAt: hoursAgo(10), declares: { security: true } }] }).deps,
+  );
+  assert.equal(
+    security.lines[2],
+    `${LATEST}, a security fix: its hold counts from ${hoursAgo(10).toISOString()}, when Rekor signed for it; it may install 24 hours after, at ${after(hoursAgo(10), 24)}.`,
+  );
+
+  // No signed time (an inclusion proof alone): held from this machine's first sight, whatever the registry says.
+  const n = await launched();
+  const unsigned = await printed(
+    n,
+    world(n, {
+      releases: [{ version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog: 'proof' } }],
+    }).deps,
+  );
+  assert.equal(
+    unsigned.lines[2],
+    `${LATEST}: its hold counts from ${NOW.toISOString()}, when this machine first saw it, as its provenance carries no time Rekor signed; it may install 72 hours after, at ${after(NOW, 72)}.`,
+  );
+
+  for (const { lines } of [signed, security, unsigned]) {
+    assert.doesNotMatch(lines.join('\n'), /came out \d{4}-|the registry does not give/, 'no registry time is told');
+  }
+});
+
 test('the offline self-check: the CLI says the release, and its server answers — started with no account to reach', async () => {
   const m = machine();
   /** A runtime whose CLI says `says` for --version and, for `mcp`, answers as a server would — or exits at once. */
