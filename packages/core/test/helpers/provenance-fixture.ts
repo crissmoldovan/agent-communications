@@ -152,6 +152,19 @@ export function trustedRoot(): Record<string, unknown> {
 
 // ── One provenance bundle ───────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * What a bundle's transparency-log entries carry, as `ProvenanceShape.tlog`:
+ * - `'promise'`: one entry with an inclusion promise (a SET) and no proof, in a v0.1 bundle: the bundle these tests
+ *   have always made, and the default.
+ * - `'both'`: one entry with a promise and an inclusion proof, as npm's provenance for 0.25.0 carries (design
+ *   2026-10-22 §7.2), in a v0.3 bundle with the certificate on its own.
+ * - `'proof'`: one entry with an inclusion proof and no promise, in a v0.2 bundle (v0.1 requires a promise).
+ * - `'two'`: two entries, each with its own promise, log index and integrated time, in a v0.1 bundle.
+ * - `'bad-promise'`: `'promise'` with one byte of the SET changed.
+ * - `'none'`: no entry at all.
+ */
+export type TlogShape = 'promise' | 'both' | 'proof' | 'two' | 'bad-promise' | 'none';
+
 /** What a bundle says. Each field defaults to what a release of `version` built by release.yml says. */
 export interface ProvenanceShape {
   packageName: string;
@@ -168,6 +181,13 @@ export interface ProvenanceShape {
   subjectName?: string;
   subjectSha512?: string;
   predicateType?: string;
+  /**
+   * When this release was signed: the certificate's validity, its SCT's time and the transparency log's integrated
+   * time all follow it. It wins over `provenanceBundle`'s second parameter, so a test can give each release its own.
+   */
+  signedAt?: Date;
+  /** What its transparency-log entries carry (`TlogShape`); `'promise'` when not given. */
+  tlog?: TlogShape;
 }
 
 const REPOSITORY = 'https://github.com/crissmoldovan/agent-communications';
@@ -223,11 +243,34 @@ function sctFor(precertificate: Buffer, at: Date): Buffer {
   return Buffer.concat([list, item, sct]);
 }
 
+/**
+ * An inclusion proof for `body` as the only leaf of a tree of size 1 (RFC 6962: its root is the leaf's hash), with a
+ * checkpoint note signed by the test's transparency log, its key hint the first 4 bytes of the log's key id.
+ */
+function inclusionProofFor(body: Buffer): Record<string, unknown> {
+  const rootHash = createHash('sha256')
+    .update(Buffer.from([0x00]))
+    .update(body)
+    .digest();
+  const note = `rekor.comms.test - 1\n1\n${rootHash.toString('base64')}\n`;
+  const signature = sign('sha256', Buffer.from(note, 'utf8'), transparencyLog.privateKey);
+  const signed = Buffer.concat([keyId(transparencyLog.publicKey).subarray(0, 4), signature]).toString('base64');
+  return {
+    logIndex: '0',
+    rootHash: rootHash.toString('base64'),
+    treeSize: '1',
+    hashes: [],
+    checkpoint: { envelope: `${note}\n— rekor.comms.test ${signed}\n` },
+  };
+}
+
 /** The bundle, as npm's endpoint holds it under `attestations[].bundle`, for exactly `shape`. */
 export function provenanceBundle(
   shape: ProvenanceShape,
-  signedAt: Date = new Date('2026-10-10T12:00:00Z'),
+  signedAtByDefault: Date = new Date('2026-10-10T12:00:00Z'),
 ): Record<string, unknown> {
+  const signedAt = shape.signedAt ?? signedAtByDefault;
+  const tlog = shape.tlog ?? 'promise';
   const tag = `refs/tags/v${shape.version}`;
   const leaf = ec();
   const fulcio = (id: string, value: string) => extension(`1.3.6.1.4.1.57264.1.${id}`, utf8(value));
@@ -296,34 +339,70 @@ export function provenanceBundle(
   );
   const integratedTime = Math.floor(signedAt.getTime() / 1000);
   const logIndex = 4242;
-  const promise = sign(
-    'sha256',
-    Buffer.from(
-      canonical({
-        body: entryBody.toString('base64'),
-        integratedTime,
-        logID: keyId(transparencyLog.publicKey).toString('hex'),
-        logIndex,
-      }),
-      'utf8',
-    ),
-    transparencyLog.privateKey,
-  );
+  /** The SET Rekor signs for an entry: over its body, integrated time, log id and log index. */
+  const promiseFor = (time: number, index: number): Buffer =>
+    sign(
+      'sha256',
+      Buffer.from(
+        canonical({
+          body: entryBody.toString('base64'),
+          integratedTime: time,
+          logID: keyId(transparencyLog.publicKey).toString('hex'),
+          logIndex: index,
+        }),
+        'utf8',
+      ),
+      transparencyLog.privateKey,
+    );
+  const entry = (time: number, index: number, carries: { promise?: Buffer; proof?: boolean }) => ({
+    logIndex: String(index),
+    logId: { keyId: keyId(transparencyLog.publicKey).toString('base64') },
+    kindVersion: { kind: 'dsse', version: '0.0.1' },
+    integratedTime: String(time),
+    ...(carries.promise === undefined
+      ? {}
+      : { inclusionPromise: { signedEntryTimestamp: carries.promise.toString('base64') } }),
+    ...(carries.proof ? { inclusionProof: inclusionProofFor(entryBody) } : {}),
+    canonicalizedBody: entryBody.toString('base64'),
+  });
+  const changed = (signature: Buffer): Buffer => {
+    const copy = Buffer.from(signature);
+    copy[copy.length - 1] = (copy[copy.length - 1] as number) ^ 0x01;
+    return copy;
+  };
+  const tlogEntries =
+    tlog === 'none'
+      ? []
+      : tlog === 'two'
+        ? [
+            entry(integratedTime, logIndex, { promise: promiseFor(integratedTime, logIndex) }),
+            entry(integratedTime + 60, logIndex + 1, { promise: promiseFor(integratedTime + 60, logIndex + 1) }),
+          ]
+        : [
+            entry(integratedTime, logIndex, {
+              ...(tlog === 'proof'
+                ? {}
+                : {
+                    promise:
+                      tlog === 'bad-promise'
+                        ? changed(promiseFor(integratedTime, logIndex))
+                        : promiseFor(integratedTime, logIndex),
+                  }),
+              proof: tlog === 'proof' || tlog === 'both',
+            }),
+          ];
+  const certificateMaterial =
+    tlog === 'both'
+      ? { certificate: { rawBytes: certificate.toString('base64') } }
+      : { x509CertificateChain: { certificates: [{ rawBytes: certificate.toString('base64') }] } };
   return {
-    mediaType: 'application/vnd.dev.sigstore.bundle+json;version=0.1',
-    verificationMaterial: {
-      x509CertificateChain: { certificates: [{ rawBytes: certificate.toString('base64') }] },
-      tlogEntries: [
-        {
-          logIndex: String(logIndex),
-          logId: { keyId: keyId(transparencyLog.publicKey).toString('base64') },
-          kindVersion: { kind: 'dsse', version: '0.0.1' },
-          integratedTime: String(integratedTime),
-          inclusionPromise: { signedEntryTimestamp: promise.toString('base64') },
-          canonicalizedBody: entryBody.toString('base64'),
-        },
-      ],
-    },
+    mediaType:
+      tlog === 'both'
+        ? 'application/vnd.dev.sigstore.bundle.v0.3+json'
+        : tlog === 'proof'
+          ? 'application/vnd.dev.sigstore.bundle+json;version=0.2'
+          : 'application/vnd.dev.sigstore.bundle+json;version=0.1',
+    verificationMaterial: { ...certificateMaterial, tlogEntries },
     dsseEnvelope: {
       payload: payload.toString('base64'),
       payloadType,
