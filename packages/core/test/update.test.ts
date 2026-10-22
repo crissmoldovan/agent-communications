@@ -38,6 +38,7 @@ import { writeManaged } from './fixtures/cli-command/trees.ts';
 import { assertNoBareCommand, coreHandoffs, locatedCoreLine } from './helpers/handoffs.ts';
 import {
   attestationsEndpoint,
+  fixtureTarballs,
   integrityOf,
   type ListedRelease,
   type ProvenanceShape,
@@ -375,6 +376,7 @@ function fakes(
     latestVersion,
     registry: packumentRegistry(options.latest ?? EVERYTHING_LATEST, options.releases).read,
     verifyRelease: testReleaseVerifier(endpoint),
+    tarballs: fixtureTarballs,
     globalPackages: async () => ({ ...installed }),
     installGlobal: async (spec: string) => {
       globals.push(spec);
