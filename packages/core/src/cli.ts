@@ -653,11 +653,10 @@ export async function main(
   }
 
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
-  // given the notice it is part of — it is run before the notice, as the server is.
+  // given the notice it is part of — it is run before the notice, as the server is. With core's own verifier, so what a
+  // release declares is read from its verified tarball (design 2026-10-22 P1); a test hands in its own.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
-    return runCommand(output, () =>
-      runUpdateCheckChild(core, env, sub, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
-    );
+    return runCommand(output, () => runUpdateCheckChild(core, env, sub, { deps: deps.update ?? coreUpdateDeps(core) }));
   }
 
   // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for

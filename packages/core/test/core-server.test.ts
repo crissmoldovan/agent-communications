@@ -39,7 +39,7 @@ import {
   HOSTILE_EXPECT,
   HOSTILE_FILE_NAME,
 } from './helpers/hostile-approval.ts';
-import { registryOf, tarballOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
+import { fixtureTarballs, registryOf, tarballOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -1868,7 +1868,7 @@ test(
     eventsRuntime(m, VERSION);
     // Core verifies the release whose runtime it registers on, against the test's own trust root: nothing reaches npm.
     const { ok, close } = await connect(m, {
-      update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier() },
+      update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier(), tarballs: fixtureTarballs },
     });
     try {
       const args = { channel: 'events', client: 'cursor', noVerify: true };

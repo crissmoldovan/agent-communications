@@ -428,10 +428,10 @@ test('two processes that find the file a day old at the same moment ask the regi
     writeFileSync(go, '');
     const outcomes = await Promise.all([one.done, two.done]);
     assert.deepEqual(outcomes.map((outcome) => outcome.asked).sort(), [false, true], 'one of them asked');
-    // Once between them — the latest, then core's full document, for what its releases declare (design 2026-10-16,
-    // U5, U7: every release since the one here, not only the latest's own).
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore'], 'the registry was asked once');
-    assert.deepEqual(served.documents, ['abbreviated', 'full']);
+    // Once between them — the latest. A process with no verifier reads no document for what its releases declare: it
+    // could believe none of it (design 2026-10-22, P2).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore'], 'the registry was asked once');
+    assert.deepEqual(served.documents, ['abbreviated']);
     assert.equal((await readUpdateCheck(m.stateDir)).latest, LATEST);
   } finally {
     await served.close();
@@ -1179,9 +1179,9 @@ test('a registry slower than the terminal waits is still heard from: the check f
     const record = await readUpdateCheck(m.stateDir);
     assert.equal(record.lastError, null);
     assert.equal(record.checking, null, 'the claim was given up');
-    // The latest, then core's full document, for what its releases declare (design 2026-10-16, U5, U7).
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore']);
-    assert.deepEqual(served.documents, ['abbreviated', 'full']);
+    // The latest, and no document for what its releases declare: nothing here verifies (design 2026-10-22, P2).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore']);
+    assert.deepEqual(served.documents, ['abbreviated']);
   } finally {
     await served.close();
   }
@@ -1294,8 +1294,9 @@ test('a child that cannot be started loses nothing: the command asks in its own 
       assert.match(tty.err(), /agent-communications 99\.0\.0 is out/, label);
       const record = await readUpdateCheck(m.stateDir);
       assert.deepEqual([record.latest, record.checking], [LATEST, null], label);
-      // The latest, and the release's own document (design 2026-10-16, U7): one ask.
-      assert.equal(served.requests.length, asked + 2, `${label}: asked ${served.requests.length - asked} times`);
+      // The latest: one ask. Nothing here verifies, so no document is read for what a release declares (design
+      // 2026-10-22, P2).
+      assert.equal(served.requests.length, asked + 1, `${label}: asked ${served.requests.length - asked} times`);
     }
   } finally {
     await served.close();
