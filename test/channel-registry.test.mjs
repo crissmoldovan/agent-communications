@@ -848,6 +848,97 @@ test('REL-c: a hold is read from the package, and refused where it cannot apply'
   );
 });
 
+test('REL-d: core declares a security fix or a needed decision, as booleans and nothing else', async () => {
+  /*
+   * Update provenance, hardened (P1): core's `"agentcommsRelease"` says what a release is — a security fix, a release
+   * that needs a decision before it installs, or both — and the release checks hold it to the changelog. It is never a
+   * hold, and only these two keys, each true or false, mean anything: anything else is refused here, before a tag.
+   */
+  const { root } = await treeWithLibrary();
+  const corePath = join(root, 'packages', 'core', 'package.json');
+  const core = JSON.parse(await readFile(corePath, 'utf8'));
+  const declare = (release) => writeFile(corePath, JSON.stringify({ ...core, agentcommsRelease: release }));
+
+  // Nothing declared reads as neither.
+  assert.deepEqual(loadRegistry(root).releaseFlags, { security: false, needsDecision: false });
+
+  for (const [release, flags] of [
+    [{ security: true }, { security: true, needsDecision: false }],
+    [
+      { needsDecision: true, security: false },
+      { security: false, needsDecision: true },
+    ],
+    [{ needsDecision: true }, { security: false, needsDecision: true }],
+    [
+      { security: true, needsDecision: true },
+      { security: true, needsDecision: true },
+    ],
+  ]) {
+    await declare(release);
+    const registry = loadRegistry(root);
+    assert.deepEqual(registry.releaseFlags, flags, JSON.stringify(release));
+    // A declaration, not a hold: core is still the first package a tag publishes.
+    assert.ok(!registry.held.some((entry) => entry.directory === 'core'), 'core was held');
+    assert.equal(registry.packages[0], 'core');
+  }
+
+  const where = 'packages/core/package.json: ';
+  const shape = `${where}"agentcommsRelease" on core declares "security" and "needsDecision" only, each true or false`;
+  const empty = `${where}"agentcommsRelease" on core declares neither "security" nor "needsDecision"`;
+  const hold = `${where}core cannot be held back from a release: every channel depends on it at exactly its own version, so a release without it installs nothing`;
+  for (const [release, message] of [
+    [{}, empty],
+    [{ security: 'yes' }, shape],
+    [{ needsDecision: 1 }, shape],
+    [{ security: true, needsDecision: null }, shape],
+    [{ security: true, until: 1 }, shape],
+    [{ security: true, hold: 'x' }, hold],
+    [{ hold: 'Not this release.' }, hold],
+    [true, shape],
+    ['security', shape],
+    [null, shape],
+    [['security'], shape],
+  ]) {
+    await declare(release);
+    assert.throws(
+      () => loadRegistry(root),
+      (error) => {
+        assert.equal(error.message, message, JSON.stringify(release));
+        return true;
+      },
+      JSON.stringify(release),
+    );
+  }
+  await writeFile(corePath, JSON.stringify(core));
+
+  // Another package's field is still a hold and nothing else: a channel or a library cannot declare a flag.
+  const slackPath = join(root, 'packages', 'slack', 'package.json');
+  const slack = JSON.parse(await readFile(slackPath, 'utf8'));
+  for (const [directory, path, manifest] of [
+    ['slack', slackPath, slack],
+    ['shelf', join(root, 'packages', 'shelf', 'package.json'), libraryManifest(core.version)],
+  ]) {
+    for (const [key, release] of [
+      ['security', { security: true }],
+      ['needsDecision', { needsDecision: true }],
+    ]) {
+      await writeFile(path, JSON.stringify({ ...manifest, agentcommsRelease: release }));
+      assert.throws(
+        () => loadRegistry(root),
+        (error) => {
+          assert.equal(
+            error.message,
+            `packages/${directory}/package.json: "agentcommsRelease" has unknown key "${key}"; it is { "hold": "<why, one sentence>" } and nothing else`,
+          );
+          return true;
+        },
+      );
+    }
+    await writeFile(path, JSON.stringify(manifest));
+  }
+  assert.deepEqual(loadRegistry(root).releaseFlags, { security: false, needsDecision: false });
+});
+
 /**
  * Every channel carries the core it was released with (design 2026-10-04, D4).
  *
