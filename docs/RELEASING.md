@@ -124,7 +124,8 @@ pnpm sync:versions          # every package manifest, two plugin files, the laun
 pnpm build && pnpm run licenses # third-party notices, read from what each bundle actually contains
 
 # 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`. The tag gate refuses a version
-#    with no section, and the GitHub release is made from it.
+#    with no section, or one that does not say what core declares the release to be (see "Declaring a security fix
+#    or a needed decision"), and the GitHub release is made from it.
 
 # 3. Commit and push. What is published must be what anyone else can read.
 
@@ -207,6 +208,56 @@ to find out would be a consumer whose install of `gmail-mcp` cannot resolve the 
 commit each version records, not only the version, because the GitHub release waits for it: a package at the right
 version from any other commit fails the run there, at once, and gets no release page.
 
+## Declaring a security fix or a needed decision
+
+A release can say two things about itself that change how every machine's update treats it. Only core says them, in
+the same field a package uses to be held back, `agentcommsRelease` in `packages/core/package.json`:
+
+```json
+"agentcommsRelease": { "security": true, "needsDecision": true }
+```
+
+Either key alone, or both; those two keys and no other, each `true` or `false`. `{}` is refused, and so is a `hold`:
+core is never held back (`scripts/channels.mjs`). What each does:
+
+- **`"security": true`, a security fix.** The background run holds it for 24 hours instead of 72, and a pause does not
+  hold it at all. It is announced at once wherever it would not install on its own, and there the next Gmail or Resend
+  send preview, or Slack post preview, opens with a line about it until the person answers one.
+- **`"needsDecision": true`, a release that needs a decision before it installs:** a migration, or a changed safety
+  default. It never installs in the background, and neither does a later release that takes a machine past it. The
+  by-hand update's preview names it, and the person's yes to that preview is the decision, so its changelog section
+  says what the decision is.
+
+**The changelog section must say the same, both ways.** `scripts/release-flags.mjs` reads the version's own section,
+the lines after `## X.Y.Z` up to the next `## `, and holds core's flags to its marker lines:
+
+| Core's `package.json` declares | A line of the section starts with |
+|---|---|
+| `"security": true` | `**Security fix.**` |
+| `"needsDecision": true` | `**Needs a decision before it installs.**` |
+
+A flag without its marker line is refused, and so is a marker line without its flag. A marker counts only as the very
+first words of a line, so put it there and say after it what the release fixes, or what the decision is: the GitHub
+release is made from this section. `pnpm release` and the tag gate in `release.yml` both run the check, before anything
+is sent, and each refusal names the file and the marker. `pnpm verify` does not, because the changes being made sit
+under `## Unreleased`, which names no version.
+
+**Remove the flags in the next release.** Nothing else takes a flag out of core's `package.json` once its release is
+out, and left there it would declare the next release a security fix, or one needing a decision, too. The next
+version's section carries no marker, so its release is refused until the flag goes: delete `agentcommsRelease` from
+core's `package.json` in that release's version commit, and keep both markers out of its section.
+
+**Why the release itself, and not the registry.** From 0.26.0 an update believes either flag only from the verified
+release: core downloads the release's tarball, keeps it only when its SHA-512 is the digest its Sigstore provenance
+signs, and reads `package/package.json` from inside it. The registry's copy of the manifest decides nothing, since a
+registry or a mirror could add or remove a flag on a genuine release. So a flag counts only in the commit that is
+tagged and built; none can be added after the publish. Machines still on 0.20.0 to 0.25.0 read the same field from the
+registry's copy of the manifest, which carries it as published.
+
+**0.26.0 declares neither.** It hardens updates against registry tampering that nobody is known to be exploiting.
+Declaring `security: true` for a precaution would have given every machine on 0.20.0 to 0.25.0 the urgent notice and
+the 24-hour hold, and nothing in it needs a decision.
+
 ## A package held back from release
 
 A package this repository publishes can be left out of the releases before its first one: it says so in its own
@@ -219,7 +270,8 @@ unrelated patch, would stop for the owner to publish by hand a public API nothin
 `pnpm verify`, on every release leg: it is in `PUBLISHABLE`, which those checks walk. It is left out of the release:
 `PACKAGES`, which the workflow's publish and confirm loops, the OIDC preflight and `scripts/release.mjs` read, does not
 name it, so a release never reads it from the registry, proves it, sends it or confirms it. The registry
-(`scripts/channels.mjs`) refuses a hold on core, on a private package and on one that declares nothing, and
+(`scripts/channels.mjs`) refuses a hold on core, whose `agentcommsRelease` declares its release flags instead
+([above](#declaring-a-security-fix-or-a-needed-decision)), on a private package and on one that declares nothing, and
 `test/release-packages.test.mjs` fails `pnpm verify` while a package a tag publishes depends at runtime on a held one.
 So the release of the first package that does cannot go out with the hold still in place.
 
