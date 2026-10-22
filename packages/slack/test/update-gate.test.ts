@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   asV2,
   claimUpdateCheck,
@@ -560,4 +561,90 @@ test('agent-slack finishes the update check a command handed on: under its claim
   assert.deepEqual([record.lastChecked, record.checking], [claimedAt, null]);
   assert.match(String(record.lastError), /could not be reached/);
   assert.doesNotMatch((await command(['--help'])).stdout, new RegExp(UPDATE_CHECK_CHILD_COMMAND));
+});
+
+// ── The day's check, handed to core's CLI (design 2026-10-22, P2) ──────────────────────────────────────────────
+
+/** Core's CLI as Slack finds it from this checkout: through its own dependency on core, at its own version. */
+const CORE_CLI = realpathSync(fileURLToPath(new URL('../node_modules/@agentcomms/core/src/cli.ts', import.meta.url)));
+
+/** The check on and due — the file a day old — with a registry port nobody answers on. */
+function updateDue(harness: Harness): void {
+  harness.env.AGENT_COMMS_UPDATE_CHECK = 'on';
+  harness.env.npm_config_registry = 'http://127.0.0.1:9/';
+  const stateDir = harness.core.paths.stateDir;
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    updateCheckPath(stateDir),
+    JSON.stringify({
+      lastChecked: new Date(Date.now() - 25 * 3_600_000).toISOString(),
+      latest: '99.0.0',
+      behind: true,
+    }),
+  );
+}
+
+/** A start that starts nothing: it records the words it was handed, and says it started them. */
+function recordingStart() {
+  const started: string[][] = [];
+  const start = async (words: readonly string[]) => {
+    started.push([...words]);
+    return true;
+  };
+  return { started, start };
+}
+
+/** The words start core's CLI with the hidden command, under the claim the file holds. */
+async function assertCoreHandOff(harness: Harness, started: string[][]): Promise<void> {
+  assert.equal(started.length, 1, JSON.stringify(started));
+  const [words] = started as [string[]];
+  const claimedAt = (await readUpdateCheck(harness.core.paths.stateDir)).checking;
+  assert.equal(typeof claimedAt, 'string', 'the check was not claimed');
+  assert.deepEqual(words.slice(-2), [UPDATE_CHECK_CHILD_COMMAND, claimedAt]);
+  assert.ok(words.includes(CORE_CLI), `not core's CLI: ${JSON.stringify(words)}`);
+  assert.equal(words[words.indexOf('--config-dir') + 1], harness.core.paths.configDir);
+}
+
+test("agent-slack hands the day's check to core's CLI", async () => {
+  const harness = await newHarness();
+  updateDue(harness);
+  const handed = recordingStart();
+  const exit = await run(['workspace', 'list', '--json'], {
+    core: harness.core,
+    env: harness.env,
+    streams: { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() },
+    openBrowser: () => undefined,
+    probe: (input, init) => harness.probe(input, init),
+    read: refuseEverything,
+    updateHandOff: { start: handed.start },
+  });
+  assert.equal(exit, 0);
+  await assertCoreHandOff(harness, handed.started);
+});
+
+test('the Slack server hands its check to core’s CLI', async () => {
+  const harness = await newHarness();
+  updateDue(harness);
+  const handed = recordingStart();
+  const { server } = await createSlackMcpServer({
+    core: harness.core,
+    env: harness.env,
+    fetch: refuseEverything,
+    probe: (input, init) => harness.probe(input, init),
+    updateHandOff: { start: handed.start },
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '0' });
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+  try {
+    const listed = (await client.callTool({ name: 'slack_workspaces_list', arguments: {} })) as ToolResult;
+    assert.notEqual(listed.isError, true, JSON.stringify(listed.structuredContent));
+    // The check runs beside the call, never before its answer: waited for here.
+    for (const deadline = Date.now() + 10_000; handed.started.length === 0 && Date.now() < deadline; ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await assertCoreHandOff(harness, handed.started);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+  }
 });

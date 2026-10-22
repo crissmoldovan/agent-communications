@@ -3,6 +3,7 @@ import {
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
+  type CoreHandOff,
   canPrompt,
   cliHandoffs,
   colorEnabled,
@@ -111,6 +112,12 @@ export interface CliDeps extends ResendContextOptions {
   platform?: NodeJS.Platform | undefined;
   /** Starts the stdio server. Injected so a test can inspect its inputs without opening stdio. */
   startMcp?: ((options: import('../mcp/server.ts').ResendMcpOptions) => Promise<void>) | undefined;
+  /**
+   * How the day's update check is handed to core's CLI (design 2026-10-22, P2): core's command, at this package's own
+   * version, located and started as the default does. Injected so a test can see what would be started without
+   * starting it.
+   */
+  updateHandOff?: CoreHandOff | undefined;
 }
 
 type Options = Record<string, unknown>;
@@ -249,7 +256,7 @@ Exit codes: 0 ok · 1 unexpected · 10 a send or a change was refused or needs a
       running: VERSION,
       output: output(),
       streams,
-      ...terminalUpdateHooks(core, env),
+      ...terminalUpdateHooks(core, env, { handOff: deps.updateHandOff ?? {} }),
     });
   });
 

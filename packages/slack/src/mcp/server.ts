@@ -2,6 +2,7 @@ import {
   type ApprovalKind,
   approvalNotFound,
   CommsError,
+  type CoreHandOff,
   changeToolResult,
   checkForUpdates,
   type GatedChange,
@@ -122,6 +123,12 @@ export interface SlackMcpOptions extends SlackContextOptions {
   fileDownload?: FileDownloader | undefined;
   /** The command that runs a sign-in's detached listener; the tests point it at the source entry. */
   listenerCommand?: ListenerEntry | undefined;
+  /**
+   * How the day's update check is handed to core's CLI (design 2026-10-22, P2): core's command, at this package's own
+   * version, located and started as the default does. Injected so a test can see what would be started without
+   * starting it.
+   */
+  updateHandOff?: CoreHandOff | undefined;
 }
 
 export interface SlackMcpServer {
@@ -264,7 +271,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       channel: 'slack',
       running: VERSION,
       exempt: ['slack_doctor'],
-      refresh: () => checkForUpdates(context.core, context.env),
+      refresh: () => checkForUpdates(context.core, context.env, { handOff: options.updateHandOff ?? {} }),
     }),
     { slack_file_download: { out: retiredOutHint('mcp') } },
   );
