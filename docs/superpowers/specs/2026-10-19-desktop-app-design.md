@@ -192,8 +192,11 @@ The command is built in Rust from the allow-list. It is never text taken from th
   - refuses a dirty tree, or a commit that is not the tag's.
 
   Then `publish-desktop.sh` makes the GitHub release `desktop-vX.Y.Z` in this repository, with the DMG, the updater's
-  `.app.tar.gz` and `latest.json`. The signing identity and the updater key stay on the owner's Mac, as they do for
-  Supbuddy and QuotaMate. An agent never runs these scripts.
+  `.app.tar.gz` and `latest.json`. The signing identity, the notary profile and the updater key stay on the owner's
+  Mac, as they do for Supbuddy and QuotaMate. An agent may run these scripts once the owner has said so, as Supbuddy's
+  `/release` does, with the version confirmed on the command line instead of typed back at a terminal:
+  `release-desktop.sh desktop-vX.Y.Z --confirm X.Y.Z [--updater off]` and `publish-desktop.sh desktop-vX.Y.Z --confirm
+  X.Y.Z`. **(the owner, 2026-10-21; 0.26.0 design R1, which replaces "An agent never runs these scripts")**
 - **The updater** follows the siblings: tauri-plugin-updater with `requireSignedVersion`, a silent check 60 seconds
   after launch and then every 24 hours, and Check for Updates… in the tray. It reads `latest.json` from this
   repository's releases. **No token is baked into the app,** because this repository is public. An app built without
@@ -374,9 +377,10 @@ the plan, differ, this list is the later word.
   **(lead's call, after review)**
 - **A signed release may have its updater off.** With `plugins.updater.pubkey` empty, `release-desktop.sh` still
   builds, signs and notarises the DMG, with no updater artefacts and no key in the build's environment, after the owner
-  types `off`; `publish-desktop.sh` then publishes without `latest.json`, and says the updater stays off until the key
-  is committed and the next version released. With a pubkey, the key must be there, mode 600 and the pubkey's, or the
-  release is refused — checked before the signing environment is read. **(lead's call, after review)**
+  types `off` (or, run with `--confirm`, is given `--updater off`; 0.26.0 design R1); `publish-desktop.sh` then
+  publishes without `latest.json`, and says the updater stays off until the key is committed and the next version
+  released. With a pubkey, the key must be there, mode 600 and the pubkey's, or the release is refused — checked before
+  the signing environment is read. **(lead's call, after review)**
 - **The DMG is notarised with a notarytool keychain profile** (`agentcomms-notary`, or `AGENTCOMMS_NOTARY_PROFILE`),
   so no password is on a command line. Tauri still reads `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` from its
   environment to notarise the app. **(lead's call, after review)**
