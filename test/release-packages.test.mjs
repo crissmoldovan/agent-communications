@@ -1058,19 +1058,31 @@ test('scripts/release.mjs refuses flags that do not match the changelog', async 
   const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
   // Core's declaration and the check both come from the one module, so a copied release state stands in for the whole
   // check with one file, as `test/laya-release-gate.test.mjs` does for Phase E's gates.
-  assert.match(
-    script,
-    /^import \{ coreReleaseFlags, releaseFlagProblems \} from '\.\/release-flags\.mjs';$/m,
-    'it does not import the flag check',
-  );
   assert.doesNotMatch(script, /from '\.\/channels\.mjs'/, 'it reads the registry itself, past the flag check');
+  // Loaded only once both Phase-E gates have passed, as the Laya gate is: reading core's declaration reads the whole
+  // registry, and a static import would read it before either gate could refuse (E3's and E13's copied trees).
+  assert.doesNotMatch(
+    script,
+    /^import [^;]*'\.\/release-flags\.mjs';$/m,
+    'it reads the flags before the Phase-E gates',
+  );
+  const load = /const \{ coreReleaseFlags, releaseFlagProblems \} = await import\('\.\/release-flags\.mjs'\);/.exec(
+    script,
+  );
+  assert.ok(load, 'it does not load the flag check');
+  const gates = script.indexOf("await requirePhaseEGate('Phase-E strict-test gate', verifyPhaseETestManifest);");
+  assert.ok(gates !== -1 && gates < load.index, 'the flag check is loaded before the Phase-E gates pass');
   // Core's own declaration, against this version's section of the repository's changelog, each problem a refusal.
   const check =
     /for \(const problem of releaseFlagProblems\(\{ version, changelog, flags: coreReleaseFlags\(\) \}\)\) \{\n\s+refuse\(\s*problem,/.exec(
       script,
     );
   assert.ok(check, 'its flag problems are not each a refusal');
-  assert.match(script, /^const changelog = quiet\(\(\) => readFileSync\('CHANGELOG\.md', 'utf8'\), ''\);$/m);
+  assert.ok(load.index < check.index);
+  assert.match(script, /^ {2}const changelog = quiet\(\(\) => readFileSync\('CHANGELOG\.md', 'utf8'\), ''\);$/m);
+  // A declaration that cannot be read is a refusal too, never a release that goes on without the check.
+  const after = script.slice(check.index);
+  assert.match(after, /^[\s\S]*?\} catch \(error\) \{\n\s+refuse\(\n\s+`the release flags could not be checked: /);
   // Gathered with the rest, before any is printed: nothing is verified or sent past one.
   const printed = script.indexOf('if (failures.length > 0) {');
   assert.ok(printed !== -1 && check.index < printed, 'the flags are checked after the refusals are printed');

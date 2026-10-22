@@ -22,7 +22,6 @@ import { join } from 'node:path';
 // about Slack — a local release would have published three, confirmed three and reported success.
 import { PACKAGES, SCOPE } from './packages.mjs';
 import { isVisible } from './release-confirm.mjs';
-import { coreReleaseFlags, releaseFlagProblems } from './release-flags.mjs';
 import { verifyPhaseEPrerequisites } from './verify-events-phase-e-prerequisites.mjs';
 import { verifyPhaseETestManifest } from './verify-events-phase-e-tests.mjs';
 
@@ -155,13 +154,23 @@ try {
 // Core may declare this release a security fix, or one that needs a decision before it installs, and an update
 // believes either from the verified release: it changes the hold, the notice and whether it installs in the
 // background. Flags left in packages/core/package.json from the last release would otherwise apply to this one, so
-// they must be what this version's changelog section says, both ways. The tag gate runs the same check.
-const changelog = quiet(() => readFileSync('CHANGELOG.md', 'utf8'), '');
-for (const problem of releaseFlagProblems({ version, changelog, flags: coreReleaseFlags() })) {
+// they must be what this version's changelog section says, both ways. The tag gate runs the same check. Loaded only
+// here, after both Phase-E gates have passed, as the Laya gate is: reading core's declaration reads the registry.
+try {
+  const { coreReleaseFlags, releaseFlagProblems } = await import('./release-flags.mjs');
+  const changelog = quiet(() => readFileSync('CHANGELOG.md', 'utf8'), '');
+  for (const problem of releaseFlagProblems({ version, changelog, flags: coreReleaseFlags() })) {
+    refuse(
+      problem,
+      'Write this version’s changelog section; declare a flag in packages/core/package.json only with its marker ' +
+        'line there, and remove one left from the last release (docs/RELEASING.md, "Declaring a security fix or a ' +
+        'needed decision").',
+    );
+  }
+} catch (error) {
   refuse(
-    problem,
-    'Write this version’s changelog section; declare a flag in packages/core/package.json only with its marker line ' +
-      'there, and remove one left from the last release (docs/RELEASING.md, "Declaring a security fix or a needed decision").',
+    `the release flags could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+    'Fix what it names; core declares { "security": true }, { "needsDecision": true } or both, as booleans and nothing else.',
   );
 }
 
