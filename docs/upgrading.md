@@ -33,12 +33,12 @@ pinned to an older release, the managed runtimes those will need, and the `@agen
 each with the version it has and the latest. It asks the registry only about the packages this computer uses.
 
 Without `--check` it prepares one change and shows every step of it: each registration registered again at the latest
-release under the name, client, scope, launcher and pins it has now; each runtime it installs; each
-`npm install -g <package>@<version>`. Nothing happens until you approve it, as for any other change: at a terminal you
-type `yes` (or, under the `confirm` change policy, the code it shows); an agent gets the preview and an approval id,
-and calls again with it — `--approval <id>`, or `approvalId` — once you have agreed. The approval is for those steps at
-those versions: a release published in between is a different change, and is refused. With nothing behind, it says
-so and prepares nothing.
+release under the name, client, scope, launcher and pins it has now; each runtime it installs; each global package,
+installed from its verified tarball with `npm install -g` and checked afterwards. Nothing happens until you approve
+it, as for any other change: at a terminal you type `yes` (or, under the `confirm` change policy, the code it shows);
+an agent gets the preview and an approval id, and calls again with it — `--approval <id>`, or `approvalId` — once you
+have agreed. The approval is for those steps at those versions: a release published in between is a different
+change, and is refused. With nothing behind, it says so and prepares nothing.
 
 **Every release it would install is verified first**, before the preview is made and again when the approval is
 claimed, against the same pins as the background run (below): each runtime it installs, each launcher it switches, each
@@ -47,12 +47,25 @@ each global package. The preview ends with one line a package: `@agentcomms/gmai
 preview: built by this repository's release workflow …`. One release with no attestation, or one that names anything
 else, refuses the whole update with `BAD_DATA` — `nothing was installed or changed: <package>@<version> could not be
 verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
-No flag or setting skips it. A release it takes the machine past that says it needs a decision — 0.21.0, on the way
-from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words, with whether it verified: your yes to the preview
-is that decision, so read its release notes first. Runtimes and global packages are installed with `--ignore-scripts`: no package's install script runs before its
+No flag or setting skips it. A release it takes the machine past whose verified release says it needs a decision —
+0.21.0, on the way from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words: your yes to the preview is that
+decision, so read its release notes first. What a release declares is read from its own verified tarball, never from
+the registry's copy of its manifest (see [the daily check](#the-daily-check-and-its-notice)); one whose declaration
+could not be read is named as well, saying that whether it needs a decision is not known, and the preview is still
+shown. Runtimes and global packages are installed with `--ignore-scripts`: no package's install script runs before its
 tarball has been checked (nothing published here, nor anything it depends on, needs one). After installing, each runtime must hold the very tarball that was verified, as npm's
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
 registered on, and its step says so.
+
+**A global package is installed from its verified tarball, and checked afterwards.** From 0.26.0 the update writes the
+verified bytes to a private temporary file and hands `npm install -g` that file, so npm installs exactly them rather
+than looking the name up again. npm keeps no lockfile for a global, so afterwards the update reads what it installed,
+in the folder `npm root -g` names: every file of the verified tarball must be there with the same bytes, nothing the
+tarball does not list may sit outside the package's own `node_modules/`, a package that is a link is a mismatch and is
+not followed, and every `@agentcomms` package inside it — the core Gmail depends on — must verify and match its own
+tarball the same way. A mismatch fails that step: `the global @agentcomms/gmail does not match its verified release
+(…): run <update> again`, naming this installation's update command. Nothing is uninstalled, and running the update
+again checks it again. Other packages npm installs beside it are npm's to check, as before.
 
 **A first install is verified the same way, when core makes it.** A managed `mcp install` by core —
 `agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — verifies the release whose
@@ -92,6 +105,13 @@ over as they are — one registered for a single project, one written by hand, o
 one whose client's own command is not on `PATH` — is left as it was and listed with what to run instead. It reports
 each step as it went, then says which clients to restart. Restart them, then prune the old runtimes from the restarted
 server, as in step 7.
+
+Once it has installed, the update records what is now on this machine in `update-check.json`, so that a server or
+command started before it says "restart" rather than "update". That record waits for the file's lock up to 2 seconds
+for each process ahead of it, 15 seconds in all, and is tried twice. When other processes keep it busy past both, the
+result says `the update was installed; its record will be corrected by the next check` (`recordNote` in `--json` and
+over MCP). Nothing is wrong and there is nothing to do: the next check reads the machine again and records what it
+finds.
 
 ### The daily check, and its notice
 
@@ -166,9 +186,9 @@ scheduler is asked about the job only when this installation recorded one. With 
 read is `state: "unreadable"`, with a `reason`, and the rest of the status is read all the same. `--status` takes no
 `--approval` and no `--no-verify`: it only reads.
 
-**A security fix.** A release whose core manifest declares `agentcommsRelease.security: true` is said at once on
-`every-14-days`, on `never` (when a check by hand found it), and on `auto` while its background job is not set up or
-has not run in 48 hours —
+**A security fix.** A release whose verified tarball declares `agentcommsRelease.security: true` in core's
+`package.json` is said at once on `every-14-days`, on `never` (when a check by hand found it), and on `auto` while its
+background job is not set up or has not run in 48 hours —
 whatever the pause or the 14-day spacing, and with when the pause ends. A job that works holds it back only for a
 server or command it updates — one started through its package's stable launcher, which hands it
 `AGENT_COMMS_LAUNCHER` — and only until that launcher starts the fix, a release the job installs on its own: not a
@@ -212,15 +232,31 @@ output, so the command's process ends when the command does: on the day's first 
 `jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
 `npm ls` behind it. The registry's `latest` counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version
 with build metadata is the registry's own text, so the check records none, no notice, doctor row, `--check` or
-refusal says it, and `update` refuses it without repeating it. The check reads core's full document too, for what its releases declare: a decision that any
-release since the oldest one here needs, and whether the latest is a security fix — each counted only once its
-provenance verifies. Core's own server and command verify it; a channel's server or command carries no Sigstore and
-counts neither, so on a machine where only a channel's server or command ran the day's check, a security fix is said
-as an ordinary release until core's next check. Where that process cannot be started, the command asks in its own process, as before, and ends
-once the ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple
-of minutes later. WhatsApp's server and command, which never reach the network, do not ask npm themselves; they give
-the notice once any other server or command on the machine has found an update. The check is skipped entirely when
-`CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when `AGENT_COMMS_UPDATES=never`.
+refusal says it, and `update` refuses it without repeating it. Where that process cannot be started, the command
+asks in its own process, as before, and ends once the ask has. An ask cut short — a process ended part-way — does
+not use up the day: another process asks a couple of minutes later. Nor does a busy machine get in the way: deciding a
+tool call's or a command's line, or a preview's security line, waits at most 2 seconds for the lock on
+`update-check.json`; busy past that, the call goes on without it, and a later one says it.
+
+**What a release declares comes from the release itself.** The check reads core's full document too, for which
+releases there are: a decision that any release since the oldest one here needs, and whether the latest is a security
+fix. From 0.26.0 neither is read from that document, which a registry or a mirror could change for a genuine release.
+Each release is verified first, and what it declares is then read from `package/package.json` inside its own tarball,
+downloaded from wherever the registry or a mirror says — any `http` or `https` address, through at most five
+redirects, then npm's own address once if that fails — and kept only when its SHA-512 is the digest its provenance
+signs. What was read is remembered per release in `release-declarations.json` in the state directory, so no release
+is downloaded twice; it is verified again every time. A release that does not verify, or whose tarball cannot be read,
+counts for nothing either way: nothing says it is a security fix, or that it is not.
+
+Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
+Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and
+records what it found. Where no such core is found or it cannot be started (a Windows `.cmd` that would need a shell,
+say), the channel asks as before, without a verifier: it records the latest release, keeps what core verified of that
+same release, and otherwise records nothing of what it declares. So a security fix it found first is said without its
+security line until core's next check, and is never recorded as not one. WhatsApp's server and command, which never
+reach the network, do not ask npm themselves; they give the notice once any other server or command on the machine has
+found an update. The check is skipped entirely when `CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when
+`AGENT_COMMS_UPDATES=never`.
 
 ### The background update job
 
@@ -246,10 +282,11 @@ off.
 
 **A job that does not run is no job.** Every background run that does the job's work — finds nothing to do, installs,
 holds a release for its hours or a pause, leaves one for you, or refuses one as unverified — records when it ran
-(`lastRun` in `update-job.json`). A run that could not read the registry (`unavailable`), found the machine's update
-lock held (`busy`) or failed records nothing: a job stuck so, offline for good or behind a lock a hung run keeps, is
-reported as not running once 48 hours have passed. Only the job's own runs count: it starts the stable core launcher,
-which says so to what it starts, so `agentcomms update --background` run by hand records nothing. The job counts as working only when it ran in the last 48 hours, or was set up
+(`lastRun` in `update-job.json`). A run that could not read the registry, or what a verified release declares
+(`unavailable`), found the machine's update lock held (`busy`) or failed records nothing: a job stuck so, offline for
+good or behind a lock a hung run keeps, is reported as not running once 48 hours have passed. Only the job's own
+runs count: it starts the stable core launcher, which says so to what it starts, so `agentcomms update --background`
+run by hand records nothing. The job counts as working only when it ran in the last 48 hours, or was set up
 less than 48 hours ago and has not had its first run yet. A job switched off in Login Items, a timer that never fires
 or a task that cannot start keeps its file, and counts as none: every notice and the security line are given as though
 no job were set up, with the offer to set it up again, and one more line —
@@ -272,16 +309,23 @@ nothing unless all of this holds:
   profile turns background updates off; otherwise it stops, and removes a job such a profile forbids. A pause asked
   for with `update --pause` holds it, but never for a security fix. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and
   `AGENT_COMMS_UPDATES=never` turn it off for that process.
-- **The release waits for nobody.** A major version, a release whose core manifest declares
+- **The release waits for nobody.** A major version, a release whose verified tarball declares
   `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. Every
   release since the oldest one a launcher here starts counts, not only the latest: if 0.21.0 needs a decision and
-  0.21.1 does not say so again, 0.21.1 waits for you too, and a major crossed by any launcher here waits. Each release
-  whose decision is acted on is verified first, as the latest is. A
+  0.21.1 does not say so again, 0.21.1 waits for you too, and a major crossed by any launcher here waits. Each is
+  verified, and what it declares read from its own tarball, as the latest's is. One that does not verify, or whose
+  declaration cannot be read, holds the run back with no notice: it is `unavailable`, its reason says `its declaration
+  could not be read from its verified release`, and the next run tries again. A job that never gets past it is not
+  counted as working, so after 48 hours the notices come back (above). A
   release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
   state directory).
-- **It is past its hold**: 72 hours after the last of its packages was published, or 24 for one whose core manifest
-  declares `agentcommsRelease.security: true`. The clock is the earlier of this machine's and the registry's, so a clock
-  set ahead skips no hold and ends no pause early.
+- **It is past its hold**: 72 hours, or 24 for a security fix, from when Sigstore's transparency log, Rekor, signed
+  for the last of its packages. From 0.26.0 the registry's word for when a release came out counts for nothing: a
+  registry could make a release look older than it is. Every package is verified before the hold is decided. A release
+  whose provenance carries no time Rekor signed is held from when this machine first saw it, recorded in
+  `release-first-seen.json` in the state directory. The clock is the earlier of this machine's and the registry's, so a
+  clock set ahead skips no hold and ends no pause early. The run's result says which time the hold counts from:
+  `release.publishedAt`, with `release.heldFrom` `signed` or `first-seen`.
 - **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
   sigstore-js (its verifier's parts, `@sigstore/verify` and the rest at sigstore-js 3.1.0's versions, are dependencies of
   `@agentcomms/core`) — must be issued by `https://token.actions.githubusercontent.com`
@@ -289,10 +333,10 @@ nothing unless all of this holds:
   built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
   version with no attestation, or any other identity, is refused, and nothing at all is installed.
 
-Core's latest release is verified first, before anything the registry says of it is acted on or made a notice — a
-security fix's shorter hold and its way past a pause, a needed decision, a major release, a downgrade. Until then the
-registry's word can only hold a release back: a pause holds one that does not say it is a security fix. A release that
-does not verify is only refused, and its notice says only that.
+Core's latest release is verified first, and what it declares read from its verified tarball, before anything said
+of it is acted on or made a notice — a security fix's shorter hold and its way past a pause, a needed decision, a major
+release, a downgrade. Until then nothing can pass a pause: a pause holds a release that is not known to be a security
+fix. A release that does not verify is only refused, and its notice says only that.
 
 Then it installs each package into a runtime of its own — npm told to run no package's install script — checks that
 npm installed the tarball whose provenance was verified, and that every other package of this suite in the runtime (the
@@ -518,6 +562,10 @@ Only if you installed them globally before (`npm ls -g --depth=0 | grep @agentco
 npm install -g @agentcomms/gmail@$V @agentcomms/slack@$V @agentcomms/core@$V   # only the ones listed
 npm install -g @agentcomms/resend@$V @agentcomms/whatsapp@$V                   # likewise, from 0.7.0
 ```
+
+Run by hand, `npm install -g` checks nothing but the integrity the registry gives. Where the core already has
+`agentcomms update`, let it update them instead: it installs each global from its verified tarball and checks what
+npm installed ([above](#the-short-way-agentcomms-update)).
 
 ## 6. Check it
 

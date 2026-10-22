@@ -110,9 +110,22 @@ with `comms_approval_wait` (`agentcomms approval wait <id>`), in repeated defaul
 again once it answers `claimable: true`. When the person says no, revoke it at once:
 `comms_approval_revoke` (`agentcomms approvals revoke <id>`).
 
+The preview may name a release the update takes the computer past with `its declaration could not be read from its
+verified release, so whether it needs a decision from you is not known`. Say so, and ask the person to read that
+release's notes before they approve, as for one that says it needs a decision.
+
 The result lists each step with its `outcome`. A registration that did not start, or a runtime that
 did not install, is reported as `failed` with its `detail`: say which, and do not call the update done.
 `manual` lists the entries left for the person.
+
+- **A global step that fails with `the global <package> does not match its verified release (…): run … again`** means
+  what npm installed is not the release that was verified. Nothing was uninstalled, so that command runs what npm
+  wrote until it is fixed. Tell the person, then update again: `comms_update` with `check: true`, then a new preview
+  and their yes. The check is made again each time. Never install the package by hand with `npm install -g` to get
+  past it: that is not checked against the verified release.
+- **A result that carries `recordNote`** (`the update was installed; its record will be corrected by the next check`)
+  needs nothing. The update is done; only this computer's record of it waits for the next check. Say so if a notice
+  still names the older release before then.
 
 ## 3. Restart, then clear out the old versions
 

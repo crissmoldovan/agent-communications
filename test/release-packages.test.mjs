@@ -1170,6 +1170,43 @@ test('REL-d: the release documents say what a hold is, and how it is lifted', as
   assert.match(skill, /A new package's first version/, 'the release skill does not send its first release by hand');
 });
 
+test('the release documents say how core declares a security fix or a needed decision, where the refusal sends you', async () => {
+  /*
+   * Update provenance, hardened, P1: core's `agentcommsRelease` declares the flags, and both release paths refuse ones
+   * the version's changelog section does not say with its marker lines. `scripts/release.mjs` names the section of
+   * RELEASING.md that says how, so that section must exist under exactly that name, show the field, give both markers
+   * as `scripts/release-flags.mjs` reads them, and say a flag goes in the next release. The release skill says it too.
+   */
+  const { SECURITY_MARKER, DECISION_MARKER } = await import('../scripts/release-flags.mjs');
+  const script = (await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8')).replace(/'\s*\+\s*'/g, '');
+  const named = /remove one left from the last release \(docs\/RELEASING\.md, "([^"]+)"\)/.exec(script)?.[1];
+  assert.equal(named, 'Declaring a security fix or a needed decision', 'the flag refusal names another section');
+
+  const releasing = await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8');
+  const at = releasing.indexOf(`\n## ${named}\n`);
+  assert.notEqual(at, -1, `RELEASING.md has no "## ${named}" section`);
+  const next = releasing.indexOf('\n## ', at + 1);
+  const section = releasing.slice(at, next === -1 ? undefined : next).replace(/\s+/g, ' ');
+  assert.match(
+    section,
+    /"agentcommsRelease": \{ "security": true, "needsDecision": true \}/,
+    'where they are declared',
+  );
+  assert.match(section, /`packages\/core\/package\.json`/, 'it does not say only core declares them');
+  for (const marker of [SECURITY_MARKER, DECISION_MARKER]) {
+    assert.ok(section.includes(`\`${marker}\``), `it does not give the marker ${marker}`);
+  }
+  assert.match(section, /both ways/, 'it does not say a marker needs its flag too');
+  assert.match(section, /Remove the flags in the next release/, 'it does not say a flag goes with its release');
+  assert.match(section, /`scripts\/release-flags\.mjs`/, 'it does not name the check');
+
+  const skill = (await readFile(join(ROOT, '.claude', 'skills', 'release', 'SKILL.md'), 'utf8')).replace(/\s+/g, ' ');
+  for (const marker of [SECURITY_MARKER, DECISION_MARKER]) {
+    assert.ok(skill.includes(`\`${marker}\``), `the release skill does not give the marker ${marker}`);
+  }
+  assert.ok(skill.includes(`"${named}"`), 'the release skill does not send you to the section');
+});
+
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
 test('REL-B1: from 0.16.0 the event library and daemon publish with every release, the library first', async () => {
