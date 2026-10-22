@@ -35,6 +35,7 @@ import { releaseFactsReader, type UpdateDeps, updateCheck } from '../src/operati
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
 import { writeManaged } from './fixtures/cli-command/trees.ts';
+import { globalStandIn } from './helpers/global-stand-in.ts';
 import { assertNoBareCommand, coreHandoffs, locatedCoreLine } from './helpers/handoffs.ts';
 import {
   attestationsEndpoint,
@@ -339,7 +340,10 @@ const EVERYTHING_LATEST = {
 interface Fakes extends UpdateDeps {
   asked: string[];
   runtimes: string[];
+  /** What npm was handed to install globally: each the path of a release's verified tarball. */
   globals: string[];
+  /** Where the stand-in installs global packages: `npm root -g`. */
+  globalFolder: string;
   /** npm's attestations endpoint: what it was asked, and what it answers for each package, which a test may change. */
   attestations: { asked: string[]; change: Record<string, Partial<ProvenanceShape> | 'missing'> };
 }
@@ -365,6 +369,9 @@ function fakes(
   const globals: string[] = [];
   // What `npm ls -g` would list: what the test says is there, and then whatever the update installed.
   const installed: Record<string, string> = { ...(options.global ?? {}) };
+  // npm installing the file it is handed into a global folder of this machine's own, as `npm install -g` would.
+  const globalFolder = join(m.home, 'npm-global');
+  const standIn = globalStandIn(globalFolder, installed);
   // npm's attestations endpoint, genuine for every release unless a test changes what it says of a package.
   const change: Record<string, Partial<ProvenanceShape> | 'missing'> = {};
   const endpoint = attestationsEndpoint(change);
@@ -372,6 +379,7 @@ function fakes(
     asked,
     runtimes,
     globals,
+    globalFolder,
     attestations: { asked: endpoint.asked, change },
     latestVersion,
     registry: packumentRegistry(options.latest ?? EVERYTHING_LATEST, options.releases).read,
@@ -380,9 +388,9 @@ function fakes(
     globalPackages: async () => ({ ...installed }),
     installGlobal: async (spec: string) => {
       globals.push(spec);
-      const at = spec.lastIndexOf('@');
-      installed[spec.slice(0, at)] = spec.slice(at + 1);
+      await standIn.installGlobal(spec);
     },
+    globalRoot: standIn.globalRoot,
     installRuntime: async (packageName: string, version: string) => {
       runtimes.push(`${packageName}@${version}`);
       if (options.runtimeFails?.includes(packageName)) throw new Error(`npm could not fetch ${packageName}@${version}`);
@@ -988,7 +996,7 @@ test('update prepares one approval listing every step, writes nothing before it,
         points('slack', 'Slack', PACKAGES.slack),
         later('cursor'),
         ...shim('agent-slack'),
-        `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: \`npm install -g ${PACKAGES.core}@${LATEST}\``,
+        `  - updates the global ${PACKAGES.core} from ${OLD} to ${LATEST}: installs its verified tarball with \`npm install -g\`, then checks what npm installed against it`,
         // Every release it installs or registers, verified before this preview was made.
         `  - ${verifiedLine(PACKAGES.core, LATEST)}`,
         `  - ${verifiedLine(PACKAGES.gmail, LATEST)}`,
@@ -1032,8 +1040,13 @@ test('update prepares one approval listing every step, writes nothing before it,
       ],
     );
     assert.deepEqual(deps.runtimes, [`${PACKAGES.gmail}@${LATEST}`, `${PACKAGES.slack}@${LATEST}`]);
-    // Only the global package that was there and behind: Gmail's is current, and Slack's is not installed.
-    assert.deepEqual(deps.globals, [`${PACKAGES.core}@${LATEST}`]);
+    // Only the global package that was there and behind: Gmail's is current, and Slack's is not installed. npm was
+    // handed the file of its verified tarball, never its name, and the file is gone once it is installed.
+    assert.equal(deps.globals.length, 1, `npm was handed ${deps.globals.join(', ')}`);
+    assert.match(String(deps.globals[0]), /[\\/]agentcomms-core-99\.0\.0\.tgz$/);
+    assert.equal(existsSync(String(deps.globals[0])), false);
+    const installedCore = join(deps.globalFolder, ...PACKAGES.core.split('/'), 'package.json');
+    assert.equal((JSON.parse(readFileSync(installedCore, 'utf8')) as { version: string }).version, LATEST);
 
     // Every entry is where it was, under the name it had, with the pins it had — at the latest version.
     const entries = cursorEntries(m);

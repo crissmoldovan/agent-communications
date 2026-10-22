@@ -17,6 +17,7 @@ export function refusingNpm(now: () => Date): { deps: UpdateDeps; asked: string[
       latestVersion: refuse('latestVersion'),
       globalPackages: refuse('globalPackages'),
       installGlobal: refuse('installGlobal'),
+      globalRoot: refuse('globalRoot'),
       installRuntime: refuse('installRuntime'),
       releaseFacts: refuse('releaseFacts'),
       registry: refuse('registry'),

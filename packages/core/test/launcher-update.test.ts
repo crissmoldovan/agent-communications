@@ -231,6 +231,9 @@ function fakes(
     installGlobal: async () => {
       throw new Error('no global package is installed in these tests');
     },
+    globalRoot: async () => {
+      throw new Error('no global package is installed, or checked, in these tests');
+    },
     installRuntime: async (packageName: string, version: string) => {
       runtimes.push(`${packageName}@${version}`);
       makeRuntime(m, version, cli, options.tarball);
