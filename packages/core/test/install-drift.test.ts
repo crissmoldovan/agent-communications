@@ -15,6 +15,7 @@ import { doctor } from '../src/operations/maintenance.ts';
 import { type ServerInstallRequest, serverInstallChange } from '../src/operations/servers.ts';
 import { VERSION } from '../src/version.ts';
 import { writeManaged } from './fixtures/cli-command/trees.ts';
+import { fixtureTarballs, registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -238,8 +239,17 @@ function fakeClient(
 /** What was asked of a client's CLI that changes something: asking what is registered changes nothing. */
 const writesOf = (calls: string[]) => calls.filter((call) => !call.startsWith('mcp get '));
 
+/**
+ * Core's server, its verifier and registry the test's own (design 2026-10-22 P5: core verifies the release an npx entry's
+ * client fetches), under which this release verifies: what is refused here is refused for the drift alone.
+ */
 async function connect(m: Machine) {
-  const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null });
+  const { server } = await createCoreMcpServer({
+    core: m.core,
+    env: m.env,
+    keyring: null,
+    update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier(), tarballs: fixtureTarballs },
+  });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);

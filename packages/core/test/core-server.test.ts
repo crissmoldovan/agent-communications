@@ -1287,7 +1287,11 @@ test('an approval is good only for the change the tool that prepared it plans: n
   // Cursor, whose configuration is a file this writes itself: the `claude` stand-in is a script, which Windows cannot
   // start, and without it a registration is only printed — which asks nobody, so there would be no approval to steal.
   const cursorConfig = join(m.home, '.cursor', 'mcp.json');
-  const { ok, call, close } = await connect(m);
+  // Core verifies the release an npx entry's client fetches (design 2026-10-22 P5): a registry and a verifier of the
+  // test's own, under which it verifies, so what is refused below is refused for the approval alone.
+  const { ok, call, close } = await connect(m, {
+    update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier(), tarballs: fixtureTarballs },
+  });
   try {
     const install = await ok('comms_server_install', {
       channel: 'core',
@@ -2636,7 +2640,11 @@ test('WhatsApp from chat: comms_server_install pins it by `account`, and comms_c
     createdAt: CREATED,
   };
   const m = machine({ inboxes: { 'acme/gmail': inbox() }, accounts: { 'personal/whatsapp': whatsapp } });
-  const { ok, call, close } = await connect(m);
+  // Core verifies the release an npx entry's client fetches (design 2026-10-22 P5): here, against the test's own
+  // registry and trust root, under which WhatsApp's release verifies.
+  const { ok, call, close } = await connect(m, {
+    update: { registry: registryOf(() => VERSION), verifyRelease: testReleaseVerifier(), tarballs: fixtureTarballs },
+  });
   try {
     const args = {
       channel: 'whatsapp',
