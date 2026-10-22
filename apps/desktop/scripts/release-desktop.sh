@@ -6,18 +6,24 @@ umask 077
 # the DMG notarised and stapled, and the updater's signed archive when the updater is on, staged for
 # publish-desktop.sh (desktop design DA8, DA16).
 #
-#   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z
+#   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z [--updater off]]
 #
-# **The owner runs this, on the signing Mac, in a terminal, from a clean checkout of the tag. An agent never does.**
+# **It runs on the signing Mac, from a clean checkout of the tag.** The owner runs it in a terminal, and types the
+# version back. An agent may run it once the owner has said so, with --confirm X.Y.Z, the app's version, in place of
+# typing it, and --updater off when the updater is off, in place of typing off (0.26.0 design R1); then it needs no
+# terminal. The signing identity, the notary profile and the updater key stay on that Mac, whoever runs it.
 # docs/RELEASING.md, "The desktop app", has the steps around it.
 #
 # QuotaMate's scripts/release-menubar.sh (cueplusplus/quotamate), with its checks kept, and changed here:
-# - it refuses a tag other than desktop-v plus the tauri.conf.json version, a HEAD other than the tag's commit, and a
-#   stdin or stdout that is not a terminal, and asks for the version to be typed back;
+# - it refuses a tag other than desktop-v plus the tauri.conf.json version and a HEAD other than the tag's commit, and
+#   asks for the version to be typed back, refusing a stdin or stdout that is not a terminal; or, with --confirm, it
+#   refuses a version that is not the app's;
 # - the updater is decided first, before the signing environment is read: with plugins.updater.pubkey committed, the
 #   updater key ${AGENTCOMMS_UPDATER_KEY_FILE:-~/.agentcomms/tauri-updater.key} must be there, mode 600, its .pub that
 #   pubkey (apps/desktop/scripts/updater-key.mjs); with it empty, the release is still built, signed and notarised,
-#   with its updater OFF and no updater artefacts, which this says loudly and asks to be confirmed;
+#   with its updater OFF and no updater artefacts, which this says loudly and asks to be confirmed (with --confirm,
+#   by --updater off, which is refused when the updater is on);
+# - every pnpm runs under CI=true, as the build does (see "Build");
 # - the signing environment is ${AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE:-.env.desktop-release.local}, which git ignores;
 # - the DMG is notarised with the notarytool keychain profile ${AGENTCOMMS_NOTARY_PROFILE:-agentcomms-notary}
 #   (`xcrun notarytool store-credentials`), so no password is ever on a command line;
@@ -38,18 +44,47 @@ refuse() {
 }
 mode() { stat -f '%Lp' "$1"; }
 
-TAG="${1:?usage: apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z}"
+USAGE='usage: apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z [--updater off]]'
+TAG="${1:?$USAGE}"
+shift
+# --confirm X.Y.Z stands for typing the version back, and --updater off for typing off: no terminal is needed.
+CONFIRM=''
+UPDATER_FLAG=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --confirm)
+      [ -n "${2:-}" ] || refuse "--confirm takes the version: $USAGE"
+      CONFIRM="$2"
+      shift 2
+      ;;
+    --updater)
+      [ "${2:-}" = off ] || refuse "--updater takes only off: $USAGE"
+      UPDATER_FLAG=off
+      shift 2
+      ;;
+    *) refuse "unknown argument: $1" ;;
+  esac
+done
+[ -z "$UPDATER_FLAG" ] || [ -n "$CONFIRM" ] || refuse '--updater off goes with --confirm: at a terminal, type off when asked.'
+
 VERSION="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
 [ "$TAG" = "desktop-v$VERSION" ] || refuse "the tag must be desktop-v$VERSION, the version in apps/desktop/src-tauri/tauri.conf.json."
 [ "$(uname -s)" = Darwin ] || refuse 'the signed release is built on a Mac.'
-[ -t 0 ] && [ -t 1 ] || refuse 'run this in a terminal: it asks for the version to be typed back.'
+if [ -z "$CONFIRM" ]; then
+  [ -t 0 ] && [ -t 1 ] || refuse 'run this in a terminal: it asks for the version to be typed back.'
+fi
 [ -z "$(git status --porcelain)" ] || refuse 'the working tree is not clean: commit or remove what git status lists.'
 TAG_COMMIT="$(git rev-parse --verify --quiet "$TAG^{commit}")" || refuse "there is no tag $TAG here: tag the vX.Y.Z commit, or fetch the tag."
 [ "$TAG_COMMIT" = "$(git rev-parse HEAD)" ] || refuse "HEAD is not the commit $TAG names: check out $TAG."
 COMMIT="$TAG_COMMIT"
-printf 'This builds, signs and notarises Agent Comms %s from %s.\nType the version to go on: ' "$VERSION" "${COMMIT:0:12}"
-read -r TYPED
-[ "$TYPED" = "$VERSION" ] || refuse 'the version typed back does not match; nothing was built.'
+if [ -n "$CONFIRM" ]; then
+  [ "$CONFIRM" = "$VERSION" ] || refuse 'the version given to --confirm does not match; nothing was built.'
+  printf 'This builds, signs and notarises Agent Comms %s from %s: confirmed with --confirm.\n' "$VERSION" "${COMMIT:0:12}"
+else
+  printf 'This builds, signs and notarises Agent Comms %s from %s.\nType the version to go on: ' "$VERSION" "${COMMIT:0:12}"
+  read -r TYPED
+  [ "$TYPED" = "$VERSION" ] || refuse 'the version typed back does not match; nothing was built.'
+fi
 
 # ── The updater key, before anything else is read ────────────────────────────────────────────────────────────────
 # on: the pubkey is committed, and the key beside it is there, mode 600, and its .pub is that pubkey. off: no pubkey
@@ -59,9 +94,16 @@ KEY_FILE="${AGENTCOMMS_UPDATER_KEY_FILE:-$HOME/.agentcomms/tauri-updater.key}"
 UPDATER="$(node apps/desktop/scripts/updater-key.mjs "$KEY_FILE")" || refuse 'the updater key does not match the app: see above.'
 case "$UPDATER" in on | off) ;; *) refuse "the updater is neither on nor off: $UPDATER" ;; esac
 if [ "$UPDATER" = off ]; then
-  printf 'Type off to build Agent Comms %s with its updater off: ' "$VERSION"
-  read -r OFF
-  [ "$OFF" = off ] || refuse 'nothing was built: commit the updater key first, as above, or type off.'
+  if [ -n "$CONFIRM" ]; then
+    [ "$UPDATER_FLAG" = off ] || refuse 'the updater is off: pass --updater off with --confirm to build it with the updater off.'
+    printf 'Agent Comms %s is built with its updater off: confirmed with --updater off.\n' "$VERSION"
+  else
+    printf 'Type off to build Agent Comms %s with its updater off: ' "$VERSION"
+    read -r OFF
+    [ "$OFF" = off ] || refuse 'nothing was built: commit the updater key first, as above, or type off.'
+  fi
+else
+  [ -z "$UPDATER_FLAG" ] || refuse 'the updater is on: --updater off is refused.'
 fi
 
 # ── The signing environment ──────────────────────────────────────────────────────────────────────────────────────
@@ -103,14 +145,17 @@ else
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────────────────────────────────────────────
-pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
+# Every pnpm here runs under CI=true, the install as the build and the bundle check: under CI, pnpm 11.22 defaults
+# enableGlobalVirtualStore to false, and verifyDepsBeforeRun refuses a script whose install ran with the other setting.
+# That stopped the first real run, 2026-10-21, whose install ran without it.
+CI=true pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 node apps/desktop/scripts/third-party-licenses.mjs --check
 (cd apps/desktop/src-tauri && rustup target add aarch64-apple-darwin x86_64-apple-darwin)
 # Finder's installer-window styling needs desktop automation consent; CI mode builds the same signed DMG without that
 # optional AppleScript step. No token is in the build's environment, so none can be baked into the app.
 env -u GH_TOKEN -u GITHUB_TOKEN -u SSL_CERT_FILE -u REQUESTS_CA_BUNDLE -u NODE_EXTRA_CA_CERTS -u TAURI_BUNDLER_DMG_IGNORE_CI CI=true \
   pnpm --filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config "$UPDATER_CONFIG"
-pnpm --filter @agentcomms/desktop check:bundle
+CI=true pnpm --filter @agentcomms/desktop check:bundle
 
 BUNDLE='apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle'
 APP="$BUNDLE/macos/Agent Comms.app"

@@ -1,15 +1,28 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /*
  * The desktop app's CI, its release workflow and the owner's two release scripts (desktop design DA8, DA15; plan
- * Task 11). The scripts are read, never run: they sign, notarise and publish from the owner's Mac, and no agent and no
- * test runs them. `bash -n` only parses them.
+ * Task 11; 0.26.0 design R1). The scripts sign, notarise and publish from the signing Mac. Here they are read, and run
+ * in a temporary repository against stand-ins for everything that would sign, notarise, publish or build, so no test
+ * ever does any of that.
  */
 
 const APP = fileURLToPath(new URL('../../', import.meta.url));
@@ -386,18 +399,36 @@ describe("the owner's release scripts", () => {
 
     // Every refusal comes before the signing environment is read and before anything is built.
     const refusals = positions(script, [
+      "--updater off goes with --confirm: at a terminal, type off when asked.'",
       '[ "$TAG" = "desktop-v$VERSION" ] || refuse',
       '[ -t 0 ] && [ -t 1 ] || refuse',
       '[ -z "$(git status --porcelain)" ] || refuse',
       'TAG_COMMIT="$(git rev-parse --verify --quiet "$TAG^{commit}")" || refuse',
       '[ "$TAG_COMMIT" = "$(git rev-parse HEAD)" ] || refuse',
+      '[ "$CONFIRM" = "$VERSION" ] || refuse',
       '[ "$TYPED" = "$VERSION" ] || refuse',
+      '[ "$UPDATER_FLAG" = off ] || refuse',
+      '[ -z "$UPDATER_FLAG" ] || refuse',
     ]);
     const environment = script.indexOf('. "$ENV_FILE"');
     const build = script.indexOf('tauri build');
     expect(environment).toBeGreaterThan(Math.max(...refusals));
     expect(build).toBeGreaterThan(environment);
-    expect(script).toMatch(/read -r TYPED/);
+    expectConfirmOrTerminal(script, 'built');
+    expect(script).toContain(
+      'apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z [--updater off]]',
+    );
+    // The install and every script pnpm runs share CI=true with the build: pnpm 11.22 defaults
+    // enableGlobalVirtualStore to false under CI, and verifyDepsBeforeRun refuses a script whose install ran with the
+    // other setting (the first real run, 2026-10-21).
+    expect(script).toContain("\nCI=true pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'\n");
+    expect(script).toContain('\nCI=true pnpm --filter @agentcomms/desktop check:bundle\n');
+    const pnpmLines = script
+      .replace(/\\\n\s*/g, ' ')
+      .split('\n')
+      .filter((line) => /\bpnpm\b/.test(line) && !line.trimStart().startsWith('#'));
+    expect(pnpmLines.length).toBe(3);
+    for (const line of pnpmLines) expect(line, line).toMatch(/\bCI=true\s+pnpm\b/);
 
     // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow and shell text, not a template
     expect(script).toContain('ENV_FILE="${AGENTCOMMS_DESKTOP_RELEASE_ENV_FILE:-.env.desktop-release.local}"');
@@ -450,6 +481,12 @@ describe("the owner's release scripts", () => {
     expect(unset).toBeLessThan(script.indexOf('tauri build'));
     expect(script).toContain("echo 'THE UPDATER IS OFF:");
     expect(script).toContain('--config "$UPDATER_CONFIG"');
+    // With --confirm, --updater off stands for typing off: required when the updater is off, refused when it is on.
+    const off = script.indexOf('if [ "$UPDATER" = off ]; then\n  if [ -n "$CONFIRM" ]; then\n');
+    expect(off).toBeGreaterThan(decided);
+    expect(script.slice(off)).toMatch(
+      /^if \[ "\$UPDATER" = off \]; then\n {2}if \[ -n "\$CONFIRM" \]; then\n {4}\[ "\$UPDATER_FLAG" = off \] \|\| refuse 'the updater is off: pass --updater off with --confirm to build it with the updater off\.'\n[\s\S]*?\n {2}else\n[\s\S]*?read -r OFF\n[\s\S]*?\n {2}fi\nelse\n {2}\[ -z "\$UPDATER_FLAG" \] \|\| refuse 'the updater is on: --updater off is refused\.'\nfi\n/,
+    );
     expect(script).toContain('printf \'%s\\n\' "$UPDATER" > "$OUT/.updater"');
     // The DMG is notarised with a keychain profile: no password on a command line.
     const notary = script
@@ -534,14 +571,19 @@ describe("the owner's release scripts", () => {
     const script = read(PUBLISH_SH);
     expect(script.startsWith('#!/bin/bash\nset -euo pipefail\numask 077\n')).toBe(true);
     expect(script).toContain("REPO='crissmoldovan/agent-communications'");
-    positions(script, [
+    // Every refusal comes before anything is written to the release.
+    const refusals = positions(script, [
       '[ "$TAG" = "desktop-v$VERSION" ] || refuse',
       '[ -t 0 ] && [ -t 1 ] || refuse',
       '[ -z "$(git status --porcelain)" ] || refuse',
       '[ "$BUILT" = "$(git rev-parse HEAD)" ] || refuse',
       '[ "$BUILT" = "$TAG_COMMIT" ] || refuse',
+      '[ "$CONFIRM" = "$VERSION" ] || refuse',
       '[ "$TYPED" = "$VERSION" ] || refuse',
     ]);
+    expect(script.indexOf('gh release')).toBeGreaterThan(Math.max(...refusals));
+    expectConfirmOrTerminal(script, 'published');
+    expect(script).toContain('apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z]');
 
     // A release already out is refused; otherwise CI's draft is used, or a draft is made.
     expect(script).toContain('gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft');
@@ -631,7 +673,463 @@ describe("the owner's release scripts", () => {
       expect(run.status, `${script}: ${run.stderr}`).toBe(0);
     }
   });
+
+  /*
+   * Both scripts run, as an agent runs them once the owner has said so: with pipes for stdio, so with no terminal
+   * (0.26.0 design R1). Each runs in a temporary repository, against stand-ins for everything that signs, notarises,
+   * publishes or builds; see `releaseHarness`. Windows has no bash to run them.
+   */
+  describe.skipIf(process.platform === 'win32')('run against stand-ins (Windows has no bash to run them)', () => {
+    it('release-desktop.sh builds headless with --confirm against stand-ins, and installs under CI=true', () => {
+      const harness = releaseHarness();
+      try {
+        const run = harness.run(RELEASE_SH, [TAG, '--confirm', '0.26.0', '--updater', 'off'], 'off');
+        expect(run.status, told(run)).toBe(0);
+        expect(readdirSync(harness.staged).sort()).toEqual([
+          '.built-at-commit',
+          '.updater',
+          'Agent.Comms_0.26.0_universal.dmg',
+          'SHA256SUMS',
+        ]);
+        expect(readFileSync(join(harness.staged, '.updater'), 'utf8')).toBe('off\n');
+        expect(readFileSync(join(harness.staged, '.built-at-commit'), 'utf8')).toBe(`${harness.commit}\n`);
+        expect(readFileSync(join(harness.staged, 'SHA256SUMS'), 'utf8')).toMatch(
+          /^[0-9a-f]{64} {2}Agent\.Comms_0\.26\.0_universal\.dmg\n$/,
+        );
+
+        // The install runs under CI=true, as the build and the bundle check do: pnpm refuses a script whose install
+        // ran with the other setting, which the stand-in does as pnpm 11.22 does.
+        const pnpm = run.calls.filter((call) => call.startsWith('pnpm '));
+        expect(pnpm).toEqual([
+          'pnpm install --frozen-lockfile --filter !@agentcomms/events-laya-runtime CI=true',
+          'pnpm --filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config {"bundle":{"createUpdaterArtifacts":false}} CI=true',
+          'pnpm --filter @agentcomms/desktop check:bundle CI=true',
+        ]);
+
+        // No call reached anything but a stand-in: the PATH holds only the stand-ins and the harmless tools, and
+        // each step that would sign, notarise or check a signature went to its stand-in.
+        expect(readdirSync(harness.bin).sort()).toEqual([...Object.keys(STAND_INS), ...HARMLESS, 'node'].sort());
+        for (const step of [
+          'uname -s',
+          'security find-identity -v -p codesigning',
+          'xcrun notarytool history --keychain-profile agentcomms-notary',
+          'rustup target add aarch64-apple-darwin x86_64-apple-darwin',
+          'lipo -archs',
+          'codesign --verify --deep --strict --verbose=2',
+          'spctl --assess --type execute',
+          'xcrun stapler validate',
+          'xcrun notarytool submit',
+          'xcrun stapler staple',
+        ]) {
+          expect(
+            run.calls.some((call) => call.startsWith(`${step} `)),
+            step,
+          ).toBe(true);
+        }
+        expect(`${run.stdout}${run.stderr}`).not.toMatch(/fake-app-password|STAND-IN-UPDATER-KEY/);
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('with the updater on, --confirm alone builds and stages the updater archive', () => {
+      const harness = releaseHarness();
+      try {
+        const run = harness.run(RELEASE_SH, [TAG, '--confirm', '0.26.0'], 'on');
+        expect(run.status, told(run)).toBe(0);
+        expect(readdirSync(harness.staged).sort()).toEqual([
+          '.built-at-commit',
+          '.updater',
+          'Agent.Comms.app.tar.gz',
+          'Agent.Comms.app.tar.gz.sig',
+          'Agent.Comms_0.26.0_universal.dmg',
+          'SHA256SUMS',
+        ]);
+        expect(readFileSync(join(harness.staged, '.updater'), 'utf8')).toBe('on\n');
+        expect(readFileSync(join(harness.staged, 'SHA256SUMS'), 'utf8')).toMatch(
+          /^[0-9a-f]{64} {2}Agent\.Comms\.app\.tar\.gz\n[0-9a-f]{64} {2}Agent\.Comms_0\.26\.0_universal\.dmg\n$/,
+        );
+        expect(run.calls).toContain(
+          'pnpm --filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config {"bundle":{"createUpdaterArtifacts":true}} CI=true',
+        );
+        // The archive was opened in a temporary folder, and the app inside it checked.
+        expect(
+          run.calls.filter((call) => /^codesign --verify --deep --strict \/\S.*\/Agent Comms\.app CI=$/.test(call)),
+        ).toHaveLength(1);
+        expect(`${run.stdout}${run.stderr}`).not.toMatch(/fake-app-password|STAND-IN-UPDATER-KEY/);
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('a wrong --confirm, a missing --updater off, or --updater off with the updater on is refused before anything is built', () => {
+      const harness = releaseHarness();
+      try {
+        const cases: [Updater, string[], string][] = [
+          ['on', ['--confirm', '0.26.1'], 'the version given to --confirm does not match; nothing was built.'],
+          [
+            'off',
+            ['--confirm', '0.25.0', '--updater', 'off'],
+            'the version given to --confirm does not match; nothing was built.',
+          ],
+          [
+            'off',
+            ['--confirm', '0.26.0'],
+            'the updater is off: pass --updater off with --confirm to build it with the updater off.',
+          ],
+          ['on', ['--confirm', '0.26.0', '--updater', 'off'], 'the updater is on: --updater off is refused.'],
+        ];
+        for (const [updater, args, sentence] of cases) {
+          const run = harness.run(RELEASE_SH, [TAG, ...args], updater);
+          expect(run.status, args.join(' ')).toBe(1);
+          expect(run.stderr).toBe(`release-desktop: ${sentence}\n`);
+          // Refused before the signing environment, the identity, the install or the build.
+          expect(run.calls.filter((call) => !/^(?:git|uname) /.test(call))).toEqual([]);
+          expect(existsSync(harness.staged)).toBe(false);
+        }
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('without --confirm, the scripts still need a terminal', () => {
+      const harness = releaseHarness();
+      try {
+        for (const [script, name] of [
+          [RELEASE_SH, 'release-desktop'],
+          [PUBLISH_SH, 'publish-desktop'],
+        ] as const) {
+          const run = harness.run(script, [TAG], 'on');
+          expect(run.status).toBe(1);
+          expect(run.stderr).toBe(`${name}: run this in a terminal: it asks for the version to be typed back.\n`);
+          expect(run.calls.filter((call) => !/^(?:git|uname) /.test(call))).toEqual([]);
+        }
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('--updater off without --confirm is refused', () => {
+      const harness = releaseHarness();
+      try {
+        const run = harness.run(RELEASE_SH, [TAG, '--updater', 'off'], 'off');
+        expect(run.status).toBe(1);
+        expect(run.stderr).toBe(
+          'release-desktop: --updater off goes with --confirm: at a terminal, type off when asked.\n',
+        );
+        expect(run.calls).toEqual([]);
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('an unknown argument, or --confirm with no version, is refused by both scripts', () => {
+      const harness = releaseHarness();
+      try {
+        const cases: [string, string[], string][] = [
+          [RELEASE_SH, ['--yes'], 'release-desktop: unknown argument: --yes'],
+          [RELEASE_SH, ['--confirm'], 'release-desktop: --confirm takes the version: usage: '],
+          [
+            RELEASE_SH,
+            ['--confirm', '0.26.0', '--updater', 'on'],
+            'release-desktop: --updater takes only off: usage: ',
+          ],
+          [PUBLISH_SH, ['--confirm', '0.26.0', '--updater', 'off'], 'publish-desktop: unknown argument: --updater'],
+          [PUBLISH_SH, ['--confirm'], 'publish-desktop: --confirm takes the version: usage: '],
+        ];
+        for (const [script, args, refusal] of cases) {
+          const run = harness.run(script, [TAG, ...args], 'on');
+          expect(run.status, args.join(' ')).toBe(1);
+          expect(run.stderr.startsWith(refusal), run.stderr).toBe(true);
+          expect(run.calls).toEqual([]);
+        }
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+
+    it('publish-desktop.sh publishes headless with --confirm against a stand-in gh, and a wrong one is refused', () => {
+      const harness = releaseHarness();
+      try {
+        const release = harness.run(RELEASE_SH, [TAG, '--confirm', '0.26.0'], 'on');
+        expect(release.status, told(release)).toBe(0);
+
+        const wrong = harness.run(PUBLISH_SH, [TAG, '--confirm', '0.25.0']);
+        expect(wrong.status).toBe(1);
+        expect(wrong.stderr).toBe(
+          'publish-desktop: the version given to --confirm does not match; nothing was published.\n',
+        );
+        expect(wrong.calls.filter((call) => call.startsWith('gh release'))).toEqual([]);
+        expect(readFileSync(join(harness.state, 'draft'), 'utf8')).toBe('true\n');
+
+        const run = harness.run(PUBLISH_SH, [TAG, '--confirm', '0.26.0']);
+        expect(run.status, told(run)).toBe(0);
+        const out = 'apps/desktop/src-tauri/target/desktop-release/0.26.0';
+        const order = positions(run.calls.join('\n'), [
+          `gh release view ${TAG} --repo ${REPO} --json isDraft --jq .isDraft CI=`,
+          `gh release upload ${TAG} --repo ${REPO} --clobber ${out}/Agent.Comms_0.26.0_universal.dmg ${out}/Agent.Comms.app.tar.gz ${out}/Agent.Comms.app.tar.gz.sig ${out}/SHA256SUMS apps/desktop/THIRD_PARTY_LICENSES CI=`,
+          `gh release upload ${TAG} --repo ${REPO} --clobber ${out}/latest.json CI=`,
+          `gh release edit ${TAG} --repo ${REPO} --draft=false --latest=false CI=`,
+        ]);
+        expect(ascending(order)).toBe(true);
+        expect(readFileSync(join(harness.state, 'draft'), 'utf8')).toBe('false\n');
+        expect(readFileSync(join(harness.repo, out, 'latest.json'), 'utf8')).toBe('{"version":"0.26.0"}\n');
+      } finally {
+        harness.remove();
+      }
+    }, 60_000);
+  });
 });
+
+/**
+ * Without `--confirm`, a terminal and the version typed back, as before. With it, neither, and the version given must
+ * be the app's, as typing it back must (0.26.0 design R1).
+ */
+function expectConfirmOrTerminal(script: string, nothing: 'built' | 'published'): void {
+  expect(script.match(/\[ -t 0 \]/g) ?? []).toHaveLength(1);
+  expect(script).toContain(
+    `if [ -z "$CONFIRM" ]; then\n  [ -t 0 ] && [ -t 1 ] || refuse 'run this in a terminal: it asks for the version to be typed back.'\nfi\n`,
+  );
+  expect(script.match(/\bread -r TYPED\b/g) ?? []).toHaveLength(1);
+  const start = script.indexOf('\nif [ -n "$CONFIRM" ]; then\n');
+  const otherwise = script.indexOf('\nelse\n', start);
+  const end = script.indexOf('\nfi\n', otherwise);
+  expect(start).toBeGreaterThan(-1);
+  expect(otherwise).toBeGreaterThan(start);
+  expect(end).toBeGreaterThan(otherwise);
+  const confirmed = script.slice(start, otherwise);
+  const asked = script.slice(otherwise, end);
+  expect(confirmed).toContain(
+    `\n  [ "$CONFIRM" = "$VERSION" ] || refuse 'the version given to --confirm does not match; nothing was ${nothing}.'`,
+  );
+  expect(confirmed).not.toMatch(/\bread\b/);
+  expect(asked).toContain('\n  read -r TYPED\n');
+  expect(asked).toContain(
+    `\n  [ "$TYPED" = "$VERSION" ] || refuse 'the version typed back does not match; nothing was ${nothing}.'`,
+  );
+}
+
+type Updater = 'on' | 'off';
+
+const TAG = 'desktop-v0.26.0';
+const REPO = 'crissmoldovan/agent-communications';
+const IDENTITY = 'Developer ID Application: Stand-in Signer (TEAM000000)';
+
+/** The real tools the scripts and the stand-ins use, none of which signs, notarises, publishes or builds anything. */
+const HARMLESS = [
+  'awk',
+  'basename',
+  'bash',
+  'cat',
+  'cp',
+  'dirname',
+  'env',
+  'grep',
+  'gzip',
+  'mkdir',
+  'mktemp',
+  'rm',
+  'shasum',
+  'tar',
+];
+
+/**
+ * What each stand-in does once it has written `<name> <args> CI=$CI` to the log; `@STATE@` is its folder, `@GIT@` the
+ * real git. Anything a stand-in is not written to answer fails, so a script that asks something new fails here too.
+ */
+const STAND_INS: Record<string, string> = {
+  uname: 'echo Darwin',
+  security: [
+    `[ "$*" = 'find-identity -v -p codesigning' ] || exit 1`,
+    `printf '  1) %s "%s"\\n     1 valid identities found\\n' 0000000000000000000000000000000000000000 '${IDENTITY}'`,
+  ].join('\n'),
+  rustup: `[ "$1 $2" = 'target add' ]`,
+  // Each checks the path it is given, the last argument, which the build made.
+  codesign: `[ "$1" = --verify ] && [ -e "\${!#}" ]`,
+  spctl: `[ "$1" = --assess ] && [ -e "\${!#}" ]`,
+  lipo: `[ "$1" = -archs ] && [ -e "$2" ] && echo 'x86_64 arm64'`,
+  xcrun: [
+    'case "$1 $2" in',
+    `  'notarytool history') ;;`,
+    `  'notarytool submit') [ -e "$3" ] && echo '{"status":"Accepted"}' ;;`,
+    `  'stapler validate' | 'stapler staple') [ -e "$3" ] ;;`,
+    `  *) echo "xcrun stand-in: not expected: $*" >&2; exit 1 ;;`,
+    'esac',
+  ].join('\n'),
+  // pnpm 11.22 checks the install before it runs a script (verifyDepsBeforeRun), and refuses one whose install ran
+  // with the other CI setting: under CI, enableGlobalVirtualStore defaults to false.
+  pnpm: [
+    `mode=on; case "$CI" in '' | false) mode=off ;; esac`,
+    `if [ "$1" = install ]; then echo "$mode" > '@STATE@/installed'; exit 0; fi`,
+    `if [ "$(cat '@STATE@/installed' 2>/dev/null)" != "$mode" ]; then`,
+    `  echo '[ERR_PNPM_VERIFY_DEPS_BEFORE_RUN] The value of the enableGlobalVirtualStore setting has changed' >&2`,
+    '  exit 1',
+    'fi',
+    'bundle=apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle',
+    'case "$*" in',
+    `  '--filter @agentcomms/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config '*)`,
+    `    mkdir -p "$bundle/macos/Agent Comms.app/Contents/MacOS" "$bundle/dmg"`,
+    `    echo stand-in > "$bundle/macos/Agent Comms.app/Contents/MacOS/agentcomms-desktop"`,
+    `    echo stand-in > "$bundle/dmg/Agent Comms_0.26.0_universal.dmg"`,
+    `    case "$*" in *'"createUpdaterArtifacts":true'*)`,
+    `      tar -czf "$bundle/macos/Agent Comms.app.tar.gz" -C "$bundle/macos" 'Agent Comms.app'`,
+    `      echo stand-in-signature > "$bundle/macos/Agent Comms.app.tar.gz.sig" ;;`,
+    '    esac ;;',
+    `  '--filter @agentcomms/desktop check:bundle') ;;`,
+    `  *) echo "pnpm stand-in: not expected: $*" >&2; exit 1 ;;`,
+    'esac',
+  ].join('\n'),
+  // A draft the Desktop release workflow made, with its Windows and Linux files attached.
+  gh: [
+    'case "$*" in',
+    `  "repo view ${REPO} --json isPrivate --jq .isPrivate") echo false ;;`,
+    `  "api repos/${REPO}/commits/"*" --silent") ;;`,
+    `  "api --paginate repos/${REPO}/releases?per_page=100 --jq "*) echo 417525829 ;;`,
+    `  "release view ${TAG} --repo ${REPO}") ;;`,
+    `  "release view ${TAG} --repo ${REPO} --json isDraft --jq .isDraft") cat '@STATE@/draft' ;;`,
+    `  "release view ${TAG} --repo ${REPO} --json assets --jq .assets[].name") cat '@STATE@/assets' ;;`,
+    `  "release view ${TAG} --repo ${REPO} --json url,isDraft,isPrerelease,assets --jq "*) echo '{"isDraft":false}' ;;`,
+    `  "release upload ${TAG} --repo ${REPO} --clobber "*)`,
+    '    shift 6',
+    `    for file in "$@"; do [ -e "$file" ] || exit 1; printf '%s\\n' "$(basename "$file")" >> '@STATE@/assets'; done ;;`,
+    `  "release edit ${TAG} --repo ${REPO} --draft=false --latest=false") echo false > '@STATE@/draft' ;;`,
+    `  *) echo "gh stand-in: not expected: $*" >&2; exit 1 ;;`,
+    'esac',
+  ].join('\n'),
+  // The real git, except ls-remote, which answers for GitHub with the tag's commit.
+  git: [
+    'if [ "$1" = ls-remote ]; then',
+    `  printf '%s\\t%s\\n' "$('@GIT@' rev-parse '${TAG}^{commit}')" 'refs/tags/${TAG}'`,
+    '  exit 0',
+    'fi',
+    `exec '@GIT@' "$@"`,
+  ].join('\n'),
+};
+
+/** What a run said, and what it asked the stand-ins, for a failing assertion's message. */
+function told(run: { stderr: string; calls: string[] }): string {
+  return `${run.stderr}\nwhat the stand-ins were asked:\n${run.calls.join('\n')}`;
+}
+
+/** The first executable called `name` on this process's PATH. */
+function onPath(name: string): string {
+  for (const folder of (process.env.PATH ?? '').split(delimiter)) {
+    const candidate = join(folder, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not here
+    }
+  }
+  throw new Error(`${name} is not on the PATH`);
+}
+
+/**
+ * A temporary repository with the two real scripts at `apps/desktop/scripts/`, stand-ins for the helpers they call,
+ * `tauri.conf.json` at 0.26.0, committed and tagged `desktop-v0.26.0`. The scripts run there with a PATH that holds
+ * only the stand-ins and the harmless tools, so nothing they call can sign, notarise, publish or build; the signing
+ * environment is made up, and none of it is this machine's.
+ */
+function releaseHarness() {
+  const folder = mkdtempSync(join(tmpdir(), 'agentcomms-release-scripts-'));
+  const repo = join(folder, 'repo');
+  const bin = join(folder, 'bin');
+  const state = join(folder, 'state');
+  const home = join(folder, 'home');
+  const temp = join(folder, 'tmp');
+  for (const path of [repo, bin, state, home, temp]) mkdirSync(path);
+  const log = join(folder, 'calls.log');
+  const realGit = onPath('git');
+  const gitEnvironment = { HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+
+  const files: Record<string, string> = {
+    '.gitignore': 'apps/desktop/src-tauri/target/\n',
+    'apps/desktop/src-tauri/tauri.conf.json': `${JSON.stringify({ version: '0.26.0', plugins: { updater: { pubkey: '' } } })}\n`,
+    'apps/desktop/THIRD_PARTY_LICENSES': 'stand-in notices\n',
+    'apps/desktop/scripts/updater-key.mjs': 'console.log(process.env.TEST_UPDATER);\n',
+    'apps/desktop/scripts/third-party-licenses.mjs': '',
+    'apps/desktop/scripts/release-notes.mjs': "console.log('Agent Comms ' + process.argv[2] + '.');\n",
+    'apps/desktop/scripts/updater-manifest.mjs': "console.log(JSON.stringify({ version: '0.26.0' }));\n",
+    [RELEASE_SH]: read(RELEASE_SH),
+    [PUBLISH_SH]: read(PUBLISH_SH),
+  };
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), text, { mode: path.endsWith('.sh') ? 0o755 : 0o644 });
+  }
+  const git = (...args: string[]) => {
+    const run = spawnSync(realGit, ['-c', 'user.name=Stand-in', '-c', 'user.email=stand-in@example.invalid', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...gitEnvironment, PATH: process.env.PATH ?? '' },
+    });
+    expect(run.status, `git ${args.join(' ')}: ${run.stderr}`).toBe(0);
+    return run.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('add', '-A');
+  git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'Agent Comms 0.26.0');
+  git('-c', 'tag.gpgsign=false', 'tag', TAG);
+  const commit = git('rev-parse', 'HEAD');
+
+  for (const [name, body] of Object.entries(STAND_INS)) {
+    const script = body.replaceAll('@STATE@', state).replaceAll('@GIT@', realGit);
+    writeFileSync(join(bin, name), `#!/bin/bash\nprintf '%s\\n' "${name} $* CI=$CI" >> '${log}'\n${script}\n`);
+    chmodSync(join(bin, name), 0o755);
+  }
+  // Each by its full path, not a link: macOS's shasum is a perl script that will not run under another path.
+  const tools: [string, string][] = [
+    ...HARMLESS.map((tool): [string, string] => [tool, onPath(tool)]),
+    ['node', process.execPath],
+  ];
+  for (const [tool, path] of tools) {
+    writeFileSync(join(bin, tool), `#!/bin/bash\nexec '${path}' "$@"\n`);
+    chmodSync(join(bin, tool), 0o755);
+  }
+  writeFileSync(join(state, 'draft'), 'true\n');
+  writeFileSync(
+    join(state, 'assets'),
+    ['Agent.Comms_0.26.0_x64-setup.exe', 'Agent.Comms_0.26.0_amd64.AppImage', 'Agent.Comms_0.26.0_amd64.deb', ''].join(
+      '\n',
+    ),
+  );
+  const keyFile = join(folder, 'tauri-updater.key');
+  writeFileSync(keyFile, 'STAND-IN-UPDATER-KEY\n', { mode: 0o600 });
+
+  return {
+    repo,
+    bin,
+    state,
+    commit,
+    staged: join(repo, 'apps/desktop/src-tauri/target/desktop-release/0.26.0'),
+    /** Runs `script` with stdio as pipes, so with no terminal, and returns what the stand-ins were asked. */
+    run(script: string, args: string[], updater: Updater = 'on') {
+      writeFileSync(log, '');
+      const run = spawnSync(join(bin, 'bash'), [join(repo, script), ...args], {
+        cwd: folder,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 50_000,
+        // Only these, so nothing of this machine's own signing environment, CI or tokens reaches the scripts.
+        env: {
+          ...gitEnvironment,
+          PATH: bin,
+          TMPDIR: temp,
+          APPLE_SIGNING_IDENTITY: IDENTITY,
+          APPLE_ID: 'stand-in-apple-id',
+          APPLE_TEAM_ID: 'TEAM000000',
+          APPLE_PASSWORD: 'fake-app-password',
+          AGENTCOMMS_UPDATER_KEY_FILE: keyFile,
+          TEST_UPDATER: updater,
+        },
+      });
+      const calls = readFileSync(log, 'utf8').split('\n').filter(Boolean);
+      return { status: run.status, stdout: run.stdout, stderr: run.stderr, calls };
+    },
+    remove: () => rmSync(folder, { recursive: true, force: true }),
+  };
+}
 
 /** No trace, and no line that prints a secret's value. */
 function expectQuietAboutSecrets(script: string): void {

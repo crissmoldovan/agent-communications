@@ -507,8 +507,13 @@ and none of it goes to npm. A release of it holds:
 - **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
   `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
 
-**No agent runs these scripts.** They need the owner's keychain, the updater key, and the version typed back in a
-terminal; without a terminal they refuse.
+**An agent may run these scripts once the owner has said so** (the owner, 2026-10-21), as Supbuddy's `/release` does:
+on the signing Mac, from a clean checkout of the tag, with the version confirmed on the command line instead of typed
+back. `--confirm X.Y.Z` must be the app's version, as typing it back must. `release-desktop.sh` also takes
+`--updater off` beside it, which stands for typing `off`: it is required when the updater is off, and refused when the
+updater is on or without `--confirm`. Without the flags, both scripts ask at a terminal, as before, and refuse without
+one. Every other check stays. The signing identity, the notary profile and the updater key stay on the signing Mac,
+whoever runs the scripts, and neither script prints a password or the key.
 
 **A desktop release never takes Latest.** GitHub's Latest release is the CLI's, made by `release.yml`. Every desktop
 release command passes `--latest=false`, so a `desktop-v*` tag cannot move it. The app does not look for Latest: it
@@ -522,11 +527,12 @@ is public.
 
 **The first signed release may have no updater.** With `plugins.updater.pubkey` in `tauri.conf.json` still empty,
 `release-desktop.sh` still builds, signs and notarises the DMG, but with updater artefacts off, and says so in a box
-you confirm by typing `off`; `publish-desktop.sh` then publishes it without `latest.json`, and says the updater stays
-off. Such a copy never updates itself: it is replaced by hand. To turn the updater on, do steps 1 and 2 below —
-generate the key, commit its `.pub` — and release the next version; from the release after that one, installed copies
-update themselves. `apps/desktop/scripts/updater-key.mjs` makes the decision: off with no pubkey; with one, the key
-must be there, mode 600, and its `.pub` the pubkey, or the release is refused before anything else is read or built.
+you confirm by typing `off` (or with `--updater off`, beside `--confirm`); `publish-desktop.sh` then publishes it
+without `latest.json`, and says the updater stays off. Such a copy never updates itself: it is replaced by hand. To
+turn the updater on, do steps 1 and 2 below — generate the key, commit its `.pub` — and release the next version; from
+the release after that one, installed copies update themselves. `apps/desktop/scripts/updater-key.mjs` makes the
+decision: off with no pubkey; with one, the key must be there, mode 600, and its `.pub` the pubkey, or the release is
+refused before anything else is read or built.
 
 ### The owner's steps
 
@@ -572,7 +578,7 @@ Each release, after `vX.Y.Z` is out:
    four desktop legs, makes the draft release and attaches the Windows and Linux files. The release stays a draft.
    If a leg fails for a reason outside the repository, re-run it: the draft is found again and uploads replace what
    is there.
-6. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
+6. On the signing Mac, from a clean checkout of the tag, run the two scripts. In a terminal:
 
    ```bash
    git checkout desktop-vX.Y.Z
@@ -580,14 +586,28 @@ Each release, after `vX.Y.Z` is out:
    apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
    ```
 
-   Both refuse a dirty tree, a tag that is not the app's version, a HEAD that is not the tag's commit and a missing
-   terminal, and ask for the version to be typed back. `release-desktop.sh` decides the updater from the key first
-   (on, off, or refused), then reads the signing environment, builds the universal app, signs, notarises and staples
-   the app and the DMG, and stages them in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they
-   were built from and whether the updater is on. `publish-desktop.sh` refuses a release already published, whatever
-   it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft, and stops if the workflow's Windows and
-   Linux files are not attached yet; run it again once they are. Then, with the updater on, it uploads `latest.json`;
-   with it off, it says the updater stays off. It publishes the release, still not Latest.
+   Or, by an agent the owner has asked to run them, with no terminal, the version confirmed on the command line (and
+   `--updater off` after it while the updater is off):
+
+   ```bash
+   git checkout desktop-vX.Y.Z
+   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z --confirm X.Y.Z
+   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z --confirm X.Y.Z
+   ```
+
+   Both refuse a dirty tree, a tag that is not the app's version and a HEAD that is not the tag's commit. Without
+   `--confirm` they refuse a missing terminal and ask for the version to be typed back; with it, they refuse a version
+   that is not the app's. `release-desktop.sh` decides the updater from the key first (on, off, or refused), then reads
+   the signing environment, builds the universal app, signs, notarises and staples the app and the DMG, and stages them
+   in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they were built from and whether the
+   updater is on. Its install, its build and its bundle check all run under `CI=true`: under CI, pnpm 11.22 defaults
+   `enableGlobalVirtualStore` to false, and refuses a script whose install ran with the other setting, which stopped
+   the first real run (2026-10-21). So afterwards, before working in that checkout, run the ordinary
+   `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'` again. `publish-desktop.sh` refuses a
+   release already published, whatever it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft,
+   and stops if the workflow's Windows and Linux files are not attached yet; run it again once they are. Then, with the
+   updater on, it uploads `latest.json`; with it off, it says the updater stays off. It publishes the release, still
+   not Latest.
 7. Update between two signed versions with the updater on. The first such release has nothing to update from, so from
    the second on: with the previous one installed, choose Check for Updates… in the tray. It should find the new
    release, check its signature against the key in the app, install it and restart.
