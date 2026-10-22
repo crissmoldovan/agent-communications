@@ -308,7 +308,16 @@ export interface UpdateResult {
   ok: boolean;
   /** What the person does next: restart the clients, then prune the old runtimes. Null when nothing was registered. */
   next: string | null;
+  /** Set when the record of an applied update could not be written, after one retry. */
+  recordNote?: string | undefined;
 }
+
+/**
+ * What an update says when it was installed but the daily check's file stayed busy past both tries to record it
+ * (design 2026-10-22, R2). Nothing is wrong with the update: the next check, a day on or the next one anybody asks
+ * for, reads the machine again and records what it finds.
+ */
+export const RECORD_DEFERRED = 'the update was installed; its record will be corrected by the next check';
 
 // ── Reading what is there ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -767,6 +776,10 @@ const registrationKey = (entry: {
  * when this is that background check's own finding, is the claim it was made under: the finding is dropped when the
  * file no longer holds it, because something newer — a check a person asked for, an update — was written meanwhile.
  * The machine it describes was read before that, and put back it would say "update" where "restart" is right.
+ *
+ * Says how it went: `written`; `busy`, when the file's lock stayed held past its bound, so an update can try once
+ * more (design 2026-10-22, R2); and `unchanged` for everything else — switched off, a claim given up, or a write that
+ * failed for any other reason, each left as it always was.
  */
 async function recordFound(
   core: Core,
@@ -776,32 +789,37 @@ async function recordFound(
   after: UpdateResult | null = null,
   claim?: string,
   release?: ReleaseFacts | null,
-): Promise<void> {
+): Promise<'written' | 'unchanged' | 'busy'> {
   const latest = report.latest[CORE_PACKAGE];
-  if (updateCheckSwitchedOff(env) !== null || latest === undefined || !isVersion(latest)) return;
+  if (updateCheckSwitchedOff(env) !== null || latest === undefined || !isVersion(latest)) return 'unchanged';
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const { behind, current } = updateCheckFindings(report, latest, after);
   const moves = movesLeft(report, after);
   // What the release declares, when this read it; what an earlier read found of another release counts for nothing.
   const facts = (record: { release: ReleaseFacts | null }) =>
     release !== undefined ? release : record.release?.version === latest ? record.release : null;
-  await changeUpdateCheck(core.paths.stateDir, (record) =>
-    claim !== undefined && record.checking !== claim
-      ? null
-      : {
-          record: {
-            ...record,
-            lastChecked: at,
-            latest,
-            behind,
-            current,
-            lastError: null,
-            checking: null,
-            release: facts(record),
-            moves,
+  try {
+    const { written } = await changeUpdateCheck(core.paths.stateDir, (record) =>
+      claim !== undefined && record.checking !== claim
+        ? null
+        : {
+            record: {
+              ...record,
+              lastChecked: at,
+              latest,
+              behind,
+              current,
+              lastError: null,
+              checking: null,
+              release: facts(record),
+              moves,
+            },
           },
-        },
-  ).catch(() => undefined);
+    );
+    return written ? 'written' : 'unchanged';
+  } catch (error) {
+    return toCommsError(error).code === 'LOCK_TIMEOUT' ? 'busy' : 'unchanged';
+  }
 }
 
 /**
@@ -1306,8 +1324,14 @@ export function updateChange(
       return withPersonUpdateLock(core.paths.stateDir, async () => {
         const result = await applyUpdate(context, done, deps);
         // What it moved to the latest release — and only what worked — is what lets a server or a command started
-        // before this say "restart" rather than "update" from now on.
-        await recordFound(core, env, done.report, deps, result);
+        // before this say "restart" rather than "update" from now on. The update is installed whatever happens here,
+        // so a record the lock kept busy is tried once more, and one still busy is said rather than silently dropped.
+        if (
+          (await recordFound(core, env, done.report, deps, result)) === 'busy' &&
+          (await recordFound(core, env, done.report, deps, result)) === 'busy'
+        ) {
+          result.recordNote = RECORD_DEFERRED;
+        }
         return result;
       });
     },
