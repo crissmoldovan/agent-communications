@@ -33,6 +33,14 @@ more.
   its verified tarball's, byte for byte, with nothing extra outside its own `node_modules/`, and a package that is a
   link is a mismatch. A mismatch fails that step with `the global <package> does not match its verified release (…):
   run <update> again`; nothing is uninstalled, and running the update again checks it again.
+- **A first `npx` install through core verifies the release it registers.** `agentcomms mcp install --launcher npx`
+  and `comms_server_install` with `launcher: "npx"` now verify the package the entry's client will fetch, at that
+  version, before the preview and again when the approval is claimed, as `agentcomms update` already did for an npx
+  registration. One that does not verify is refused with the same `nothing was installed or changed: … could not be
+  verified` and nothing is written: registering it would be installing it. The preview is unchanged, so an approval a
+  channel's own command prepared, which cannot verify, is still claimed through core's, and checked then. What stays a
+  limit is that npx fetches the package again each time a client starts the entry, which nothing here verifies: the
+  managed launcher is the verified one.
 - **Holds count from Rekor's signed time.** The background run's 72 hours, or 24 for a security fix, now start when
   Sigstore's transparency log signed for the release, the latest among its packages, and every package is verified
   before the hold is decided. A release whose provenance carries no signed time is held from when this machine first
@@ -53,8 +61,9 @@ registry's word alone.
   installs nothing in the background until it can: each run says so, and after 48 hours the notices come back, as for
   a job that does not run.
 - **There is still no way past verification, and none was added** (the owner's decision). A release whose provenance
-  does not verify cannot be installed by hand, by the background run or at a first install, whatever the flag,
-  setting, environment variable or approval. A broken release is replaced by a new one that verifies.
+  does not verify cannot be installed by hand, by the background run or at a first install, on the managed launcher or
+  the npx one, whatever the flag, setting, environment variable or approval. A broken release is replaced by a new one
+  that verifies.
 - The levels, the pause, the notices' words, the background job and the commands are as they were. Packages that are
   not `@agentcomms` are still checked by npm alone, against the registry's integrity.
 - Machines on 0.20.0 to 0.25.0 read what a release declares from the registry, as before, until they update to this

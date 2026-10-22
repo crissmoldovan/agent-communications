@@ -80,6 +80,13 @@ preview: …`. After npm has installed it, with `--ignore-scripts`, the runtime 
 and every `@agentcomms` package in it — the core Gmail depends on — must verify too, or the runtime is removed, the
 launcher is not pointed at it, and nothing is registered.
 
+From 0.26.0 a first `--launcher npx` install by core (`agentcomms mcp install --server <channel> --client <client>
+--launcher npx`, or `comms_server_install` with `launcher: "npx"`) verifies the release the entry names — the package
+its client fetches from npm — as a by-hand update does: before the preview and again when the approval is claimed,
+with the same `BAD_DATA` refusal, writing nothing for one that does not verify. Registering it is installing it. Its
+preview gains no line, so an approval a channel's own command prepared for it is claimed through core's in the same
+words, and checked then. A `--print` writes nothing and is not checked.
+
 **A channel's own `mcp install` installs only its own release, unverified, and says so.** Only core carries Sigstore,
 so `agent-gmail mcp install --client <client>` or `npx -y @agentcomms/gmail mcp install --client <client>` cannot
 check provenance. It installs the release it is running itself — exactly that package and version, which npx already
@@ -88,9 +95,9 @@ command cannot check provenance`, naming core's `mcp install --server gmail --cl
 the same in its warnings and in `provenance` (`verified: false`), naming core's command located, and the runtime's
 folder keeps a receipt, `.agentcomms-install.json`, with `verified: false`; one core installed says `verified: true`.
 Any other release it would fetch it refuses with `BAD_DATA`, naming core's command. With the runtime already on this
-machine, or with `--print`, it fetches nothing and registers as before. `--launcher npx` installs nothing either: the
-client fetches the package from npm each time it starts it, which nothing here checks, where the managed launcher's
-runtime was verified.
+machine, or with `--print`, it fetches nothing and registers as before. Its `--launcher npx` registers without
+checking, as it cannot; core's checks the release first (above). Either way the client fetches the package from npm
+again each time it starts it, which nothing here verifies: the managed launcher's runtime is the verified one.
 
 Each managed registration also writes that package's CLI shim in `~/.local/bin` on macOS and Linux, pointing at the
 same locator-resolved Node and runtime entry. An update repoints a shim this installation owns and leaves any foreign
