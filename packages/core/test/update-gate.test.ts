@@ -59,6 +59,7 @@ import {
 } from '../src/update-state.ts';
 import { BACKGROUND_WORDS } from '../src/update-words.ts';
 import { VERSION } from '../src/version.ts';
+import { globalStandIn } from './helpers/global-stand-in.ts';
 import { coreInline } from './helpers/handoffs.ts';
 import { holdLock } from './helpers/hold-lock.ts';
 import { fixtureTarballs, registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
@@ -170,10 +171,8 @@ function deps(latestVersion: UpdateDeps['latestVersion'], global: Record<string,
     verifyRelease: testReleaseVerifier(),
     tarballs: fixtureTarballs,
     globalPackages: async () => ({ ...installed }),
-    installGlobal: async (spec: string) => {
-      const at = spec.lastIndexOf('@');
-      installed[spec.slice(0, at)] = spec.slice(at + 1);
-    },
+    // npm installing the verified tarball it is handed, into a global folder of the test's own.
+    ...globalStandIn(tempDir('comms-global-'), installed),
     installRuntime: async () => undefined,
   } satisfies UpdateDeps;
 }

@@ -14,6 +14,7 @@ import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
+import { type GlobalInstallDeps, installVerifiedGlobal } from '../global-install.ts';
 import { type CliHandoffs, type Handoff, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
 import {
@@ -55,12 +56,14 @@ import {
   isBehind,
   isVersion,
   npmGlobalPackages,
+  npmGlobalRoot,
   npmInstallGlobal,
   npmLatestVersion,
   type ReleaseDeclaration,
 } from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
-// Types only: what reads a tarball stays out of every bundle that reaches this module, WhatsApp's among them.
+// Types only here. What reads a tarball is reached through the global install alone, and like it runs nothing when
+// loaded, so a bundle that never applies an update — WhatsApp's (its no-network test) — drops it.
 import type { TarballFetch } from '../release-tarball.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
@@ -125,8 +128,13 @@ export interface UpdateDeps {
   latestVersion?: ((packageName: string) => Promise<string>) | undefined;
   /** This suite's packages installed globally, by name. Defaults to `npm ls --global --depth=0 --json`. */
   globalPackages?: (() => Promise<Record<string, string>>) | undefined;
-  /** `npm install --global <spec>`. */
+  /**
+   * `npm install --global <spec>`. The spec is the path of the release's verified tarball, written for it (design
+   * 2026-10-22 P3): npm installs exactly those bytes, and does not resolve the name again.
+   */
   installGlobal?: ((spec: string) => Promise<void>) | undefined;
+  /** Where npm installs global packages, checked after each global install. Defaults to `npm root --global`. */
+  globalRoot?: (() => Promise<string>) | undefined;
   /** Installs a managed runtime of exactly this version, as the managed launcher would. */
   installRuntime?: ((packageName: string, version: string) => Promise<void>) | undefined;
   /**
@@ -1114,7 +1122,7 @@ function effectsOf(planned: Planned): string[] {
     ...planned.registrations.map(once).flatMap(registrationEffects),
     ...planned.globals.map(
       (global) =>
-        `updates the global ${global.package} from ${global.version} to ${global.latest}: \`npm install -g ${global.package}@${global.latest}\``,
+        `updates the global ${global.package} from ${global.version} to ${global.latest}: installs its verified tarball with \`npm install -g\`, then checks what npm installed against it`,
     ),
     ...decidingEffects(planned),
     ...verifiedEffects(planned),
@@ -1655,12 +1663,39 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
     }
   }
 
-  // Last: a global package may be the very command running this, and npm replaces it underneath.
+  // Last: a global package may be the very command running this, and npm replaces it underneath. Each is installed
+  // from its verified tarball, never by name, and what npm installed is checked against it (design 2026-10-22 P3).
+  const globals: GlobalInstallDeps = {
+    install: installGlobal,
+    root: deps.globalRoot ?? (() => npmGlobalRoot(context.env)),
+    registry: releaseSources(context.env, deps).registry,
+    verify: check.verify,
+    tarballs: deps.tarballs,
+    verified: planned.verified,
+  };
+  const again = handoffSentence(planned.handoffs.core(['update']), (command) => `run ${command} again`, {
+    instead: "run core's update again",
+  });
   for (const global of planned.globals) {
     const base = { kind: 'global' as const, package: global.package, from: global.version, to: global.latest };
+    const provenance = planned.verified.get(global.package);
+    if (provenance === undefined || provenance.version !== global.latest) {
+      steps.push({
+        ...base,
+        outcome: 'failed',
+        detail: `${global.package}@${global.latest} was not verified before the preview`,
+      });
+      continue;
+    }
     try {
-      await installGlobal(`${global.package}@${global.latest}`);
-      steps.push({ ...base, outcome: 'updated' });
+      const installed = await installVerifiedGlobal(
+        { packageName: global.package, version: global.latest, provenance },
+        globals,
+        again,
+      );
+      steps.push(
+        installed.ok ? { ...base, outcome: 'updated' } : { ...base, outcome: 'failed', detail: installed.detail },
+      );
     } catch (error) {
       steps.push({ ...base, outcome: 'failed', detail: message(error) });
     }

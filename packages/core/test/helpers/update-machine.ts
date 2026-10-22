@@ -8,6 +8,7 @@ import { type CoreMcpOptions, createCoreMcpServer } from '../../src/mcp/server.t
 import type { UpdateDeps } from '../../src/operations/update.ts';
 import { updateJobMarkerPath } from '../../src/update-job.ts';
 import { changeUpdateCheck, type UpdateCheckRecord } from '../../src/update-state.ts';
+import { globalStandIn } from './global-stand-in.ts';
 import { fixtureTarballs, registryOf, testReleaseVerifier } from './provenance-fixture.ts';
 import { tempDir } from './temp.ts';
 
@@ -103,10 +104,8 @@ export function deps(
     verifyRelease: testReleaseVerifier(),
     tarballs: fixtureTarballs,
     globalPackages: async () => ({ ...installed }),
-    installGlobal: async (spec: string) => {
-      const at = spec.lastIndexOf('@');
-      installed[spec.slice(0, at)] = spec.slice(at + 1);
-    },
+    // npm installing the verified tarball it is handed, into a global folder of the test's own.
+    ...globalStandIn(tempDir('comms-global-'), installed),
     installRuntime: async () => undefined,
   };
 }

@@ -48,6 +48,14 @@ export interface WorldRelease {
   shape?: Partial<ProvenanceShape> | 'missing';
   /** What its tarball location answers: its own bytes, a 404, or another tarball's bytes. */
   serve?: 'ok' | 'missing' | 'other-bytes';
+  /**
+   * More of a package's manifest, by package, in its tarball and its registry document alike: Gmail's `dependencies`
+   * on core, so that npm installs a global Gmail with a nested `@agentcomms/core`, or a `bin`. Not given, the tarball
+   * is the one it always was.
+   */
+  manifests?: Record<string, Record<string, unknown>>;
+  /** More files in a package's tarball, by package, each below `package/`. */
+  files?: Record<string, Record<string, string>>;
 }
 
 export interface World {
@@ -100,8 +108,15 @@ export function releaseWorld(latest: Record<string, string>, releases: readonly 
     const key = `${packageName}@${version}`;
     let bytes = packed.get(key);
     if (bytes === undefined) {
-      const declares = packageName === CORE ? releaseOf(packageName, version)?.declares : undefined;
-      bytes = releaseTarball(packageName, version, declares === undefined ? {} : { declares });
+      const release = releaseOf(packageName, version);
+      const declares = packageName === CORE ? release?.declares : undefined;
+      const manifest = release?.manifests?.[packageName];
+      const files = release?.files?.[packageName];
+      bytes = releaseTarball(packageName, version, {
+        ...(declares === undefined ? {} : { declares }),
+        ...(manifest === undefined ? {} : { manifest }),
+        ...(files === undefined ? {} : { files }),
+      });
       packed.set(key, bytes);
     }
     return bytes;
@@ -118,6 +133,7 @@ export function releaseWorld(latest: Record<string, string>, releases: readonly 
       const release = releaseOf(packageName, version);
       const says = release?.registrySays !== undefined ? release.registrySays : release?.declares;
       versions[version] = {
+        ...release?.manifests?.[packageName],
         name: packageName,
         version,
         ...(packageName === CORE && says !== undefined ? { agentcommsRelease: says } : {}),
@@ -208,7 +224,8 @@ export function releaseWorld(latest: Record<string, string>, releases: readonly 
 /**
  * The world on 127.0.0.1: each package's document at `/<name>` (a scope's slash escaped or not), with its
  * `dist.tarball` pointing here, and each release's tarball as its `serve` says. `toNpm` serves npm itself — a request
- * whose user agent is npm's — another tarball by package name: a registry that lies to npm and not to the check.
+ * whose user agent is npm's — another tarball by package name, and gives that tarball's integrity in the document npm
+ * reads, so npm installs it: a registry that lies to npm, consistently, and not to the check.
  */
 export async function loopbackRegistry(
   world: World,
@@ -248,7 +265,20 @@ export async function loopbackRegistry(
       return notFound();
     }
     if (built.packument['dist-tags']?.latest === undefined) return notFound();
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(built.packument));
+    const lie = npm ? options.toNpm?.[packageName] : undefined;
+    const packument =
+      lie === undefined
+        ? built.packument
+        : {
+            ...built.packument,
+            versions: Object.fromEntries(
+              Object.entries(built.packument.versions ?? {}).map(([version, manifest]) => [
+                version,
+                { ...manifest, dist: { ...manifest?.dist, integrity: integrityOfBytes(lie) } },
+              ]),
+            ),
+          };
+    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(packument));
   });
   await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
