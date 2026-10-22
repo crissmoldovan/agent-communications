@@ -1,5 +1,5 @@
 import { startCoreStdioServer } from '../../src/mcp/server.ts';
-import { testReleaseVerifier } from '../helpers/provenance-fixture.ts';
+import { fixtureTarballs, testReleaseVerifier } from '../helpers/provenance-fixture.ts';
 
 /*
  * Core's MCP server over stdio, as `agentcomms mcp` serves it, for a test in another package that drives an update
@@ -10,4 +10,7 @@ import { testReleaseVerifier } from '../helpers/provenance-fixture.ts';
  * (`../helpers/provenance-fixture.ts`). A server started from a package's build reads npm's endpoint and Sigstore's
  * root, which no test may reach, and nothing in its environment can tell it otherwise.
  */
-await startCoreStdioServer({ env: process.env, update: { verifyRelease: testReleaseVerifier() } });
+await startCoreStdioServer({
+  env: process.env,
+  update: { verifyRelease: testReleaseVerifier(), tarballs: fixtureTarballs },
+});

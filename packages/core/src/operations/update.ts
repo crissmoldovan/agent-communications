@@ -60,6 +60,8 @@ import {
   type ReleaseDeclaration,
 } from '../npm.ts';
 import { launcherOf, registrationVersion, stableLauncherOf } from '../registrations.ts';
+// Types only: what reads a tarball stays out of every bundle that reaches this module, WhatsApp's among them.
+import type { TarballFetch } from '../release-tarball.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
 import type { VerifiedProvenance } from '../update-provenance.ts';
@@ -150,6 +152,11 @@ export interface UpdateDeps {
    * installs unverified, and nothing skips it.
    */
   verifyRelease?: ReleaseVerifier | undefined;
+  /**
+   * How a release's tarball is fetched, to read what it declares and to install a global package from it. Defaults to
+   * `fetch`.
+   */
+  tarballs?: TarballFetch | undefined;
   /** The clock a check or an update is recorded by in the daily check's file. */
   now?: (() => Date) | undefined;
   /** The shell the commands it prints are quoted for: this machine's, unless a test asks for another by name. */

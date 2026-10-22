@@ -21,10 +21,15 @@ import { compareVersions, isPlainVersion, isPrerelease, isVersion } from './vers
  * handed in (`ReleaseVerifier`), by core, which carries sigstore-js.
  */
 
-/** What an update reads of a package's document on the registry: its tags, its versions' manifests, when each came out. */
+/**
+ * What an update reads of a package's document on the registry: its tags, its versions' manifests, when each came out,
+ * and where each version's tarball is (`dist.tarball`, read by `tarballLocation` in `release-tarball.ts`).
+ */
 export interface Packument {
   'dist-tags'?: Record<string, unknown> | undefined;
-  versions?: Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown } } | undefined> | undefined;
+  versions?:
+    | Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown; tarball?: unknown } } | undefined>
+    | undefined;
   time?: Record<string, unknown> | undefined;
 }
 

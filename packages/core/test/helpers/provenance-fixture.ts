@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
+import type { TarballFetch } from '../../src/release-tarball.ts';
 import {
   ATTESTATIONS_BASE,
   type AttestationFetch,
@@ -6,6 +7,7 @@ import {
   sigstoreBundleVerifier,
 } from '../../src/update-provenance.ts';
 import type { Packument, ReleaseRegistry, ReleaseVerifier } from '../../src/update-release.ts';
+import { integrityOfBytes, releaseTarball } from './tarball-fixture.ts';
 
 /*
  * Provenance bundles made here, for tests that must never reach npm or Sigstore (design 2026-10-16 §4).
@@ -342,8 +344,48 @@ export function attestationsAnswer(bundle: Record<string, unknown>): { attestati
 
 // ── Stand-ins for an update: npm's endpoint, a registry of full documents, and the verifier ─────────────────────────
 
+const packed = new Map<string, Buffer>();
+
+/** The tarball every stand-in serves for one release (`releaseTarball`, declaring nothing), made once per process. */
+function fixtureTarball(packageName: string, version: string): Buffer {
+  const key = `${packageName}@${version}`;
+  let bytes = packed.get(key);
+  if (bytes === undefined) {
+    bytes = releaseTarball(packageName, version);
+    packed.set(key, bytes);
+  }
+  return bytes;
+}
+
 /** The tarball every stand-in serves for one release: its integrity, as the registry writes it. */
-export const tarballOf = (packageName: string, version: string): string => integrityOf(`${packageName}@${version}`);
+export const tarballOf = (packageName: string, version: string): string =>
+  integrityOfBytes(fixtureTarball(packageName, version));
+
+/** Where a stand-in registry says one release's tarball is: npm's own path, on a host no test can reach. */
+export function fixtureTarballUrl(packageName: string, version: string): string {
+  return `https://registry.comms.test/${packageName}/-/${packageName.split('/').at(-1)}-${version}.tgz`;
+}
+
+/**
+ * The tarballs a stand-in registry names (`fixtureTarballUrl`): each release's `releaseTarball`, the very bytes
+ * `tarballOf` gives the integrity of and the attestations endpoint signs. Anything else is a 404.
+ */
+export const fixtureTarballs: TarballFetch = async (url) => {
+  const found = /^https:\/\/registry\.comms\.test\/((?:@[^/]+\/)?[^/]+)\/-\/([^/]+)\.tgz$/.exec(url);
+  const packageName = found?.[1];
+  const base = packageName?.split('/').at(-1);
+  const file = found?.[2];
+  if (packageName === undefined || base === undefined || file === undefined || !file.startsWith(`${base}-`)) {
+    return new Response('not found', { status: 404 });
+  }
+  const version = file.slice(base.length + 1);
+  if (fixtureTarballUrl(packageName, version) !== url) return new Response('not found', { status: 404 });
+  const bytes = fixtureTarball(packageName, version);
+  return new Response(new Uint8Array(bytes), {
+    status: 200,
+    headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) },
+  });
+};
 
 /**
  * npm's attestations endpoint: a genuine bundle for every package and version, signing `tarballOf` it — but where
@@ -385,7 +427,8 @@ export interface ListedRelease {
 
 /**
  * A registry's full package documents: for each package, `latest` as its tag and every release in `releases` (and
- * `latest` itself), each with the tarball `tarballOf` it; `agentcommsRelease` only on core's, as the release declares.
+ * `latest` itself), each with the tarball `tarballOf` it at `fixtureTarballUrl`; `agentcommsRelease` only on core's, as
+ * the release declares.
  */
 export function packumentRegistry(
   latest: Record<string, string>,
@@ -400,7 +443,10 @@ export function packumentRegistry(
     const listed = releases.some((release) => release.version === tag) ? releases : [...releases, { version: tag }];
     for (const release of listed) {
       (packument.versions as Record<string, unknown>)[release.version] = {
-        dist: { integrity: tarballOf(packageName, release.version) },
+        dist: {
+          integrity: tarballOf(packageName, release.version),
+          tarball: fixtureTarballUrl(packageName, release.version),
+        },
         ...(packageName === '@agentcomms/core' && release.declares !== undefined
           ? { agentcommsRelease: release.declares }
           : {}),
@@ -416,7 +462,7 @@ export function packumentRegistry(
 
 /**
  * A registry whose every package's latest release is what `latestOf` says — a stand-in `latestVersion`, read again —
- * with its tarball `tarballOf` it: for a test about something else than which releases there are.
+ * with its tarball `tarballOf` it at `fixtureTarballUrl`: for a test about something else than which releases there are.
  */
 export function registryOf(latestOf: (packageName: string) => string | Promise<string>): ReleaseRegistry {
   return async (packageName) => {
@@ -424,7 +470,11 @@ export function registryOf(latestOf: (packageName: string) => string | Promise<s
     return {
       packument: {
         'dist-tags': { latest: version },
-        versions: { [version]: { dist: { integrity: tarballOf(packageName, version) } } },
+        versions: {
+          [version]: {
+            dist: { integrity: tarballOf(packageName, version), tarball: fixtureTarballUrl(packageName, version) },
+          },
+        },
       },
     };
   };

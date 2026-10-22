@@ -8,7 +8,7 @@ import { type CoreMcpOptions, createCoreMcpServer } from '../../src/mcp/server.t
 import type { UpdateDeps } from '../../src/operations/update.ts';
 import { updateJobMarkerPath } from '../../src/update-job.ts';
 import { changeUpdateCheck, type UpdateCheckRecord } from '../../src/update-state.ts';
-import { registryOf, testReleaseVerifier } from './provenance-fixture.ts';
+import { fixtureTarballs, registryOf, testReleaseVerifier } from './provenance-fixture.ts';
 import { tempDir } from './temp.ts';
 
 /*
@@ -101,6 +101,7 @@ export function deps(
     // Each release's document, and its provenance verified against the test's own trust root: nothing reaches npm.
     registry: registryOf(async (packageName) => String(await (latestVersion ?? unreachable)(packageName))),
     verifyRelease: testReleaseVerifier(),
+    tarballs: fixtureTarballs,
     globalPackages: async () => ({ ...installed }),
     installGlobal: async (spec: string) => {
       const at = spec.lastIndexOf('@');

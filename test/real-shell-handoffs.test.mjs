@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
@@ -46,6 +45,10 @@ import {
   wordsOf,
 } from './helpers/real-shell.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
+
+// The integrity of the tarball the test's verifier is shown signed for a release, from the fixture itself: the
+// deterministic tarball the stand-in registry serves (`packages/core/test/helpers/provenance-fixture.ts`).
+const { tarballOf } = await import('../packages/core/test/helpers/provenance-fixture.ts');
 
 /**
  * The acceptance criterion of 0.13.1, in real shells (CUE-403; design 2026-10-04 §1, §4 items 3 and 8).
@@ -838,7 +841,7 @@ function managedRuntime(dataDir) {
   );
   // The lockfile npm writes, with the integrity of the tarball the test's verifier was shown signed: core holds a
   // runtime already on disk to it before it registers on it (`provenance-fixture.ts`'s `tarballOf`).
-  const integrity = `sha512-${createHash('sha512').update(`@agentcomms/core@${VERSION}`).digest('base64')}`;
+  const integrity = tarballOf('@agentcomms/core', VERSION);
   WRITES.writeFile(
     join(root, 'package-lock.json'),
     JSON.stringify({
