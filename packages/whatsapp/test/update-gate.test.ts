@@ -225,6 +225,14 @@ test('the bundle as it ships carries the update notice’s reader, and none of t
     'updateCheckChildEnvironment',
     'UPDATE_CHECK_CHILD_COMMAND',
     'update-check-child',
+    // A channel's hand-off to core's CLI (design 2026-10-22, P2): WhatsApp has no check to hand on.
+    'coreUpdateCheckWords',
+    'startCheckChild',
+    // What reads and installs a verified release (P1, P3): a network path, which WhatsApp's bundle never reaches.
+    'readVerifiedDeclaration',
+    'downloadVerifiedTarball',
+    'installVerifiedGlobal',
+    'release-declarations.json',
   ]) {
     assert.ok(!shipped.includes(checker), `the bundle carries ${checker}`);
   }

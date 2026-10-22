@@ -6,6 +6,7 @@ import {
   approveRefusedHint,
   approveStandingAtTerminal,
   CommsError,
+  type CoreHandOff,
   canPrompt,
   cliHandoffs,
   colorEnabled,
@@ -187,6 +188,12 @@ export interface CliDeps extends SlackContextOptions {
    * that does not end the process. Injected so a test is not killed by it.
    */
   signals?: { host: SignalHost; exit(code: number): void };
+  /**
+   * How the day's update check is handed to core's CLI (design 2026-10-22, P2): core's command, at this package's own
+   * version, located and started as the default does. Injected so a test can see what would be started without
+   * starting it.
+   */
+  updateHandOff?: CoreHandOff | undefined;
 }
 
 interface GlobalOptions {
@@ -334,7 +341,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       running: VERSION,
       output: output(),
       streams,
-      ...terminalUpdateHooks(core, env),
+      ...terminalUpdateHooks(core, env, { handOff: deps.updateHandOff ?? {} }),
     });
   });
 

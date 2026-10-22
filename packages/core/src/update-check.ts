@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import { channelServer } from './channel-servers.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
-import { handoffSentence, requireHandoffs } from './handoffs.ts';
+import { handoffSentence, isCommand, requireHandoffs } from './handoffs.ts';
 import { npmLatestVersion } from './npm.ts';
 import { releaseFactsReader, type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
@@ -15,6 +15,7 @@ import {
   changeUpdateCheck,
   EMPTY_UPDATE_CHECK,
   readUpdateCheck,
+  UPDATE_CHECK_LEASE_MS,
   type UpdateCheckRecord,
   updateCheckDue,
   updateCheckEnabled,
@@ -52,10 +53,35 @@ export interface UpdateCheckOptions {
   /** The registry and `npm ls`, for a test — nothing a test runs reads the real ones. */
   deps?: UpdateDeps | undefined;
   now?: (() => Date) | undefined;
+  /**
+   * A channel's server: the ask handed to core's CLI at this channel's own version, which verifies what a release
+   * declares (design 2026-10-22, P2) — when that core is found and starts; otherwise the ask is this process's, as it
+   * always was. Never with `deps`, which a child could not be handed. Core's own server gives none.
+   */
+  handOff?: CoreHandOff | undefined;
+}
+
+/**
+ * How a channel hands its update check to core's CLI (design 2026-10-22, P2). A channel carries core's code but not
+ * its Sigstore verifier, so its own check can believe nothing a release declares; core's CLI, installed beside it at
+ * the same version, can. Each part is a test's seam: a channel's command and its server pass `{}`, and core's own pass
+ * nothing at all.
+ */
+export interface CoreHandOff {
+  /** Core's command for `update-check-child <claimedAt>`, as words; null when there is none. Default `coreUpdateCheckWords`. */
+  locate?: ((core: Core, claimedAt: string) => readonly string[] | null) | undefined;
+  /**
+   * Starts the words detached, with no shell, waiting until `deadline` at most; false when it could not start. Default
+   * `startCheckChild`. A command starts its own child with it too, when core's could not be started.
+   */
+  start?: ((words: readonly string[], env: NodeJS.ProcessEnv, deadline: number) => Promise<boolean>) | undefined;
 }
 
 export interface UpdateCheckOutcome {
-  /** Whether this call asked the registry: false when the check is off, not due, or another process is asking. */
+  /**
+   * Whether this call's claim was asked under — here, or by core's CLI it was handed to: false when the check is off,
+   * not due, or another process is asking.
+   */
   asked: boolean;
   record: UpdateCheckRecord;
 }
@@ -72,7 +98,13 @@ export async function checkForUpdates(
     if (!enabled.on) return { asked: false, record: await readUpdateCheck(stateDir) };
     const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return { asked: false, record: await readUpdateCheck(stateDir) };
-    await askUnderClaim(core, env, claimedAt, options);
+    // A channel's server hands the ask to core's CLI, and waits for it no longer than the claim holds: past that,
+    // another process may claim the check and ask, and nothing here would be waiting for anything of this one's.
+    const handed =
+      options.handOff !== undefined &&
+      options.deps === undefined &&
+      (await handToCore(core, env, claimedAt, options.handOff, Date.now() + UPDATE_CHECK_LEASE_MS));
+    if (!handed) await askUnderClaim(core, env, claimedAt, options);
     return { asked: true, record: await readUpdateCheck(stateDir) };
   } catch {
     // The check never stops anything, a command least of all: whatever went wrong, the file is what it was.
@@ -340,8 +372,13 @@ export function updateCheckChildEnvironment(
  * message — or whatever reads that output would wait for the child as it waited for the check. Detached, so a
  * Ctrl-C at the terminal does not cut the ask short, and hidden, so Windows opens no console for it.
  *
- * When the child cannot be started — no entry to start, a program not there or not allowed — the check is asked in
- * this process instead, as it was before. It never throws.
+ * A channel's command hands the ask to core's CLI first (design 2026-10-22, P2): core's command, located at the
+ * channel's own version, with the same hidden command, the same claim and the same environment. Core's child verifies
+ * what a release declares, which the channel's own could not.
+ *
+ * When the child cannot be started — no core, no entry to start, a program not there or not allowed, a `.cmd` that
+ * would need a shell — the next is tried: the channel's own child, then the check in this process, as it was before.
+ * It never throws.
  */
 async function handUpdateCheckToChild(
   core: Core,
@@ -350,6 +387,7 @@ async function handUpdateCheckToChild(
     now?: (() => Date) | undefined;
     entry?: UpdateCheckChildEntry | null | undefined;
     verifyRelease?: ReleaseVerifier | undefined;
+    handOff?: CoreHandOff | undefined;
   },
 ): Promise<void> {
   const deadline = Date.now() + TERMINAL_CHECK_WAIT_MS;
@@ -359,8 +397,16 @@ async function handUpdateCheckToChild(
     if (!enabled.on) return;
     const claimedAt = await claimUpdateCheck(core, { now: options.now, intervalMs: enabled.intervalMs });
     if (claimedAt === null) return;
+    if (options.handOff !== undefined && (await handToCore(core, env, claimedAt, options.handOff, deadline))) return;
     const entry = options.entry === undefined ? updateCheckChildEntry() : options.entry;
-    const started = entry !== null && (await startUpdateCheckChild(entry, claimedAt, core.paths, env, deadline));
+    const started =
+      entry !== null &&
+      (await startedSafely(
+        options.handOff?.start ?? startCheckChild,
+        ownChildWords(entry, claimedAt, core.paths),
+        updateCheckChildEnvironment(env),
+        deadline,
+      ));
     if (!started) {
       await askUnderClaim(core, env, claimedAt, {
         now: options.now,
@@ -372,25 +418,95 @@ async function handUpdateCheckToChild(
   }
 }
 
+/** This CLI again, as its child: the entry, every folder pinned, the hidden command and the claim. */
+function ownChildWords(entry: UpdateCheckChildEntry, claimedAt: string, paths: ResolvedPaths): string[] {
+  const pathArgs = PATH_OPTIONS.flatMap(({ key, flag }) => [flag, paths[key]]);
+  return [entry.command, ...entry.args, ...pathArgs, UPDATE_CHECK_CHILD_COMMAND, claimedAt];
+}
+
 /**
- * Starts the child and waits, until `deadline` at most, for it to say the ask is over, or to end. False when it could
- * not be started at all; then nothing was asked, and the claim is still this process's to ask under.
+ * Core's own command for `update-check-child <claimedAt>`, as the words to start: `core.handoffs.core(…)` with every
+ * folder pinned, located as the channel finds core — its installed dependency, at exactly the channel's own version,
+ * through the stable way in a managed runtime keeps (`locateCliCommand`). Locating checks files and runs nothing.
+ *
+ * Located for this process's own system, whatever shell its printed commands are quoted for: these words are started
+ * here, and a managed runtime's stable launcher is started one way on Windows and another elsewhere.
+ *
+ * Null for core's own process, which asks itself and is never handed its own check; for a core opened without its
+ * caller, which can locate nothing; and where no such core is found.
  */
-async function startUpdateCheckChild(
-  entry: UpdateCheckChildEntry,
+export function coreUpdateCheckWords(core: Core, claimedAt: string): readonly string[] | null {
+  if (core.handoffs === undefined || core.handoffs.caller.packageName === CORE_PACKAGE) return null;
+  try {
+    const handoffs = requireHandoffs(core, process.platform);
+    const handoff = handoffs.core([UPDATE_CHECK_CHILD_COMMAND, claimedAt], { downloads: true });
+    return isCommand(handoff) ? handoff.words : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The ask handed to core's CLI (design 2026-10-22, P2): its command located (`handOff.locate`), started with the
+ * claim and this command's child environment (`handOff.start`), and waited for until `deadline`. False when there is
+ * no such command, or it did not start: then nothing was asked, and the claim is still this process's to ask under. It
+ * never throws.
+ */
+async function handToCore(
+  core: Core,
+  env: NodeJS.ProcessEnv,
   claimedAt: string,
-  paths: ResolvedPaths,
+  handOff: CoreHandOff,
+  deadline: number,
+): Promise<boolean> {
+  let words: readonly string[] | null;
+  try {
+    words = (handOff.locate ?? coreUpdateCheckWords)(core, claimedAt);
+  } catch {
+    return false;
+  }
+  if (words === null || words.length === 0) return false;
+  return startedSafely(handOff.start ?? startCheckChild, words, updateCheckChildEnvironment(env), deadline);
+}
+
+/** A start's answer, with one that throws counted as not started: the fallback after it is all that is left. */
+async function startedSafely(
+  start: NonNullable<CoreHandOff['start']>,
+  words: readonly string[],
   env: NodeJS.ProcessEnv,
   deadline: number,
 ): Promise<boolean> {
+  try {
+    return (await start(words, env, deadline)) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Starts `words` — a program, then its arguments — detached and hidden, with no shell and `env` as given, and waits,
+ * until `deadline` at most, for it to say the ask is over, or to end. False when it could not be started at all; then
+ * nothing was asked, and the claim is still this process's to ask under.
+ *
+ * Never through a shell: each word is one argument, as located, and nothing in them is read as a shell would read it.
+ * A program only a shell could start — a Windows `.cmd` or `.bat`, which Node refuses without one (EINVAL) — is not
+ * started, and the caller falls back.
+ */
+export async function startCheckChild(
+  words: readonly string[],
+  env: NodeJS.ProcessEnv,
+  deadline: number,
+): Promise<boolean> {
+  const [command, ...args] = words;
+  if (command === undefined) return false;
   let child: ChildProcess;
   try {
-    const pathArgs = PATH_OPTIONS.flatMap(({ key, flag }) => [flag, paths[key]]);
-    child = spawn(entry.command, [...entry.args, ...pathArgs, UPDATE_CHECK_CHILD_COMMAND, claimedAt], {
+    child = spawn(command, args, {
       detached: true,
       windowsHide: true,
+      shell: false,
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      env: updateCheckChildEnvironment(env),
+      env,
     });
   } catch {
     return false;
@@ -487,6 +603,11 @@ export function terminalUpdateHooks(
      * and what it reads of a release's manifest counts for nothing.
      */
     verifyRelease?: ReleaseVerifier | undefined;
+    /**
+     * A channel's command: the check handed to core's CLI at this channel's own version, which verifies (design
+     * 2026-10-22, P2), before the channel's own child. Core's command gives none.
+     */
+    handOff?: CoreHandOff | undefined;
   } = {},
 ): TerminalUpdateHooks {
   return {
@@ -500,6 +621,7 @@ export function terminalUpdateHooks(
         now: options.now,
         entry: options.childEntry,
         verifyRelease: options.verifyRelease,
+        handOff: options.handOff,
       });
     },
   };

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   asV2,
   claimUpdateCheck,
@@ -11,6 +13,10 @@ import {
   updateCheckPath,
   updateLevelChange,
 } from '@agentcomms/core';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { run } from '../src/cli/program.ts';
+import { createResendMcpServer } from '../src/mcp/server.ts';
 import { coreText } from './support/handoffs.ts';
 import { type Harness, newHarness, type ToolResult, tempDir } from './support/harness.ts';
 
@@ -233,6 +239,101 @@ test('agent-resend finishes the update check a command handed on: under its clai
     assert.deepEqual([record.lastChecked, record.checking], [claimedAt, null]);
     assert.match(String(record.lastError), /could not be reached/);
     assert.doesNotMatch((await harness.cli(['--help'])).stdout, new RegExp(UPDATE_CHECK_CHILD_COMMAND));
+  } finally {
+    await harness.close();
+  }
+});
+
+// ── The day's check, handed to core's CLI (design 2026-10-22, P2) ──────────────────────────────────────────────
+
+/** Core's CLI as Resend finds it from this checkout: through its own dependency on core, at its own version. */
+const CORE_CLI = realpathSync(fileURLToPath(new URL('../node_modules/@agentcomms/core/src/cli.ts', import.meta.url)));
+
+/** The check on and due — the file a day old — with a registry port nobody answers on. */
+function updateDue(harness: Harness): void {
+  harness.env.AGENT_COMMS_UPDATE_CHECK = 'on';
+  harness.env.npm_config_registry = 'http://127.0.0.1:9/';
+  const stateDir = harness.core.paths.stateDir;
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    updateCheckPath(stateDir),
+    JSON.stringify({
+      lastChecked: new Date(Date.now() - 25 * 3_600_000).toISOString(),
+      latest: '99.0.0',
+      behind: true,
+    }),
+  );
+}
+
+/** A start that starts nothing: it records the words it was handed, and says it started them. */
+function recordingStart() {
+  const started: string[][] = [];
+  const start = async (words: readonly string[]) => {
+    started.push([...words]);
+    return true;
+  };
+  return { started, start };
+}
+
+/** The words start core's CLI with the hidden command, under the claim the file holds. */
+async function assertCoreHandOff(harness: Harness, started: string[][]): Promise<void> {
+  assert.equal(started.length, 1, JSON.stringify(started));
+  const [words] = started as [string[]];
+  const claimedAt = (await readUpdateCheck(harness.core.paths.stateDir)).checking;
+  assert.equal(typeof claimedAt, 'string', 'the check was not claimed');
+  assert.deepEqual(words.slice(-2), [UPDATE_CHECK_CHILD_COMMAND, claimedAt]);
+  assert.ok(words.includes(CORE_CLI), `not core's CLI: ${JSON.stringify(words)}`);
+  assert.equal(words[words.indexOf('--config-dir') + 1], harness.core.paths.configDir);
+}
+
+test("agent-resend hands the day's check to core's CLI", async () => {
+  const harness = await newHarness();
+  try {
+    updateDue(harness);
+    const handed = recordingStart();
+    const code = await run(['--json', 'account', 'list'], {
+      core: harness.core,
+      env: harness.env,
+      fetch: harness.fake.fetch,
+      throttle: { intervalMs: 0 },
+      platform: 'darwin',
+      streams: { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() },
+      updateHandOff: { start: handed.start },
+    });
+    assert.equal(code, 0);
+    await assertCoreHandOff(harness, handed.started);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the Resend server hands its check to core’s CLI', async () => {
+  const harness = await newHarness();
+  try {
+    updateDue(harness);
+    const handed = recordingStart();
+    const { server } = await createResendMcpServer({
+      core: harness.core,
+      env: harness.env,
+      fetch: harness.fake.fetch,
+      throttle: { intervalMs: 0 },
+      platform: 'darwin',
+      updateHandOff: { start: handed.start },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const listed = (await client.callTool({ name: 'resend_accounts_list', arguments: {} })) as ToolResult;
+      assert.notEqual(listed.isError, true, JSON.stringify(listed.structuredContent));
+      // The check runs beside the call, never before its answer: waited for here.
+      for (const deadline = Date.now() + 10_000; handed.started.length === 0 && Date.now() < deadline; ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await assertCoreHandOff(harness, handed.started);
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
   } finally {
     await harness.close();
   }
