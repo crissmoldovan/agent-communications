@@ -17,6 +17,7 @@ import {
   readUpdateCheck,
   SPACED_INTERVAL_MS,
   securityRelease,
+  UPDATE_NOTICE_LOCK,
   UPDATE_STARTED_BY_ENV,
   type UpdateCheckRecord,
   type UpdateSurface,
@@ -208,7 +209,7 @@ async function decideNotice(
   };
   // Most calls have nothing to say: they read the file and take no lock, so a server's calls never queue behind one.
   if (due(await readUpdateCheck(options.core.paths.stateDir), now()) === null) return null;
-  const decided = await changeUpdateCheck<NoticeDecision>(options.core.paths.stateDir, (record) => {
+  const decide = (record: UpdateCheckRecord): { record: UpdateCheckRecord; result: NoticeDecision } | null => {
     const at = now();
     const decision = due(record, at);
     if (decision === null) return null;
@@ -229,7 +230,11 @@ async function decideNotice(
       record: written,
       result: { ...decision, notice: notice === null || kind === undefined ? null : { ...notice, kind } },
     };
-  });
+  };
+  // The rest wait 2 s at most for the lock (`UPDATE_NOTICE_LOCK`), and never longer: busy past that, it throws, nothing
+  // is decided or written, and both callers say nothing this time (`updateToolNotice`, `updateNoticeAtTerminal`). The
+  // notice stays due, so a later call decides it.
+  const decided = await changeUpdateCheck(options.core.paths.stateDir, decide, UPDATE_NOTICE_LOCK);
   return decided.result ?? null;
 }
 
@@ -463,10 +468,15 @@ export async function securityNotice(options: {
     const { approvalId } = options;
     let shown = version;
     if (approvalId !== undefined) {
-      const decided = await changeUpdateCheck<string>(options.core.paths.stateDir, (record) => {
-        const now = asked(record);
-        return now === null ? null : { record: withSecurityShown(record, now, approvalId), result: now };
-      });
+      // A notice's bound: busy past 2 s, this preview goes without the line, and the next one carries it.
+      const decided = await changeUpdateCheck<string>(
+        options.core.paths.stateDir,
+        (record) => {
+          const now = asked(record);
+          return now === null ? null : { record: withSecurityShown(record, now, approvalId), result: now };
+        },
+        UPDATE_NOTICE_LOCK,
+      );
       if (decided.result === undefined) return null;
       shown = decided.result;
     }

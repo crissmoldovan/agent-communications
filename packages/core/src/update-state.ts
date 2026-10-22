@@ -305,13 +305,27 @@ export const UPDATE_CHECK_LOCK: LockOptions = Object.freeze({
 });
 
 /**
+ * How a notice takes the lock: 2 s in all, counted from the start of the wait, however often it changes hands meanwhile.
+ *
+ * A notice is best effort. Deciding a tool call's or a command's line, the security line in a preview, and recording
+ * the person's answer to that line take the lock only for what is said, and each runs while a person or an agent
+ * waits. Waited out holder by holder, as `UPDATE_CHECK_LOCK` waits, a busy machine's queue of refreshes held them for
+ * up to 15 s. Busy past 2 s, a notice decides nothing this time, and a later call says it.
+ */
+export const UPDATE_NOTICE_LOCK: LockOptions = Object.freeze({ timeoutMs: 2_000 });
+
+/**
  * Reads the record, changes it and writes it back, under a lock beside it, atomically — so a server recording a check
  * and a person's "not now" arriving at the same moment each keep what the other wrote. Returns what `change` returned
  * alongside the record written; `change` returning `null` writes nothing.
+ *
+ * `lock` is how long to wait for the lock: `UPDATE_CHECK_LOCK`, for a record that matters, unless a notice passes
+ * `UPDATE_NOTICE_LOCK`. Busy past it, this throws LOCK_TIMEOUT, and nothing is written.
  */
 export async function changeUpdateCheck<T = void>(
   stateDir: string,
   change: (record: UpdateCheckRecord) => { record: UpdateCheckRecord; result?: T } | null,
+  lock: LockOptions = UPDATE_CHECK_LOCK,
 ): Promise<{ record: UpdateCheckRecord; result: T | undefined; written: boolean }> {
   return withFileLock(
     join(stateDir, '.update-check.lock'),
@@ -322,7 +336,7 @@ export async function changeUpdateCheck<T = void>(
       await writeFileAtomic(updateCheckPath(stateDir), `${JSON.stringify(next.record, null, 2)}\n`);
       return { record: next.record, result: next.result, written: true };
     },
-    UPDATE_CHECK_LOCK,
+    lock,
   );
 }
 
@@ -629,10 +643,15 @@ export async function securityAnswered(stateDir: string, approvalId: string): Pr
   try {
     // Nearly always nothing to do: read, and no lock taken.
     if (!carried(await readUpdateCheck(stateDir))) return;
-    await changeUpdateCheck(stateDir, (record) => {
-      if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
-      return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
-    });
+    // A notice's bound: the send waits 2 s at most on the answer, and busy, the line is asked once more.
+    await changeUpdateCheck(
+      stateDir,
+      (record) => {
+        if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
+        return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
+      },
+      UPDATE_NOTICE_LOCK,
+    );
   } catch {
     // The answer is the person's yes, given; failing to record it only means the line is shown once more.
   }

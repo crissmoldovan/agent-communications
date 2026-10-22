@@ -990,6 +990,35 @@ test('changeUpdateCheck takes the lock per holder, 2 s each, 15 s in all', async
   assert.deepEqual(UPDATE_CHECK_LOCK, { timeoutPerHolder: true, timeoutMs: 2_000, maxWaitMs: 15_000 });
 });
 
+test('a notice decision waits 2 s at most for a lock handed on, and the notice comes on a later call', async () => {
+  const m = machine();
+  await seed(m, { latest: LATEST, behind: true });
+  const { call, close } = await connect(m);
+  try {
+    /*
+     * Six holders, 1 s each, back to back: what a writer whose record matters waits out, holder by holder. A notice is
+     * best effort and not worth that wait: the call answers while the lock is still being handed on, with no notice,
+     * and the next call once the lock is free decides it.
+     */
+    const held = holdLock(checkLockOf(m), [1_000, 1_000, 1_000, 1_000, 1_000, 1_000]);
+    await held.taken;
+    let over = false;
+    void held.then(() => {
+      over = true;
+    });
+    const first = await call('comms_audit_tail');
+    assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
+    assert.equal(over, false, 'the call waited until the lock was free');
+    assert.ok(!noticed(first), 'nothing was decided while the lock was busy');
+    await held;
+    const second = await call('comms_audit_tail');
+    assert.equal(second.isError, undefined, JSON.stringify(second.structuredContent));
+    assert.match(String(noticeOf(second)), /is out; say "update"/, 'the notice comes once the lock is free');
+  } finally {
+    await close();
+  }
+});
+
 // ── Switched off ──────────────────────────────────────────────────────────────────────────────────────────────
 
 test('CI, AGENT_COMMS_UPDATE_CHECK=off and the machine’s own setting each skip everything: no check, no notice', async () => {
