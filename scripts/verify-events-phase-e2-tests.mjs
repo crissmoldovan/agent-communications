@@ -8,6 +8,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SyntaxKind } from 'typescript/unstable/ast';
+import { createScanner } from 'typescript/unstable/ast/scanner';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const casesRelative = 'packages/events-daemon/test/fixtures/laya/cases';
@@ -698,9 +700,133 @@ const INSTALL_RULES = [
   'verify-runs-checker-and-fence',
 ];
 
-function codeOnly(source) {
-  // Block and line comments removed, string contents kept: a rule is about what the code does, not what it says.
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+/*
+ * 0.26.0 R3: a file's code is read with TypeScript's own scanner, never by hand. A comment, a string, a regular
+ * expression and each part of a template is one token, so a quote or a `//` inside one starts nothing. TypeScript 7
+ * offers no `preProcessFile` and no parser in JavaScript; its scanner is the tokenizer that `preProcessFile` walked.
+ */
+const COMMENTS = new Set([SyntaxKind.SingleLineCommentTrivia, SyntaxKind.MultiLineCommentTrivia]);
+const TRIVIA = new Set([
+  ...COMMENTS,
+  SyntaxKind.NewLineTrivia,
+  SyntaxKind.WhitespaceTrivia,
+  SyntaxKind.ConflictMarkerTrivia,
+]);
+/** The tokens a `/` divides after: each ends an expression. */
+const ENDS_EXPRESSION = new Set([
+  SyntaxKind.Identifier,
+  SyntaxKind.PrivateIdentifier,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.TemplateTail,
+  SyntaxKind.CloseParenToken,
+  SyntaxKind.CloseBracketToken,
+  SyntaxKind.CloseBraceToken,
+  SyntaxKind.ThisKeyword,
+  SyntaxKind.SuperKeyword,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.PlusPlusToken,
+  SyntaxKind.MinusMinusToken,
+]);
+
+function isWordKind(kind) {
+  return kind === SyntaxKind.Identifier || (kind >= SyntaxKind.FirstKeyword && kind <= SyntaxKind.LastKeyword);
+}
+
+function isPropertyDot(token) {
+  return token?.kind === SyntaxKind.DotToken || token?.kind === SyntaxKind.QuestionDotToken;
+}
+
+/**
+ * Whether a `/` after `previous` divides. An identifier ends an expression, and so does a word that names one: a
+ * property after `.` (`options.default / 2`), and a contextual keyword (`type`, `from`, `number`) but `await` and `of`,
+ * which an expression follows. After anything else, a `/` opens a regular expression.
+ */
+function endsExpression(previous, beforePrevious) {
+  if (previous === undefined) return false;
+  if (ENDS_EXPRESSION.has(previous.kind)) return true;
+  if (!isWordKind(previous.kind)) return false;
+  if (isPropertyDot(beforePrevious)) return true;
+  return (
+    previous.kind >= SyntaxKind.FirstContextualKeyword &&
+    previous.kind !== SyntaxKind.AwaitKeyword &&
+    previous.kind !== SyntaxKind.OfKeyword
+  );
+}
+
+/**
+ * A source's tokens, trivia included, as TypeScript's scanner reads them: a `/` or `/=` where an expression may start
+ * is re-scanned as a regular expression, and a `}` that closes a template's substitution as the template's next part.
+ */
+function sourceTokens(source) {
+  const scanner = createScanner(false, undefined, source);
+  const tokens = [];
+  // For each template substitution the scanner is inside, the braces opened in it and not yet closed.
+  const substitutions = [];
+  let previous;
+  let beforePrevious;
+  for (let kind = scanner.scan(); kind !== SyntaxKind.EndOfFile; kind = scanner.scan()) {
+    const open = substitutions.length - 1;
+    if (
+      (kind === SyntaxKind.SlashToken || kind === SyntaxKind.SlashEqualsToken) &&
+      !endsExpression(previous, beforePrevious)
+    )
+      kind = scanner.reScanSlashToken();
+    else if (kind === SyntaxKind.OpenBraceToken && open >= 0) substitutions[open] += 1;
+    else if (kind === SyntaxKind.CloseBraceToken && open >= 0) {
+      if (substitutions[open] > 0) substitutions[open] -= 1;
+      else {
+        kind = scanner.reScanTemplateToken(false);
+        if (kind !== SyntaxKind.TemplateMiddle) substitutions.pop();
+      }
+    }
+    if (kind === SyntaxKind.TemplateHead) substitutions.push(0);
+    const token = { kind, start: scanner.getTokenStart(), end: scanner.getTokenEnd() };
+    if (isWordKind(kind)) token.text = scanner.getTokenText();
+    else if (kind === SyntaxKind.StringLiteral || kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+      token.value = scanner.getTokenValue();
+    tokens.push(token);
+    if (!TRIVIA.has(kind)) {
+      beforePrevious = previous;
+      previous = token;
+    }
+  }
+  return tokens;
+}
+
+/**
+ * A reading of a source, kept by its text: the rules read the same file many times over, and TypeScript's scanner
+ * costs several times what the old regular expressions did. A reading is a function of the text alone.
+ */
+function remembered(readings, source, read) {
+  let reading = readings.get(source);
+  if (reading === undefined) {
+    reading = read(source);
+    readings.set(source, reading);
+  }
+  return reading;
+}
+
+const CODE_ONLY = new Map();
+
+/** The source with every comment removed and everything else byte for byte. */
+export function codeOnly(source) {
+  // A rule is about what the code does, not what it says.
+  return remembered(CODE_ONLY, source, () => {
+    let code = '';
+    let kept = 0;
+    for (const token of sourceTokens(source)) {
+      if (!COMMENTS.has(token.kind)) continue;
+      code += source.slice(kept, token.start);
+      kept = token.end;
+    }
+    return code + source.slice(kept);
+  });
 }
 
 function gitListed(root) {
@@ -1020,14 +1146,77 @@ function verifyAsyncLedger(root, fragments) {
 /** Network built-ins a Laya module may import as values: the boundary probe's two, and nowhere else. */
 const NETWORK_BUILTINS = /^node:(?:net|dgram|http|https|http2|tls|dns|dns\/promises)$/;
 
-function valueImports(source) {
-  const imports = [];
-  for (const match of source.matchAll(/(?:^|\n)\s*import\s+(type\s+)?([^'"]*?)\s*from\s*(['"])([^'"]+)\3/g))
-    if (match[1] === undefined) imports.push(match[4]);
-  for (const match of source.matchAll(/(?:^|\n)\s*import\s*(['"])([^'"]+)\1/g)) imports.push(match[2]);
-  for (const match of source.matchAll(/\bimport\(\s*(['"])([^'"]+)\1\s*\)/g)) imports.push(match[2]);
-  for (const match of source.matchAll(/\brequire\(\s*(['"])([^'"]+)\1\s*\)/g)) imports.push(match[2]);
-  return imports;
+const MODULE_REFERENCES = new Map();
+
+/**
+ * Every module a source names in its code, in order, each marked when only its types are imported or re-exported.
+ * A specifier is the string right after `from`, after `import`, or after `import (` or `require (` (there a template
+ * with no substitution counts too). An `import`, `require` or `from` after `.` or `?.` is a property, not a keyword.
+ */
+function moduleReferences(source) {
+  return remembered(MODULE_REFERENCES, source, readModuleReferences);
+}
+
+function readModuleReferences(source) {
+  const tokens = sourceTokens(source).filter((token) => !TRIVIA.has(token.kind));
+  const isWord = (at, word) => tokens[at]?.text === word;
+  const isKind = (at, kind) => tokens[at]?.kind === kind;
+  const stringAt = (at) => (isKind(at, SyntaxKind.StringLiteral) ? at : undefined);
+  const callAt = (at) =>
+    isKind(at, SyntaxKind.OpenParenToken) &&
+    (isKind(at + 1, SyntaxKind.StringLiteral) || isKind(at + 1, SyntaxKind.NoSubstitutionTemplateLiteral))
+      ? at + 1
+      : undefined;
+  /**
+   * The specifier of an `import type …` or `export type … from` that brings in types only, as TypeScript's parser reads
+   * it: `type` is the default import's own name in `import type from 'x'`, `import type, { a } from 'x'` and
+   * `import type = require('x')`, and those are value imports.
+   */
+  const typeOnlyAt = (at) => {
+    if (!isWord(at + 1, 'type')) return undefined;
+    const exporting = isWord(at, 'export');
+    let next = at + 2;
+    if (isKind(next, SyntaxKind.OpenBraceToken)) {
+      for (let depth = 0; next < tokens.length; next += 1) {
+        if (isKind(next, SyntaxKind.OpenBraceToken)) depth += 1;
+        else if (isKind(next, SyntaxKind.CloseBraceToken) && --depth === 0) break;
+      }
+      next += 1;
+    } else if (isKind(next, SyntaxKind.AsteriskToken)) next += isWord(next + 1, 'as') ? 3 : 1;
+    // A default import's name; in `import type from 'x'` the string follows that name, so it is not type-only.
+    else if (exporting || !isWordKind(tokens[next]?.kind ?? SyntaxKind.Unknown)) return undefined;
+    else next += 1;
+    if (isWord(next, 'from')) return stringAt(next + 1);
+    if (!exporting && isKind(next, SyntaxKind.EqualsToken) && isWord(next + 1, 'require')) return callAt(next + 2);
+    return undefined;
+  };
+  const named = new Set();
+  const typeOnly = new Set();
+  for (let at = 0; at < tokens.length; at += 1) {
+    if (isPropertyDot(tokens[at - 1])) continue;
+    let specifier;
+    if (isWord(at, 'from')) specifier = stringAt(at + 1);
+    else if (isWord(at, 'import')) specifier = stringAt(at + 1) ?? callAt(at + 1);
+    else if (isWord(at, 'require')) specifier = callAt(at + 1);
+    if (specifier !== undefined) named.add(specifier);
+    if (isWord(at, 'import') || isWord(at, 'export')) {
+      const types = typeOnlyAt(at);
+      if (types !== undefined) typeOnly.add(types);
+    }
+  }
+  return [...named]
+    .sort((left, right) => left - right)
+    .map((at) => ({ specifier: tokens[at].value, typeOnly: typeOnly.has(at) }));
+}
+
+/**
+ * The same as `codeImportSpecifiers`, less `import type …` and `export type … from`; `import type from 'x'` (a default
+ * import named type) counts.
+ */
+export function valueImports(source) {
+  return moduleReferences(source)
+    .filter((reference) => !reference.typeOnly)
+    .map((reference) => reference.specifier);
 }
 
 function layaSources(root) {
@@ -1037,49 +1226,12 @@ function layaSources(root) {
 const LAYA_RUNTIME_ROOTS = [runtimeName, ...runtimePackages];
 
 /**
- * The module specifiers a file's code imports or requires — `import … from`, `export … from`, a bare `import`,
- * `import(…)` and `require(…)` — read past comments and string contents, so text that only mentions a package (a
- * test's refusal data, a script's lock data) is not an import of it.
+ * Static `import … from`, `export … from`, a bare `import '…'`, `import('…')` and `require('…')`, read past comments,
+ * strings, regular expressions and templates, so text that only mentions a package (a test's refusal data, a script's
+ * lock data) is not an import of it.
  */
-function codeImportSpecifiers(source) {
-  const specifiers = [];
-  const identifier = /[\w$]/;
-  const skipString = (from) => {
-    const quote = source[from];
-    let at = from + 1;
-    while (at < source.length && source[at] !== quote) at += source[at] === '\\' ? 2 : 1;
-    return at + 1;
-  };
-  let at = 0;
-  while (at < source.length) {
-    const char = source[at];
-    if (char === '/' && source[at + 1] === '/') {
-      const end = source.indexOf('\n', at);
-      at = end === -1 ? source.length : end;
-    } else if (char === '/' && source[at + 1] === '*') {
-      const end = source.indexOf('*/', at + 2);
-      at = end === -1 ? source.length : end + 2;
-    } else if (char === "'" || char === '"' || char === '`') {
-      at = skipString(at);
-    } else if (identifier.test(char) && (at === 0 || !identifier.test(source[at - 1]))) {
-      const word = /^[\w$]+/.exec(source.slice(at, at + 32))[0];
-      if ((word === 'import' || word === 'require' || word === 'from') && source[at - 1] !== '.') {
-        let next = at + word.length;
-        while (/\s/.test(source[next] ?? '')) next += 1;
-        if (word !== 'from' && source[next] === '(') {
-          next += 1;
-          while (/\s/.test(source[next] ?? '')) next += 1;
-        }
-        const quote = source[next];
-        if (quote === "'" || quote === '"') {
-          const end = source.indexOf(quote, next + 1);
-          if (end !== -1) specifiers.push(source.slice(next + 1, end));
-        }
-      }
-      at += word.length;
-    } else at += 1;
-  }
-  return specifiers;
+export function codeImportSpecifiers(source) {
+  return moduleReferences(source).map((reference) => reference.specifier);
 }
 
 /**

@@ -1513,6 +1513,11 @@ test('E2 static boundary: any file that imports the Laya runtime or its private 
     await writeTracked(root, 'scripts/laya-load-runtime.mjs', "import '@receptron/laya';\n");
     await expectRejected(root, /laya-load-runtime\.mjs imports @receptron\/laya/);
   });
+  // 0.26.0 R3: an apostrophe inside a regular expression opens no string, so the import after it is still read.
+  await withCase(async (root) => {
+    await writeTracked(root, 'scripts/laya-regex-runtime.mjs', "const quote = /'/;\nimport '@receptron/laya';\n");
+    await expectRejected(root, /laya-regex-runtime\.mjs imports @receptron\/laya/);
+  });
 });
 
 test('E2 static boundary: a Laya gate workflow another event or an input can start is refused', {
