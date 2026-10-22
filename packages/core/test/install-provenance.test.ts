@@ -34,6 +34,7 @@ import { VERSION } from '../src/version.ts';
 import {
   attestationsAnswer,
   attestationsEndpoint,
+  fixtureTarballs,
   type ProvenanceShape,
   provenanceBundle,
   registryOf,
@@ -515,7 +516,7 @@ test('core’s tool and its command both verify a first install, with the verifi
     ['verified', attestationsEndpoint(), true],
     ['no attestation', attestationsEndpoint({ [GMAIL]: 'missing' }), false],
   ] as const) {
-    const update = { registry, verifyRelease: testReleaseVerifier(attest) };
+    const update = { registry, verifyRelease: testReleaseVerifier(attest), tarballs: fixtureTarballs };
     // The tool, as a client calls it.
     const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null, update });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();

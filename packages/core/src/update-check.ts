@@ -14,6 +14,7 @@ import type { ReleaseVerifier } from './update-release.ts';
 import {
   changeUpdateCheck,
   EMPTY_UPDATE_CHECK,
+  type ReleaseFacts,
   readUpdateCheck,
   UPDATE_CHECK_LEASE_MS,
   type UpdateCheckRecord,
@@ -166,10 +167,17 @@ async function ask(
    * what is in the file is newer than what this ask found, and writing over it would put back the machine as it was
    * before an update: "update" where "restart" is right.
    */
-  const settle = (found: Partial<UpdateCheckRecord>) =>
+  const settle = (found: Partial<UpdateCheckRecord> | ((record: UpdateCheckRecord) => Partial<UpdateCheckRecord>)) =>
     changeUpdateCheck(core.paths.stateDir, (record) =>
       record.checking === options.claimedAt
-        ? { record: { ...record, ...found, lastChecked: options.claimedAt, checking: null } }
+        ? {
+            record: {
+              ...record,
+              ...(typeof found === 'function' ? found(record) : found),
+              lastChecked: options.claimedAt,
+              checking: null,
+            },
+          }
         : null,
     ).catch(() => undefined);
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
@@ -197,17 +205,20 @@ async function ask(
     });
     return;
   }
-  // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — read from
-  // the same registry the number came from, each counted only once verified, where this process can verify: core's
-  // hands in its verifier, a channel's has none. Read first for the releases since this one, so a machine that cannot
-  // be read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
-  // registry hands in its own, or none is read.
-  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps);
-  const release =
+  // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — each read
+  // from its verified tarball (design 2026-10-22 P1), where this process can verify: core's hands in its verifier, a
+  // channel's has none, and reads nothing (P2). Read first for the releases since this one, so a machine that cannot be
+  // read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
+  // registry hands in its own, or none is read. Null: read, and not known now. Undefined: not read here. For either, the
+  // record keeps what core's verified check found of the same version — a version npm never publishes twice — and
+  // otherwise makes no claim.
+  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps, core.paths.stateDir);
+  const release: ReleaseFacts | null | undefined =
     read === null
-      ? null
+      ? undefined
       : await read(CORE_PACKAGE, latest, VERSION).then(
-          (facts) => ({ version: latest, security: facts.security, needsDecision: facts.needsDecision }),
+          (facts) =>
+            facts === null ? null : { version: latest, security: facts.security, needsDecision: facts.needsDecision },
           () => null,
         );
   try {
@@ -226,7 +237,15 @@ async function ask(
     );
   } catch (error) {
     // The registry answered, and something here could not be read: what is known is recorded, and the rest is not.
-    await settle({ latest, behind: null, current: null, lastError: reason(error), release });
+    await settle((record) => ({
+      latest,
+      behind: null,
+      current: null,
+      lastError: reason(error),
+      // As `recordFound` keeps it: read here and known, what was read; not read here, or not known now, what core's
+      // verified check found of this same version, and nothing of another (design 2026-10-22 P2).
+      release: release ?? (record.release?.version === latest ? record.release : null),
+    }));
   }
 }
 
@@ -547,8 +566,11 @@ export async function runUpdateCheckChild(
   core: Core,
   env: NodeJS.ProcessEnv,
   claimedAt: string | undefined,
-  /** Core's own child verifies what a release declares before it counts; a channel's has nothing to verify with. */
-  options: { verifyRelease?: ReleaseVerifier | undefined } = {},
+  /**
+   * What the ask reads and runs: core's CLI hands in its own — the verifier, so what a release declares is read from
+   * its verified tarball — or a test's stand-ins. A channel's child has nothing to verify with, and hands in none.
+   */
+  options: { deps?: UpdateDeps | undefined } = {},
 ): Promise<void> {
   if (claimedAt === undefined || !Number.isFinite(Date.parse(claimedAt))) {
     throw new CommsError('USAGE', `${UPDATE_CHECK_CHILD_COMMAND} takes the time of the claim it asks under`, {
@@ -560,12 +582,7 @@ export async function runUpdateCheckChild(
   }
   try {
     if ((await readUpdateCheck(core.paths.stateDir)).checking === claimedAt) {
-      await askUnderClaim(
-        core,
-        env,
-        claimedAt,
-        options.verifyRelease ? { deps: { verifyRelease: options.verifyRelease } } : {},
-      );
+      await askUnderClaim(core, env, claimedAt, options.deps !== undefined ? { deps: options.deps } : {});
     }
   } finally {
     settled();
