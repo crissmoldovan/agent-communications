@@ -229,14 +229,16 @@ again that day. A prerelease never counts as an update. A command at a terminal 
 answer at most, then goes on while the ask finishes beside it, so a slow registry is still heard from; a server never
 waits for it. The ask that goes on is handed to a detached process of its own, which holds none of the command's
 output, so the command's process ends when the command does: on the day's first run a script's `$(…)`, a pipe into
-`jq` or an agent's shell tool waits at most about three seconds longer than usual, and never for npm's registry or
-`npm ls` behind it. The registry's `latest` counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version
-with build metadata is the registry's own text, so the check records none, no notice, doctor row, `--check` or
-refusal says it, and `update` refuses it without repeating it. Where that process cannot be started, the command
-asks in its own process, as before, and ends once the ask has. An ask cut short — a process ended part-way — does
-not use up the day: another process asks a couple of minutes later. Nor does a busy machine get in the way: deciding a
-tool call's or a command's line, or a preview's security line, waits at most 2 seconds for the lock on
-`update-check.json`; busy past that, the call goes on without it, and a later one says it.
+`jq` or an agent's shell tool waits at most about three seconds longer than usual (two more on a machine so busy that
+the lock below stays taken throughout), and never for npm's registry or `npm ls` behind it. The registry's `latest`
+counts only as a plain `MAJOR.MINOR.PATCH`: a prerelease or a version with build metadata is the registry's own text,
+so the check records none, no notice, doctor row, `--check` or refusal says it, and `update` refuses it without
+repeating it. Where that process cannot be started, the command asks in its own process, as before, and ends once the
+ask has. An ask cut short — a process ended part-way — does not use up the day: another process asks a couple of
+minutes later. Nor does a busy machine get in the way: claiming the day's check, and deciding a tool call's or a
+command's line or a preview's security line, each wait at most 2 seconds for the lock on `update-check.json`, however
+often it changes hands meanwhile; busy past that, the call goes on without it, and a later one claims the check or
+says the line.
 
 **What a release declares comes from the release itself.** The check reads core's full document too, for which
 releases there are: a decision that any release since the oldest one here needs, and whether the latest is a security
@@ -250,13 +252,13 @@ counts for nothing either way: nothing says it is a security fix, or that it is 
 
 Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
 Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and
-records what it found. Where no such core is found or it cannot be started (a Windows `.cmd` that would need a shell,
-say), the channel asks as before, without a verifier: it records the latest release, keeps what core verified of that
-same release, and otherwise records nothing of what it declares. So a security fix it found first is said without its
-security line until core's next check, and is never recorded as not one. WhatsApp's server and command, which never
-reach the network, do not ask npm themselves; they give the notice once any other server or command on the machine has
-found an update. The check is skipped entirely when `CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when
-`AGENT_COMMS_UPDATES=never`.
+records what it found. Where no such core is found, or it cannot be started (a Windows `.cmd` that would need a shell,
+say), or it ends at once with an error before it has asked (a launcher whose Node was removed), the channel asks as
+before, without a verifier: it records the latest release, keeps what core verified of that same release, and otherwise
+records nothing of what it declares. So a security fix it found first is said without its security line until core's
+next check, and is never recorded as not one. WhatsApp's server and command, which never reach the network, do not ask
+npm themselves; they give the notice once any other server or command on the machine has found an update. The check is
+skipped entirely when `CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when `AGENT_COMMS_UPDATES=never`.
 
 ### The background update job
 

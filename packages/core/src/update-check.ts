@@ -17,6 +17,7 @@ import {
   type ReleaseFacts,
   readUpdateCheck,
   UPDATE_CHECK_LEASE_MS,
+  UPDATE_NOTICE_LOCK,
   type UpdateCheckRecord,
   updateCheckDue,
   updateCheckEnabled,
@@ -72,8 +73,9 @@ export interface CoreHandOff {
   /** Core's command for `update-check-child <claimedAt>`, as words; null when there is none. Default `coreUpdateCheckWords`. */
   locate?: ((core: Core, claimedAt: string) => readonly string[] | null) | undefined;
   /**
-   * Starts the words detached, with no shell, waiting until `deadline` at most; false when it could not start. Default
-   * `startCheckChild`. A command starts its own child with it too, when core's could not be started.
+   * Starts the words detached, with no shell, waiting until `deadline` at most; false when it could not start, or ended
+   * badly before it said the ask is over. Default `startCheckChild`. A command starts its own child with it too, when
+   * core's could not be started.
    */
   start?: ((words: readonly string[], env: NodeJS.ProcessEnv, deadline: number) => Promise<boolean>) | undefined;
 }
@@ -122,6 +124,11 @@ export async function checkForUpdates(
  * claim written before anyone asks, so of two processes that both found it a day old, one asks. The time is read under
  * the lock too: read before it, the second process's time could be earlier than the first's claim, which reads as a
  * clock gone back.
+ *
+ * A claim is best effort, as a notice is (`UPDATE_NOTICE_LOCK`): 2 s at most for the lock, however often it changes
+ * hands meanwhile, then null, and a later process claims. Every command's and every tool call's check claims here,
+ * before the person's output is done; waited out holder by holder, as a record that matters waits, a busy machine's
+ * refreshes kept a finished command's process and its stdout open for up to 15 s (0.26.0 review B).
  */
 export async function claimUpdateCheck(
   core: Core,
@@ -131,12 +138,16 @@ export async function claimUpdateCheck(
   // Due by the machine's level: a day on `auto`, 14 days on `every-14-days` (design 2026-10-16, U2).
   const enabled = options.intervalMs === undefined ? await updateCheckEnabled(core, {}).catch(() => null) : null;
   const intervalMs = options.intervalMs ?? (enabled?.on ? enabled.intervalMs : undefined);
-  const claim = await changeUpdateCheck<string>(core.paths.stateDir, (record) => {
-    const claimedAt = now();
-    if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
-    const checking = claimedAt.toISOString();
-    return { record: { ...record, checking }, result: checking };
-  }).catch(() => null);
+  const claim = await changeUpdateCheck<string>(
+    core.paths.stateDir,
+    (record) => {
+      const claimedAt = now();
+      if (!updateCheckDue(record, claimedAt, intervalMs) || updateCheckUnderway(record, claimedAt)) return null;
+      const checking = claimedAt.toISOString();
+      return { record: { ...record, checking }, result: checking };
+    },
+    UPDATE_NOTICE_LOCK,
+  ).catch(() => null);
   return claim?.result ?? null;
 }
 
@@ -396,8 +407,8 @@ export function updateCheckChildEnvironment(
  * what a release declares, which the channel's own could not.
  *
  * When the child cannot be started — no core, no entry to start, a program not there or not allowed, a `.cmd` that
- * would need a shell — the next is tried: the channel's own child, then the check in this process, as it was before.
- * It never throws.
+ * would need a shell, a launcher whose Node was removed, which starts and ends at once — the next is tried: the
+ * channel's own child, then the check in this process, as it was before. It never throws.
  */
 async function handUpdateCheckToChild(
   core: Core,
@@ -504,8 +515,10 @@ async function startedSafely(
 
 /**
  * Starts `words` — a program, then its arguments — detached and hidden, with no shell and `env` as given, and waits,
- * until `deadline` at most, for it to say the ask is over, or to end. False when it could not be started at all; then
- * nothing was asked, and the claim is still this process's to ask under.
+ * until `deadline` at most, for it to say the ask is over, or to end. False when it could not be started at all, or
+ * when it ended with a code other than 0, or by a signal, before it said the ask is over — a launcher whose Node was
+ * removed starts, and ends at once with 127 (0.26.0 review B). Either way nothing was asked, and the claim is still
+ * this process's to ask under.
  *
  * Never through a shell: each word is one argument, as located, and nothing in them is read as a shell would read it.
  * A program only a shell could start — a Windows `.cmd` or `.bat`, which Node refuses without one (EINVAL) — is not
@@ -532,27 +545,39 @@ export async function startCheckChild(
   }
   // Attached before the next `await`, and never taken off: `spawn` reports a program that is not there, or not
   // allowed, on the following tick, and an 'error' event with no listener is thrown past every catch here.
-  let failed = false;
-  child.on('error', () => {
-    // Without a process id the child never started: the ask is this process's after all.
-    if (child.pid === undefined) failed = true;
-  });
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
-    const done = () => {
+  child.on('error', () => undefined);
+  // Whichever comes first decides, and nothing after it changes the answer.
+  const started = await new Promise<boolean>((resolve) => {
+    // Still going at the deadline: it started, and carries on alone.
+    const timer = setTimeout(() => resolve(true), Math.max(0, deadline - Date.now()));
+    const done = (started: boolean) => {
       clearTimeout(timer);
-      resolve();
+      resolve(started);
     };
-    child.once('error', done);
-    child.once('exit', done);
+    // Without a process id the child never started: the ask is this process's after all.
+    child.once('error', () => done(child.pid !== undefined));
     child.on('message', (message: { type?: unknown } | null) => {
-      if (message?.type === 'settled') done();
+      if (message?.type === 'settled') done(true);
     });
+    /*
+     * Ended, and its channel closed too: a message it sent before it ended comes through the channel before the
+     * channel's end does, whichever of the two Node reports first. Ended with 0, it finished; ended with any other
+     * code, or by a signal, before it said the ask is over, it asked nothing (0.26.0 review B).
+     */
+    let ended: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    const over = () => {
+      if (ended !== null && !child.connected) done(ended.code === 0 && ended.signal === null);
+    };
+    child.once('exit', (code, signal) => {
+      ended = { code, signal };
+      over();
+    });
+    child.once('disconnect', over);
   });
   // Let go: the channel closed and the child unreferenced, so nothing of it keeps this process alive.
   if (child.connected) child.disconnect();
   child.unref();
-  return !failed;
+  return started;
 }
 
 /**

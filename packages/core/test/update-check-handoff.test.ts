@@ -25,6 +25,7 @@ import {
   type UpdateCheckRecord,
 } from '../src/update-state.ts';
 import { moduleUrl, realTemp, writeManaged, writePackage } from './fixtures/cli-command/trees.ts';
+import { holdLock } from './helpers/hold-lock.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -167,6 +168,45 @@ test("the server's check is handed on too, and waits no longer than the lease", 
   assert.equal(again.calls.length, 0);
 });
 
+test('a claim waits 2 s at most for a lock handed on, so the command can end while the lock still changes hands', async () => {
+  /*
+   * 0.26.0 review B, finding 1. Holders of 1 s each, back to back, as a busy machine's refreshes hand the lock on.
+   * Waited out holder by holder, as a record that matters waits (`UPDATE_CHECK_LOCK`), the claim kept the command's
+   * process, and its stdout, for up to 15 s after the command had finished, and a `$(…)`, a pipe or an agent's shell
+   * waited with it. A claim is best effort, as a notice is: busy past 2 s, nothing is claimed, and a later process
+   * claims the day's check.
+   */
+  const m = machine();
+  await due(m);
+  const held = holdLock(
+    join(m.stateDir, '.update-check.lock'),
+    Array.from({ length: 8 }, () => 1_000),
+  );
+  await held.taken;
+  let over = false;
+  void held.then(() => {
+    over = true;
+  });
+  const handed = recorder();
+  const started = Date.now();
+  await terminalUpdateHooks(m.core, m.env, { handOff: { start: handed.start }, childEntry: OWN }).check?.();
+  const waited = Date.now() - started;
+  assert.equal(over, false, `the command's check waited ${waited} ms, until the lock was free`);
+  assert.ok(waited < 4_000, `the command's check waited ${waited} ms`);
+  // A server's check claims the same way: it goes on, and a later call claims.
+  const outcome = await checkForUpdates(m.core, m.env, { handOff: { start: handed.start } });
+  assert.equal(over, false, "the server's check waited until the lock was free");
+  assert.equal(outcome.asked, false);
+  assert.deepEqual(handed.calls, [], 'a check was started with no claim');
+  await held;
+  assert.equal((await readUpdateCheck(m.stateDir)).checking, null, 'nothing was claimed while the lock was busy');
+  // Once the lock is free, the next process claims the check, and hands it on.
+  const later = recorder();
+  await terminalUpdateHooks(m.core, m.env, { handOff: { start: later.start }, childEntry: OWN }).check?.();
+  assert.equal(later.calls.length, 1);
+  assertCoreWords(m, (later.calls[0] as Started).words, (await readUpdateCheck(m.stateDir)).checking as string);
+});
+
 test('with no core located, the channel checks as before', async () => {
   // The command: its own child, with the words it always had; nothing it found is touched.
   const m = machine();
@@ -274,6 +314,72 @@ test("a located core command that cannot be spawned without a shell falls back t
     await startCheckChild([program, UPDATE_CHECK_CHILD_COMMAND, new Date().toISOString()], {}, Date.now() + 10_000),
     false,
   );
+});
+
+test('a located core command that starts and fails at once falls back, for the command and for the server', async () => {
+  /*
+   * 0.26.0 review B, finding 3. Core's stable launcher naming a Node that was removed: the program starts, and ends at
+   * once, 127, before it says the ask is over. Counted as handed, the claim sat out its lease and nothing was recorded,
+   * every day. A child that ends with a code other than 0, or by a signal, before it says `settled` asked nothing, so
+   * the claim is still this process's: the channel's own child is started next, then the check in this process.
+   */
+  const fails = (claimedAt: string) => [
+    process.execPath,
+    '-e',
+    'process.exit(127)',
+    UPDATE_CHECK_CHILD_COMMAND,
+    claimedAt,
+  ];
+  const env = updateCheckChildEnvironment(machine().env);
+  const soon = () => Date.now() + 10_000;
+  assert.equal(
+    await startCheckChild(fails(new Date().toISOString()), env, soon()),
+    false,
+    'exit 127 counted as started',
+  );
+  assert.equal(
+    await startCheckChild([process.execPath, '-e', "process.kill(process.pid, 'SIGKILL')"], env, soon()),
+    false,
+    'killed by a signal, counted as started',
+  );
+  // A child that said the ask is over did ask, however it ends; one that ends with 0 finished.
+  const said = "process.send({ type: 'settled' }, () => process.exit(3))";
+  assert.equal(await startCheckChild([process.execPath, '-e', said], env, soon()), true, 'settled, then 3');
+  assert.equal(await startCheckChild([process.execPath, '-e', 'process.exit(0)'], env, soon()), true, 'exit 0');
+
+  // The command: core's command fails at once, and the channel's own child is started next.
+  const m = machine();
+  await due(m);
+  const results: boolean[] = [];
+  const handed = recorder(async (words, call) => {
+    if (call > 1) return true;
+    const started = await startCheckChild(words, updateCheckChildEnvironment(m.env), soon());
+    results.push(started);
+    return started;
+  });
+  await terminalUpdateHooks(m.core, m.env, {
+    handOff: { locate: (_core, claimedAt) => fails(claimedAt), start: handed.start },
+    childEntry: OWN,
+  }).check?.();
+  assert.deepEqual(results, [false], 'core’s command counted as started');
+  const record = await readUpdateCheck(m.stateDir);
+  assert.deepEqual(
+    handed.calls.map(({ words }) => words),
+    [fails(record.checking as string), ownWords(m, record.checking as string)],
+  );
+
+  // The server, with the real start: it asks in its own process, and the day is recorded under its claim.
+  const server = machine();
+  await due(server);
+  const outcome = await checkForUpdates(server.core, server.env, {
+    handOff: { locate: (_core, claimedAt) => fails(claimedAt) },
+  });
+  assert.equal(outcome.asked, true);
+  const asked = await readUpdateCheck(server.stateDir);
+  assert.equal(asked.checking, null, 'the claim sat, unasked');
+  assert.notEqual(asked.lastChecked, null);
+  assert.match(String(asked.lastError), /could not be reached/);
+  assert.deepEqual(asked.release, RELEASE);
 });
 
 test("core's own process never hands its check to itself", async () => {

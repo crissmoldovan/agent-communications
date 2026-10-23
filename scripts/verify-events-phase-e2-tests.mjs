@@ -734,6 +734,26 @@ const ENDS_EXPRESSION = new Set([
   SyntaxKind.MinusMinusToken,
 ]);
 
+/**
+ * 0.26.0 review B: what a `(` or a `{` opened, kept while it is open. The `)` that closes the head of an `if`, a
+ * `while`, a `for` or a `with`, and the `}` that closes a block, end no expression: a statement comes next, so a `/`
+ * after either opens a regular expression. Read as a division, the quote or the backtick inside one opened a string or
+ * a template, and the imports after it went unread.
+ */
+const HEAD = 'head';
+const BLOCK = 'block';
+const OTHER = 'other';
+const HEAD_WORDS = new Set(['if', 'while', 'for', 'with']);
+/** The tokens a `{` opens a block after: a statement's end or start, a head's `)`, an arrow's `=>`. */
+const BLOCK_AFTER = new Set([
+  SyntaxKind.SemicolonToken,
+  SyntaxKind.OpenBraceToken,
+  SyntaxKind.CloseBraceToken,
+  SyntaxKind.CloseParenToken,
+  SyntaxKind.EqualsGreaterThanToken,
+]);
+const BLOCK_WORDS = new Set(['else', 'do', 'try', 'finally', 'static']);
+
 function isWordKind(kind) {
   return kind === SyntaxKind.Identifier || (kind >= SyntaxKind.FirstKeyword && kind <= SyntaxKind.LastKeyword);
 }
@@ -742,13 +762,31 @@ function isPropertyDot(token) {
   return token?.kind === SyntaxKind.DotToken || token?.kind === SyntaxKind.QuestionDotToken;
 }
 
+/** What a `(` after `previous` opens: the head of an `if`, a `while`, a `for` (`for await` too) or a `with`, or else other. */
+function parenthesisOpens(previous, beforePrevious) {
+  if (previous === undefined || isPropertyDot(beforePrevious)) return OTHER;
+  if (HEAD_WORDS.has(previous.text)) return HEAD;
+  return previous.text === 'await' && beforePrevious?.text === 'for' ? HEAD : OTHER;
+}
+
+/**
+ * What a `{` after `previous` opens: a block — a statement's, a function's or an arrow's body, a declaration's after
+ * its name (a class, an interface, an enum, a namespace), `else`, `do`, `try`, `finally` or a class's `static` — or
+ * else an object literal, a pattern or a type, whose `}` ends an expression as before.
+ */
+function braceOpens(previous) {
+  if (previous === undefined || BLOCK_AFTER.has(previous.kind)) return BLOCK;
+  return previous.kind === SyntaxKind.Identifier || BLOCK_WORDS.has(previous.text) ? BLOCK : OTHER;
+}
+
 /**
  * Whether a `/` after `previous` divides. An identifier ends an expression, and so does a word that names one: a
  * property after `.` (`options.default / 2`), and a contextual keyword (`type`, `from`, `number`) but `await` and `of`,
- * which an expression follows. After anything else, a `/` opens a regular expression.
+ * which an expression follows. A head's `)` and a block's `}` end none (`afterStatementPart`). After anything else, a
+ * `/` opens a regular expression.
  */
 function endsExpression(previous, beforePrevious) {
-  if (previous === undefined) return false;
+  if (previous === undefined || previous.afterStatementPart) return false;
   if (ENDS_EXPRESSION.has(previous.kind)) return true;
   if (!isWordKind(previous.kind)) return false;
   if (isPropertyDot(beforePrevious)) return true;
@@ -768,25 +806,36 @@ function sourceTokens(source) {
   const tokens = [];
   // For each template substitution the scanner is inside, the braces opened in it and not yet closed.
   const substitutions = [];
+  // What each `(` and `{` still open opened (`parenthesisOpens`, `braceOpens`); a substitution's own braces are not here.
+  const groups = [];
   let previous;
   let beforePrevious;
   for (let kind = scanner.scan(); kind !== SyntaxKind.EndOfFile; kind = scanner.scan()) {
     const open = substitutions.length - 1;
+    let closed;
     if (
       (kind === SyntaxKind.SlashToken || kind === SyntaxKind.SlashEqualsToken) &&
       !endsExpression(previous, beforePrevious)
     )
       kind = scanner.reScanSlashToken();
-    else if (kind === SyntaxKind.OpenBraceToken && open >= 0) substitutions[open] += 1;
-    else if (kind === SyntaxKind.CloseBraceToken && open >= 0) {
-      if (substitutions[open] > 0) substitutions[open] -= 1;
-      else {
-        kind = scanner.reScanTemplateToken(false);
-        if (kind !== SyntaxKind.TemplateMiddle) substitutions.pop();
-      }
-    }
+    else if (kind === SyntaxKind.CloseBraceToken && open >= 0 && substitutions[open] === 0) {
+      kind = scanner.reScanTemplateToken(false);
+      if (kind !== SyntaxKind.TemplateMiddle) substitutions.pop();
+    } else if (kind === SyntaxKind.OpenBraceToken) {
+      if (open >= 0) substitutions[open] += 1;
+      groups.push(braceOpens(previous));
+    } else if (kind === SyntaxKind.CloseBraceToken) {
+      if (open >= 0) substitutions[open] -= 1;
+      closed = groups.pop();
+    } else if (kind === SyntaxKind.OpenParenToken) groups.push(parenthesisOpens(previous, beforePrevious));
+    else if (kind === SyntaxKind.CloseParenToken) closed = groups.pop();
     if (kind === SyntaxKind.TemplateHead) substitutions.push(0);
     const token = { kind, start: scanner.getTokenStart(), end: scanner.getTokenEnd() };
+    if (
+      (kind === SyntaxKind.CloseParenToken && closed === HEAD) ||
+      (kind === SyntaxKind.CloseBraceToken && closed === BLOCK)
+    )
+      token.afterStatementPart = true;
     if (isWordKind(kind)) token.text = scanner.getTokenText();
     else if (kind === SyntaxKind.StringLiteral || kind === SyntaxKind.NoSubstitutionTemplateLiteral)
       token.value = scanner.getTokenValue();

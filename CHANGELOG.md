@@ -25,8 +25,9 @@ more.
 - **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
   Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
   the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or
-  started, the channel checks as before, records the latest release and keeps what core verified of it; it never
-  records a release as not being a security fix. WhatsApp still never reaches the network.
+  started, or ends at once with an error before it has asked (a launcher whose Node was removed), the channel checks
+  as before, records the latest release and keeps what core verified of it; it never records a release as not being a
+  security fix. WhatsApp still never reaches the network.
 - **A global package is installed from its verified file, and checked afterwards.** `agentcomms update` (and
   `comms_update`) hands `npm install -g` the verified tarball itself, from a private temporary file, instead of a name
   npm would look up again. Then every file of what npm installed, and of each `@agentcomms` package inside it, must be
@@ -72,10 +73,12 @@ Also:
 - **A person's update no longer loses its record when the machine is busy.** After it installs, the update's record
   of what is on the machine waits up to 2 seconds for each process ahead of it on `update-check.json`, 15 seconds in
   all, and is tried twice. Still busy, the result says `the update was installed; its record will be corrected by the
-  next check` (`recordNote`), and the next check does so. A notice still waits 2 seconds at most for that file, so it
-  never holds a tool call or a command longer than that.
+  next check` (`recordNote`), and the next check does so. A notice, and the claim of the day's check, still wait 2
+  seconds at most for that file, so neither holds a tool call or a command longer than that: busy past it, a later
+  call gives the notice, and a later process claims the check.
 - **The release's check of the event-service tests** reads imports with TypeScript's own scanner, so an apostrophe
-  inside a regular expression no longer hides an import that comes after it.
+  inside a regular expression no longer hides an import that comes after it, nor does a quote or a backtick in one
+  that follows the head of an `if`, `while`, `for` or `with`, or a block's closing brace.
 
 Why: CUE-495, the follow-ups the 0.20.0 provenance work proposed and left. Provenance proves where a release's
 tarball came from; it says nothing of the registry's copy of its manifest, the time the registry gives it, or what

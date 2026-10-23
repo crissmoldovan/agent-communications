@@ -311,6 +311,10 @@ export const UPDATE_CHECK_LOCK: LockOptions = Object.freeze({
  * the person's answer to that line take the lock only for what is said, and each runs while a person or an agent
  * waits. Waited out holder by holder, as `UPDATE_CHECK_LOCK` waits, a busy machine's queue of refreshes held them for
  * up to 15 s. Busy past 2 s, a notice decides nothing this time, and a later call says it.
+ *
+ * Claiming the day's check is best effort too: busy past 2 s, nothing is claimed, and a later process claims it (0.26.0
+ * review B). The claim's function is not named here: this comment ships in WhatsApp's bundle, which carries none of the
+ * checker, not even its name (`packages/whatsapp/test/update-gate.test.ts`).
  */
 export const UPDATE_NOTICE_LOCK: LockOptions = Object.freeze({ timeoutMs: 2_000 });
 
@@ -319,8 +323,8 @@ export const UPDATE_NOTICE_LOCK: LockOptions = Object.freeze({ timeoutMs: 2_000 
  * and a person's "not now" arriving at the same moment each keep what the other wrote. Returns what `change` returned
  * alongside the record written; `change` returning `null` writes nothing.
  *
- * `lock` is how long to wait for the lock: `UPDATE_CHECK_LOCK`, for a record that matters, unless a notice passes
- * `UPDATE_NOTICE_LOCK`. Busy past it, this throws LOCK_TIMEOUT, and nothing is written.
+ * `lock` is how long to wait for the lock: `UPDATE_CHECK_LOCK`, for a record that matters, unless a notice or the
+ * day's claim passes `UPDATE_NOTICE_LOCK`. Busy past it, this throws LOCK_TIMEOUT, and nothing is written.
  */
 export async function changeUpdateCheck<T = void>(
   stateDir: string,
