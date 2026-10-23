@@ -316,6 +316,72 @@ test("a located core command that cannot be spawned without a shell falls back t
   );
 });
 
+test('a located core command that starts and fails at once falls back, for the command and for the server', async () => {
+  /*
+   * 0.26.0 review B, finding 3. Core's stable launcher naming a Node that was removed: the program starts, and ends at
+   * once, 127, before it says the ask is over. Counted as handed, the claim sat out its lease and nothing was recorded,
+   * every day. A child that ends with a code other than 0, or by a signal, before it says `settled` asked nothing, so
+   * the claim is still this process's: the channel's own child is started next, then the check in this process.
+   */
+  const fails = (claimedAt: string) => [
+    process.execPath,
+    '-e',
+    'process.exit(127)',
+    UPDATE_CHECK_CHILD_COMMAND,
+    claimedAt,
+  ];
+  const env = updateCheckChildEnvironment(machine().env);
+  const soon = () => Date.now() + 10_000;
+  assert.equal(
+    await startCheckChild(fails(new Date().toISOString()), env, soon()),
+    false,
+    'exit 127 counted as started',
+  );
+  assert.equal(
+    await startCheckChild([process.execPath, '-e', "process.kill(process.pid, 'SIGKILL')"], env, soon()),
+    false,
+    'killed by a signal, counted as started',
+  );
+  // A child that said the ask is over did ask, however it ends; one that ends with 0 finished.
+  const said = "process.send({ type: 'settled' }, () => process.exit(3))";
+  assert.equal(await startCheckChild([process.execPath, '-e', said], env, soon()), true, 'settled, then 3');
+  assert.equal(await startCheckChild([process.execPath, '-e', 'process.exit(0)'], env, soon()), true, 'exit 0');
+
+  // The command: core's command fails at once, and the channel's own child is started next.
+  const m = machine();
+  await due(m);
+  const results: boolean[] = [];
+  const handed = recorder(async (words, call) => {
+    if (call > 1) return true;
+    const started = await startCheckChild(words, updateCheckChildEnvironment(m.env), soon());
+    results.push(started);
+    return started;
+  });
+  await terminalUpdateHooks(m.core, m.env, {
+    handOff: { locate: (_core, claimedAt) => fails(claimedAt), start: handed.start },
+    childEntry: OWN,
+  }).check?.();
+  assert.deepEqual(results, [false], 'core’s command counted as started');
+  const record = await readUpdateCheck(m.stateDir);
+  assert.deepEqual(
+    handed.calls.map(({ words }) => words),
+    [fails(record.checking as string), ownWords(m, record.checking as string)],
+  );
+
+  // The server, with the real start: it asks in its own process, and the day is recorded under its claim.
+  const server = machine();
+  await due(server);
+  const outcome = await checkForUpdates(server.core, server.env, {
+    handOff: { locate: (_core, claimedAt) => fails(claimedAt) },
+  });
+  assert.equal(outcome.asked, true);
+  const asked = await readUpdateCheck(server.stateDir);
+  assert.equal(asked.checking, null, 'the claim sat, unasked');
+  assert.notEqual(asked.lastChecked, null);
+  assert.match(String(asked.lastError), /could not be reached/);
+  assert.deepEqual(asked.release, RELEASE);
+});
+
 test("core's own process never hands its check to itself", async () => {
   const claimedAt = new Date().toISOString();
   const own = machine(CORE_CALLER);

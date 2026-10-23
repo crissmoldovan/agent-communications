@@ -252,13 +252,13 @@ counts for nothing either way: nothing says it is a security fix, or that it is 
 
 Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
 Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and
-records what it found. Where no such core is found or it cannot be started (a Windows `.cmd` that would need a shell,
-say), the channel asks as before, without a verifier: it records the latest release, keeps what core verified of that
-same release, and otherwise records nothing of what it declares. So a security fix it found first is said without its
-security line until core's next check, and is never recorded as not one. WhatsApp's server and command, which never
-reach the network, do not ask npm themselves; they give the notice once any other server or command on the machine has
-found an update. The check is skipped entirely when `CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when
-`AGENT_COMMS_UPDATES=never`.
+records what it found. Where no such core is found, or it cannot be started (a Windows `.cmd` that would need a shell,
+say), or it ends at once with an error before it has asked (a launcher whose Node was removed), the channel asks as
+before, without a verifier: it records the latest release, keeps what core verified of that same release, and otherwise
+records nothing of what it declares. So a security fix it found first is said without its security line until core's
+next check, and is never recorded as not one. WhatsApp's server and command, which never reach the network, do not ask
+npm themselves; they give the notice once any other server or command on the machine has found an update. The check is
+skipped entirely when `CI` is set, when `AGENT_COMMS_UPDATE_CHECK=off`, or when `AGENT_COMMS_UPDATES=never`.
 
 ### The background update job
 

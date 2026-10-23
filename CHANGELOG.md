@@ -25,8 +25,9 @@ more.
 - **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
   Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
   the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or
-  started, the channel checks as before, records the latest release and keeps what core verified of it; it never
-  records a release as not being a security fix. WhatsApp still never reaches the network.
+  started, or ends at once with an error before it has asked (a launcher whose Node was removed), the channel checks
+  as before, records the latest release and keeps what core verified of it; it never records a release as not being a
+  security fix. WhatsApp still never reaches the network.
 - **A global package is installed from its verified file, and checked afterwards.** `agentcomms update` (and
   `comms_update`) hands `npm install -g` the verified tarball itself, from a private temporary file, instead of a name
   npm would look up again. Then every file of what npm installed, and of each `@agentcomms` package inside it, must be

@@ -73,8 +73,9 @@ export interface CoreHandOff {
   /** Core's command for `update-check-child <claimedAt>`, as words; null when there is none. Default `coreUpdateCheckWords`. */
   locate?: ((core: Core, claimedAt: string) => readonly string[] | null) | undefined;
   /**
-   * Starts the words detached, with no shell, waiting until `deadline` at most; false when it could not start. Default
-   * `startCheckChild`. A command starts its own child with it too, when core's could not be started.
+   * Starts the words detached, with no shell, waiting until `deadline` at most; false when it could not start, or ended
+   * badly before it said the ask is over. Default `startCheckChild`. A command starts its own child with it too, when
+   * core's could not be started.
    */
   start?: ((words: readonly string[], env: NodeJS.ProcessEnv, deadline: number) => Promise<boolean>) | undefined;
 }
@@ -406,8 +407,8 @@ export function updateCheckChildEnvironment(
  * what a release declares, which the channel's own could not.
  *
  * When the child cannot be started — no core, no entry to start, a program not there or not allowed, a `.cmd` that
- * would need a shell — the next is tried: the channel's own child, then the check in this process, as it was before.
- * It never throws.
+ * would need a shell, a launcher whose Node was removed, which starts and ends at once — the next is tried: the
+ * channel's own child, then the check in this process, as it was before. It never throws.
  */
 async function handUpdateCheckToChild(
   core: Core,
@@ -514,8 +515,10 @@ async function startedSafely(
 
 /**
  * Starts `words` — a program, then its arguments — detached and hidden, with no shell and `env` as given, and waits,
- * until `deadline` at most, for it to say the ask is over, or to end. False when it could not be started at all; then
- * nothing was asked, and the claim is still this process's to ask under.
+ * until `deadline` at most, for it to say the ask is over, or to end. False when it could not be started at all, or
+ * when it ended with a code other than 0, or by a signal, before it said the ask is over — a launcher whose Node was
+ * removed starts, and ends at once with 127 (0.26.0 review B). Either way nothing was asked, and the claim is still
+ * this process's to ask under.
  *
  * Never through a shell: each word is one argument, as located, and nothing in them is read as a shell would read it.
  * A program only a shell could start — a Windows `.cmd` or `.bat`, which Node refuses without one (EINVAL) — is not
@@ -542,27 +545,39 @@ export async function startCheckChild(
   }
   // Attached before the next `await`, and never taken off: `spawn` reports a program that is not there, or not
   // allowed, on the following tick, and an 'error' event with no listener is thrown past every catch here.
-  let failed = false;
-  child.on('error', () => {
-    // Without a process id the child never started: the ask is this process's after all.
-    if (child.pid === undefined) failed = true;
-  });
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
-    const done = () => {
+  child.on('error', () => undefined);
+  // Whichever comes first decides, and nothing after it changes the answer.
+  const started = await new Promise<boolean>((resolve) => {
+    // Still going at the deadline: it started, and carries on alone.
+    const timer = setTimeout(() => resolve(true), Math.max(0, deadline - Date.now()));
+    const done = (started: boolean) => {
       clearTimeout(timer);
-      resolve();
+      resolve(started);
     };
-    child.once('error', done);
-    child.once('exit', done);
+    // Without a process id the child never started: the ask is this process's after all.
+    child.once('error', () => done(child.pid !== undefined));
     child.on('message', (message: { type?: unknown } | null) => {
-      if (message?.type === 'settled') done();
+      if (message?.type === 'settled') done(true);
     });
+    /*
+     * Ended, and its channel closed too: a message it sent before it ended comes through the channel before the
+     * channel's end does, whichever of the two Node reports first. Ended with 0, it finished; ended with any other
+     * code, or by a signal, before it said the ask is over, it asked nothing (0.26.0 review B).
+     */
+    let ended: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    const over = () => {
+      if (ended !== null && !child.connected) done(ended.code === 0 && ended.signal === null);
+    };
+    child.once('exit', (code, signal) => {
+      ended = { code, signal };
+      over();
+    });
+    child.once('disconnect', over);
   });
   // Let go: the channel closed and the child unreferenced, so nothing of it keeps this process alive.
   if (child.connected) child.disconnect();
   child.unref();
-  return !failed;
+  return started;
 }
 
 /**
