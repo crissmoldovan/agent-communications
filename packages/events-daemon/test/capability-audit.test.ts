@@ -306,7 +306,7 @@ test('PAR-B3: strict parity rejects a fixture copy with a removed B3 capability 
     );
     assert.match(output, /agent-events approval view.*no row|events_approval_view.*no row/su);
   } finally {
-    await rm(fixture.parent, { recursive: true, force: true });
+    await rm(fixture.parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
 
@@ -324,7 +324,7 @@ test('PAR-B3: strict parity rejects a fixture copy with a removed B3 operation e
     );
     assert.match(output, /ruleTest|does not provide an export named/u);
   } finally {
-    await rm(fixture.parent, { recursive: true, force: true });
+    await rm(fixture.parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
 

@@ -187,6 +187,6 @@ test('PAR-B3: the production reference generator rejects a fixture copy with a r
       'the generated-reference command cannot be deleted without the generator detecting drift',
     );
   } finally {
-    await rm(fixture.parent, { recursive: true, force: true });
+    await rm(fixture.parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
