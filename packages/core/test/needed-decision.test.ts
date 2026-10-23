@@ -11,7 +11,7 @@ import * as releaseFacts from '../src/release-facts.ts';
 import { canonicalTarballUrl, type TarballFetch } from '../src/release-tarball.ts';
 import { type BackgroundDeps, runBackgroundUpdate } from '../src/update-background.ts';
 import { askUnderClaim, claimUpdateCheck } from '../src/update-check.ts';
-import type { ReleaseRegistry } from '../src/update-release.ts';
+import type { ReleaseRegistry, ReleaseVerifier } from '../src/update-release.ts';
 import {
   changeUpdateCheck,
   readUpdateCheck,
@@ -19,7 +19,7 @@ import {
   type UpdateCheckRecord,
 } from '../src/update-state.ts';
 import { fixtureTarballUrl } from './helpers/provenance-fixture.ts';
-import { releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
+import { loopbackRegistry, releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
 import { tempDir } from './helpers/temp.ts';
 import { machine as noticeMachine } from './helpers/update-machine.ts';
 
@@ -375,3 +375,130 @@ test("a check whose target's tarball stalls records within its lease, unknown an
   assert.equal(typeof deadline, 'number', 'the read has a deadline');
   assert.ok((deadline as number) <= UPDATE_CHECK_LEASE_MS / 4, `${String(deadline)} ms is not well inside the lease`);
 });
+
+// ── The day's own reader: its reads stop a fixed time into its claim, whenever the ask began ────────────────────────
+
+/*
+ * The deadline counts from the claim, not from when the read starts (review B of 0.26.0, finding 2): the claim is
+ * taken by the command, and the ask that reads may be a child started seconds later on a loaded machine, after the
+ * registry's `latest` took its own ten. Each claim here is taken as if the check began `DECLARATION_DEADLINE_MS` less
+ * a few seconds ago, so its reads must stop a few seconds from now. Nothing is handed in but the registry, the
+ * verifier and the tarballs: the latest comes from the world on 127.0.0.1, so the ask makes its own reader, as it does
+ * in core's update-check child.
+ */
+const READS_LEFT_MS = 4_000;
+
+/** A claim as if the check began `DECLARATION_DEADLINE_MS - READS_LEFT_MS` ago. */
+async function lateClaim(core: Core): Promise<string> {
+  const claimedAt = await claimUpdateCheck(core, {
+    now: () => new Date(Date.now() - releaseFacts.DECLARATION_DEADLINE_MS + READS_LEFT_MS),
+  });
+  assert.ok(claimedAt !== null, 'the check is claimed');
+  return claimedAt;
+}
+
+test("the day's check stops reading a fixed time into its claim, whatever stalls, and records under it", {
+  timeout: 60_000,
+}, async () => {
+  const LATEST = '99.0.0';
+  // A request taken and never answered, and an attestations endpoint that never answers: only the deadline ends them.
+  const signals: AbortSignal[] = [];
+  const stalled: TarballFetch = (_url, { signal }) => {
+    signals.push(signal);
+    return new Promise((_, failed) => {
+      if (signal.aborted) failed(signal.reason);
+      signal.addEventListener('abort', () => failed(signal.reason), { once: true });
+    });
+  };
+  const unanswered: ReleaseVerifier = () => new Promise(() => undefined);
+  for (const stall of ['a mirror that never answers', 'an attestations endpoint that never answers'] as const) {
+    signals.length = 0;
+    const world = releaseWorld({ [CORE]: LATEST }, [{ version: LATEST, declares: { security: true } }]);
+    // sigstore-js loaded before the clock starts, so a cold first verification does not use the reads' time up.
+    assert.ok(
+      (await world.verifyRelease({ packageName: CORE, version: LATEST, integrity: world.integrity(CORE, LATEST) })).ok,
+    );
+    const served = await loopbackRegistry(world);
+    try {
+      const m = noticeMachine({ npm_config_registry: served.url });
+      await dueMachineAt(m);
+      const claimedAt = await lateClaim(m.core);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finished = await Promise.race([
+        askUnderClaim(m.core, m.env, claimedAt, {
+          deps: {
+            registry: world.registry,
+            verifyRelease: stall === 'a mirror that never answers' ? world.verifyRelease : unanswered,
+            tarballs: stall === 'a mirror that never answers' ? stalled : world.tarballs,
+            globalPackages: async () => ({}),
+          },
+        }).then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(resolve, READS_LEFT_MS + 15_000, false);
+        }),
+      ]);
+      clearTimeout(timer);
+      assert.ok(finished, `${stall}: still reading 15 s after its reads were to stop`);
+      const record = await readUpdateCheck(m.stateDir);
+      recordedUnder(record, claimedAt);
+      assert.deepEqual([record.latest, record.release], [LATEST, null], `${stall}: ${JSON.stringify(record)}`);
+      // What was asked for was cut off when the reads stopped, and npm's own address was not asked after that.
+      assert.ok(signals.length <= 1, `${stall}: asked ${signals.length} times`);
+      assert.ok(
+        signals.every((signal) => signal.aborted),
+        `${stall}: a download went on after its check`,
+      );
+    } finally {
+      await served.close();
+    }
+  }
+});
+
+test('a release the check read before its reads stopped still counts when the check asks again after', {
+  timeout: 60_000,
+}, async () => {
+  // The check reads the latest for this release, runs `npm ls`, then asks again for the oldest release here; `npm ls`
+  // can take a minute, so the second asking often comes after the reads stop. What was read stands: the record keeps
+  // the verified security fix, and the release is verified and downloaded once.
+  const LATEST = '99.0.0';
+  const world = releaseWorld({ [CORE]: LATEST }, [{ version: LATEST, declares: { security: true }, registrySays: {} }]);
+  assert.ok(
+    (await world.verifyRelease({ packageName: CORE, version: LATEST, integrity: world.integrity(CORE, LATEST) })).ok,
+  );
+  const served = await loopbackRegistry(world);
+  try {
+    const m = noticeMachine({ npm_config_registry: served.url });
+    await dueMachineAt(m);
+    const claimedAt = await lateClaim(m.core);
+    const stop = Date.parse(claimedAt) + releaseFacts.DECLARATION_DEADLINE_MS;
+    const attestations = world.attestationsAsked.length;
+    await askUnderClaim(m.core, m.env, claimedAt, {
+      deps: {
+        registry: world.registry,
+        verifyRelease: world.verifyRelease,
+        tarballs: world.tarballs,
+        // `npm ls`, slow: it answers once the reads have stopped.
+        globalPackages: async () => {
+          await new Promise((waited) => setTimeout(waited, Math.max(0, stop - Date.now()) + 200));
+          return {};
+        },
+      },
+    });
+    assert.ok(Date.now() > stop, 'the second asking came before the reads stopped');
+    const record = await readUpdateCheck(m.stateDir);
+    recordedUnder(record, claimedAt);
+    assert.deepEqual(record.release, { version: LATEST, security: true, needsDecision: false });
+    assert.equal(world.tarballsAsked.length, 1, 'downloaded more than once');
+    assert.equal(world.attestationsAsked.length - attestations, 1, 'verified more than once');
+  } finally {
+    await served.close();
+  }
+});
+
+/** `m`'s check made a day old, so the next one is due. */
+async function dueMachineAt(m: { stateDir: string }): Promise<void> {
+  mkdirSync(m.stateDir, { recursive: true });
+  await changeUpdateCheck(m.stateDir, (record) => ({
+    record: { ...record, lastChecked: new Date(Date.now() - 30 * 3_600_000).toISOString() },
+  }));
+}

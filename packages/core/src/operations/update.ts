@@ -65,7 +65,14 @@ import { launcherOf, registrationVersion, stableLauncherOf } from '../registrati
 // What a verified release declares, read from its tarball, and the global install that hands npm the verified file
 // (`../global-install.ts`): no Sigstore in either, and nothing runs on load, so WhatsApp's bundle, which reaches this
 // module, drops both with the check (its `update-gate.test.ts` holds it to that).
-import { declaredFor, factsOf, type TargetDeclaration, targetDeclaration, withinDeadline } from '../release-facts.ts';
+import {
+  DECLARATION_DEADLINE_MS,
+  declaredFor,
+  factsOf,
+  type TargetDeclaration,
+  targetDeclaration,
+  withinDeadline,
+} from '../release-facts.ts';
 import type { TarballFetch } from '../release-tarball.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
@@ -740,9 +747,11 @@ function oldestHere(report: UpdateReport): string | null {
  * Each release is read once however often it is asked — the check asks once for the core answering, and again for the
  * oldest release it finds here — and known or unknown, the answer stands for the reader's life: an unreadable tarball
  * is asked for at most twice in a check, at its location and at npm's own address (review B of 0.26.0, finding 2).
- * And the read is given `deadlineMs` at most (`DECLARATION_DEADLINE_MS` unless a test gives another), well inside the
- * check's claim, after which it is unknown — never false — and cut off, so the check records what it found while its
- * claim is still its own.
+ * And the read is given `deadlineMs` at most (`DECLARATION_DEADLINE_MS` unless a test gives another), and stops at
+ * `deadline` — a time, by `Date.now()` — when that comes first: the day's check passes its claim's time plus
+ * `DECLARATION_DEADLINE_MS`, well inside the claim, however late its ask began. After it the read is unknown — never
+ * false — and cut off, and one not started by then is not started at all, so the check records what it found while
+ * its claim is still its own.
  *
  * The registry handed in, or the one npm reads — but only beside the registry's own `latest`: a test with a stand-in
  * `latestVersion` hands in `releaseFacts` itself, or none is read. And only with a verifier (P2): a channel's process
@@ -753,7 +762,7 @@ export function releaseFactsReader(
   env: NodeJS.ProcessEnv,
   deps: Pick<UpdateDeps, 'registry' | 'latestVersion' | 'verifyRelease' | 'tarballs'>,
   stateDir: string,
-  options: { deadlineMs?: number | undefined } = {},
+  options: { deadlineMs?: number | undefined; deadline?: number | undefined } = {},
 ): ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration | null>) | null {
   const verify = deps.verifyRelease;
   if (deps.latestVersion !== undefined || verify === undefined) return null;
@@ -763,11 +772,14 @@ export function releaseFactsReader(
     const key = `${packageName}@${version}`;
     let read = declarations.get(key);
     if (read === undefined) {
-      read = withinDeadline(
-        (signal) => targetDeclaration(sources, packageName, version, { signal }),
-        version,
-        options.deadlineMs,
+      const left = Math.min(
+        options.deadlineMs ?? DECLARATION_DEADLINE_MS,
+        options.deadline === undefined ? Number.POSITIVE_INFINITY : options.deadline - Date.now(),
       );
+      read =
+        left > 0
+          ? withinDeadline((signal) => targetDeclaration(sources, packageName, version, { signal }), version, left)
+          : Promise.resolve({ known: false, version });
       declarations.set(key, read);
     }
     return read;

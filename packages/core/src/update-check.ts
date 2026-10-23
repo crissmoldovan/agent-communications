@@ -8,6 +8,7 @@ import { handoffSentence, isCommand, requireHandoffs } from './handoffs.ts';
 import { npmLatestVersion } from './npm.ts';
 import { releaseFactsReader, type UpdateDeps, updateCheck } from './operations/update.ts';
 import { PATH_OPTIONS, type ResolvedPaths } from './paths.ts';
+import { DECLARATION_DEADLINE_MS } from './release-facts.ts';
 import { childEnvironment } from './system-programs.ts';
 import { TERMINAL_CHECK_WAIT_MS, type TerminalUpdateHooks } from './update-gate.ts';
 import type { ReleaseVerifier } from './update-release.ts';
@@ -213,7 +214,13 @@ async function ask(
   // again (review B of 0.26.0, finding 2). A test's stand-in registry hands in its own, or none is read. Null: read,
   // and not known now. Undefined: not read here. For either, the record keeps what core's verified check found of the
   // same version — a version npm never publishes twice — and otherwise makes no claim.
-  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps, core.paths.stateDir);
+  // Its reads stop a fixed time into the claim, not into this ask, which a command's child may start late.
+  const read =
+    deps.releaseFacts !== undefined
+      ? deps.releaseFacts
+      : releaseFactsReader(env, deps, core.paths.stateDir, {
+          deadline: Date.parse(options.claimedAt) + DECLARATION_DEADLINE_MS,
+        });
   const release: ReleaseFacts | null | undefined =
     read === null
       ? undefined
