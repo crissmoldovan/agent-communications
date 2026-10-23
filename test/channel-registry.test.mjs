@@ -858,8 +858,11 @@ test('REL-d: core declares a security fix or a needed decision, as booleans, and
    */
   const { root } = await treeWithLibrary();
   const corePath = join(root, 'packages', 'core', 'package.json');
-  const core = JSON.parse(await readFile(corePath, 'utf8'));
-  const declare = (release) => writeFile(corePath, JSON.stringify({ ...core, agentcommsRelease: release }));
+  // The copy is this checkout's core, which declares whatever this release is; the test starts from nothing declared.
+  const { agentcommsRelease: _declared, ...core } = JSON.parse(await readFile(corePath, 'utf8'));
+  const declare = (release) =>
+    writeFile(corePath, JSON.stringify(release === undefined ? core : { ...core, agentcommsRelease: release }));
+  await declare(undefined);
 
   // Nothing declared reads as neither, and carries nothing.
   const NONE = { security: false, needsDecision: false, needsDecisionSince: null };
