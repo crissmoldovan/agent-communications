@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.26.0
 
 **An update now believes what a release says about itself only from the release's own verified files, and holds it
 from a time the registry cannot set** (CUE-495). Since 0.20.0 every `@agentcomms` release has been checked with
