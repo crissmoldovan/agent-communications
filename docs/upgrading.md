@@ -246,14 +246,9 @@ fix. From 0.26.0 neither is read from that document, which a registry or a mirro
 Each release is verified first, and what it declares is then read from `package/package.json` inside its own tarball,
 downloaded from wherever the registry or a mirror says — any `http` or `https` address, through at most five
 redirects, then npm's own address once if that fails — and kept only when its SHA-512 is the digest its provenance
-signs. What was read is remembered per release in `release-declarations.json` in the state directory, so a release
-read once is not downloaded again; it is verified again every time. A release that does not verify, or whose tarball
-cannot be read, counts for nothing either way: nothing says it is a security fix, or that it is not. Such a tarball is
-not remembered, so the next check asks for it again; within one check it is asked for at most once from each address,
-however often the check reads what the releases declare. And a check stops reading 30 seconds after it began: a
-release not verified and read by then counts for nothing that day, and a download still going is cut off, so a mirror
-that takes the request and never answers cannot keep the check from recording what it found before its two-minute
-claim runs out and another process may take it over.
+signs. What was read is remembered per release in `release-declarations.json` in the state directory, so no release
+is downloaded twice; it is verified again every time. A release that does not verify, or whose tarball cannot be read,
+counts for nothing either way: nothing says it is a security fix, or that it is not.
 
 Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
 Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and

@@ -147,14 +147,11 @@ const RANK: Readonly<Record<'download' | 'size' | 'digest', number>> = { downloa
  * The release's tarball: from `location`, then — if that fails in any way — once from npm's canonical address, which
  * is never asked twice. Kept only when its sha512 is the verified one; otherwise the problem that says the most of the
  * two tries.
- *
- * `deadline`, by `Date.now()`, is when the caller stops waiting: a request still going then is cut off, and no address
- * is asked after it (0.26.0 review B). Each address keeps its own `timeoutMs` too.
  */
 export async function downloadVerifiedTarball(
   release: TarballRelease,
   location: string | null,
-  options: { fetch?: TarballFetch; timeoutMs?: number; deadline?: number } = {},
+  options: { fetch?: TarballFetch; timeoutMs?: number } = {},
 ): Promise<{ ok: true; bytes: Buffer } | { ok: false; problem: 'download' | 'size' | 'digest' }> {
   const ask = options.fetch ?? fetchTarball;
   const timeoutMs = options.timeoutMs ?? TARBALL_TIMEOUT_MS;
@@ -163,9 +160,7 @@ export async function downloadVerifiedTarball(
   const first = location === null ? null : httpAddress(location);
   let problem: 'download' | 'size' | 'digest' = 'download';
   for (const place of first === null || first === canonical ? [canonical] : [first, canonical]) {
-    const left = options.deadline === undefined ? timeoutMs : Math.min(timeoutMs, options.deadline - Date.now());
-    if (!(left > 0)) break;
-    const fetched = await fetchOne(ask, place, left);
+    const fetched = await fetchOne(ask, place, timeoutMs);
     let failed: 'download' | 'size' | 'digest';
     if (fetched.ok) {
       if (createHash('sha512').update(fetched.bytes).digest('hex') === want) return fetched;

@@ -1,4 +1,4 @@
-import { type DeclarationRead, readVerifiedDeclaration } from './release-declarations.ts';
+import { readVerifiedDeclaration } from './release-declarations.ts';
 import { type TarballFetch, tarballLocation } from './release-tarball.ts';
 import { type ReleaseRegistry, type ReleaseVerifier, releaseIntegrity, releasesBetween } from './update-release.ts';
 import type { ReleaseFacts } from './update-state.ts';
@@ -25,19 +25,6 @@ export interface DeclarationSources {
   verify: ReleaseVerifier;
   stateDir: string;
   tarballs?: TarballFetch | undefined;
-  /**
-   * When reading stops, by `Date.now()`: a release not verified and read by then is unread, nothing is verified or
-   * downloaded after it, and a download still going is cut off. None: each request keeps only its own limits. The
-   * day's check gives one well inside its claim (`UPDATE_CHECK_READS_MS`, 0.26.0 review B).
-   */
-  deadline?: number | undefined;
-  /**
-   * What was read of each verified release so far, by package, version and integrity, kept by a caller across its
-   * calls: each release is then verified and downloaded at most once — its location, then npm's — whether what it
-   * declares could be read or not. The day's check reads twice, and an unknown declaration is never cached on disk
-   * (0.26.0 review B).
-   */
-  read?: Map<string, Promise<DeclarationRead>> | undefined;
 }
 
 export interface DeclaredSince {
@@ -70,30 +57,17 @@ export async function declaredSince(
   let security: boolean | null = null;
   for (const version of versions) {
     const integrity = releaseIntegrity(packument, version);
-    if (integrity === null) {
+    const verdict = integrity === null ? null : await sources.verify({ packageName, version, integrity });
+    // The digest the bytes must have is the one the verified attestation signs, never the registry's word for it.
+    const provenance = verdict?.ok === true ? verdict.provenance : null;
+    if (provenance === null) {
       unread.push(version);
       continue;
     }
-    // Read already by this caller — verified first, and downloaded at most once — it is not asked again, and what was
-    // read stands, though the deadline has passed since.
-    const key = [packageName, version, integrity].join('\u0000');
-    let reading = sources.read?.get(key);
-    if (reading === undefined) {
-      const verdict = await byDeadline(() => sources.verify({ packageName, version, integrity }), sources.deadline);
-      // The digest the bytes must have is the one the verified attestation signs, never the registry's word for it.
-      const provenance = verdict?.ok === true ? verdict.provenance : null;
-      if (provenance === null) {
-        unread.push(version);
-        continue;
-      }
-      reading = readVerifiedDeclaration(provenance, tarballLocation(packument, version), {
-        stateDir: sources.stateDir,
-        ...(sources.tarballs !== undefined ? { fetch: sources.tarballs } : {}),
-        ...(sources.deadline !== undefined ? { deadline: sources.deadline } : {}),
-      });
-      sources.read?.set(key, reading);
-    }
-    const read = await reading;
+    const read = await readVerifiedDeclaration(provenance, tarballLocation(packument, version), {
+      stateDir: sources.stateDir,
+      ...(sources.tarballs !== undefined ? { fetch: sources.tarballs } : {}),
+    });
     if (!read.known) {
       unread.push(version);
       continue;
@@ -107,28 +81,6 @@ export async function declaredSince(
     deciding,
     unread,
   };
-}
-
-/**
- * What `start` answers, or null once `deadline` (by `Date.now()`) comes first — and null at once, with nothing started,
- * when it has already passed. With no deadline, `start`'s answer, however long it takes. A verifier takes no deadline of
- * its own: one whose attestations endpoint never answers is waited for until then, and no longer.
- */
-async function byDeadline<T>(start: () => Promise<T>, deadline: number | undefined): Promise<T | null> {
-  if (deadline === undefined) return start();
-  const left = deadline - Date.now();
-  if (!(left > 0)) return null;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      start(),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(resolve, left, null);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /** The record's facts: null unless both `security` and `needsDecision` are known. */

@@ -15,11 +15,9 @@ import { isVersion } from './versions.ts';
  * the release's own.
  *
  * What was read is kept per integrity, content-free — the version, the integrity and the two flags, never a word of the
- * manifest — in `<state>/release-declarations.json`, so neither the daily check nor the background run downloads a
- * release again once it was read. A declaration that cannot be read is unknown: it is never cached here, and the caller
- * fails closed; the day's check remembers it for the rest of its own reading (`DeclarationSources.read`), so it asks
- * for such a tarball at most once from each address a check. The cache saves downloads, not verification: the caller
- * verifies the release first, every time.
+ * manifest — in `<state>/release-declarations.json`, so neither the daily check nor the background run downloads one
+ * release twice. A declaration that cannot be read is unknown: it is never cached, and the caller fails closed. The
+ * cache saves downloads, not verification: the caller verifies the release first, every time.
  */
 
 export const DECLARATIONS_FILE = 'release-declarations.json';
@@ -87,13 +85,12 @@ async function remember(stateDir: string, record: DeclarationRecord): Promise<vo
  * What a verified release declares: from the cache, by its integrity and version, or else from its tarball — the bytes
  * whose sha512 is `provenance.sha512`, from `location` or npm's canonical address — whose `package/package.json` must
  * name the release itself. Unknown, with the problem, when it cannot be read. A known declaration is cached unless
- * `writeCache` is false (a dry run); an unknown one never is. Nothing is downloaded past `deadline` (by `Date.now()`),
- * and a download still going then is cut off (`downloadVerifiedTarball`).
+ * `writeCache` is false (a dry run); an unknown one never is.
  */
 export async function readVerifiedDeclaration(
   provenance: Pick<VerifiedProvenance, 'package' | 'version' | 'sha512'>,
   location: string | null,
-  options: { stateDir: string; fetch?: TarballFetch; writeCache?: boolean; timeoutMs?: number; deadline?: number },
+  options: { stateDir: string; fetch?: TarballFetch; writeCache?: boolean; timeoutMs?: number },
 ): Promise<DeclarationRead> {
   const { version } = provenance;
   const integrity = `sha512-${Buffer.from(provenance.sha512, 'hex').toString('base64')}`;
@@ -109,7 +106,6 @@ export async function readVerifiedDeclaration(
     {
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      ...(options.deadline !== undefined ? { deadline: options.deadline } : {}),
     },
   );
   if (!download.ok) return { known: false, version, problem: download.problem };

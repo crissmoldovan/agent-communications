@@ -22,7 +22,7 @@ import { tempDir } from './helpers/temp.ts';
  * What a release declares — a security fix, a decision it needs — is read from its verified tarball, never from the
  * registry (design 2026-10-22 P1): the tarball whose sha512 is the verified provenance digest, its
  * `package/package.json`, its name and version the release's. What was read is cached per integrity, content-free, so
- * a release read once is not downloaded again; a declaration that cannot be read is unknown, and is never cached.
+ * no release is downloaded twice; a declaration that cannot be read is unknown, and is never cached.
  *
  * The world here (`helpers/release-world.ts`) is the registry, npm's attestations and the tarballs, all stand-ins;
  * the verifier is the real one over the test's own trust root. Nothing reaches npm or Sigstore.

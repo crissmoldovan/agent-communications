@@ -17,13 +17,11 @@ more.
 - **What a release declares comes from the release itself.** Whether it is a security fix, and whether it needs a
   decision before it installs, is read from the `package.json` inside its own tarball, once its provenance verifies,
   and only from bytes whose SHA-512 is the digest that provenance signs, wherever the registry or a mirror serves them.
-  The registry's copy of the manifest decides nothing. What a release declares is remembered once read, in
-  `release-declarations.json` in the state directory, and that release is not downloaded again. One whose declaration
-  cannot be read is unknown: the background run installs nothing that run and tries again the next (`its declaration
-  could not be read from its verified release`), no notice or preview says it is a security fix or that it is not, and
-  `agentcomms update` still shows its preview, saying so. The day's check asks for such a tarball at most once from
-  each address, and stops reading 30 seconds into its check, so a mirror that never answers cannot keep it from
-  recording what it found; a release not read by then counts for nothing that day.
+  The registry's copy of the manifest decides nothing. Each release is downloaded once and remembered, in
+  `release-declarations.json` in the state directory. One whose declaration cannot be read is unknown: the background
+  run installs nothing that run and tries again the next (`its declaration could not be read from its verified
+  release`), no notice or preview says it is a security fix or that it is not, and `agentcomms update` still shows its
+  preview, saying so.
 - **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
   Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
   the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or

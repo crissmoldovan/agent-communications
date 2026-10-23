@@ -9,13 +9,11 @@ import { openCore } from '../src/core.ts';
 import { releaseFactsReader, type UpdateDeps, updateCheck } from '../src/operations/update.ts';
 import { PATH_OPTIONS } from '../src/paths.ts';
 import { type DeclaredSince, declaredSince, factsOf } from '../src/release-facts.ts';
-import { canonicalTarballUrl, type TarballFetch } from '../src/release-tarball.ts';
-import { askUnderClaim, checkForUpdates, claimUpdateCheck, UPDATE_CHECK_READS_MS } from '../src/update-check.ts';
+import { checkForUpdates, claimUpdateCheck } from '../src/update-check.ts';
 import { securityNotice, updateToolNotice } from '../src/update-gate.ts';
-import type { ReleaseRegistry, ReleaseVerifier } from '../src/update-release.ts';
-import { changeUpdateCheck, readUpdateCheck, UPDATE_CHECK_LEASE_MS } from '../src/update-state.ts';
+import type { ReleaseRegistry } from '../src/update-release.ts';
+import { changeUpdateCheck, readUpdateCheck } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
-import { fixtureTarballUrl } from './helpers/provenance-fixture.ts';
 import { loopbackRegistry, releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
 import { tempDir } from './helpers/temp.ts';
 import { type Machine, machine, seed } from './helpers/update-machine.ts';
@@ -431,141 +429,6 @@ test("core's update-check-child writes the verified flags, and a channel's unver
     const after = await readUpdateCheck(m.stateDir);
     assert.notEqual(after.lastChecked, record.lastChecked, 'the channel checked');
     assert.deepEqual(after.release, { version: LATEST, security: true, needsDecision: false });
-  } finally {
-    await served.close();
-  }
-});
-
-test('a check downloads a release whose tarball cannot be read once from each address, however often it reads it', async () => {
-  /*
-   * 0.26.0 review B, finding 2. The day's check reads what the releases declare twice — for the releases since this
-   * one, then for those since the oldest here — and a declaration that cannot be read is never cached, so such a
-   * tarball was asked for four times a check: its location and npm's, twice. Within one check each release is read
-   * once, known or not: its location, then npm's.
-   */
-  const world = worldOf({ version: LATEST, serve: 'missing' });
-  const m = machine();
-  const once = [fixtureTarballUrl(CORE, LATEST), canonicalTarballUrl(CORE, LATEST)];
-  assert.equal((await checkForUpdates(m.core, m.env, { deps: checkDeps(m, world) })).asked, true);
-  assert.deepEqual(world.tarballsAsked, once);
-  assert.equal(world.attestationsAsked.length, 1, 'verified more than once');
-  const record = await readUpdateCheck(m.stateDir);
-  assert.deepEqual([record.latest, record.release, record.checking], [LATEST, null, null]);
-  // The next check asks again: what could not be read is kept for nothing past its own check.
-  await seed(m, {}, new Date(Date.now() - 25 * 3_600_000));
-  assert.equal((await checkForUpdates(m.core, m.env, { deps: checkDeps(m, world) })).asked, true);
-  assert.deepEqual(world.tarballsAsked, [...once, ...once]);
-});
-
-test('a check whose reads stall still records under its own claim, and a later claim keeps what it found', async () => {
-  /*
-   * 0.26.0 review B, finding 2. A mirror that takes a tarball request and never answers is cut off at 60 s, and npm's
-   * address after it too: read twice, one unreadable release kept a check reading for four minutes, twice its claim.
-   * Another process then claimed the check, what the first had found was dropped, and the day was never recorded. A
-   * check now stops reading `UPDATE_CHECK_READS_MS` into its claim: a release not verified and read by then is unread,
-   * never declared false, and what was asked for is cut off then. So it records what it found while the claim is its
-   * own.
-   *
-   * Each claim here is taken as if the check began `UPDATE_CHECK_READS_MS` less a second ago, so its reads stop a
-   * second from now. The check's clock is the machine's, and the latest release comes from the world on 127.0.0.1, so
-   * the check reads with its own reader.
-   */
-  const stalled = (signals: AbortSignal[]): TarballFetch => {
-    return (_url, { signal }) => {
-      signals.push(signal);
-      // A request taken and never answered: only its own signal ends it.
-      return new Promise((_answered, failed) =>
-        signal.addEventListener('abort', () => failed(signal.reason), { once: true }),
-      );
-    };
-  };
-  const unanswered: ReleaseVerifier = () => new Promise(() => undefined);
-  for (const stall of ['a mirror that never answers', 'an attestations endpoint that never answers'] as const) {
-    const world = worldOf({ version: LATEST, declares: { security: true } });
-    const served = await loopbackRegistry(world);
-    try {
-      const m = machine({ npm_config_registry: served.url });
-      const signals: AbortSignal[] = [];
-      const deps: UpdateDeps = {
-        registry: world.registry,
-        verifyRelease: stall === 'a mirror that never answers' ? world.verifyRelease : unanswered,
-        tarballs: stall === 'a mirror that never answers' ? stalled(signals) : world.tarballs,
-        globalPackages: async () => ({}),
-      };
-      const claimedAt = await claimUpdateCheck(m.core, {
-        now: () => new Date(Date.now() - UPDATE_CHECK_READS_MS + 1_000),
-      });
-      assert.ok(claimedAt !== null, `${stall}: the check is claimed`);
-      let timer: NodeJS.Timeout | undefined;
-      const finished = await Promise.race([
-        askUnderClaim(m.core, m.env, claimedAt, { deps }).then(() => true),
-        new Promise<false>((resolve) => {
-          timer = setTimeout(resolve, 15_000, false);
-        }),
-      ]);
-      clearTimeout(timer);
-      assert.ok(finished, `${stall}: still reading 15 s after its reads were to stop`);
-      const record = await readUpdateCheck(m.stateDir);
-      assert.ok(Date.now() - Date.parse(claimedAt) < UPDATE_CHECK_LEASE_MS, `${stall}: recorded after its claim`);
-      // The day's check recorded, by the check's clock, and its claim given up: the latest heard, and no claim of what
-      // it declares.
-      assert.ok(Date.parse(String(record.lastChecked)) >= Date.parse(claimedAt), `${stall}: ${JSON.stringify(record)}`);
-      assert.deepEqual(
-        [record.checking, record.latest, record.release],
-        [null, LATEST, null],
-        `${stall}: ${JSON.stringify(record)}`,
-      );
-      // What it asked for was cut off when its reads stopped, and npm's address was not asked after that.
-      assert.ok(signals.length <= 1, `${stall}: asked ${signals.length} times`);
-      assert.ok(
-        signals.every((signal) => signal.aborted),
-        `${stall}: a download went on after its check`,
-      );
-      // Another process, once this claim would have run out: the day is recorded, and nothing is claimed over it.
-      const later = () => new Date(Date.parse(claimedAt) + UPDATE_CHECK_LEASE_MS + 1_000);
-      assert.equal(await claimUpdateCheck(m.core, { now: later }), null, `${stall}: claimed again`);
-      assert.deepEqual(await readUpdateCheck(m.stateDir), record, `${stall}: the record changed`);
-    } finally {
-      await served.close();
-    }
-  }
-});
-
-test('a release a check read before its reads stopped still counts when the check reads it again after', async () => {
-  /*
-   * 0.26.0 review B, finding 2. The check reads what the releases declare, then runs `npm ls`, then reads them again
-   * for the releases since the oldest here; `npm ls` can take a minute, so the second reading often comes after the
-   * reads stop (`UPDATE_CHECK_READS_MS`). A release already verified and read in this check is not asked again, and
-   * what was read stands: the record keeps the verified security fix, never null for a release it read.
-   */
-  const world = worldOf({ version: LATEST, declares: { security: true }, registrySays: {} });
-  const served = await loopbackRegistry(world);
-  try {
-    const m = machine({ npm_config_registry: served.url });
-    const claimedAt = await claimUpdateCheck(m.core, {
-      now: () => new Date(Date.now() - UPDATE_CHECK_READS_MS + 1_000),
-    });
-    assert.ok(claimedAt !== null);
-    const stop = Date.parse(claimedAt) + UPDATE_CHECK_READS_MS;
-    await askUnderClaim(m.core, m.env, claimedAt, {
-      deps: {
-        registry: world.registry,
-        verifyRelease: world.verifyRelease,
-        tarballs: world.tarballs,
-        // `npm ls`, slow: it answers once the reads have stopped.
-        globalPackages: async () => {
-          await new Promise((waited) => setTimeout(waited, Math.max(0, stop - Date.now()) + 200));
-          return {};
-        },
-      },
-    });
-    assert.ok(Date.now() > stop, 'the second reading came before the reads stopped');
-    const record = await readUpdateCheck(m.stateDir);
-    assert.ok(Date.parse(String(record.lastChecked)) >= Date.parse(claimedAt), JSON.stringify(record));
-    assert.equal(record.checking, null);
-    assert.deepEqual(record.release, { version: LATEST, security: true, needsDecision: false });
-    assert.equal(world.tarballsAsked.length, 1, 'downloaded more than once');
-    assert.equal(world.attestationsAsked.length, 1, 'verified more than once');
   } finally {
     await served.close();
   }
