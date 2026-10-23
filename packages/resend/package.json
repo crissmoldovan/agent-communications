@@ -39,7 +39,7 @@
     "@agentcomms/core": "workspace:*"
   },
   "optionalDependencies": {
-    "@napi-rs/keyring": "2.1.0"
+    "@napi-rs/keyring": "2.1.2"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.3.1",

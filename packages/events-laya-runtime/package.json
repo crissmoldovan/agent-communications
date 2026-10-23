@@ -6,7 +6,7 @@
   "license": "MIT",
   "dependencies": {
     "@huggingface/tokenizers": "0.2.0",
-    "@receptron/laya": "0.1.2",
+    "@receptron/laya": "0.2.0",
     "onnxruntime-node": "1.30.0"
   }
 }
