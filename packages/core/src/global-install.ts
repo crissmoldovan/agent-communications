@@ -3,6 +3,8 @@ import type { Stats } from 'node:fs';
 import { chmod, lstat, mkdtemp, readdir, readFile, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { writeFileAtomic } from './fs.ts';
+import { withFileLock } from './lock.ts';
 import {
   downloadVerifiedTarball,
   type TarballEntry,
@@ -35,7 +37,14 @@ import { isPlainVersion } from './versions.ts';
  * package of this suite there that does not match is removed before the step fails (design §8.2): the global package
  * itself when it is the one, or each one inside it. A nested `@agentcomms/core` npm took from the registry would
  * otherwise stay, and a channel's day's check, handed to the core beside it (P2), would start it. A removal follows no
- * link — a link is removed as a link — and reaches nothing outside the folder `npm root -g` named.
+ * link — a link is removed as a link — and reaches nothing outside the folder `npm root -g` named. On Windows, where a
+ * file another process holds open refuses deletion for a moment, a removal refused with EBUSY or EPERM is tried again
+ * a few times first.
+ *
+ * Each global package a mismatch was found in is recorded, content-free, in `<state>/removed-globals.json`: its name,
+ * the release being installed, and when. The next update by hand installs it again from its verified file, though npm
+ * lists it at its latest release or no longer lists it at all, and the record is cleared once an install of that
+ * package verifies; one that fails again keeps it. So "run the update again" does what it says.
  *
  * No Sigstore here, and nothing runs when this module is loaded: WhatsApp's bundle, which carries core's index, drops
  * it with everything that reads a tarball.
@@ -57,6 +66,73 @@ export interface GlobalInstallDeps {
    * one at exactly that release is held to that verification, and not verified again.
    */
   verified?: ReadonlyMap<string, VerifiedProvenance> | undefined;
+  /**
+   * The state directory, where a global package a mismatch was found in is recorded for the next update to reinstall
+   * (`removed-globals.json`), and cleared once its install verifies. None: nothing is recorded or cleared.
+   */
+  stateDir?: string | undefined;
+}
+
+// ── What the next update reinstalls ─────────────────────────────────────────────────────────────────────────────
+
+export const REMOVED_GLOBALS_FILE = 'removed-globals.json';
+
+const REMOVED_GLOBALS_LOCK = '.removed-globals.lock';
+
+/** A global package an update found a mismatch in, and removed what of it did not match: content-free. */
+export interface RemovedGlobal {
+  package: string;
+  /** The release the update was installing. */
+  version: string;
+  /** When, ISO. */
+  removedAt: string;
+}
+
+function isTime(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const at = new Date(value);
+  return !Number.isNaN(at.getTime()) && at.toISOString() === value;
+}
+
+/**
+ * The globals recorded for the next update to reinstall, each once: none when there is no record or it cannot be
+ * read. Only a name of this suite and a plain release are read from it.
+ */
+export async function readRemovedGlobals(stateDir: string): Promise<RemovedGlobal[]> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(join(stateDir, REMOVED_GLOBALS_FILE), 'utf8'));
+  } catch {
+    return [];
+  }
+  const listed = typeof parsed === 'object' && parsed !== null ? (parsed as { removed?: unknown }).removed : undefined;
+  if (!Array.isArray(listed)) return [];
+  const removed: RemovedGlobal[] = [];
+  for (const item of listed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const { package: name, version, removedAt } = item as Record<string, unknown>;
+    if (typeof name !== 'string' || !SUITE_NAME.test(name) || typeof version !== 'string') continue;
+    if (!isPlainVersion(version) || !isTime(removedAt)) continue;
+    if (removed.some((one) => one.package === name)) continue;
+    removed.push({ package: name, version, removedAt });
+  }
+  return removed;
+}
+
+/** The record changed by `change`, under its lock, written atomically; never in the way of the step it serves. */
+async function changeRemovedGlobals(
+  stateDir: string,
+  change: (removed: RemovedGlobal[]) => RemovedGlobal[] | null,
+): Promise<void> {
+  try {
+    await withFileLock(join(stateDir, REMOVED_GLOBALS_LOCK), async () => {
+      const next = change(await readRemovedGlobals(stateDir));
+      if (next === null) return;
+      await writeFileAtomic(join(stateDir, REMOVED_GLOBALS_FILE), `${JSON.stringify({ removed: next }, null, 2)}\n`);
+    });
+  } catch {
+    // A record that cannot be written leaves the step's own outcome as it is.
+  }
 }
 
 /** A name of this suite, as npm writes one: only then is it said in a detail. */
@@ -389,12 +465,35 @@ async function removeTree(path: string): Promise<void> {
   }
 }
 
+/** How often a removal Windows refused for a moment is tried, in all, and how long it waits between tries. */
+const WINDOWS_TRIES = 5;
+const WINDOWS_PAUSE_MS = 100;
+
+/** What Windows answers while another process — a running server, a virus scan — holds a file open. */
+function refusedForNow(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'EBUSY' || code === 'EPERM';
+}
+
+export interface RemoveOptions {
+  /** Removes what is at a path without following a link: `removeTree` when left out. For a test, one that refuses. */
+  remove?: ((path: string) => Promise<void>) | undefined;
+  /** The system it runs on: only Windows tries again. */
+  platform?: NodeJS.Platform | undefined;
+  /** Waits between tries. */
+  pause?: ((ms: number) => Promise<void>) | undefined;
+}
+
 /**
  * Removes the package at `dir`, below `root` — the folder `npm root -g` named — without following a link. Refused
  * unless `dir` is below `root` and every folder between them is a folder and not a link, so nothing outside the global
- * root is reached by way of one; `root` itself is as npm named it. True when nothing is left at `dir`.
+ * root is reached by way of one; `root` itself is as npm named it. On Windows a removal refused with EBUSY or EPERM is
+ * tried again, `WINDOWS_TRIES` times in all, `WINDOWS_PAUSE_MS` apart. True when nothing is left at `dir`.
  */
-async function removeInside(root: string, dir: string): Promise<boolean> {
+export async function removeInside(root: string, dir: string, options: RemoveOptions = {}): Promise<boolean> {
+  const remove = options.remove ?? removeTree;
+  const windows = (options.platform ?? process.platform) === 'win32';
+  const pause = options.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const path = relative(root, dir);
   if (path === '' || isAbsolute(path) || path === '..' || path.startsWith(`..${sep}`)) return false;
   const parts = path.split(sep);
@@ -403,10 +502,18 @@ async function removeInside(root: string, dir: string): Promise<boolean> {
       const stat = await lstat(join(root, ...parts.slice(0, end)));
       if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
     }
-    await removeTree(dir);
-    return true;
   } catch (error) {
     return missingError(error) && !(await there(dir));
+  }
+  for (let tries = 1; ; tries += 1) {
+    try {
+      await remove(dir);
+      return true;
+    } catch (error) {
+      if (missingError(error)) return !(await there(dir));
+      if (!windows || !refusedForNow(error) || tries >= WINDOWS_TRIES) return false;
+      await pause(WINDOWS_PAUSE_MS);
+    }
   }
 }
 
@@ -521,7 +628,23 @@ export async function installVerifiedGlobal(
     { packageName, version, sha512: provenance.sha512, bytes: download.bytes },
     deps,
   );
-  if (check.problem === null) return { ok: true };
+  const stateDir = deps.stateDir;
+  if (check.problem === null) {
+    // Verified: nothing of it is left for the next update to reinstall.
+    if (stateDir !== undefined) {
+      await changeRemovedGlobals(stateDir, (removed) =>
+        removed.some((one) => one.package === packageName)
+          ? removed.filter((one) => one.package !== packageName)
+          : null,
+      );
+    }
+    return { ok: true };
+  }
   const removal = await removeMismatching(root, check.mismatching);
+  // Recorded whether or not all of it could be removed: either way, the next update installs it again.
+  if (stateDir !== undefined && check.mismatching.length > 0) {
+    const entry: RemovedGlobal = { package: packageName, version, removedAt: new Date().toISOString() };
+    await changeRemovedGlobals(stateDir, (removed) => [...removed.filter((one) => one.package !== packageName), entry]);
+  }
   return { ok: false, detail: `${GLOBAL_MISMATCH(packageName)} (${check.problem})${removal}: ${again}` };
 }

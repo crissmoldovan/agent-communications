@@ -71,8 +71,14 @@ command. Left in place it would run: npm fetches the core Gmail depends on from 
 and Gmail hands its day's update check to that core. A link is removed as a link, never followed, and nothing outside
 the folder `npm root -g` names is touched. Gmail carries core's code in its own files, so with its core removed it
 still works, and checks for updates on its own, unverified; a removed global package's command is gone until it is
-installed again. The update installs a global package only when a newer release of it is out, so running it again
-before then leaves either as it is. Other packages npm installs beside it are npm's to check, as before.
+installed again, which running the update again does. The update records each global package it found a mismatch in
+— its name, the release, and when, in `removed-globals.json` in the state directory — and the next update installs it
+again from its verified file, even when npm lists it at its latest release or no longer lists it: its preview says
+`reinstalls the global @agentcomms/gmail <version>, which an earlier update removed all or part of because it did not
+match its verified release`. The record is cleared once an install of that package checks out; a reinstall that fails
+the same way keeps it, for the update after. On Windows a removal refused for a moment, while another program holds a
+file open, is tried again a few times before the step says it could not be removed. Other packages npm installs beside
+it are npm's to check, as before.
 
 **A first install is verified the same way, when core makes it.** A managed `mcp install` by core —
 `agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — verifies the release whose

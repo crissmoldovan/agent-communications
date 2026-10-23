@@ -122,9 +122,11 @@ did not install, is reported as `failed` with its `detail`: say which, and do no
   what npm installed is not the release that was verified. What did not match was removed, and the step says what:
   `so it was removed` (that global command is gone until it is installed again) or `so @agentcomms/core was removed
   from it` (the channel still works, and checks for updates on its own). `could not be removed` means it is still
-  there, and still runs: say so plainly. Tell the person. The update installs that global package again only when a
-  newer release of it is out; `comms_update` with `check: true` shows whether one is. Never install the package by
-  hand with `npm install -g` to get past it: that is not checked against the verified release.
+  there, and still runs: say so plainly. Tell the person, then update again: `comms_update` with `check: true`, then
+  a new preview, which says `reinstalls the global <package> …`, and their yes. The update installs it again from its
+  verified file. If it fails the same way again, what npm is given is still not the verified release: say so, and do
+  not try again unasked. Never install the package by hand with `npm install -g` to get past it: that is not checked
+  against the verified release.
 - **A result that carries `recordNote`** (`the update was installed; its record will be corrected by the next check`)
   needs nothing. The update is done; only this computer's record of it waits for the next check. Say so if a notice
   still names the older release before then.

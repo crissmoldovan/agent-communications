@@ -237,6 +237,30 @@ const OWN: UpdateCheckChildEntry = Object.freeze({
   args: Object.freeze([join(tempDir('comms-update-global-own-'), 'dist', 'cli.mjs')]),
 });
 
+/** The file where the update records each global it removed, in the state directory: what the next update reinstalls. */
+const REMOVED_FILE = 'removed-globals.json';
+
+interface RemovedEntry {
+  package: string;
+  version: string;
+  removedAt: string;
+}
+
+/** What the record holds now: each global it lists, or none when there is no record. */
+function removedEntries(m: Machine): RemovedEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(m.core.paths.stateDir, REMOVED_FILE), 'utf8'));
+  } catch {
+    return [];
+  }
+  const listed = (parsed as { removed?: unknown } | null)?.removed;
+  return Array.isArray(listed) ? (listed as RemovedEntry[]) : [];
+}
+
+/** The preview's line for a global the update reinstalls: one an earlier update removed all or part of. */
+const REINSTALLS = `reinstalls the global ${GMAIL} ${LATEST}, which an earlier update removed all or part of because it did not match its verified release: installs its verified tarball with \`npm install -g\`, then checks what npm installed against it`;
+
 function flipFirstByte(file: string): void {
   const bytes = readFileSync(file);
   bytes[0] = (bytes[0] as number) ^ 0x01;
@@ -463,6 +487,18 @@ test(
         step.detail,
       );
       assert.equal(record.current?.global.includes('gmail'), false);
+      // Recorded, content-free, for the next update to reinstall: the global package, its release, and when.
+      const removed = removedEntries(m);
+      assert.deepEqual(
+        removed.map((entry) => Object.keys(entry).sort()),
+        [['package', 'removedAt', 'version']],
+        JSON.stringify(removed),
+      );
+      assert.deepEqual(
+        removed.map(({ package: name, version }) => [name, version]),
+        [[GMAIL, LATEST]],
+      );
+      assert.equal(new Date(removed[0]?.removedAt as string).toISOString(), removed[0]?.removedAt);
     } finally {
       await m.close();
     }
@@ -586,9 +622,188 @@ test('an install that matches its verified release removes nothing', WITH_NPM, a
     assert.equal(globalStep(result).outcome, 'updated');
     assert.ok(installed.includes(join('node_modules', ...CORE.split('/'), 'package.json')), installed.join(', '));
     assert.deepEqual(tree(installedAt(m)), installed, 'everything npm installed is still there');
+    assert.deepEqual(removedEntries(m), [], 'nothing is recorded for the next update to reinstall');
   } finally {
     await m.close();
   }
+});
+
+test(
+  'a global the update removed part of is reinstalled by the next update, and the record is cleared',
+  WITH_NPM,
+  async () => {
+    const m = await machine(world());
+    try {
+      let tamper = true;
+      const installGlobal = async (spec: string) => {
+        await npmInstallGlobal(m.env, spec);
+        if (tamper) flipFirstByte(nestedCore(installedAt(m), 'dist', 'cli.mjs'));
+      };
+      const first = await update(m, { ...olderListed, installGlobal });
+      assert.equal(globalStep(first.result).outcome, 'failed');
+      assert.equal(present(nestedCore(installedAt(m))), false, 'the core that differed is removed');
+      assert.deepEqual(
+        removedEntries(m).map(({ package: name, version }) => [name, version]),
+        [[GMAIL, LATEST]],
+      );
+
+      // npm itself now lists Gmail at its latest release, with no core in it: by version alone nothing is behind.
+      tamper = false;
+      const second = await update(m, { installGlobal });
+      assert.ok(second.effects.includes(REINSTALLS), second.effects.join('\n'));
+      assert.deepEqual(globalStep(second.result), {
+        kind: 'global',
+        package: GMAIL,
+        from: LATEST,
+        to: LATEST,
+        outcome: 'updated',
+      });
+      assert.ok(
+        existsSync(nestedCore(installedAt(m), 'package.json')),
+        'the core is back, checked against its release',
+      );
+      assert.deepEqual(removedEntries(m), [], 'the record is cleared once the install verifies');
+      assert.ok(second.record.current?.global.includes('gmail'), JSON.stringify(second.record.current));
+    } finally {
+      await m.close();
+    }
+  },
+);
+
+test(
+  'a global package the update removed is reinstalled by the next update, though npm no longer lists it',
+  WITH_NPM,
+  async () => {
+    const m = await machine(world());
+    try {
+      let tamper = true;
+      const installGlobal = async (spec: string) => {
+        await npmInstallGlobal(m.env, spec);
+        if (tamper) flipFirstByte(join(installedAt(m), 'dist', 'cli.mjs'));
+      };
+      const first = await update(m, { ...olderListed, installGlobal });
+      assert.equal(globalStep(first.result).outcome, 'failed');
+      assert.equal(present(installedAt(m)), false, 'the global package is removed');
+
+      tamper = false;
+      const second = await update(m, { installGlobal });
+      assert.ok(second.effects.includes(REINSTALLS), second.effects.join('\n'));
+      assert.deepEqual(globalStep(second.result), {
+        kind: 'global',
+        package: GMAIL,
+        from: LATEST,
+        to: LATEST,
+        outcome: 'updated',
+      });
+      assert.ok(existsSync(join(installedAt(m), 'dist', 'cli.mjs')), 'the global package is installed again');
+      assert.deepEqual(removedEntries(m), [], 'the record is cleared once the install verifies');
+      assert.ok(second.record.current?.global.includes('gmail'), JSON.stringify(second.record.current));
+    } finally {
+      await m.close();
+    }
+  },
+);
+
+test('a reinstall that fails again keeps the record, and the global is not counted as current', WITH_NPM, async () => {
+  const m = await machine(world());
+  try {
+    const installGlobal = async (spec: string) => {
+      await npmInstallGlobal(m.env, spec);
+      flipFirstByte(join(installedAt(m), 'dist', 'cli.mjs'));
+    };
+    await update(m, { ...olderListed, installGlobal });
+    assert.deepEqual(
+      removedEntries(m).map(({ package: name }) => name),
+      [GMAIL],
+    );
+
+    const second = await update(m, { installGlobal });
+    assert.ok(second.effects.includes(REINSTALLS), second.effects.join('\n'));
+    assert.equal(globalStep(second.result).outcome, 'failed');
+    assert.deepEqual(
+      removedEntries(m).map(({ package: name, version }) => [name, version]),
+      [[GMAIL, LATEST]],
+      'the record stays for the update after',
+    );
+    assert.equal(second.record.current?.global.includes('gmail'), false, 'a global not installed is not current');
+
+    // And the update after that plans the reinstall once more.
+    const third = await update(m, { installGlobal: async (spec) => npmInstallGlobal(m.env, spec) });
+    assert.equal(globalStep(third.result).outcome, 'updated');
+    assert.deepEqual(removedEntries(m), []);
+  } finally {
+    await m.close();
+  }
+});
+
+test('on Windows a removal refused for a moment is tried again; elsewhere, and for other errors, it is not', async (t) => {
+  const { removeInside } = (await import('../src/global-install.ts')) as unknown as {
+    removeInside: (
+      root: string,
+      dir: string,
+      options?: {
+        platform?: NodeJS.Platform;
+        remove?: (path: string) => Promise<void>;
+        pause?: (ms: number) => Promise<void>;
+      },
+    ) => Promise<boolean>;
+  };
+  const installed = () => {
+    const root = tempDir('comms-update-global-retry-');
+    const dir = join(root, '@agentcomms', 'gmail');
+    mkdirSync(join(dir, 'dist'), { recursive: true });
+    writeFileSync(join(dir, 'dist', 'cli.mjs'), 'process.exit(0);\n');
+    return { root, dir };
+  };
+  /** A remover that refuses with each of `codes` in turn, then removes. */
+  const refusing = (...codes: string[]) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      remove: async (path: string) => {
+        calls.push(path);
+        const code = codes[calls.length - 1];
+        if (code !== undefined) throw Object.assign(new Error(`${code}: refused, for the test`), { code });
+        rmSync(path, { recursive: true });
+      },
+    };
+  };
+  const pauses: number[] = [];
+  const pause = async (ms: number) => {
+    pauses.push(ms);
+  };
+
+  await t.test('refused with EBUSY, then EPERM, on Windows: tried again, and removed', async () => {
+    const { root, dir } = installed();
+    const remover = refusing('EBUSY', 'EPERM');
+    assert.equal(await removeInside(root, dir, { platform: 'win32', remove: remover.remove, pause }), true);
+    assert.deepEqual(remover.calls, [dir, dir, dir]);
+    assert.equal(present(dir), false);
+  });
+
+  await t.test('refused every time on Windows: given up after five tries, briefly', async () => {
+    const { root, dir } = installed();
+    const remover = refusing('EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY');
+    pauses.length = 0;
+    assert.equal(await removeInside(root, dir, { platform: 'win32', remove: remover.remove, pause }), false);
+    assert.equal(remover.calls.length, 5, 'five tries');
+    assert.ok(pauses.length === 4 && pauses.every((ms) => ms > 0 && ms <= 500), `paused ${pauses.join(', ')} ms`);
+    assert.ok(present(dir), 'what could not be removed is still there, and said to be');
+  });
+
+  await t.test('refused with EBUSY elsewhere: not tried again', async () => {
+    const { root, dir } = installed();
+    const remover = refusing('EBUSY');
+    assert.equal(await removeInside(root, dir, { platform: 'linux', remove: remover.remove, pause }), false);
+    assert.equal(remover.calls.length, 1);
+  });
+
+  await t.test('refused with another error on Windows: not tried again', async () => {
+    const { root, dir } = installed();
+    const remover = refusing('EACCES');
+    assert.equal(await removeInside(root, dir, { platform: 'win32', remove: remover.remove, pause }), false);
+    assert.equal(remover.calls.length, 1);
+  });
 });
 
 test("npm's own files inside node_modules are not refused", WITH_NPM, async () => {

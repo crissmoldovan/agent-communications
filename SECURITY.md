@@ -167,8 +167,11 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   channel hands its day's update check to, and starts as you. A removal never follows a link (a link is removed as a
   link, and what it points to is left alone) and touches nothing outside the folder `npm root -g` names. A channel
   carries core's code in its own files, so with its core removed it still works, and checks for updates on its own,
-  unverified; a removed global package's command is gone until it is installed again. An npx registration's client
-  fetches its package from npm each time it starts, which only that client checks.
+  unverified; a removed global package's command is gone until it is installed again. The update records each global
+  package it found a mismatch in — its name, the release, and when, in `removed-globals.json` in the state directory —
+  and the next update installs it again from its verified file, even when npm lists it at its latest release or no
+  longer lists it, until an install of it checks out. An npx registration's client fetches its package from npm each
+  time it starts, which only that client checks.
 - **A first install is verified only when core makes it.** A managed `mcp install` through core's command or
   `comms_server_install` holds the runtime it fetches to the same provenance as an update. A channel's own command
   carries no Sigstore: it installs only the release it is running itself — the same package and version npx already
