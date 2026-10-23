@@ -184,8 +184,8 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   which the release check holds to the changelog), so an update reads the release it would install and no other. A
   registry that leaves out the release needing a decision, lists one that does not verify, or lists hundreds changes
   nothing and costs no request. A declaration that cannot be read is unknown: the background run installs nothing that
-  run, and no notice or preview claims a security fix or its absence. The daily check gives the read 30 seconds, well
-  inside its two-minute claim, and counts it unknown after that. Only core carries the verifier, so a channel's server
+  run, and no notice or preview claims a security fix or its absence. The daily check stops the read 30 seconds into its
+  two-minute claim, and counts it unknown after that. Only core carries the verifier, so a channel's server
   or command hands its day's check to core's CLI at the channel's own version; where that cannot be found or started,
   the channel's own check records the latest version and keeps what core verified of that same release, or else records
   its flags as unknown, never as absent. What none of this catches is a release built by a compromised release workflow

@@ -240,19 +240,18 @@ tool call's or a command's line, or a preview's security line, waits at most 2 s
 `update-check.json`; busy past that, the call goes on without it, and a later one says it.
 
 **What a release declares comes from the release itself.** The check also reads what the latest release declares:
-whether it is a security fix, and whether a decision is needed before it installs here — one it declares itself, or
-one a release since the oldest one here needed, which every later release carries forward (`needsDecisionSince` in
-its core `package.json`). From 0.26.0 none of it is read from core's document on the registry, which a registry or a
-mirror could change for a genuine release, and which releases that document lists counts for nothing: only the latest
-is read. It is verified first, and what it declares is then read from `package/package.json` inside its own tarball,
-downloaded from wherever the registry or a mirror says — any `http` or `https` address, through at most five
-redirects, then npm's own address once if that fails — and kept only when its SHA-512 is the digest its provenance
-signs. A declaration that was read is remembered per release in `release-declarations.json` in the state directory,
-so that release is not downloaded again; it is verified again every time. One check reads it once, and gives the read
-30 seconds: a tarball that cannot be had is asked for at most twice, at its location and at npm's own address, and is
-tried again at the next check. A release that does not verify, or whose tarball cannot be read in that time, counts
-for nothing either way: nothing says it is a security fix, or that it is not, nor that it needs a decision or does
-not.
+whether it is a security fix, and whether a decision is needed before it installs here — one it declares itself, or one
+a release since the oldest one here needed, which every later release carries forward (`needsDecisionSince` in its core
+`package.json`). From 0.26.0 none of it is read from core's document on the registry, which a registry or a mirror could
+change for a genuine release, and which releases that document lists counts for nothing: only the latest is read. It is
+verified first, and what it declares is then read from `package/package.json` inside its own tarball, downloaded from
+wherever the registry or a mirror says — any `http` or `https` address, through at most five redirects, then npm's own
+address once if that fails — and kept only when its SHA-512 is the digest its provenance signs. A declaration that was
+read is remembered per release in `release-declarations.json` in the state directory, so that release is not downloaded
+again; it is verified again every time. One check reads it once, and stops the read 30 seconds into its claim: a tarball
+that cannot be had is asked for at most twice, at its location and at npm's own address, and is tried again at the next
+check. A release that does not verify, or whose tarball cannot be read in that time, counts for nothing either way:
+nothing says it is a security fix, or that it is not, nor that it needs a decision or does not.
 
 Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
 Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and

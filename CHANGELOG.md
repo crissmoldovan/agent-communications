@@ -15,16 +15,16 @@ more.
 
 **What changes when you update:**
 - **What a release declares comes from the release itself.** Whether it is a security fix, and whether it needs a
-  decision before it installs, is read from the `package.json` inside its own tarball, once its provenance verifies,
-  and only from bytes whose SHA-512 is the digest that provenance signs, wherever the registry or a mirror serves them.
-  The registry's copy of the manifest decides nothing, and nor does which releases it lists: only the release an
-  update would install is read, and a decision a release before it needed is carried forward in that release's own
-  declaration. So a registry that leaves out the release needing a decision, adds one that does not verify, or lists
-  hundreds changes nothing and costs no request. A declaration once read is remembered in `release-declarations.json`
-  in the state directory; one check reads it once, and gives it 30 seconds. One whose declaration cannot be read is
+  decision before it installs, is read from the `package.json` inside its own tarball, once its provenance verifies, and
+  only from bytes whose SHA-512 is the digest that provenance signs, wherever the registry or a mirror serves them. The
+  registry's copy of the manifest decides nothing, and nor does which releases it lists: only the release an update
+  would install is read, and a decision a release before it needed is carried forward in that release's own declaration.
+  So a registry that leaves out the release needing a decision, adds one that does not verify, or lists hundreds changes
+  nothing and costs no request. A declaration once read is remembered in `release-declarations.json` in the state
+  directory; one check reads it once, and stops 30 seconds into its claim. One whose declaration cannot be read is
   unknown: the background run installs nothing that run and tries again the next (`its declaration could not be read
-  from its verified release`), no notice or preview says it is a security fix or that it is not, and `agentcomms
-  update` still shows its preview, saying so.
+  from its verified release`), no notice or preview says it is a security fix or that it is not, and `agentcomms update`
+  still shows its preview, saying so.
 - **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
   Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
   the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or
