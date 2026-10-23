@@ -623,6 +623,16 @@ export function serverInstallChange(
               )
             ).get(product.packageName)
           : undefined;
+      /*
+       * An npx entry's client fetches its package from npm when it starts it: registering the entry is installing that
+       * release (design 2026-10-22 P5). So wherever there is a verifier — core's install — the release is verified as a
+       * managed runtime is, before the preview and again at the claim, and one that does not verify is refused in the
+       * same words. No sentence is added: a channel's own command, which cannot verify, prepares the same change, and
+       * core holds it to this when it is claimed. An entry only printed registers nothing, and is not asked about.
+       */
+      if (request.print !== true && launcher === 'npx' && target.writes && deps.verifyRelease !== undefined) {
+        await verifyReleaseSet(from, new Map([[facts.npxPackage, version]]), 'install');
+      }
       planned = { product, install: plannedInstall(preflight), verified, unverifiedOwn };
       const effects: string[] = [];
       if (target.writes) {

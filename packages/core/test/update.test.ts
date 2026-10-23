@@ -1766,7 +1766,9 @@ test('an approval is good only for the update it showed: a newer release, or ano
   const config = cursor(m, { gmail: managed(m, PACKAGES.gmail, OLD, ['--inbox', 'acme/gmail']) });
   const untouched = readFileSync(config, 'utf8');
   const latest = { ...EVERYTHING_LATEST };
-  const deps = fakes(m, { latest });
+  // The registry lists this core's own release too: the npx entry comms_server_install registers below is for it, and
+  // core verifies that release before it prepares anything (design 2026-10-22 P5).
+  const deps = fakes(m, { latest, releases: [{ version: VERSION }] });
   const { ok, refused, close } = await connect(m, { update: deps });
   try {
     const first = await ok('comms_update', { noVerify: true });

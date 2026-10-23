@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFil
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { stateOf } from '../src/approval-stored.ts';
+import { asV2, stateOf } from '../src/approval-stored.ts';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
 import { serverFacts } from '../src/channel-servers.ts';
 import { type Core, openCore } from '../src/core.ts';
@@ -41,7 +41,8 @@ import { tempDir } from './helpers/temp.ts';
  * - by hand (`updateChange`): a runtime installed and a versioned registration registered again; a stable launcher's
  *   pointer switched, to a runtime it installs or to one already on disk; an npx registration registered again; a
  *   global package updated;
- * - at first install (`serverInstallChange`): a managed runtime fetched from npm, or one already on this machine;
+ * - at first install (`serverInstallChange`): a managed runtime fetched from npm, or one already on this machine; an
+ *   npx registration, whose client fetches the release from npm — registering it is installing it;
  * - in the background (`runBackgroundUpdate`, and its dry run): core's release, and another package of the release;
  * - and the global install itself (`installVerifiedGlobal`), the one step that hands npm the bytes.
  * Each attempt fails if any installer is called, or anything outside the state folder is written — a runtime, a
@@ -51,10 +52,8 @@ import { tempDir } from './helpers/temp.ts';
  * installs the release it is running itself, unverified and said so (the owner's decision, 2026-10-17). That is a
  * release nothing here could check, not one that failed a check: handed a verifier, the same request is refused.
  *
- * Not held here: a first install on the npx launcher (`launcher: 'npx'`) writes an entry whose client fetches the
- * release from npm each time it starts it, and checks nothing before writing it, with a verifier or without — the limit
- * SECURITY.md has stated since 0.20.0. The by-hand update does verify an npx registration's release before it writes
- * the entry again (above).
+ * What stays a limit, and is not this test's: npx fetches the package again each time a client starts the entry, and
+ * nothing here can verify that fetch (SECURITY.md). What is held is the release the entry is written for.
  *
  * Nothing here reaches npm, Sigstore or GitHub: every release is one `releaseWorld`, its attestations signed by the
  * test's own trust root, and every installer a stand-in that records being called.
@@ -236,6 +235,8 @@ interface InstallPath {
   world: () => World;
   /** A machine on which this path installs `failing`. */
   setUp: (world: World) => Promise<Machine>;
+  /** At first install: what is asked for, before what an attempt adds. */
+  request?: Partial<ServerInstallRequest>;
 }
 
 /** Every package at `OLD` and `LATEST`, signed by Rekor 30 days and 80 hours ago: past every hold. */
@@ -346,6 +347,7 @@ const FIRST_INSTALL: readonly InstallPath[] = [
     failing: `${GMAIL}@${VERSION}`,
     world: firstReleases,
     setUp: async () => machine(),
+    request: { launcher: 'managed' },
   },
   {
     kind: 'at first install',
@@ -357,6 +359,16 @@ const FIRST_INSTALL: readonly InstallPath[] = [
       makeRuntime(m, GMAIL, VERSION, world.integrity(GMAIL, VERSION));
       return m;
     },
+    request: { launcher: 'managed' },
+  },
+  {
+    // Registering it is installing it: the client fetches this very release from npm when it starts the entry.
+    kind: 'at first install',
+    name: 'an npx registration, whose client fetches its package from npm',
+    failing: `${GMAIL_MCP}@${VERSION}`,
+    world: firstReleases,
+    setUp: async () => machine(),
+    request: { launcher: 'npx' },
   },
 ];
 
@@ -455,7 +467,13 @@ async function attempt(path: InstallPath, m: Machine, world: World, how: How = {
     return gatedChange(core, updateChange(core, env, how.update ?? {}, updateDeps(m, world, registry)), gate);
   }
   if (path.kind === 'at first install') {
-    const request: ServerInstallRequest = { channel: 'gmail', client: 'cursor', noVerify: true, ...how.install };
+    const request: ServerInstallRequest = {
+      channel: 'gmail',
+      client: 'cursor',
+      noVerify: true,
+      ...path.request,
+      ...how.install,
+    };
     const deps = how.installDeps ?? { registry, verifyRelease: world.verifyRelease };
     return gatedChange(core, serverInstallChange(core, env, request, how.own, deps), gate);
   }
@@ -618,11 +636,11 @@ test('no flag or request installs one', async () => {
     }
   }
 
-  // At first install: forced over an entry already there, on the managed launcher, checked or not.
+  // At first install: forced over an entry already there, on each path's launcher, checked or not.
   for (const path of FIRST_INSTALL) {
     for (const install of [
-      { launcher: 'managed', force: true },
-      { launcher: 'managed', force: true, noVerify: false },
+      { force: true },
+      { force: true, noVerify: false },
     ] satisfies Partial<ServerInstallRequest>[]) {
       const { m, world } = await failingOn(path);
       cursor(m, { gmail: { command: 'npx', args: ['-y', `${GMAIL_MCP}@${OLD}`] } });
@@ -678,13 +696,13 @@ test('no approval installs one', async () => {
     assert.notEqual(stateOf(stored), 'used', `${why}: the approval was spent`);
   }
 
-  // Prepared by a channel's own command, which cannot verify and says so, then claimed through core's, which can.
-  const [path] = FIRST_INSTALL;
-  assert.ok(path !== undefined);
-  const why = "an approval Gmail's own command prepared, claimed through core's";
-  const { m, world } = await failingOn(path);
-  const approvalId = prepared(await attempt(path, m, world, { own: GMAIL_OWN, installDeps: {} }), why);
-  await refusedOn(path, m, world, { approvalId }, why);
+  // Prepared by a channel's own command, which cannot verify, then claimed through core's, which can.
+  for (const path of FIRST_INSTALL) {
+    const why = `${named(path)}, an approval Gmail's own command prepared, claimed through core's`;
+    const { m, world } = await failingOn(path);
+    const approvalId = prepared(await attempt(path, m, world, { own: GMAIL_OWN, installDeps: {} }), why);
+    await refusedOn(path, m, world, { approvalId }, why);
+  }
 });
 
 // ── What the registry says ──────────────────────────────────────────────────────────────────────────────────────
@@ -914,4 +932,47 @@ test("a channel's own command, which cannot verify, still installs the release i
     { own: GMAIL_OWN, installDeps: { registry: world.registry, verifyRelease: world.verifyRelease } },
     "Gmail's own command, handed a registry and a verifier",
   );
+});
+
+// ── A first install on the npx launcher ─────────────────────────────────────────────────────────────────────────
+
+test('a first npx install through core verifies the release it registers: one that fails is refused, and one that verifies is the change a channel’s own command prepares', async () => {
+  const path = FIRST_INSTALL.find((each) => each.request?.launcher === 'npx');
+  assert.ok(path !== undefined);
+
+  // Core holds a verifier: the package the entry's client will fetch is verified first, and with no attestation it is
+  // refused in the managed path's words, with nothing registered.
+  {
+    const { m, world } = await failingOn(path);
+    await refusedOn(path, m, world, {}, 'core, the npx package with no attestation');
+    assert.ok(
+      world.attestationsAsked.some((url) => decodeURIComponent(url).endsWith(`${GMAIL_MCP}@${VERSION}`)),
+      `the npx package was not asked about: ${world.attestationsAsked.join(', ')}`,
+    );
+  }
+
+  // A release that verifies: core and Gmail's own command, which cannot verify, prepare one and the same change — no
+  // sentence is added for the check — so an approval either prepares is claimed by the other, and core checks at the
+  // claim.
+  {
+    const world = path.world();
+    const m = await path.setUp(world);
+    const byCore = prepared(await attempt(path, m, world), 'core');
+    const byOwn = prepared(await attempt(path, m, world, { own: GMAIL_OWN, installDeps: {} }), "Gmail's own command");
+    const effects = async (id: string) => asV2(await m.core.approvals.get(id))?.change?.effects;
+    const said = await effects(byCore);
+    assert.ok(said !== undefined && said.length > 0, 'core prepared no change');
+    assert.deepEqual(await effects(byOwn), said, "Gmail's own command prepared another change than core's");
+    assert.ok(!said.some((effect) => effect.includes('verified')), `a sentence about verifying: ${said.join(' | ')}`);
+    const asked = world.attestationsAsked.length;
+    const done = (await attempt(path, m, world, { approvalId: byOwn })) as GatedOutcome<ServerInstallResult>;
+    assert.equal(done.status, 'applied');
+    assert.ok(world.attestationsAsked.length > asked, 'the claim did not verify again');
+    const entry = (
+      JSON.parse(readFileSync(join(m.home, '.cursor', 'mcp.json'), 'utf8')) as {
+        mcpServers: Record<string, { args: string[] }>;
+      }
+    ).mcpServers.gmail;
+    assert.ok(entry?.args.includes(`${GMAIL_MCP}@${VERSION}`), JSON.stringify(entry));
+  }
 });

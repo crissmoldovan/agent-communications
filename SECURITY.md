@@ -179,9 +179,13 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   `verified: false` in the runtime's `.agentcomms-install.json`; any other release it refuses, naming core's command.
   Core holds a runtime already on the machine to the same: its release is verified and its lockfile must show the
   attested tarball for every `@agentcomms` package, or core registers nothing on it and says how to fetch a verified
-  one; one that passes has its receipt marked `verified: true`. A channel's own command uses a runtime already there as
-  it finds it, and `--launcher npx` registers a package its client fetches unverified each time it starts it, as
-  above; the managed launcher's runtime, installed or checked by core, is verified.
+  one; one that passes has its receipt marked `verified: true`. A `--launcher npx` install through core verifies the
+  release the entry names, the package its client will fetch, before the preview and again at the claim, and writes
+  nothing for one that does not verify; its preview gains no line, so a channel's own command prepares the same change
+  and core checks it when it is claimed. A channel's own command uses a runtime already there as it finds it, and its
+  own `--launcher npx` registers without checking, as it cannot. Either way the client fetches an npx package from npm
+  again each time it starts it, unverified, as above; the managed launcher's runtime, installed or checked by core, is
+  the verified one.
 - **What a release declares is believed only from its verified tarball.** Whether a release is a security fix, and
   whether it needs a decision before it installs (`agentcommsRelease` in core's `package.json`), is read from
   `package/package.json` inside the release's own tarball, once its provenance verifies, and only from bytes whose
@@ -210,10 +214,13 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   release's hold by as much.
 - **There is no way past verification** (the owner's decision, 2026-10-22). A release whose provenance does not verify
   cannot be installed by core in any way: not by `agentcomms update` or `comms_update`, not by the background run, and
-  not by a first install core makes. Nothing turns that off: no flag, setting, environment variable, approval or code.
-  `--no-verify` skips only starting a registered server to check that it answers. A broken release is replaced by a
-  new one that verifies. A channel's own `mcp install`, which carries no Sigstore, installs only the release it is
-  running, and says so (above).
+  not by a first install core makes, on the managed launcher or the npx one — registering an npx entry is installing
+  the release its client fetches, so core verifies that release first, as a by-hand update does. Nothing turns that
+  off: no flag, setting, environment variable, approval or code. `--no-verify` skips only starting a registered server
+  to check that it answers. A broken release is replaced by a new one that verifies. A channel's own `mcp install`,
+  which carries no Sigstore, installs only the release it is running, and says so (above). What stays a limit is that
+  npx fetches the package again each time a client starts the entry, which nothing here verifies: the managed
+  launcher's runtime is the verified one.
 - **Laya is kept off the network by the operating system, and only where stated.** On macOS the boundary is a `sandbox-exec` profile that denies all network access, Unix-domain sockets included, and Apple marks `sandbox-exec` deprecated; if it stops applying, Laya is not offered. Laya is not available on Linux or Windows in this version. Code inside the worker that refuses network calls is defence in depth, not the boundary. The boundary does not protect against another process of the same user, and the daemon's one-time downloads of the Laya runtime and model are ordinary network traffic.
 
 Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.
