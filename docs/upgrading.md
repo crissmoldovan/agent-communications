@@ -47,11 +47,12 @@ each global package. The preview ends with one line a package: `@agentcomms/gmai
 preview: built by this repository's release workflow …`. One release with no attestation, or one that names anything
 else, refuses the whole update with `BAD_DATA` — `nothing was installed or changed: <package>@<version> could not be
 verified as built by this repository's release workflow`, and which pin failed — and nothing is prepared to approve.
-No flag or setting skips it. A release it takes the machine past whose verified release says it needs a decision —
-0.21.0, on the way from 0.20.0 to 0.21.1 — is named in the preview too, in fixed words: your yes to the preview is that
-decision, so read its release notes first. What a release declares is read from its own verified tarball, never from
-the registry's copy of its manifest (see [the daily check](#the-daily-check-and-its-notice)); one whose declaration
-could not be read is named as well, saying that whether it needs a decision is not known, and the preview is still
+No flag or setting skips it. A release it takes the machine past that needs a decision — 0.21.0, on the way from
+0.20.0 to 0.21.1 — is named in the preview too, in fixed words: your yes to the preview is that decision, so read its
+release notes first. What a release declares is read from the verified tarball of the release the update goes to, and
+of no other, never from the registry's copy of its manifest: every release after one that needed a decision carries
+it forward, so 0.21.1's own tarball names 0.21.0 (see [the daily check](#the-daily-check-and-its-notice)). When that
+declaration could not be read, the preview says so, that whether a decision is needed is not known, and is still
 shown. Runtimes and global packages are installed with `--ignore-scripts`: no package's install script runs before its
 tarball has been checked (nothing published here, nor anything it depends on, needs one). After installing, each runtime must hold the very tarball that was verified, as npm's
 lockfile in it records: one that does not, whether installed then or found on disk, is neither switched to nor
@@ -238,15 +239,20 @@ not use up the day: another process asks a couple of minutes later. Nor does a b
 tool call's or a command's line, or a preview's security line, waits at most 2 seconds for the lock on
 `update-check.json`; busy past that, the call goes on without it, and a later one says it.
 
-**What a release declares comes from the release itself.** The check reads core's full document too, for which
-releases there are: a decision that any release since the oldest one here needs, and whether the latest is a security
-fix. From 0.26.0 neither is read from that document, which a registry or a mirror could change for a genuine release.
-Each release is verified first, and what it declares is then read from `package/package.json` inside its own tarball,
+**What a release declares comes from the release itself.** The check also reads what the latest release declares:
+whether it is a security fix, and whether a decision is needed before it installs here — one it declares itself, or
+one a release since the oldest one here needed, which every later release carries forward (`needsDecisionSince` in
+its core `package.json`). From 0.26.0 none of it is read from core's document on the registry, which a registry or a
+mirror could change for a genuine release, and which releases that document lists counts for nothing: only the latest
+is read. It is verified first, and what it declares is then read from `package/package.json` inside its own tarball,
 downloaded from wherever the registry or a mirror says — any `http` or `https` address, through at most five
 redirects, then npm's own address once if that fails — and kept only when its SHA-512 is the digest its provenance
-signs. What was read is remembered per release in `release-declarations.json` in the state directory, so no release
-is downloaded twice; it is verified again every time. A release that does not verify, or whose tarball cannot be read,
-counts for nothing either way: nothing says it is a security fix, or that it is not.
+signs. A declaration that was read is remembered per release in `release-declarations.json` in the state directory,
+so that release is not downloaded again; it is verified again every time. One check reads it once, and gives the read
+30 seconds: a tarball that cannot be had is asked for at most twice, at its location and at npm's own address, and is
+tried again at the next check. A release that does not verify, or whose tarball cannot be read in that time, counts
+for nothing either way: nothing says it is a security fix, or that it is not, nor that it needs a decision or does
+not.
 
 Core's own server and command verify. A channel's server or command — Gmail's, Slack's or Resend's — carries no
 Sigstore, so it hands the day's check to core's CLI at its own version, installed beside it, whose check verifies and
@@ -309,16 +315,17 @@ nothing unless all of this holds:
   profile turns background updates off; otherwise it stops, and removes a job such a profile forbids. A pause asked
   for with `update --pause` holds it, but never for a security fix. `CI`, `AGENT_COMMS_UPDATE_CHECK=off` and
   `AGENT_COMMS_UPDATES=never` turn it off for that process.
-- **The release waits for nobody.** A major version, a release whose verified tarball declares
-  `agentcommsRelease.needsDecision`, and a downgrade are never installed in the background; each leaves a notice. Every
-  release since the oldest one a launcher here starts counts, not only the latest: if 0.21.0 needs a decision and
-  0.21.1 does not say so again, 0.21.1 waits for you too, and a major crossed by any launcher here waits. Each is
-  verified, and what it declares read from its own tarball, as the latest's is. One that does not verify, or whose
-  declaration cannot be read, holds the run back with no notice: it is `unavailable`, its reason says `its declaration
+- **The release waits for nobody.** A major version, a release that needs a decision, and a downgrade are never
+  installed in the background; each leaves a notice. Every release since the oldest one a launcher here starts counts,
+  not only the latest: if 0.21.0 needs a decision and 0.21.1 does not declare one again, 0.21.1 waits for you too, and
+  a major crossed by any launcher here waits. That is read from the latest's own verified tarball alone: a release
+  that declares `agentcommsRelease.needsDecision` names itself in `needsDecisionSince`, every later one carries that
+  forward, and the latest waits when it declares a decision or carries one after the oldest release here. No other
+  release is verified or read, so one the registry leaves out, adds, or cannot serve changes nothing. A latest whose
+  declaration cannot be read holds the run back with no notice: it is `unavailable`, its reason says `its declaration
   could not be read from its verified release`, and the next run tries again. A job that never gets past it is not
-  counted as working, so after 48 hours the notices come back (above). A
-  release you rolled back from with `update --rollback` is held until a newer one is out (`update-held.json` in the
-  state directory).
+  counted as working, so after 48 hours the notices come back (above). A release you rolled back from with
+  `update --rollback` is held until a newer one is out (`update-held.json` in the state directory).
 - **It is past its hold**: 72 hours, or 24 for a security fix, from when Sigstore's transparency log, Rekor, signed
   for the last of its packages. From 0.26.0 the registry's word for when a release came out counts for nothing: a
   registry could make a release look older than it is. Every package is verified before the hold is decided. A release

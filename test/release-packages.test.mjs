@@ -1218,6 +1218,10 @@ test('the release documents say how core declares a security fix or a needed dec
   }
   assert.match(section, /both ways/, 'it does not say a marker needs its flag too');
   assert.match(section, /Remove the flags in the next release/, 'it does not say a flag goes with its release');
+  // The needed decision carried forward (design 2026-10-22 §8.1): the key, that it stays, and where the check reads it.
+  assert.ok(section.includes('`"needsDecisionSince": "X.Y.Z"`'), 'it does not show how a needed decision is carried');
+  assert.match(section, /keep `needsDecisionSince`/, 'it does not say the carry stays from release to release');
+  assert.match(section, /reads the changelog, not the previous tag's `package\.json`/, 'it does not say where');
   assert.match(section, /`scripts\/release-flags\.mjs`/, 'it does not name the check');
 
   const skill = (await readFile(join(ROOT, '.claude', 'skills', 'release', 'SKILL.md'), 'utf8')).replace(/\s+/g, ' ');
@@ -1225,6 +1229,7 @@ test('the release documents say how core declares a security fix or a needed dec
     assert.ok(skill.includes(`\`${marker}\``), `the release skill does not give the marker ${marker}`);
   }
   assert.ok(skill.includes(`"${named}"`), 'the release skill does not send you to the section');
+  assert.ok(skill.includes('`"needsDecisionSince": "X.Y.Z"`'), 'the release skill does not say a decision is carried');
 });
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────

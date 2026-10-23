@@ -124,8 +124,9 @@ pnpm sync:versions          # every package manifest, two plugin files, the laun
 pnpm build && pnpm run licenses # third-party notices, read from what each bundle actually contains
 
 # 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`. The tag gate refuses a version
-#    with no section, or one that does not say what core declares the release to be (see "Declaring a security fix
-#    or a needed decision"), and the GitHub release is made from it.
+#    with no section, one that does not say what core declares the release to be, or one that does not carry the
+#    last needed decision forward (see "Declaring a security fix or a needed decision"), and the GitHub release is
+#    made from it.
 
 # 3. Commit and push. What is published must be what anyone else can read.
 
@@ -210,15 +211,16 @@ version from any other commit fails the run there, at once, and gets no release 
 
 ## Declaring a security fix or a needed decision
 
-A release can say two things about itself that change how every machine's update treats it. Only core says them, in
-the same field a package uses to be held back, `agentcommsRelease` in `packages/core/package.json`:
+A release can say two things about itself that change how every machine's update treats it, and carries a third
+forward from the releases before it. Only core says them, in the same field a package uses to be held back,
+`agentcommsRelease` in `packages/core/package.json`:
 
 ```json
 "agentcommsRelease": { "security": true, "needsDecision": true }
 ```
 
-Either key alone, or both; those two keys and no other, each `true` or `false`. `{}` is refused, and so is a `hold`:
-core is never held back (`scripts/channels.mjs`). What each does:
+Either key alone, or both, each `true` or `false`; with `"needsDecisionSince"` beside them or alone, as below; and no
+other key. `{}` is refused, and so is a `hold`: core is never held back (`scripts/channels.mjs`). What each does:
 
 - **`"security": true`, a security fix.** The background run holds it for 24 hours instead of 72, and a pause does not
   hold it at all. It is announced at once wherever it would not install on its own, and there the next Gmail or Resend
@@ -227,6 +229,11 @@ core is never held back (`scripts/channels.mjs`). What each does:
   default. It never installs in the background, and neither does a later release that takes a machine past it. The
   by-hand update's preview names it, and the person's yes to that preview is the decision, so its changelog section
   says what the decision is.
+- **`"needsDecisionSince": "X.Y.Z"`, the needed decision carried forward:** the newest release, up to and including
+  this one, that declared `needsDecision`, as an exact version (never a range, a prerelease or a partial version). An
+  update reads only the release it goes to, never the list of releases the registry gives, so this is how a later
+  release says that a machine from before that decision must still take it: a machine on version A updating to B waits
+  for the person when B declares `needsDecision`, or when B's `needsDecisionSince` is after A.
 
 **The changelog section must say the same, both ways.** `scripts/release-flags.mjs` reads the version's own section,
 the lines after `## X.Y.Z` up to the next `## `, and holds core's flags to its marker lines:
@@ -242,21 +249,43 @@ release is made from this section. `pnpm release` and the tag gate in `release.y
 is sent, and each refusal names the file and the marker. `pnpm verify` does not, because the changes being made sit
 under `## Unreleased`, which names no version.
 
-**Remove the flags in the next release.** Nothing else takes a flag out of core's `package.json` once its release is
-out, and left there it would declare the next release a security fix, or one needing a decision, too. The next
-version's section carries no marker, so its release is refused until the flag goes: delete `agentcommsRelease` from
-core's `package.json` in that release's version commit, and keep both markers out of its section.
+**The needed decision is carried, and the check holds the carry to the changelog.** The same check reads what
+`needsDecisionSince` must be:
 
-**Why the release itself, and not the registry.** From 0.26.0 an update believes either flag only from the verified
-release: core downloads the release's tarball, keeps it only when its SHA-512 is the digest its Sigstore provenance
-signs, and reads `package/package.json` from inside it. The registry's copy of the manifest decides nothing, since a
-registry or a mirror could add or remove a flag on a genuine release. So a flag counts only in the commit that is
-tagged and built; none can be added after the publish. Machines still on 0.20.0 to 0.25.0 read the same field from the
-registry's copy of the manifest, which carries it as published.
+| This release | `"needsDecisionSince"` must be |
+|---|---|
+| declares `"needsDecision": true` | this release's own version |
+| declares none, and some earlier `## X.Y.Z` section has a line starting `**Needs a decision before it installs.**` | the newest such version below this one |
+| declares none, and no earlier section has that line | absent |
 
-**0.26.0 declares neither.** It hardens updates against registry tampering that nobody is known to be exploiting.
+"Earlier" is by version, not by place in the file, so a backport to an older line released after a newer one carries
+nothing of the newer line's; what sits under `## Unreleased` is not a release and counts for nothing. A carry that is
+missing, wrong, or there when nothing was ever declared is refused, naming the value it must be. It reads the
+changelog, not the previous tag's `package.json`, because each released section's marker is what that release
+declared — this check held its flag to it — and the changelog is in the tree both release paths check, the tag gate's
+shallow checkout included, which holds no earlier tag. A prerelease cannot declare a needed decision, since its own
+version is not an exact `X.Y.Z`; no update installs a prerelease anyway.
+
+**Remove the flags in the next release, and keep `needsDecisionSince`.** Nothing else takes a flag out of core's
+`package.json` once its release is out, and left there it would declare the next release a security fix, or one
+needing a decision, too. The next version's section carries no marker, so its release is refused until the flag goes:
+delete `security` and `needsDecision` from core's `agentcommsRelease` in that release's version commit, keep both
+markers out of its section, and leave `needsDecisionSince` as it is. That carry stays in every release after, and
+changes only when a later release declares a decision of its own.
+
+**Why the release itself, and not the registry.** From 0.26.0 an update believes what a release declares only from
+the verified release: core downloads the tarball of the release it would go to, keeps it only when its SHA-512 is the
+digest its Sigstore provenance signs, and reads `package/package.json` from inside it. The registry's copy of the
+manifest decides nothing, since a registry or a mirror could add or remove a flag on a genuine release, and nor does
+which versions it lists: one left out, one added that does not verify, or five hundred change nothing, because no other
+release is asked about. So a flag or a carry counts only in the commit that is tagged and built; none can be added
+after the publish. Releases before 0.26.0 carry no `needsDecisionSince`, and none of them declared a decision, so an
+absent one means none. Machines still on 0.20.0 to 0.25.0 read `security` and `needsDecision` from the registry's copy
+of each release's manifest between theirs and the latest, which carries them as published.
+
+**0.26.0 declares nothing.** It hardens updates against registry tampering that nobody is known to be exploiting.
 Declaring `security: true` for a precaution would have given every machine on 0.20.0 to 0.25.0 the urgent notice and
-the 24-hour hold, and nothing in it needs a decision.
+the 24-hour hold, nothing in it needs a decision, and no release before it declared one, so it carries none either.
 
 ## A package held back from release
 

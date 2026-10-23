@@ -17,11 +17,14 @@ more.
 - **What a release declares comes from the release itself.** Whether it is a security fix, and whether it needs a
   decision before it installs, is read from the `package.json` inside its own tarball, once its provenance verifies,
   and only from bytes whose SHA-512 is the digest that provenance signs, wherever the registry or a mirror serves them.
-  The registry's copy of the manifest decides nothing. Each release is downloaded once and remembered, in
-  `release-declarations.json` in the state directory. One whose declaration cannot be read is unknown: the background
-  run installs nothing that run and tries again the next (`its declaration could not be read from its verified
-  release`), no notice or preview says it is a security fix or that it is not, and `agentcomms update` still shows its
-  preview, saying so.
+  The registry's copy of the manifest decides nothing, and nor does which releases it lists: only the release an
+  update would install is read, and a decision a release before it needed is carried forward in that release's own
+  declaration. So a registry that leaves out the release needing a decision, adds one that does not verify, or lists
+  hundreds changes nothing and costs no request. A declaration once read is remembered in `release-declarations.json`
+  in the state directory; one check reads it once, and gives it 30 seconds. One whose declaration cannot be read is
+  unknown: the background run installs nothing that run and tries again the next (`its declaration could not be read
+  from its verified release`), no notice or preview says it is a security fix or that it is not, and `agentcomms
+  update` still shows its preview, saying so.
 - **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
   Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
   the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or
@@ -63,9 +66,12 @@ registry's word alone.
 **A release can now declare that it is a security fix or needs a decision**, in core's `package.json` as
 `"agentcommsRelease": { "security": true, "needsDecision": true }` (either key, or both). The release refuses one
 whose changelog section does not say the same with its marker line, both ways, so a flag left from one release cannot
-reach the next ([Releasing](docs/RELEASING.md#declaring-a-security-fix-or-a-needed-decision)). **This release declares
-neither:** it hardens against registry tampering nobody is known to be exploiting, and declaring it a security fix
-would have given every machine on 0.20.0 to 0.25.0 the urgent notice and the 24-hour hold for a precaution.
+reach the next. A needed decision is carried forward: `"needsDecisionSince"` names the newest release that declared
+one, its own version where it does, and every release after keeps it, which the release check holds to the changelog
+([Releasing](docs/RELEASING.md#declaring-a-security-fix-or-a-needed-decision)). **This release declares neither, and
+carries nothing:** it hardens against registry tampering nobody is known to be exploiting, declaring it a security fix
+would have given every machine on 0.20.0 to 0.25.0 the urgent notice and the 24-hour hold for a precaution, and no
+release before it declared a decision.
 `SECURITY.md` now says what is checked, what is not, and that there is no way past verification.
 
 Also:
