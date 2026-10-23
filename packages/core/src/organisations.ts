@@ -484,7 +484,7 @@ export function parseProfile(text: string): OrganisationProfile {
  * the schema does not know is.
  */
 function issuesText(issues: readonly z.core.$ZodIssue[], has: string): string {
-  return issues
+  return closestBranches(issues)
     .slice(0, 6)
     .map((issue) => {
       const where = issue.path.length > 0 ? shownText(issue.path.map(String).join('.'), 120) : 'the profile';
@@ -503,6 +503,27 @@ function issuesText(issues: readonly z.core.$ZodIssue[], has: string): string {
       return `${where}: ${issue.message}`;
     })
     .join('; ');
+}
+
+/**
+ * A union's issue, read as the one branch the document came close to. Since zod 4.6.6 a union no longer picks that
+ * branch itself when the value was too big for it: it reports `invalid_union` with every branch's issues, so 51
+ * domains read as `gmail.serves: Invalid input`. A branch whose every issue is at the union itself, and says the type
+ * or the value is wrong, is one the document never tried to be. When exactly one branch is not like that, its issues
+ * are the answer, under the union's path; otherwise the union's own issue stands.
+ */
+function closestBranches(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  return issues.flatMap((issue) => {
+    if (issue.code !== 'invalid_union') return [issue];
+    const near = issue.errors.filter((branch) =>
+      branch.some(
+        (inner) => inner.path.length > 0 || (inner.code !== 'invalid_type' && inner.code !== 'invalid_value'),
+      ),
+    );
+    const [only] = near;
+    if (near.length !== 1 || only === undefined) return [issue];
+    return closestBranches(only.map((inner) => ({ ...inner, path: [...issue.path, ...inner.path] })));
+  });
 }
 
 /**
