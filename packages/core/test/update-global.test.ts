@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -13,6 +14,7 @@ import {
 } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { serverFacts } from '../src/channel-servers.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -20,7 +22,8 @@ import { findNpmCli } from '../src/mcp-install.ts';
 import { npmGlobalRoot, npmInstallGlobal } from '../src/npm.ts';
 import { type UpdateDeps, type UpdateResult, type UpdateStep, updateChange } from '../src/operations/update.ts';
 import { fetchTarball, type TarballFetch } from '../src/release-tarball.ts';
-import { readUpdateCheck, type UpdateCheckRecord } from '../src/update-state.ts';
+import { coreUpdateCheckWords, terminalUpdateHooks, type UpdateCheckChildEntry } from '../src/update-check.ts';
+import { changeUpdateCheck, readUpdateCheck, type UpdateCheckRecord } from '../src/update-state.ts';
 import { loopbackRegistry, releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
 import { releaseTarball, unpackTarball } from './helpers/tarball-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -30,7 +33,9 @@ import { tempDir } from './helpers/temp.ts';
  * 2026-10-22 P3). Before: npm was handed `<package>@<version>` and resolved it again from a fresh read of the registry,
  * so what it installed need not be what was verified, and nothing looked afterwards: npm keeps no lockfile for a
  * global. Now the update downloads the very bytes whose sha512 the provenance signs, hands npm that file, and walks the
- * installed package — and every package of this suite inside it — against the verified tarballs.
+ * installed package — and every package of this suite inside it — against the verified tarballs. Every one of those
+ * that does not match is removed before the step fails (§8.2): a nested core npm took from the registry would otherwise
+ * be what a channel's day's check hands on to (P2), and starts.
  *
  * npm itself runs here, on every platform, into a prefix of the test's own, against a registry on the loopback address
  * (`loopbackRegistry`) serving a world of releases whose provenance verifies against the test's own trust root. Nothing
@@ -191,6 +196,47 @@ function globalStep(result: UpdateResult): Extract<UpdateStep, { kind: 'global' 
 /** What the update found installed, as `npm ls -g` would list it, for a test that does not install the older one. */
 const olderListed = { globalPackages: async () => ({ [GMAIL]: OLD }) };
 
+/** Whether anything is at `path`, a link included: looked at with lstat, never through it. */
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every path below `dir`, sorted, as lstat finds them: a link is listed, and nothing behind it. */
+function tree(dir: string): string[] {
+  const paths: string[] = [];
+  const walk = (relative: string) => {
+    for (const name of readdirSync(relative === '' ? dir : join(dir, relative))) {
+      const path = relative === '' ? name : join(relative, name);
+      paths.push(path);
+      const stat = lstatSync(join(dir, path));
+      if (stat.isDirectory() && !stat.isSymbolicLink()) walk(path);
+    }
+  };
+  walk('');
+  return paths.sort();
+}
+
+/** A link to the folder `target` at `path`: a junction on Windows, which needs no privilege, a symbolic link elsewhere. */
+function linkFolder(target: string, path: string): void {
+  symlinkSync(target, path, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+/** The core nested in the global package at `dir`. */
+function nestedCore(dir: string, ...path: string[]): string {
+  return join(dir, 'node_modules', ...CORE.split('/'), ...path);
+}
+
+/** The channel's own CLI, as its command would start it for the day's check: recorded here, never started. */
+const OWN: UpdateCheckChildEntry = Object.freeze({
+  command: process.execPath,
+  args: Object.freeze([join(tempDir('comms-update-global-own-'), 'dist', 'cli.mjs')]),
+});
+
 function flipFirstByte(file: string): void {
   const bytes = readFileSync(file);
   bytes[0] = (bytes[0] as number) ^ 0x01;
@@ -268,30 +314,34 @@ test('the verified tarball is written to a private file, removed afterwards', PO
 });
 
 test(
-  'a changed byte, a missing file, or an extra file outside node_modules fails the step, and current.global stays',
+  'a changed byte, a missing file, or an extra file outside node_modules fails the step, removes what differs, and current.global stays',
   WITH_NPM,
   async (t) => {
-    const nested = (dir: string, ...path: string[]) => join(dir, 'node_modules', ...CORE.split('/'), ...path);
-    const cases: { name: string; which: string; change: (dir: string) => void }[] = [
+    // `removes`: the global package itself, when it is the one that differs; the core nested in it, when only that does.
+    const cases: { name: string; which: string; removes: 'it' | 'core'; change: (dir: string) => void }[] = [
       {
         name: 'a changed byte',
         which: 'a file of it differs from its verified release',
+        removes: 'it',
         change: (dir) => flipFirstByte(join(dir, 'dist', 'cli.mjs')),
       },
       {
         name: 'a missing file',
         which: 'a file of its verified release is missing',
+        removes: 'it',
         change: (dir) => rmSync(join(dir, 'dist', 'cli.mjs')),
       },
       {
         name: 'an extra file outside node_modules',
         which: 'it holds a file its verified release does not',
+        removes: 'it',
         change: (dir) => writeFileSync(join(dir, 'dist', 'more.mjs'), 'process.exit(0);\n'),
       },
       {
         name: 'a changed byte in the core nested in it',
         which: `a file of ${CORE}@${LATEST} in it differs from its verified release`,
-        change: (dir) => flipFirstByte(nested(dir, 'dist', 'cli.mjs')),
+        removes: 'core',
+        change: (dir) => flipFirstByte(nestedCore(dir, 'dist', 'cli.mjs')),
       },
     ];
     for (const each of cases) {
@@ -307,10 +357,19 @@ test(
           });
           const step = globalStep(result);
           assert.equal(step.outcome, 'failed');
-          assert.ok(step.detail?.startsWith(`${MISMATCH} (${each.which}): `), step.detail);
+          const removed = each.removes === 'it' ? 'so it was removed' : `so ${CORE} was removed from it`;
+          assert.ok(step.detail?.startsWith(`${MISMATCH} (${each.which}), ${removed}: `), step.detail);
           assert.equal(result.ok, false);
           assert.equal(record.current?.global.includes('gmail'), false, 'current.global is unchanged');
-          assert.ok(existsSync(join(installedAt(m), 'package.json')), 'nothing was uninstalled');
+          if (each.removes === 'it') {
+            assert.equal(present(installedAt(m)), false, 'the global package is removed');
+          } else {
+            assert.equal(present(nestedCore(installedAt(m))), false, 'the core nested in it is removed');
+            assert.ok(
+              existsSync(join(installedAt(m), 'dist', 'cli.mjs')),
+              'the global package itself, which matches, stays',
+            );
+          }
         } finally {
           await m.close();
         }
@@ -319,7 +378,7 @@ test(
   },
 );
 
-test('a nested @agentcomms/core whose release does not verify fails the step', WITH_NPM, async () => {
+test('a nested @agentcomms/core whose release does not verify fails the step, and is removed', WITH_NPM, async () => {
   const m = await machine(world());
   try {
     // Gmail's release verified for the preview; core's attestation is gone by the time npm has installed it.
@@ -328,12 +387,205 @@ test('a nested @agentcomms/core whose release does not verify fails the step', W
     assert.equal(step.outcome, 'failed');
     assert.ok(
       step.detail?.startsWith(
-        `${MISMATCH} (${CORE}@${LATEST} in it could not be verified as built by this repository's release workflow): `,
+        `${MISMATCH} (${CORE}@${LATEST} in it could not be verified as built by this repository's release workflow), so ${CORE} was removed from it: `,
       ),
       step.detail,
     );
     assert.equal(record.current?.global.includes('gmail'), false);
-    assert.ok(existsSync(join(installedAt(m), 'node_modules', ...CORE.split('/'))), 'nothing was uninstalled');
+    assert.equal(present(nestedCore(installedAt(m))), false, 'the core that could not be verified is removed');
+    assert.ok(existsSync(join(installedAt(m), 'package.json')), 'the global package itself stays');
+  } finally {
+    await m.close();
+  }
+});
+
+test(
+  'a nested core the registry substituted is removed, and the channel hands its check to nothing',
+  WITH_NPM,
+  async () => {
+    // The registry hands npm another core for the one Gmail depends on, with a command a hand-off would start; the
+    // check, which reads its verified release, is told the truth. Gmail itself is installed from its verified file.
+    const marker = join(tempDir('comms-update-global-marker-'), 'RAN');
+    const substituted = releaseTarball(CORE, LATEST, {
+      manifest: {
+        engines: { node: '>=22.0.0' },
+        agentcomms: { binary: 'agentcomms' },
+        bin: { agentcomms: './dist/cli.mjs' },
+      },
+      files: {
+        'dist/cli.mjs': `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\n`,
+      },
+    });
+    const m = await machine(world(), { toNpm: { [CORE]: substituted } });
+    try {
+      const { result, record } = await update(m, olderListed);
+      const step = globalStep(result);
+      assert.equal(step.outcome, 'failed');
+      const gmail = installedAt(m);
+
+      // The global Gmail's own command, opening core as it does, then its day's check: no core is located to hand the
+      // check to, so the channel's own child is all that starts — and nothing of the substituted core runs.
+      const fromGmail = openCore({
+        env: m.env,
+        caller: { url: pathToFileURL(join(gmail, 'dist', 'cli.mjs')).href, packageName: GMAIL },
+      });
+      assert.equal(
+        coreUpdateCheckWords(fromGmail, new Date().toISOString()),
+        null,
+        'a core is located from the global Gmail',
+      );
+      await changeUpdateCheck(fromGmail.paths.stateDir, (current) => ({
+        record: { ...current, lastChecked: new Date(Date.now() - 25 * 3_600_000).toISOString(), checking: null },
+      }));
+      const started: string[][] = [];
+      await terminalUpdateHooks(fromGmail, m.env, {
+        handOff: {
+          start: async (words) => {
+            started.push([...words]);
+            return true;
+          },
+        },
+        childEntry: OWN,
+      }).check?.();
+      assert.deepEqual(
+        started.map((words) => words.slice(0, 2)),
+        [[OWN.command, OWN.args[0]]],
+        `started: ${JSON.stringify(started)}`,
+      );
+      assert.equal(existsSync(marker), false, 'the substituted core ran');
+
+      assert.equal(present(nestedCore(gmail)), false, 'the substituted core is removed');
+      assert.ok(existsSync(join(gmail, 'dist', 'cli.mjs')), 'the verified Gmail stays');
+      assert.ok(
+        step.detail?.startsWith(
+          `${MISMATCH} (a file of ${CORE}@${LATEST} in it differs from its verified release), so ${CORE} was removed from it: `,
+        ),
+        step.detail,
+      );
+      assert.equal(record.current?.global.includes('gmail'), false);
+    } finally {
+      await m.close();
+    }
+  },
+);
+
+test('a removal never follows a link out of the global root', WITH_NPM, async (t) => {
+  await t.test('a nested core that is a link: the link is removed, and the folder it points to stays', async () => {
+    const m = await machine(world());
+    try {
+      const outside = join(m.home, 'outside', 'core');
+      let before: string[] = [];
+      const { result } = await update(m, {
+        ...olderListed,
+        installGlobal: async (spec) => {
+          await npmInstallGlobal(m.env, spec);
+          // The core npm installed, moved out of the global root with a link in its place: a removal that followed the
+          // link would empty that folder.
+          const nested = nestedCore(installedAt(m));
+          mkdirSync(dirname(outside), { recursive: true });
+          renameSync(nested, outside);
+          linkFolder(outside, nested);
+          before = tree(outside);
+        },
+      });
+      assert.ok(before.includes('package.json'), `outside: ${before.join(', ')}`);
+      assert.deepEqual(present(outside) ? tree(outside) : [], before, 'the folder the link pointed to is as it was');
+      const step = globalStep(result);
+      assert.ok(
+        step.detail?.startsWith(
+          `${MISMATCH} (${CORE} in it is a link, not an installed package), so ${CORE} was removed from it: `,
+        ),
+        step.detail,
+      );
+      assert.equal(present(nestedCore(installedAt(m))), false, 'the link is removed');
+    } finally {
+      await m.close();
+    }
+  });
+
+  await t.test(
+    'a global package removed with a link in it: the link goes, and the folder it points to stays',
+    async () => {
+      const m = await machine(world());
+      try {
+        const outside = join(m.home, 'outside', 'left-pad');
+        mkdirSync(outside, { recursive: true });
+        writeFileSync(join(outside, 'index.js'), 'module.exports = () => {};\n');
+        const before = tree(outside);
+        const { result } = await update(m, {
+          ...olderListed,
+          installGlobal: async (spec) => {
+            await npmInstallGlobal(m.env, spec);
+            flipFirstByte(join(installedAt(m), 'dist', 'cli.mjs'));
+            linkFolder(outside, join(installedAt(m), 'node_modules', 'left-pad'));
+          },
+        });
+        assert.deepEqual(
+          present(outside) ? tree(outside) : [],
+          before,
+          'the folder the link in it pointed to is as it was',
+        );
+        const step = globalStep(result);
+        assert.ok(
+          step.detail?.startsWith(`${MISMATCH} (a file of it differs from its verified release), so it was removed: `),
+          step.detail,
+        );
+        assert.equal(present(installedAt(m)), false, 'the global package is removed');
+      } finally {
+        await m.close();
+      }
+    },
+  );
+
+  await t.test('a scope folder that links out of the global root: nothing is removed through it', async () => {
+    const m = await machine(world());
+    try {
+      const outside = join(m.home, 'outside', '@agentcomms');
+      let before: string[] = [];
+      const { result } = await update(m, {
+        ...olderListed,
+        installGlobal: async (spec) => {
+          await npmInstallGlobal(m.env, spec);
+          // `<root>/@agentcomms` moved out of the global root, with a link in its place, and Gmail changed in it: the
+          // check reads Gmail through the link, and a removal by that path would reach outside the root.
+          const scope = join(npmRoot(m), '@agentcomms');
+          mkdirSync(dirname(outside), { recursive: true });
+          renameSync(scope, outside);
+          linkFolder(outside, scope);
+          flipFirstByte(join(outside, 'gmail', 'dist', 'cli.mjs'));
+          before = tree(outside);
+        },
+      });
+      assert.ok(before.includes(join('gmail', 'package.json')), `outside: ${before.join(', ')}`);
+      assert.deepEqual(present(outside) ? tree(outside) : [], before, 'nothing outside the global root is removed');
+      const step = globalStep(result);
+      assert.ok(
+        step.detail?.startsWith(
+          `${MISMATCH} (a file of it differs from its verified release), and it could not be removed: `,
+        ),
+        step.detail,
+      );
+      assert.ok(lstatSync(join(npmRoot(m), '@agentcomms')).isSymbolicLink(), 'the link is left as it was');
+    } finally {
+      await m.close();
+    }
+  });
+});
+
+test('an install that matches its verified release removes nothing', WITH_NPM, async () => {
+  const m = await machine(world());
+  try {
+    let installed: string[] = [];
+    const { result } = await update(m, {
+      ...olderListed,
+      installGlobal: async (spec) => {
+        await npmInstallGlobal(m.env, spec);
+        installed = tree(installedAt(m));
+      },
+    });
+    assert.equal(globalStep(result).outcome, 'updated');
+    assert.ok(installed.includes(join('node_modules', ...CORE.split('/'), 'package.json')), installed.join(', '));
+    assert.deepEqual(tree(installedAt(m)), installed, 'everything npm installed is still there');
   } finally {
     await m.close();
   }
@@ -394,27 +646,35 @@ test('a verified tarball that cannot be downloaded installs nothing', WITH_NPM, 
   }
 });
 
-test('a global package that is a link is a mismatch, and the link is not followed', WITH_NPM, async () => {
+test('a global package that is a link is a mismatch: the link is removed, and not followed', WITH_NPM, async () => {
   const m = await machine(world());
   try {
+    const checkout = join(m.home, 'checkout', 'gmail');
+    let before: string[] = [];
     const { result, record } = await update(m, {
       ...olderListed,
       installGlobal: async (spec) => {
         await npmInstallGlobal(m.env, spec);
         // The very files npm installed, moved to a checkout of their own, with a link in their place: a check that
-        // followed the link would find every one of them as it should be.
+        // followed the link would find every one of them as it should be, and a removal that followed it would empty
+        // the checkout.
         const dir = installedAt(m);
-        const checkout = join(m.home, 'checkout', 'gmail');
         mkdirSync(dirname(checkout), { recursive: true });
         renameSync(dir, checkout);
-        symlinkSync(checkout, dir, process.platform === 'win32' ? 'junction' : 'dir');
+        linkFolder(checkout, dir);
+        before = tree(checkout);
       },
     });
+    assert.ok(before.includes('package.json'), `checkout: ${before.join(', ')}`);
+    assert.deepEqual(present(checkout) ? tree(checkout) : [], before, 'the checkout it pointed to is as it was');
     const step = globalStep(result);
     assert.equal(step.outcome, 'failed');
-    assert.ok(step.detail?.startsWith(`${MISMATCH} (it is a link, not the installed package): `), step.detail);
+    assert.ok(
+      step.detail?.startsWith(`${MISMATCH} (it is a link, not the installed package), so it was removed: `),
+      step.detail,
+    );
     assert.equal(record.current?.global.includes('gmail'), false);
-    assert.ok(lstatSync(installedAt(m)).isSymbolicLink(), 'the link is left as it was');
+    assert.equal(present(installedAt(m)), false, 'the link is removed');
   } finally {
     await m.close();
   }
