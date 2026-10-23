@@ -60,8 +60,12 @@ them from the verified release itself, so only the tagged commit can declare the
 start of a line in the version's changelog section, both ways: `**Security fix.**` for `security`,
 `**Needs a decision before it installs.**` for `needsDecision`. `pnpm release` and the tag gate refuse a flag without
 its marker and a marker without its flag, so a flag left from the last release stops the next one: remove it in that
-release's version commit. The owner decides whether a release declares either. See `docs/RELEASING.md`, "Declaring a
-security fix or a needed decision".
+release's version commit. A needed decision is also carried forward, because an update reads only the release it goes
+to: `"needsDecisionSince": "X.Y.Z"` is the release's own version when it declares `needsDecision`, and otherwise the
+newest earlier release whose section has the decision marker, or absent when none has. Keep it from release to
+release; both release paths refuse it missing, wrong, or present with nothing to carry, and name the value it must be.
+The owner decides whether a release declares either flag. See `docs/RELEASING.md`, "Declaring a security fix or a
+needed decision".
 
 ## Procedure
 

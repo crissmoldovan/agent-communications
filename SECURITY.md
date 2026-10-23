@@ -185,15 +185,20 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
 - **What a release declares is believed only from its verified tarball.** Whether a release is a security fix, and
   whether it needs a decision before it installs (`agentcommsRelease` in core's `package.json`), is read from
   `package/package.json` inside the release's own tarball, once its provenance verifies, and only from bytes whose
-  SHA-512 is the digest that provenance signs, wherever the registry or a mirror served them. The registry's copy of
-  the manifest decides nothing, so a registry or mirror that adds or removes a flag on a genuine release moves no hold,
-  turns no notice on or off and skips no decision. A declaration that cannot be read is unknown: the background run
-  installs nothing that run, and no notice or preview claims a security fix or its absence. Only core carries the
-  verifier, so a channel's server or command hands its day's check to core's CLI at the channel's own version; where
-  that cannot be found or started, the channel's own check records the latest version and keeps what core verified of
-  that same release, or else records its flags as unknown, never as absent. What none of this catches is a release
-  built by a compromised release workflow or maintainer account, which declares whatever it was made to: provenance
-  proves where a release was built, not that it is safe.
+  SHA-512 is the digest that provenance signs, wherever the registry or a mirror served them. The registry's copy of the
+  manifest decides nothing, so a registry or mirror that adds or removes a flag on a genuine release moves no hold,
+  turns no notice on or off and skips no decision. Nor does which releases it lists: a decision a release needs is
+  carried forward in every later release's own declaration (`needsDecisionSince`, the newest release that needed one,
+  which the release check holds to the changelog), so an update reads the release it would install and no other. A
+  registry that leaves out the release needing a decision, lists one that does not verify, or lists hundreds changes
+  nothing and costs no request. A declaration that cannot be read is unknown: the background run installs nothing that
+  run, and no notice or preview claims a security fix or its absence. The daily check stops the read 30 seconds into its
+  two-minute claim, and counts it unknown after that. Only core carries the verifier, so a channel's server
+  or command hands its day's check to core's CLI at the channel's own version; where that cannot be found or started,
+  the channel's own check records the latest version and keeps what core verified of that same release, or else records
+  its flags as unknown, never as absent. What none of this catches is a release built by a compromised release workflow
+  or maintainer account, which declares whatever it was made to: provenance proves where a release was built, not that
+  it is safe.
 - **A hold counts from a time the registry cannot set.** The background run holds a release for 72 hours, or 24 for a
   security fix, from the time Rekor signed for its provenance, and a set of packages from the latest of their times;
   every package of the set is verified before the hold is decided. That time is used only when the bundle carries

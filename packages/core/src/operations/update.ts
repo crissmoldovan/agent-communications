@@ -65,7 +65,14 @@ import { launcherOf, registrationVersion, stableLauncherOf } from '../registrati
 // What a verified release declares, read from its tarball, and the global install that hands npm the verified file
 // (`../global-install.ts`): no Sigstore in either, and nothing runs on load, so WhatsApp's bundle, which reaches this
 // module, drops both with the check (its `update-gate.test.ts` holds it to that).
-import { declaredSince, factsOf } from '../release-facts.ts';
+import {
+  DECLARATION_DEADLINE_MS,
+  declaredFor,
+  factsOf,
+  type TargetDeclaration,
+  targetDeclaration,
+  withinDeadline,
+} from '../release-facts.ts';
 import type { TarballFetch } from '../release-tarball.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
@@ -74,7 +81,6 @@ import {
   BUILT_BY,
   npmRegistry,
   oldestVersion,
-  type RegistryAnswer,
   type ReleaseRegistry,
   type ReleaseSources,
   type ReleaseVerifier,
@@ -139,11 +145,12 @@ export interface UpdateDeps {
   /** Installs a managed runtime of exactly this version, as the managed launcher would. */
   installRuntime?: ((packageName: string, version: string) => Promise<void>) | undefined;
   /**
-   * What the releases after `from` up to `version` declare — a decision any of them needs, and whether `version` is a
-   * security fix (design 2026-10-16, U5, U7) — each read from its verified tarball (design 2026-10-22 P1), or null when
-   * either could not be read. Defaults to `releaseFactsReader`: `declaredSince` over `registry`, or the registry npm
-   * reads — but only beside the registry's own `latest`, and only with `verifyRelease`: a test that hands in a
-   * `latestVersion` hands in this too, or the facts are not read. Null: never read them.
+   * What `version` declares for a machine whose oldest release is `from` — whether it is a security fix, and whether a
+   * decision is needed before it runs: one it declares, or one it carries forward after `from` (design 2026-10-16, U5,
+   * U7; 2026-10-22 §8.1) — read from its verified tarball alone (design 2026-10-22 P1), or null when that could not be
+   * read. Defaults to `releaseFactsReader`, over `registry` or the registry npm reads — but only beside the registry's
+   * own `latest`, and only with `verifyRelease`: a test that hands in a `latestVersion` hands in this too, or the facts
+   * are not read. Null: never read them.
    */
   releaseFacts?:
     | ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration | null>)
@@ -719,8 +726,8 @@ export async function updateCheck(
 
 /**
  * What the latest release's core manifest declares, for the daily check's file, as its verified tarball says (design
- * 2026-10-22 P1): the facts when both flags were read; null when this check read them and either could not be read;
- * and undefined where this process reads none — a channel's, with no verifier, or a test's stand-in registry (P2). For
+ * 2026-10-22 P1, §8.1): the facts when it was read; null when this check read it and it could not be read; and
+ * undefined where this process reads none — a channel's, with no verifier, or a test's stand-in registry (P2). For
  * null and undefined alike the record keeps what core's verified check found of the same version, and otherwise makes
  * no claim. Never a reason for the check to fail.
  */
@@ -743,50 +750,61 @@ async function releaseOf(
 }
 
 /**
- * The oldest release this machine runs, as the report saw it — what every release after it is read for: the core
- * answering, and every registration, runtime and global package behind.
+ * The oldest release this machine runs, as the report saw it — what a decision the latest carries is counted from: the
+ * core answering, and every registration, runtime and global package behind.
  */
 function oldestHere(report: UpdateReport): string | null {
   return oldestVersion([report.core, ...report.behind.map((item) => item.version)]);
 }
 
 /**
- * The daily check's and `update --check`'s reader of what releases declare (`declaredSince`, design 2026-10-22 P1):
- * each release verified, then its declaration read from its tarball and cached in `stateDir`. Both flags, or null when
- * either could not be read (`factsOf`).
+ * The daily check's and `update --check`'s reader of what a release declares (design 2026-10-22 P1, §8.1): the release
+ * verified, then its declaration read from its tarball and cached in `stateDir`; its facts for each machine's `from`,
+ * or null when it could not be read (`factsOf`). Nothing of any other release is read: a needed decision is carried in
+ * the release itself.
+ *
+ * Each release is read once however often it is asked — the check asks once for the core answering, and again for the
+ * oldest release it finds here — and known or unknown, the answer stands for the reader's life: an unreadable tarball
+ * is asked for at most twice in a check, at its location and at npm's own address (review B of 0.26.0, finding 2).
+ * And the read is given `deadlineMs` at most (`DECLARATION_DEADLINE_MS` unless a test gives another), and stops at
+ * `deadline` — a time, by `Date.now()` — when that comes first: the day's check passes its claim's time plus
+ * `DECLARATION_DEADLINE_MS`, well inside the claim, however late its ask began. After it the read is unknown — never
+ * false — and cut off, and one not started by then is not started at all, so the check records what it found while
+ * its claim is still its own.
  *
  * The registry handed in, or the one npm reads — but only beside the registry's own `latest`: a test with a stand-in
  * `latestVersion` hands in `releaseFacts` itself, or none is read. And only with a verifier (P2): a channel's process
  * carries no Sigstore, so it reads nothing a release declares — no document, no tarball — and its check keeps what
- * core's verified check recorded. Each package's document is read, and each release verified, once however often
- * asked.
+ * core's verified check recorded.
  */
 export function releaseFactsReader(
   env: NodeJS.ProcessEnv,
   deps: Pick<UpdateDeps, 'registry' | 'latestVersion' | 'verifyRelease' | 'tarballs'>,
   stateDir: string,
+  options: { deadlineMs?: number | undefined; deadline?: number | undefined } = {},
 ): ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration | null>) | null {
-  const verifier = deps.verifyRelease;
-  if (deps.latestVersion !== undefined || verifier === undefined) return null;
-  const read = deps.registry ?? npmRegistry(env);
-  const documents = new Map<string, Promise<RegistryAnswer>>();
-  const registry: ReleaseRegistry = (packageName) => {
-    const known = documents.get(packageName) ?? read(packageName);
-    documents.set(packageName, known);
-    return known;
-  };
-  const verdicts = new Map<string, ReturnType<ReleaseVerifier>>();
-  const verify: ReleaseVerifier = (release) => {
-    const key = [release.packageName, release.version, release.integrity].join('\u0000');
-    const known = verdicts.get(key) ?? verifier(release);
-    verdicts.set(key, known);
-    return known;
+  const verify = deps.verifyRelease;
+  if (deps.latestVersion !== undefined || verify === undefined) return null;
+  const sources = { registry: deps.registry ?? npmRegistry(env), verify, stateDir, tarballs: deps.tarballs };
+  const declarations = new Map<string, Promise<TargetDeclaration>>();
+  const declarationOf = (packageName: string, version: string): Promise<TargetDeclaration> => {
+    const key = `${packageName}@${version}`;
+    let read = declarations.get(key);
+    if (read === undefined) {
+      const left = Math.min(
+        options.deadlineMs ?? DECLARATION_DEADLINE_MS,
+        options.deadline === undefined ? Number.POSITIVE_INFINITY : options.deadline - Date.now(),
+      );
+      read =
+        left > 0
+          ? withinDeadline((signal) => targetDeclaration(sources, packageName, version, { signal }), version, left)
+          : Promise.resolve({ known: false, version });
+      declarations.set(key, read);
+    }
+    return read;
   };
   return async (packageName, version, from = null) => {
-    const facts = factsOf(
-      version,
-      await declaredSince({ registry, verify, stateDir, tarballs: deps.tarballs }, packageName, from, version),
-    );
+    const facts = factsOf(version, declaredFor(await declarationOf(packageName, version), from));
     return facts === null ? null : { security: facts.security, needsDecision: facts.needsDecision };
   };
 }
@@ -1013,8 +1031,9 @@ interface Planned {
   /** Every release this update installs or switches to, by package: verified before the preview was made. */
   verified: Map<string, VerifiedProvenance>;
   /**
-   * The releases it takes this machine past, up to core's latest, whose verified tarballs say they need a decision from
-   * the person (`deciding`), and those whose declaration could not be read (`unread`), each oldest first.
+   * The release this update takes this machine past, up to core's latest, that needs a decision from the person, as
+   * the latest's verified tarball says (`deciding`, design 2026-10-22 §8.1), and the latest when its declaration could
+   * not be read (`unread`): one at most of either.
    */
   deciding: { deciding: string[]; unread: string[] };
 }
@@ -1118,14 +1137,16 @@ function verifyReleases(
 }
 
 /**
- * The releases of core after the oldest one this machine runs, up to the latest, that say they need a decision — a
- * migration, a changed safety default (design 2026-10-16 U5) — as their verified tarballs say (design 2026-10-22 P1),
- * and those whose declaration could not be read: what the preview says, since the person's yes to it is that decision.
- * Each is verified and read as the check reads them, with the declarations cached in this machine's state; a release
- * this plan verified already (`verified`), for the same tarball digest, is not asked about again.
+ * The release of core this update takes this machine past that needs a decision — a migration, a changed safety
+ * default (design 2026-10-16 U5) — as the latest's verified tarball says (design 2026-10-22 P1, §8.1): the latest
+ * itself when it declares one, or the release it carries forward after the oldest one this machine runs. What the
+ * preview says, since the person's yes to it is that decision. Only the latest is read, as the check reads it, with its
+ * declaration cached in this machine's state: which releases the registry lists decides nothing. A latest this plan
+ * verified already (`verified`), for the same tarball digest, is not asked about again.
  *
- * A registry whose document of core cannot be read here leaves the latest unread: what is installed was verified
- * already, and the preview is still shown, saying that whether it needs a decision is not known.
+ * A latest whose declaration cannot be read here — its document, its verification or its tarball — is unread: what is
+ * installed was verified already, and the preview is still shown, saying that whether it needs a decision is not
+ * known.
  */
 async function decidingSince(
   core: Core,
@@ -1143,17 +1164,15 @@ async function decidingSince(
       ? { ok: true, provenance: known }
       : verify(release);
   };
-  try {
-    const { deciding, unread } = await declaredSince(
+  const declared = declaredFor(
+    await targetDeclaration(
       { registry, verify: again, stateDir: core.paths.stateDir, tarballs: deps.tarballs },
       CORE_PACKAGE,
-      oldestHere(report),
       latest,
-    );
-    return { deciding, unread };
-  } catch {
-    return { deciding: [], unread: [latest] };
-  }
+    ),
+    oldestHere(report),
+  );
+  return { deciding: declared.deciding === null ? [] : [declared.deciding], unread: declared.unread ? [latest] : [] };
 }
 
 /**

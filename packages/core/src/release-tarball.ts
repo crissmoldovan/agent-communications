@@ -95,9 +95,13 @@ function discard(response: Response): void {
   void response.body?.cancel().catch(() => undefined);
 }
 
-/** One location: its redirects followed by hand, at most five, each to http(s); its body counted as it arrives. */
-async function fetchOne(ask: TarballFetch, url: string, timeoutMs: number): Promise<Fetched> {
-  const signal = AbortSignal.timeout(timeoutMs);
+/**
+ * One location: its redirects followed by hand, at most five, each to http(s); its body counted as it arrives; ended
+ * by its own time, or by `deadline` — the caller's — whichever is first.
+ */
+async function fetchOne(ask: TarballFetch, url: string, timeoutMs: number, deadline?: AbortSignal): Promise<Fetched> {
+  const own = AbortSignal.timeout(timeoutMs);
+  const signal = deadline === undefined ? own : AbortSignal.any([own, deadline]);
   let current = url;
   try {
     for (let redirects = 0; ; redirects += 1) {
@@ -146,12 +150,12 @@ const RANK: Readonly<Record<'download' | 'size' | 'digest', number>> = { downloa
 /**
  * The release's tarball: from `location`, then — if that fails in any way — once from npm's canonical address, which
  * is never asked twice. Kept only when its sha512 is the verified one; otherwise the problem that says the most of the
- * two tries.
+ * two tries. A caller's `signal` ends it: what is being fetched is cut off, and nothing more is asked.
  */
 export async function downloadVerifiedTarball(
   release: TarballRelease,
   location: string | null,
-  options: { fetch?: TarballFetch; timeoutMs?: number } = {},
+  options: { fetch?: TarballFetch; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<{ ok: true; bytes: Buffer } | { ok: false; problem: 'download' | 'size' | 'digest' }> {
   const ask = options.fetch ?? fetchTarball;
   const timeoutMs = options.timeoutMs ?? TARBALL_TIMEOUT_MS;
@@ -160,7 +164,8 @@ export async function downloadVerifiedTarball(
   const first = location === null ? null : httpAddress(location);
   let problem: 'download' | 'size' | 'digest' = 'download';
   for (const place of first === null || first === canonical ? [canonical] : [first, canonical]) {
-    const fetched = await fetchOne(ask, place, timeoutMs);
+    if (options.signal?.aborted) break;
+    const fetched = await fetchOne(ask, place, timeoutMs, options.signal);
     let failed: 'download' | 'size' | 'digest';
     if (fetched.ok) {
       if (createHash('sha512').update(fetched.bytes).digest('hex') === want) return fetched;
