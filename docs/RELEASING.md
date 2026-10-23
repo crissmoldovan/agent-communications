@@ -586,7 +586,7 @@ and none of it goes to npm. A release of it holds:
   draft release. The builds have read-only access; a separate job, which checks nothing out, uploads their files, and
   only while the release is a draft. The release notes say they are unsigned.
 - **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
-  `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
+  `pnpm --filter @agentcomms/desktop run licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
 
 **An agent may run these scripts once the owner has said so** (the owner, 2026-10-21), as Supbuddy's `/release` does:
 on the signing Mac, from a clean checkout of the tag, with the version confirmed on the command line instead of typed
