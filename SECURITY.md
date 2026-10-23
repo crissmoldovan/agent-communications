@@ -161,9 +161,14 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   name up again, and checked afterwards: every file of that tarball must be installed with the same bytes, nothing it
   does not list may sit outside the package's own `node_modules/`, a package that is a link is a mismatch and is not
   followed, and every `@agentcomms` package inside it must verify and match its own tarball the same way. The check
-  comes after npm has written the files, so a mismatch fails the step and is reported, not undone: the global command
-  runs what npm wrote until the update is run again. An npx registration's client fetches its package from npm each
-  time it starts, which only that client checks.
+  comes after npm has written the files, so on a mismatch every `@agentcomms` package of the global install that does
+  not match is removed before the step fails — the global package itself when it is the one — and the step names what
+  it removed. Left in place, it would run: a nested `@agentcomms/core` that npm fetched from the registry is the core a
+  channel hands its day's update check to, and starts as you. A removal never follows a link (a link is removed as a
+  link, and what it points to is left alone) and touches nothing outside the folder `npm root -g` names. A channel
+  carries core's code in its own files, so with its core removed it still works, and checks for updates on its own,
+  unverified; a removed global package's command is gone until it is installed again. An npx registration's client
+  fetches its package from npm each time it starts, which only that client checks.
 - **A first install is verified only when core makes it.** A managed `mcp install` through core's command or
   `comms_server_install` holds the runtime it fetches to the same provenance as an update. A channel's own command
   carries no Sigstore: it installs only the release it is running itself — the same package and version npx already

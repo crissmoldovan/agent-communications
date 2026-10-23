@@ -63,9 +63,16 @@ than looking the name up again. npm keeps no lockfile for a global, so afterward
 in the folder `npm root -g` names: every file of the verified tarball must be there with the same bytes, nothing the
 tarball does not list may sit outside the package's own `node_modules/`, a package that is a link is a mismatch and is
 not followed, and every `@agentcomms` package inside it — the core Gmail depends on — must verify and match its own
-tarball the same way. A mismatch fails that step: `the global @agentcomms/gmail does not match its verified release
-(…): run <update> again`, naming this installation's update command. Nothing is uninstalled, and running the update
-again checks it again. Other packages npm installs beside it are npm's to check, as before.
+tarball the same way. A mismatch fails that step, once every `@agentcomms` package of the global install that does not
+match has been removed — the global package itself when it is the one — and the step says what went: `the global
+@agentcomms/gmail does not match its verified release (a file of @agentcomms/core@<version> in it differs from its
+verified release), so @agentcomms/core was removed from it: run <update> again`, naming this installation's update
+command. Left in place it would run: npm fetches the core Gmail depends on from the registry, not from a verified file,
+and Gmail hands its day's update check to that core. A link is removed as a link, never followed, and nothing outside
+the folder `npm root -g` names is touched. Gmail carries core's code in its own files, so with its core removed it
+still works, and checks for updates on its own, unverified; a removed global package's command is gone until it is
+installed again. The update installs a global package only when a newer release of it is out, so running it again
+before then leaves either as it is. Other packages npm installs beside it are npm's to check, as before.
 
 **A first install is verified the same way, when core makes it.** A managed `mcp install` by core —
 `agentcomms mcp install --server <channel> --client <client>`, and `comms_server_install` — verifies the release whose
