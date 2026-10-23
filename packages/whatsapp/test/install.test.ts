@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { gatedChange, openCore, serverInstallChange } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { registryOf, testReleaseVerifier } from '../../core/test/helpers/provenance-fixture.ts';
 import { createWhatsAppMcpServer } from '../src/mcp/server.ts';
 import { VERSION } from '../src/version.ts';
 import { ALICE, buildFixtureStore } from './support/fixture.ts';
@@ -113,7 +114,11 @@ test('an approval comms_server_install prepared is claimed by WhatsApp’s mcp i
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
   await harness.ready(ACCOUNT);
   const core = openCore({ env: harness.env });
-  // What the core server's comms_server_install runs for `{ channel: "whatsapp", account }`.
+  /*
+   * What the core server's comms_server_install runs for `{ channel: "whatsapp", account }`: with a verifier, as core's
+   * server has one, so the release the npx entry's client fetches is verified before anybody is asked (design
+   * 2026-10-22 P5) — here the test's own verifier, and a registry naming this release, under which it verifies.
+   */
   const request = {
     channel: 'whatsapp',
     client: 'cursor',
@@ -121,11 +126,21 @@ test('an approval comms_server_install prepared is claimed by WhatsApp’s mcp i
     launcher: 'npx',
     noVerify: true,
   } as const;
-  const asked = await gatedChange(core, serverInstallChange(core, harness.env, request), {
+  const verifier = testReleaseVerifier();
+  const verifiedReleases: string[] = [];
+  const verification = {
+    registry: registryOf(() => VERSION),
+    verifyRelease: (release: Parameters<typeof verifier>[0]) => {
+      verifiedReleases.push(`${release.packageName}@${release.version}`);
+      return verifier(release);
+    },
+  };
+  const asked = await gatedChange(core, serverInstallChange(core, harness.env, request, undefined, verification), {
     channel: 'whatsapp',
     surface: 'mcp',
   });
   assert.equal(asked.status, 'approval-required');
+  assert.deepEqual(verifiedReleases, [`@agentcomms/whatsapp@${VERSION}`], 'verified before anybody was asked');
   const approvalId = asked.status === 'approval-required' ? asked.prepared.approvalId : '';
   const claimed = await harness.cli([
     'mcp',
