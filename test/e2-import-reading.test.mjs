@@ -43,6 +43,48 @@ test('an apostrophe in a regular expression does not hide a later import', () =>
     );
 });
 
+test("a regular expression after a statement's head or a block's end does not hide a later import", () => {
+  /*
+   * 0.26.0 review B, finding 4. The reader took every `)` and every `}` for the end of an expression, so a `/` after
+   * the head of an `if`, a `while`, a `for` or a `with`, or after a block, divided: a quote in the regular expression
+   * opened a string, and an import after it on that line went unread; a backtick opened a template, which hid every
+   * import after it up to the file's next backtick.
+   */
+  const specimens = [
+    "if (ok) /'/.test(s); import '@receptron/laya';\n",
+    'while (ok) /"/.exec(s); import "@receptron/laya";\n',
+    "for (const x of xs) /'/.test(x); import '@receptron/laya';\n",
+    "for await (const x of xs) /'/.test(x); import '@receptron/laya';\n",
+    "with (o) /'/.test(s); import '@receptron/laya';\n",
+    "if (f(x)) /'/.test(s); import '@receptron/laya';\n",
+    "if (ok) {} /'/.test(s); import '@receptron/laya';\n",
+    "if (ok) {}\n/'/.test(s); import '@receptron/laya';\n",
+    "function f() {} /'/.test(s); import '@receptron/laya';\n",
+    "class A {} /'/.test(s); import '@receptron/laya';\n",
+    "try {} finally {} /'/.test(s); import '@receptron/laya';\n",
+    "const f = () => {}\n/'/.test(s); import '@receptron/laya';\n",
+    // A backtick, read as a template, ran on to the file's next backtick, past every import between.
+    "if (ok) /`/.test(s);\nimport '@receptron/laya';\nconst t = `x`;\n",
+    "if (ok) {}\n/`/.test(s);\nimport '@receptron/laya';\nconst t = `x`;\n",
+    "while (ok) {}\n/`/.test(s);\nawait import('@receptron/laya');\nconst t = `x`;\n",
+  ];
+  for (const source of specimens) {
+    assert.deepEqual(codeImportSpecifiers(source), ['@receptron/laya'], source);
+    assert.deepEqual(valueImports(source), ['@receptron/laya'], source);
+  }
+  // An object literal's `}`, and a call's `)`, inside a head too, still end an expression: the `/` after one divides,
+  // and the quote after that opens a string. A block inside an object literal does not make the literal's `}` a block's.
+  for (const value of ['{ a: 1 }', 'count(x)', '(() => 1)()', '{ a: () => {} }'])
+    assert.deepEqual(
+      codeImportSpecifiers(`const part = ${value} / 2; const s = '/'; import '@receptron/laya';\n`),
+      ['@receptron/laya'],
+      value,
+    );
+  assert.deepEqual(codeImportSpecifiers("if (count(x) / 2 > 1) run(); const s = '/'; import '@receptron/laya';\n"), [
+    '@receptron/laya',
+  ]);
+});
+
 test("a comment, a string or a template's text that only mentions a package is not an import", () => {
   const mentions = [
     "// import '@receptron/laya';\n",

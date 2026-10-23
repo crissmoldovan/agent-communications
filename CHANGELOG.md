@@ -79,7 +79,8 @@ Also:
   seconds at most for that file, so neither holds a tool call or a command longer than that: busy past it, a later
   call gives the notice, and a later process claims the check.
 - **The release's check of the event-service tests** reads imports with TypeScript's own scanner, so an apostrophe
-  inside a regular expression no longer hides an import that comes after it.
+  inside a regular expression no longer hides an import that comes after it, nor does a quote or a backtick in one
+  that follows the head of an `if`, `while`, `for` or `with`, or a block's closing brace.
 
 Why: CUE-495, the follow-ups the 0.20.0 provenance work proposed and left. Provenance proves where a release's
 tarball came from; it says nothing of the registry's copy of its manifest, the time the registry gives it, or what
