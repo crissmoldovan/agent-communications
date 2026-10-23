@@ -1022,11 +1022,14 @@ test('the tag gate refuses, with nothing sent, flags its changelog section does 
   const corePath = join(root, 'packages', 'core', 'package.json');
   const { agentcommsRelease: _none, ...core } = JSON.parse(await readFile(corePath, 'utf8'));
 
-  async function gate(release, lines) {
+  async function gate(release, lines, older = ['Older.']) {
     const manifest = release === undefined ? core : { ...core, agentcommsRelease: release };
     await writeFile(corePath, `${JSON.stringify(manifest, null, 2)}\n`);
     const section = ['**A release.** In a line.', ...lines].join('\n\n');
-    await writeFile(join(root, 'CHANGELOG.md'), `# Changelog\n\n## ${version}\n\n${section}\n\n## 0.0.1\n\nOlder.\n`);
+    await writeFile(
+      join(root, 'CHANGELOG.md'),
+      `# Changelog\n\n## ${version}\n\n${section}\n\n## 0.0.1\n\n${older.join('\n\n')}\n`,
+    );
     const env = { ...process.env, GITHUB_REF_NAME: `v${version}` };
     delete env.RELEASE_CHANGELOG;
     return runStepScript(step, { cwd: root, env });
@@ -1051,6 +1054,23 @@ test('the tag gate refuses, with nothing sent, flags its changelog section does 
   assert.equal(unsaid.status, 1);
   assert.deepEqual(errors(unsaid.stderr), [
     `::error::the ## ${version} section of CHANGELOG.md has a line starting **Needs a decision before it installs.**, but packages/core/package.json does not declare "needsDecision": true`,
+  ]);
+
+  // A needed decision the last release declared, and this one dropped: a machine before it would go past it unasked
+  // (design 2026-10-22 §8.1). Carried forward, it passes.
+  const decided = ['**Needs a decision before it installs.** A migration.'];
+  const dropped = await gate(undefined, [], decided);
+  assert.equal(dropped.status, 1);
+  assert.deepEqual(errors(dropped.stderr), [
+    `::error::the ## 0.0.1 section of CHANGELOG.md is the newest before ${version} with a line starting **Needs a decision before it installs.**, so packages/core/package.json must carry "needsDecisionSince": "0.0.1" forward, but it declares none`,
+  ]);
+  const carried = await gate({ needsDecisionSince: '0.0.1' }, [], decided);
+  assert.equal(carried.status, 0, carried.stderr);
+  // This release's own decision carries its own version, not the last one's.
+  const own = await gate({ needsDecision: true, needsDecisionSince: '0.0.1' }, decided, decided);
+  assert.equal(own.status, 1);
+  assert.deepEqual(errors(own.stderr), [
+    `::error::packages/core/package.json declares "needsDecision": true, so its "needsDecisionSince" must be "${version}", this release's own version, but it is "0.0.1"`,
   ]);
 });
 

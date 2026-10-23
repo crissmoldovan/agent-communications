@@ -18,6 +18,22 @@
  * A marker counts only at the very start of a line of the version's own section, the lines after `## <version>` up to
  * the next `## ` — the section `release-ci.mjs notes` prints for the GitHub release.
  *
+ * **A needed decision is carried forward** (design 2026-10-22 §8.1). An update reads only the release it goes to, so
+ * that release must say whether any release before it needed a decision: core's `"needsDecisionSince"` is the newest
+ * release, up to and including this one, that declared `needsDecision`. A release that declares it carries its own
+ * version; every other release carries the last one's, or nothing when no release ever declared one. A release that
+ * dropped it would let a machine from before that decision go past it unasked.
+ *
+ * **The carry is read from the changelog**, not from the previous tag's `packages/core/package.json`. Each released
+ * `## X.Y.Z` section's decision marker is what that release declared, since this check held its flag to it, so the
+ * newest marked section before this version, by version, is the value the last release carried. The changelog is in
+ * the tree both release paths check, the tag gate's shallow checkout included, which holds no earlier tag; and it
+ * needs no git and no network. Releases before 0.26.0 could declare no flag, and no section of theirs has the marker.
+ *
+ * - `"needsDecision": true` ⇒ `"needsDecisionSince"` is this version;
+ * - otherwise ⇒ it is the newest released version below this one whose section has the decision marker, or absent
+ *   when none has.
+ *
  * Run by `scripts/release.mjs` and by the tag gate in `.github/workflows/release.yml`, before anything is sent. Not by
  * `pnpm verify`: the changes being made sit under `## Unreleased`, which names no version to check.
  *
@@ -38,8 +54,9 @@ export const SECURITY_MARKER = '**Security fix.**';
 export const DECISION_MARKER = '**Needs a decision before it installs.**';
 
 /**
- * What core declares the release under `root` to be, from that tree's registry: `{ security, needsDecision }`, both
- * false when it declares nothing. A shape `scripts/channels.mjs` refuses throws, naming the file.
+ * What core declares the release under `root` to be, from that tree's registry: `{ security, needsDecision,
+ * needsDecisionSince }` — false, false and null when it declares nothing. A shape `scripts/channels.mjs` refuses
+ * throws, naming the file.
  */
 export function coreReleaseFlags(root = ROOT) {
   return loadRegistry(root).releaseFlags;
@@ -63,7 +80,10 @@ export function changelogSection(changelog, version) {
   return lines.slice(start + 1, end === -1 ? undefined : end).join('\n');
 }
 
-/** Each mismatch between `flags` and the section's markers, as a sentence; empty when they match. */
+/**
+ * Each mismatch between `flags` and the section's markers, and a needed decision not carried forward as the
+ * changelog gives it, as a sentence each; empty when they match.
+ */
 export function releaseFlagProblems({ version, changelog, flags }) {
   const section = changelogSection(changelog, version);
   if (section === null) return [`CHANGELOG.md has no "## ${version}" section`];
@@ -82,7 +102,70 @@ export function releaseFlagProblems({ version, changelog, flags }) {
       );
     }
   }
+  const carried = carryProblem({ version, changelog, flags });
+  if (carried !== null) problems.push(carried);
   return problems;
+}
+
+/** The `X.Y.Z` of a version, as three numbers of any size; null for anything else. */
+function releaseNumbers(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/.exec(String(version));
+  return match === null ? null : match.slice(1, 4).map((part) => BigInt(part));
+}
+
+/** Negative, zero or positive, as `a`'s `X.Y.Z` comes before, is, or comes after `b`'s. */
+function compareNumbers(a, b) {
+  for (const index of [0, 1, 2]) {
+    if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * The newest released version before `version`, by version, whose `## X.Y.Z` section has a line starting the
+ * decision marker; null when none has. Only exact release headings count: what is under `## Unreleased` has not been
+ * released. By version, not by place in the file, so a backport released after a newer line carries nothing of it.
+ */
+export function lastDecisionBefore(changelog, version) {
+  const own = releaseNumbers(version);
+  if (own === null) return null;
+  let section = null;
+  let newest = null;
+  for (const line of changelog.split(/\r?\n/)) {
+    if (line.startsWith('## ')) {
+      const heading = line.slice(3).trim();
+      section = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(heading) ? heading : null;
+      continue;
+    }
+    if (section === null || !line.startsWith(DECISION_MARKER)) continue;
+    const numbers = releaseNumbers(section);
+    if (compareNumbers(numbers, own) >= 0) continue;
+    if (newest === null || compareNumbers(numbers, releaseNumbers(newest)) > 0) newest = section;
+  }
+  return newest;
+}
+
+/**
+ * What is wrong with core's `needsDecisionSince` for `version`, as a sentence, or null when it is the carry: this
+ * version when it declares `needsDecision`, otherwise the last decision before it (`lastDecisionBefore`), or none.
+ */
+function carryProblem({ version, changelog, flags }) {
+  const since = flags.needsDecisionSince ?? null;
+  const described = since === null ? 'declares none' : `is "${since}"`;
+  if (flags.needsDecision === true) {
+    return since === version
+      ? null
+      : `packages/core/package.json declares "needsDecision": true, so its "needsDecisionSince" must be "${version}", this release's own version, but it ${described}`;
+  }
+  const previous = lastDecisionBefore(changelog, version);
+  if (previous === null) {
+    return since === null
+      ? null
+      : `no ## X.Y.Z section of CHANGELOG.md before ${version} has a line starting ${DECISION_MARKER}, so packages/core/package.json must not declare "needsDecisionSince", but it is "${since}"`;
+  }
+  return since === previous
+    ? null
+    : `the ## ${previous} section of CHANGELOG.md is the newest before ${version} with a line starting ${DECISION_MARKER}, so packages/core/package.json must carry "needsDecisionSince": "${previous}" forward, but it ${described}`;
 }
 
 // Run directly: check the version named against this tree's core and changelog. Compared through realpath, as
@@ -100,6 +183,6 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
   for (const problem of problems) console.error(`::error::${problem}`);
   if (problems.length > 0) process.exit(1);
   console.log(
-    `  ✓ ${version}: core declares security ${flags.security} and needsDecision ${flags.needsDecision}, as its changelog section says`,
+    `  ✓ ${version}: core declares security ${flags.security}, needsDecision ${flags.needsDecision} and needsDecisionSince ${flags.needsDecisionSince ?? 'none'}, as its changelog says`,
   );
 }

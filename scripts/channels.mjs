@@ -22,8 +22,10 @@
  *
  * **Release flags** (update provenance, hardened, P1). Core's `"agentcommsRelease"` says what a release is instead:
  * `{ "security": true }` for a security fix, `{ "needsDecision": true }` for one that needs a decision before it
- * installs, or both — those two keys and nothing else, each true or false. It lands in `releaseFlags`, and
- * `scripts/release-flags.mjs` refuses a release whose flags its own changelog section does not say.
+ * installs, or both, each true or false; and `"needsDecisionSince": "X.Y.Z"`, the newest release up to this one that
+ * needed a decision, carried forward from release to release (design 2026-10-22 §8.1) — those three keys and nothing
+ * else. It lands in `releaseFlags`, and `scripts/release-flags.mjs` refuses a release whose flags its own changelog
+ * section does not say, or whose carry is not the one the changelog gives.
  *
  * Plain JavaScript with no dependencies, on purpose: the release workflow runs `node scripts/packages.mjs` — which
  * reads this — in a job that installs nothing. So this only *reads* the channel manifests. They are *checked*, against
@@ -51,8 +53,8 @@ export const SCOPE = '@agentcomms';
  * - `services`: each package with a D14 `"agentcommsPackage": { "kind": "service", … }`, as
  *   `{ directory, packageName, declaration, packageJson }`, by directory;
  * - `held`: each package held back from release, as `{ directory, packageName, reason }`, by directory;
- * - `releaseFlags`: what core's `"agentcommsRelease"` declares, as `{ security, needsDecision }`, both false when it
- *   declares nothing;
+ * - `releaseFlags`: what core's `"agentcommsRelease"` declares, as `{ security, needsDecision, needsDecisionSince }`,
+ *   false, false and null when it declares nothing;
  * - `undeclared`: each package that is not private and declares neither, as `{ directory, packageName }` — except a
  *   server-only package a channel runs its server through, which is that channel's.
  *
@@ -66,7 +68,7 @@ export function readDeclarations(root = ROOT) {
   const services = [];
   const holds = [];
   const plain = [];
-  let releaseFlags = { security: false, needsDecision: false };
+  let releaseFlags = { security: false, needsDecision: false, needsDecisionSince: null };
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const packageJson = readPackageJson(root, entry.name);
@@ -365,15 +367,19 @@ function exportsName(path, name) {
   return false;
 }
 
+/** An exact release, `X.Y.Z`: never a range, a prerelease, build metadata or a partial version. */
+const EXACT_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
 /**
  * What core's `"agentcommsRelease"` field declares: `{ "security": true }`, `{ "needsDecision": true }` or both, each
- * key true or false and no other key (update provenance, hardened, P1). `{}`, which declares neither, is refused, and so
- * is a hold: core is never held back.
+ * key true or false, and `"needsDecisionSince"`, an exact version `X.Y.Z`, alone or beside them — no other key (update
+ * provenance, hardened, P1 and §8.1). `{}`, which declares nothing, is refused, and so is a hold: core is never held
+ * back. Whether the carry is the right one is the changelog's to say (`scripts/release-flags.mjs`).
  */
 function readReleaseFlags(directory, packageJson) {
   const where = `packages/${directory}/package.json`;
   const release = packageJson.agentcommsRelease;
-  const shape = `${where}: "agentcommsRelease" on core declares "security" and "needsDecision" only, each true or false`;
+  const shape = `${where}: "agentcommsRelease" on core declares "security" and "needsDecision", each true or false, and "needsDecisionSince", an exact version X.Y.Z, and nothing else`;
   if (release === null || typeof release !== 'object' || Array.isArray(release)) throw new Error(shape);
   if (Object.hasOwn(release, 'hold')) {
     throw new Error(
@@ -382,12 +388,21 @@ function readReleaseFlags(directory, packageJson) {
   }
   const keys = Object.keys(release);
   if (keys.length === 0) {
-    throw new Error(`${where}: "agentcommsRelease" on core declares neither "security" nor "needsDecision"`);
+    throw new Error(
+      `${where}: "agentcommsRelease" on core declares none of "security", "needsDecision" and "needsDecisionSince"`,
+    );
   }
   for (const key of keys) {
-    if ((key !== 'security' && key !== 'needsDecision') || typeof release[key] !== 'boolean') throw new Error(shape);
+    const value = release[key];
+    const flag = (key === 'security' || key === 'needsDecision') && typeof value === 'boolean';
+    const carry = key === 'needsDecisionSince' && typeof value === 'string' && EXACT_VERSION.test(value);
+    if (!flag && !carry) throw new Error(shape);
   }
-  return { security: release.security === true, needsDecision: release.needsDecision === true };
+  return {
+    security: release.security === true,
+    needsDecision: release.needsDecision === true,
+    needsDecisionSince: release.needsDecisionSince ?? null,
+  };
 }
 
 /**
@@ -496,8 +511,8 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
  * - `channels`: the entries `readChannels` returns.
  * - `libraries`, `services`, `held` and `undeclared`: the entries `readDeclarations` returns. A library feeds
  *   `packages` and nothing else here; a service also feeds the surface views from its D14 declaration.
- * - `releaseFlags`: what core declares this release to be, `{ security, needsDecision }` (`readDeclarations`), which
- *   `scripts/release-flags.mjs` holds to the changelog.
+ * - `releaseFlags`: what core declares this release to be, `{ security, needsDecision, needsDecisionSince }`
+ *   (`readDeclarations`), which `scripts/release-flags.mjs` holds to the changelog.
  * - `packages`: every package to publish, in publish order — each channel, any package a channel's server is run
  *   through (`server.npxPackage`, Gmail's `gmail-mcp`), each library and each service. Held packages are among them: what a tag
  *   leaves out is `scripts/packages.mjs`'s to say.
