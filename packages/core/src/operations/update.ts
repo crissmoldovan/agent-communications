@@ -65,7 +65,8 @@ import { launcherOf, registrationVersion, stableLauncherOf } from '../registrati
 // What a verified release declares, read from its tarball, and the global install that hands npm the verified file
 // (`../global-install.ts`): no Sigstore in either, and nothing runs on load, so WhatsApp's bundle, which reaches this
 // module, drops both with the check (its `update-gate.test.ts` holds it to that).
-import { declaredSince, factsOf } from '../release-facts.ts';
+import type { DeclarationRead } from '../release-declarations.ts';
+import { type DeclarationSources, declaredSince, factsOf } from '../release-facts.ts';
 import type { TarballFetch } from '../release-tarball.ts';
 import { refuseWhileUpdating, withPersonUpdateLock } from '../update-lock.ts';
 // Types only: sigstore-js stays out of everything core's index reaches. Core's CLI and server hand in the verifier.
@@ -739,13 +740,19 @@ function oldestHere(report: UpdateReport): string | null {
  * The registry handed in, or the one npm reads — but only beside the registry's own `latest`: a test with a stand-in
  * `latestVersion` hands in `releaseFacts` itself, or none is read. And only with a verifier (P2): a channel's process
  * carries no Sigstore, so it reads nothing a release declares — no document, no tarball — and its check keeps what
- * core's verified check recorded. Each package's document is read, and each release verified, once however often
- * asked.
+ * core's verified check recorded. Each package's document is read, and each release verified and its tarball
+ * downloaded, once however often asked — a tarball that could not be read too, which the cache on disk never keeps
+ * (0.26.0 review B).
+ *
+ * `deadline`, by `Date.now()`, is when reading stops: a release not verified and read by then is unread, so it makes no
+ * claim, and nothing is verified or downloaded after it. The day's check gives one well inside its claim
+ * (`UPDATE_CHECK_READS_MS`); none, and each request keeps only its own limits.
  */
 export function releaseFactsReader(
   env: NodeJS.ProcessEnv,
   deps: Pick<UpdateDeps, 'registry' | 'latestVersion' | 'verifyRelease' | 'tarballs'>,
   stateDir: string,
+  options: { deadline?: number | undefined } = {},
 ): ((packageName: string, version: string, from?: string | null) => Promise<ReleaseDeclaration | null>) | null {
   const verifier = deps.verifyRelease;
   if (deps.latestVersion !== undefined || verifier === undefined) return null;
@@ -763,11 +770,17 @@ export function releaseFactsReader(
     verdicts.set(key, known);
     return known;
   };
+  const declarations = new Map<string, Promise<DeclarationRead>>();
+  const sources: DeclarationSources = {
+    registry,
+    verify,
+    stateDir,
+    tarballs: deps.tarballs,
+    deadline: options.deadline,
+    read: declarations,
+  };
   return async (packageName, version, from = null) => {
-    const facts = factsOf(
-      version,
-      await declaredSince({ registry, verify, stateDir, tarballs: deps.tarballs }, packageName, from, version),
-    );
+    const facts = factsOf(version, await declaredSince(sources, packageName, from, version));
     return facts === null ? null : { security: facts.security, needsDecision: facts.needsDecision };
   };
 }

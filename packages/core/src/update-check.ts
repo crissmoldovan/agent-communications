@@ -51,6 +51,16 @@ import { isPlainVersion, isVersion } from './versions.ts';
 
 const CORE_PACKAGE = channelServer('core').packageName;
 
+/**
+ * How far into its claim the day's check still reads what releases declare (0.26.0 review B). Past it, a release not
+ * yet verified and read is unread — no claim either way, never a security fix said to be none — nothing more is
+ * verified or downloaded, and a download still going is cut off. What can follow still ends inside the claim's two
+ * minutes (`UPDATE_CHECK_LEASE_MS`): `npm ls`'s minute at most, then the record's wait for its lock, 15 s at most. A
+ * mirror that took a tarball request and never answered once kept a check reading for four minutes; another process
+ * claimed the check meanwhile, the first one's findings were dropped, and the day was never recorded.
+ */
+export const UPDATE_CHECK_READS_MS: number = 30_000;
+
 export interface UpdateCheckOptions {
   /** The registry and `npm ls`, for a test — nothing a test runs reads the real ones. */
   deps?: UpdateDeps | undefined;
@@ -222,8 +232,14 @@ async function ask(
   // read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
   // registry hands in its own, or none is read. Null: read, and not known now. Undefined: not read here. For either, the
   // record keeps what core's verified check found of the same version — a version npm never publishes twice — and
-  // otherwise makes no claim.
-  const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps, core.paths.stateDir);
+  // otherwise makes no claim. The reading stops `UPDATE_CHECK_READS_MS` into the claim, by the check's own clock, so
+  // the check records what it found while the claim is still its own.
+  const elapsed = options.now().getTime() - Date.parse(options.claimedAt);
+  const deadline = Number.isFinite(elapsed) ? Date.now() + UPDATE_CHECK_READS_MS - elapsed : undefined;
+  const read =
+    deps.releaseFacts !== undefined
+      ? deps.releaseFacts
+      : releaseFactsReader(env, deps, core.paths.stateDir, { deadline });
   const release: ReleaseFacts | null | undefined =
     read === null
       ? undefined
