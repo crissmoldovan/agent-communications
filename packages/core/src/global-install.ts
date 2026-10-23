@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { chmod, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, readdir, readFile, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
+import { writeFileAtomic } from './fs.ts';
+import { withFileLock } from './lock.ts';
 import {
   downloadVerifiedTarball,
   type TarballEntry,
@@ -31,8 +33,18 @@ import { isPlainVersion } from './versions.ts';
  * and is held to its own verified tarball the same way. Other packages in `node_modules/` are npm's to check, against
  * the registry's integrity (SECURITY.md says so).
  *
- * A mismatch is said in fixed words that name no file — an installed path can be a hostile tarball's name — and
- * nothing is uninstalled: the person runs the update again, which checks again.
+ * A mismatch is said in fixed words that name no file — an installed path can be a hostile tarball's name. Every
+ * package of this suite there that does not match is removed before the step fails (design §8.2): the global package
+ * itself when it is the one, or each one inside it. A nested `@agentcomms/core` npm took from the registry would
+ * otherwise stay, and a channel's day's check, handed to the core beside it (P2), would start it. A removal follows no
+ * link — a link is removed as a link — and reaches nothing outside the folder `npm root -g` named. On Windows, where a
+ * file another process holds open refuses deletion for a moment, a removal refused with EBUSY or EPERM is tried again
+ * a few times first.
+ *
+ * Each global package a mismatch was found in is recorded, content-free, in `<state>/removed-globals.json`: its name,
+ * the release being installed, and when. The next update by hand installs it again from its verified file, though npm
+ * lists it at its latest release or no longer lists it at all, and the record is cleared once an install of that
+ * package verifies; one that fails again keeps it. So "run the update again" does what it says.
  *
  * No Sigstore here, and nothing runs when this module is loaded: WhatsApp's bundle, which carries core's index, drops
  * it with everything that reads a tarball.
@@ -54,6 +66,73 @@ export interface GlobalInstallDeps {
    * one at exactly that release is held to that verification, and not verified again.
    */
   verified?: ReadonlyMap<string, VerifiedProvenance> | undefined;
+  /**
+   * The state directory, where a global package a mismatch was found in is recorded for the next update to reinstall
+   * (`removed-globals.json`), and cleared once its install verifies. None: nothing is recorded or cleared.
+   */
+  stateDir?: string | undefined;
+}
+
+// ── What the next update reinstalls ─────────────────────────────────────────────────────────────────────────────
+
+export const REMOVED_GLOBALS_FILE = 'removed-globals.json';
+
+const REMOVED_GLOBALS_LOCK = '.removed-globals.lock';
+
+/** A global package an update found a mismatch in, and removed what of it did not match: content-free. */
+export interface RemovedGlobal {
+  package: string;
+  /** The release the update was installing. */
+  version: string;
+  /** When, ISO. */
+  removedAt: string;
+}
+
+function isTime(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const at = new Date(value);
+  return !Number.isNaN(at.getTime()) && at.toISOString() === value;
+}
+
+/**
+ * The globals recorded for the next update to reinstall, each once: none when there is no record or it cannot be
+ * read. Only a name of this suite and a plain release are read from it.
+ */
+export async function readRemovedGlobals(stateDir: string): Promise<RemovedGlobal[]> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(join(stateDir, REMOVED_GLOBALS_FILE), 'utf8'));
+  } catch {
+    return [];
+  }
+  const listed = typeof parsed === 'object' && parsed !== null ? (parsed as { removed?: unknown }).removed : undefined;
+  if (!Array.isArray(listed)) return [];
+  const removed: RemovedGlobal[] = [];
+  for (const item of listed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const { package: name, version, removedAt } = item as Record<string, unknown>;
+    if (typeof name !== 'string' || !SUITE_NAME.test(name) || typeof version !== 'string') continue;
+    if (!isPlainVersion(version) || !isTime(removedAt)) continue;
+    if (removed.some((one) => one.package === name)) continue;
+    removed.push({ package: name, version, removedAt });
+  }
+  return removed;
+}
+
+/** The record changed by `change`, under its lock, written atomically; never in the way of the step it serves. */
+async function changeRemovedGlobals(
+  stateDir: string,
+  change: (removed: RemovedGlobal[]) => RemovedGlobal[] | null,
+): Promise<void> {
+  try {
+    await withFileLock(join(stateDir, REMOVED_GLOBALS_LOCK), async () => {
+      const next = change(await readRemovedGlobals(stateDir));
+      if (next === null) return;
+      await writeFileAtomic(join(stateDir, REMOVED_GLOBALS_FILE), `${JSON.stringify({ removed: next }, null, 2)}\n`);
+    });
+  } catch {
+    // A record that cannot be written leaves the step's own outcome as it is.
+  }
 }
 
 /** A name of this suite, as npm writes one: only then is it said in a detail. */
@@ -88,6 +167,8 @@ const WORDS = {
     who === null ? 'it is a link, not the installed package' : `${who} in it is a link, not an installed package`,
   unread: (who: string | null) =>
     who === null ? 'its verified release could not be read' : `the verified release of ${who} in it could not be read`,
+  unchecked: (who: string | null) =>
+    who === null ? 'it could not be read to check it' : `${who} in it could not be read to check it`,
   unverified: (who: string) => `${who} in it could not be verified as built by this repository's release workflow`,
   undownloaded: (who: string) =>
     `the verified tarball of ${who} in it could not be downloaded, so it could not be checked`,
@@ -268,53 +349,208 @@ async function verifiedEntries(
   return read.ok ? { ok: true, entries: read.entries } : { ok: false, problem: 'unread' };
 }
 
+/** A package of this suite in a global install that is not its verified release: where it is, and its name. */
+interface Mismatching {
+  dir: string;
+  /** Its name as the folder says it; null for the global package itself. */
+  packageName: string | null;
+}
+
 /**
- * Why the package at `dir` is not its verified tarball (`release`, with its bytes), in fixed words, or null when it is:
- * the package itself, then every package of this suite inside it, each against its own verified release. Never follows
- * a link; never changes anything.
+ * What a check of a global install found: why it is not its verified release, in fixed words — the first reason found —
+ * or null when it is; and every package of this suite there that is not its own verified release. That is the global
+ * package alone when it is one itself, and otherwise each one inside it, outermost first, none inside another listed.
  */
-export async function globalProblem(
+export interface GlobalCheck {
+  problem: string | null;
+  mismatching: Mismatching[];
+}
+
+/** Whether `path` is below `folder`: both built from the same folder, so compared as paths. */
+function below(path: string, folder: string): boolean {
+  return path.startsWith(`${folder}${sep}`);
+}
+
+/**
+ * Why a package of this suite inside a global install is not its own verified release, in fixed words, or null when it
+ * is. `held` keeps each release's verified entries, so a release held by several packages is verified once.
+ */
+async function insideProblem(
+  inside: Inside,
+  held: Map<string, Awaited<ReturnType<typeof verifiedEntries>>>,
+  deps: Pick<GlobalInstallDeps, 'registry' | 'verify' | 'tarballs' | 'verified'>,
+): Promise<string | null> {
+  if (!inside.folder) return WORDS.link(named(inside.packageName));
+  const version = await installedVersion(inside.dir);
+  const who = named(inside.packageName, version);
+  if (version === null || !isPlainVersion(version) || !SUITE_NAME.test(inside.packageName)) {
+    return WORDS.unverified(who);
+  }
+  const key = `${inside.packageName}@${version}`;
+  let verified = held.get(key);
+  if (verified === undefined) {
+    verified = await verifiedEntries(inside.packageName, version, deps);
+    held.set(key, verified);
+  }
+  if (!verified.ok) return WORDS[verified.problem](who);
+  const problem = await treeProblem(inside.dir, verified.entries);
+  return problem === null ? null : WORDS[problem](who);
+}
+
+/**
+ * The package at `dir` checked against its verified tarball (`release`, with its bytes): the package itself, then every
+ * package of this suite inside it, each against its own verified release, and every one that does not match found —
+ * one that could not be read to check it included. Never follows a link; never changes anything; never throws.
+ */
+export async function globalCheck(
   dir: string,
   release: TarballRelease & { bytes: Buffer },
   deps: Pick<GlobalInstallDeps, 'registry' | 'verify' | 'tarballs' | 'verified'>,
-): Promise<string | null> {
+): Promise<GlobalCheck> {
+  const itself = (problem: string): GlobalCheck => ({ problem, mismatching: [{ dir, packageName: null }] });
   const read =
     createHash('sha512').update(release.bytes).digest('hex') === release.sha512.toLowerCase()
       ? tarballEntries(release.bytes)
       : null;
-  if (read === null || !read.ok) return WORDS.unread(null);
-  let stat: Stats;
+  if (read === null || !read.ok) return itself(WORDS.unread(null));
+  let insides: Inside[];
   try {
-    stat = await lstat(dir);
-  } catch (error) {
-    if (missingError(error)) return WORDS.missing(null);
-    throw error;
+    let stat: Stats;
+    try {
+      stat = await lstat(dir);
+    } catch (error) {
+      if (missingError(error)) return { problem: WORDS.missing(null), mismatching: [] };
+      throw error;
+    }
+    if (stat.isSymbolicLink()) return itself(WORDS.link(null));
+    if (!stat.isDirectory()) return itself(WORDS.differs(null));
+    const own = await treeProblem(dir, read.entries);
+    if (own !== null) return itself(WORDS[own](null));
+    insides = await suitePackagesIn(dir);
+  } catch {
+    return itself(WORDS.unchecked(null));
   }
-  if (stat.isSymbolicLink()) return WORDS.link(null);
-  if (!stat.isDirectory()) return WORDS.differs(null);
-  const own = await treeProblem(dir, read.entries);
-  if (own !== null) return WORDS[own](null);
 
+  let problem: string | null = null;
+  const mismatching: Mismatching[] = [];
   // Each release once, however many packages here hold it.
   const held = new Map<string, Awaited<ReturnType<typeof verifiedEntries>>>();
-  for (const inside of await suitePackagesIn(dir)) {
-    if (!inside.folder) return WORDS.link(named(inside.packageName));
-    const version = await installedVersion(inside.dir);
-    const who = named(inside.packageName, version);
-    if (version === null || !isPlainVersion(version) || !SUITE_NAME.test(inside.packageName)) {
-      return WORDS.unverified(who);
+  for (const inside of insides) {
+    // Inside one that is removed already, and removed with it.
+    if (mismatching.some((one) => below(inside.dir, one.dir))) continue;
+    let found: string | null;
+    try {
+      found = await insideProblem(inside, held, deps);
+    } catch {
+      found = WORDS.unchecked(named(inside.packageName));
     }
-    const key = `${inside.packageName}@${version}`;
-    let verified = held.get(key);
-    if (verified === undefined) {
-      verified = await verifiedEntries(inside.packageName, version, deps);
-      held.set(key, verified);
-    }
-    if (!verified.ok) return WORDS[verified.problem](who);
-    const problem = await treeProblem(inside.dir, verified.entries);
-    if (problem !== null) return WORDS[problem](who);
+    if (found === null) continue;
+    problem ??= found;
+    mismatching.push({ dir: inside.dir, packageName: inside.packageName });
   }
-  return null;
+  return { problem, mismatching };
+}
+
+/**
+ * Removes what is at `path` without following a link: a folder with everything in it, a file, or a link — the link
+ * itself, never what it points to. Each entry is looked at with lstat, so nothing behind a link is reached.
+ */
+async function removeTree(path: string): Promise<void> {
+  const stat = await lstat(path);
+  if (stat.isDirectory() && !stat.isSymbolicLink()) {
+    for (const name of await readdir(path)) await removeTree(join(path, name));
+    await rmdir(path);
+  } else {
+    await unlink(path);
+  }
+}
+
+/** How often a removal Windows refused for a moment is tried, in all, and how long it waits between tries. */
+const WINDOWS_TRIES = 5;
+const WINDOWS_PAUSE_MS = 100;
+
+/** What Windows answers while another process — a running server, a virus scan — holds a file open. */
+function refusedForNow(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'EBUSY' || code === 'EPERM';
+}
+
+export interface RemoveOptions {
+  /** Removes what is at a path without following a link: `removeTree` when left out. For a test, one that refuses. */
+  remove?: ((path: string) => Promise<void>) | undefined;
+  /** The system it runs on: only Windows tries again. */
+  platform?: NodeJS.Platform | undefined;
+  /** Waits between tries. */
+  pause?: ((ms: number) => Promise<void>) | undefined;
+}
+
+/**
+ * Removes the package at `dir`, below `root` — the folder `npm root -g` named — without following a link. Refused
+ * unless `dir` is below `root` and every folder between them is a folder and not a link, so nothing outside the global
+ * root is reached by way of one; `root` itself is as npm named it. On Windows a removal refused with EBUSY or EPERM is
+ * tried again, `WINDOWS_TRIES` times in all, `WINDOWS_PAUSE_MS` apart. True when nothing is left at `dir`.
+ */
+export async function removeInside(root: string, dir: string, options: RemoveOptions = {}): Promise<boolean> {
+  const remove = options.remove ?? removeTree;
+  const windows = (options.platform ?? process.platform) === 'win32';
+  const pause = options.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const path = relative(root, dir);
+  if (path === '' || isAbsolute(path) || path === '..' || path.startsWith(`..${sep}`)) return false;
+  const parts = path.split(sep);
+  try {
+    for (let end = 1; end < parts.length; end += 1) {
+      const stat = await lstat(join(root, ...parts.slice(0, end)));
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    }
+  } catch (error) {
+    return missingError(error) && !(await there(dir));
+  }
+  for (let tries = 1; ; tries += 1) {
+    try {
+      await remove(dir);
+      return true;
+    } catch (error) {
+      if (missingError(error)) return !(await there(dir));
+      if (!windows || !refusedForNow(error) || tries >= WINDOWS_TRIES) return false;
+      await pause(WINDOWS_PAUSE_MS);
+    }
+  }
+}
+
+/** Whether anything is at `path`, a link included. */
+async function there(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Names joined as a sentence lists them: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+/**
+ * Removes every mismatching package below `root`, and says what became of them, after the mismatch's own words: "so it
+ * was removed" for the global package itself, "so @agentcomms/core was removed from it" for one inside it, and "and …
+ * could not be removed" for what is still there. Names a package, never a file. Empty when there is nothing to remove.
+ */
+async function removeMismatching(root: string, mismatching: readonly Mismatching[]): Promise<string> {
+  const removed = new Set<string>();
+  const kept = new Set<string>();
+  let itself: boolean | null = null;
+  for (const one of mismatching) {
+    const gone = await removeInside(root, one.dir);
+    if (one.packageName === null) itself = gone;
+    else (gone ? removed : kept).add(named(one.packageName));
+  }
+  if (itself !== null) return itself ? ', so it was removed' : ', and it could not be removed';
+  const words: string[] = [];
+  if (removed.size > 0) words.push(`so ${listed([...removed])} ${removed.size === 1 ? 'was' : 'were'} removed from it`);
+  if (kept.size > 0) words.push(`and ${listed([...kept])} in it could not be removed`);
+  return words.length === 0 ? '' : `, ${words.join(', ')}`;
 }
 
 /** A release's tarball's file name, as `npm pack` names one, from what is safe to put in a path. */
@@ -329,9 +565,10 @@ function message(error: unknown): string {
 
 /**
  * Downloads the verified tarball of `request`, installs exactly it — written to a file of mode 0600, in a folder of
- * 0700, removed afterwards — then checks what npm installed against it (`globalProblem`). Never uninstalls: on a
- * mismatch the step fails with `again`, what the person runs ("run <core's located update> again"). Nothing is handed
- * to npm unless the bytes are the verified ones and can be read.
+ * 0700, removed afterwards — then checks what npm installed against it (`globalCheck`). On a mismatch, every package of
+ * this suite there that does not match is removed (`removeMismatching`), and the step fails saying so, with `again`,
+ * what the person runs ("run <core's located update> again"). Nothing is handed to npm unless the bytes are the
+ * verified ones and can be read.
  */
 export async function installVerifiedGlobal(
   request: { packageName: string; version: string; provenance: VerifiedProvenance },
@@ -385,17 +622,29 @@ export async function installVerifiedGlobal(
       detail: `the global ${packageName} could not be checked against its verified release: npm did not say where it installs global packages; ${again}`,
     };
   }
-  let problem: string | null;
-  try {
-    problem = await globalProblem(
-      join(root, ...packageName.split('/')),
-      { packageName, version, sha512: provenance.sha512, bytes: download.bytes },
-      deps,
-    );
-  } catch {
-    problem = 'it could not be read to check it';
+  const dir = join(root, ...packageName.split('/'));
+  const check = await globalCheck(
+    dir,
+    { packageName, version, sha512: provenance.sha512, bytes: download.bytes },
+    deps,
+  );
+  const stateDir = deps.stateDir;
+  if (check.problem === null) {
+    // Verified: nothing of it is left for the next update to reinstall.
+    if (stateDir !== undefined) {
+      await changeRemovedGlobals(stateDir, (removed) =>
+        removed.some((one) => one.package === packageName)
+          ? removed.filter((one) => one.package !== packageName)
+          : null,
+      );
+    }
+    return { ok: true };
   }
-  return problem === null
-    ? { ok: true }
-    : { ok: false, detail: `${GLOBAL_MISMATCH(packageName)} (${problem}): ${again}` };
+  const removal = await removeMismatching(root, check.mismatching);
+  // Recorded whether or not all of it could be removed: either way, the next update installs it again.
+  if (stateDir !== undefined && check.mismatching.length > 0) {
+    const entry: RemovedGlobal = { package: packageName, version, removedAt: new Date().toISOString() };
+    await changeRemovedGlobals(stateDir, (removed) => [...removed.filter((one) => one.package !== packageName), entry]);
+  }
+  return { ok: false, detail: `${GLOBAL_MISMATCH(packageName)} (${check.problem})${removal}: ${again}` };
 }

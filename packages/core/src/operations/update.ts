@@ -14,7 +14,7 @@ import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
-import { type GlobalInstallDeps, installVerifiedGlobal } from '../global-install.ts';
+import { type GlobalInstallDeps, installVerifiedGlobal, readRemovedGlobals } from '../global-install.ts';
 import { type CliHandoffs, type Handoff, handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_ID_PATTERN } from '../ids.ts';
 import {
@@ -224,6 +224,12 @@ export interface GlobalItem {
   package: string;
   version: string;
   latest: string;
+  /**
+   * Installed again from its verified file, though `version` is the latest or npm no longer lists it: an earlier
+   * update found a mismatch in it and removed what did not match (`removed-globals.json`). `version` is then the
+   * release npm lists, or the one that update was installing.
+   */
+  reinstall?: true;
 }
 
 export type UpdateItem = RegistrationItem | RuntimeItem | GlobalItem;
@@ -522,6 +528,10 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
     };
   });
 
+  // Each global an earlier update removed all or part of: installed again from its verified file, listed or not.
+  const removedGlobals = (await readRemovedGlobals(core.paths.stateDir)).filter((one) =>
+    PUBLISHED_NAMES.includes(one.package),
+  );
   let installed: Record<string, string> = {};
   try {
     const listed = await (deps.globalPackages ?? (() => npmGlobalPackages(env, PUBLISHED_NAMES)))();
@@ -548,6 +558,7 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
     wanted.add(entry.package);
   }
   for (const name of Object.keys(installed)) wanted.add(name);
+  for (const removed of removedGlobals) wanted.add(removed.package);
   const latest = await latestReleases(
     [...wanted].sort(),
     deps.latestVersion ?? ((name) => npmLatestVersion(name, { env })),
@@ -656,11 +667,19 @@ async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Pr
 
   const globals: GlobalItem[] = [];
   for (const name of PUBLISHED_NAMES) {
-    const version = installed[name];
+    const removed = removedGlobals.find((one) => one.package === name);
+    const version = installed[name] ?? removed?.version;
     const newestRelease = latest[name];
     if (version === undefined || newestRelease === undefined) continue;
-    const item: GlobalItem = { kind: 'global', package: name, version, latest: newestRelease };
-    if (isBehind(version, newestRelease)) {
+    const reinstall = removed !== undefined && !isBehind(version, newestRelease);
+    const item: GlobalItem = {
+      kind: 'global',
+      package: name,
+      version,
+      latest: newestRelease,
+      ...(reinstall ? { reinstall: true as const } : {}),
+    };
+    if (reinstall || isBehind(version, newestRelease)) {
       behind.push(item);
       globals.push(item);
     } else upToDate.push(item);
@@ -931,7 +950,11 @@ export function updateCheckFindings(
   const globals = items.filter((item): item is GlobalItem => item.kind === 'global');
   const global = CHANNELS.filter((channel) => {
     const name = serverFacts(channel).packageName;
-    return globals.some((item) => item.package === name && atLatest(installed.has(name) ? item.latest : item.version));
+    // One to install again is current only once it is: what npm lists of it did not match.
+    return globals.some(
+      (item) =>
+        item.package === name && atLatest(installed.has(name) ? item.latest : item.reinstall ? null : item.version),
+    );
   });
   // What an update did not settle is still behind: a step that failed, or something left for a person.
   const stillBehind =
@@ -1177,7 +1200,11 @@ function effectsOf(planned: Planned): string[] {
     ...planned.registrations.map(once).flatMap(registrationEffects),
     ...planned.globals.map(
       (global) =>
-        `updates the global ${global.package} from ${global.version} to ${global.latest}: installs its verified tarball with \`npm install -g\`, then checks what npm installed against it`,
+        `${
+          global.reinstall
+            ? `reinstalls the global ${global.package} ${global.latest}, which an earlier update removed all or part of because it did not match its verified release`
+            : `updates the global ${global.package} from ${global.version} to ${global.latest}`
+        }: installs its verified tarball with \`npm install -g\`, then checks what npm installed against it`,
     ),
     ...decidingEffects(planned),
     ...verifiedEffects(planned),
@@ -1730,6 +1757,7 @@ async function applyUpdate(context: InstallContext, planned: Planned, deps: Upda
     verify: check.verify,
     tarballs: deps.tarballs,
     verified: planned.verified,
+    stateDir: context.core.paths.stateDir,
   };
   const again = handoffSentence(planned.handoffs.core(['update']), (command) => `run ${command} again`, {
     instead: "run core's update again",

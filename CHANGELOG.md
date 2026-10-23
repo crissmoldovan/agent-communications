@@ -32,8 +32,15 @@ more.
   `comms_update`) hands `npm install -g` the verified tarball itself, from a private temporary file, instead of a name
   npm would look up again. Then every file of what npm installed, and of each `@agentcomms` package inside it, must be
   its verified tarball's, byte for byte, with nothing extra outside its own `node_modules/`, and a package that is a
-  link is a mismatch. A mismatch fails that step with `the global <package> does not match its verified release (…):
-  run <update> again`; nothing is uninstalled, and running the update again checks it again.
+  link is a mismatch. On a mismatch, every `@agentcomms` package of the global install that does not match is removed
+  — the global package itself when it is the one — and the step fails saying what went: `the global <package> does not
+  match its verified release (…), so @agentcomms/core was removed from it: run <update> again`. Left there, it would
+  run: npm fetches a global channel's core from the registry, and the channel hands its day's check to that core. A
+  removal follows no link and touches nothing outside `npm root -g`. A channel carries core's code, so with its core
+  removed it still works and checks on its own. Running the update again installs it again: each global package a
+  mismatch was found in is recorded in `removed-globals.json` in the state directory (its name, the release, and when),
+  and the next update reinstalls it from its verified file, even at its latest release or no longer listed by npm,
+  until an install of it checks out.
 - **Holds count from Rekor's signed time.** The background run's 72 hours, or 24 for a security fix, now start when
   Sigstore's transparency log signed for the release, the latest among its packages, and every package is verified
   before the hold is decided. A release whose provenance carries no signed time is held from when this machine first
