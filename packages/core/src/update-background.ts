@@ -31,6 +31,9 @@ import {
   runningCommandLines,
   verifyEntry,
 } from './mcp-install.ts';
+import { readVerifiedDeclaration } from './release-declarations.ts';
+import { firstSeenTimes } from './release-first-seen.ts';
+import { type TarballFetch, tarballLocation } from './release-tarball.ts';
 import { childEnvironment } from './system-programs.ts';
 import { backgroundJobAtRun, recordUpdateJobRun, type UpdateJobDeps, updateJobContext } from './update-job.ts';
 import { withUpdateLock } from './update-lock.ts';
@@ -44,15 +47,14 @@ import {
   verifyProvenance,
 } from './update-provenance.ts';
 import {
+  decisionNeeded,
   majorOf,
   npmRegistry,
   oldestVersion,
   type RegistryAnswer,
   type ReleaseRegistry,
   type ReleaseVerifier,
-  releaseDeclaration,
   releaseIntegrity,
-  releasesBetween,
   runtimeIntegrityProblem,
 } from './update-release.ts';
 import {
@@ -64,7 +66,7 @@ import {
   type UpdateCheckRecord,
   updateCheckSwitchedOff,
 } from './update-state.ts';
-import { BACKGROUND_WORDS, type FailedWhat } from './update-words.ts';
+import { BACKGROUND_WORDS, DECLARATION_UNREAD, type FailedWhat } from './update-words.ts';
 import { VERSION } from './version.ts';
 import { compareVersions, isPrerelease, isVersion } from './versions.ts';
 
@@ -77,12 +79,19 @@ import { compareVersions, isPrerelease, isVersion } from './versions.ts';
  * 1. **Settings.** Track A's, through `updateSettingsReader`: unless the level in force is `auto` and no organisation
  *    turns background updates off, Track C's `backgroundJobAtRun` is called — it removes the job an organisation
  *    turned off — and the run stops.
- * 2. **The registry.** `latest` of the core. Never automatic: a major version, a release whose core manifest declares
- *    `agentcommsRelease.needsDecision`, a downgrade — each a notice. Held: a release that was rolled back, until a
- *    newer one exists (`update-held.json`); one published under 72 hours ago, or 24 for `agentcommsRelease.security`.
- *    A pause holds everything but a security fix.
- * 3. **Provenance** of every package to install (`update-provenance.ts`). Any refusal stops the whole run: nothing is
- *    installed.
+ * 2. **The registry.** `latest` of the core, its release verified first (`update-provenance.ts`), and what it declares
+ *    read from its verified tarball (`release-declarations.ts`; design 2026-10-22 P1) — never from the registry's copy
+ *    of its manifest, and of no other release (§8.1). Never automatic: a major version, a release that needs a
+ *    decision — the latest declares `agentcommsRelease.needsDecision`, or carries a `needsDecisionSince` after the
+ *    oldest release a launcher here starts — a downgrade — each a notice. Held: a release that was rolled back, until a
+ *    newer one exists (`update-held.json`); one signed under 72 hours ago, or 24 for a security fix. A pause holds
+ *    everything but a security fix. A latest whose declaration cannot be read — its tarball cannot be had — holds the
+ *    run back, `unavailable`: the next run tries again, and a job that is never past it is reported as not running.
+ *    Which versions the registry lists decides nothing, and costs nothing: none of them is verified or read.
+ * 3. **Provenance** of every package to install, before its hold is decided. Any refusal stops the whole run: nothing
+ *    is installed. The hold counts from the time Rekor signed for each package's release, the latest of them
+ *    (`VerifiedProvenance.signedAt`; design 2026-10-22 P4), or, for a release whose provenance carries none, from when
+ *    this machine first saw it (`release-first-seen.ts`). The registry's `time` counts for nothing.
  * 4. **Install** each into a runtime of its own, as `comms_update` does; then check each: the installed package is the
  *    tarball whose provenance was verified, its CLI's `--version` is the release, and its server answers MCP
  *    `initialize` started with no account to reach.
@@ -92,7 +101,8 @@ import { compareVersions, isPrerelease, isVersion } from './versions.ts';
  * 7. **The notice** for the next session, in the update state file.
  *
  * The clock is the earlier of this machine's and the registry's (its `Date`), so a clock that jumps ahead skips no
- * hold and ends no pause early; one that goes back only holds longer (plan, Review focus 2).
+ * hold and ends no pause early; one that goes back only holds longer (plan, Review focus 2). A first sight is recorded
+ * at this machine's own clock, never the run's, which a registry's `Date` could set back.
  */
 
 /** What a run reads of the person's and the organisation's settings: Track A's, through `updateSettingsReader`. */
@@ -152,6 +162,8 @@ export interface BackgroundDeps {
   launchers?:
     | { exchange?: typeof exchangePointer | undefined; restore?: typeof restorePointer | undefined }
     | undefined;
+  /** How a release's tarball is fetched, to read what it declares. Defaults to `fetch`. */
+  tarballs?: TarballFetch | undefined;
 }
 
 export interface BackgroundRequest {
@@ -162,7 +174,8 @@ export interface BackgroundRequest {
 /**
  * - `off`: this process's environment turned updates off (`CI`, the switch). `not-auto`: the level or the organisation
  *   does not install in the background. `busy`: another run holds the lock. `no-launchers`: nothing here starts a
- *   stable launcher. `unavailable`: the registry could not be read.
+ *   stable launcher. `unavailable`: the registry could not be read, or what a release this run takes the machine past
+ *   declares could not be read from its verified release.
  * - `up-to-date`, `paused`, `held`: nothing to do yet. `skipped`: a release that waits for the person. `refused`: its
  *   provenance did not verify. `failed`: installing, checking or switching did not work, and nothing was switched.
  * - `installed`: switched. `would-install`: a dry run that found everything verified.
@@ -186,8 +199,9 @@ export type BackgroundOutcome =
  * The outcomes that show the job works, and so are recorded as its `lastRun` (re-review of 0.20.0, severity 6): it
  * reached the registry and decided — nothing to do, installed, held for its hours or a pause, left for the person, or
  * refused as unverified, which its notice says. Not recorded:
- * - `unavailable`: the registry could not be read. A job that can never reach it keeps nothing up to date, so after
- *   48 hours of it the notices and the security line come back, and doctor says the job has not run;
+ * - `unavailable`: the registry could not be read, or a release's declaration could not be read from its verified
+ *   release (a mirror that blocks tarballs; plan, Review Focus 1). A job that can never get past it keeps nothing up to
+ *   date, so after 48 hours of it the notices and the security line come back, and doctor says the job has not run;
  * - `busy`: another run, or a person's update, held the machine's lock. One day so is nothing; a lock held for good —
  *   a run that hung — would otherwise hide a job that does nothing, so it surfaces after 48 hours too;
  * - `failed`, and `off` or `not-auto`, where the run did none of the job's work.
@@ -226,11 +240,14 @@ export interface BackgroundRunResult {
   latest: string | null;
   /** Why the run did what it did, in a sentence. */
   reason: string;
-  /** The release considered, when there was one: when it came out, what it declares, and when it may install. */
+  /** The release considered, when there was one: when its hold counts from, what it declares, and when it may install. */
   release?:
     | {
         version: string;
+        /** When the hold counts from: the latest Rekor time of the set, or this machine's first sight. */
         publishedAt: string | null;
+        /** Where `publishedAt` comes from: the time Rekor signed, or this machine's first sight of a release with none. */
+        heldFrom: 'signed' | 'first-seen' | null;
         security: boolean;
         needsDecision: string | null;
         holdHours: number;
@@ -246,7 +263,7 @@ export interface BackgroundRunResult {
   jobRemoved: boolean;
 }
 
-/** The holds (U5 step 2): hours after publish. */
+/** The holds (U5 step 2): hours after Rekor signed for a release, or this machine first saw it (design 2026-10-22 P4). */
 export const HOLD_HOURS = 72;
 export const SECURITY_HOLD_HOURS = 24;
 const HOUR_MS = 60 * 60 * 1000;
@@ -523,43 +540,49 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   const ahead = launched.filter((entry) => entry.version !== null && (compareVersions(entry.version, latest) ?? 0) > 0);
   if (behind.length === 0) return stop('up-to-date', `every stable launcher here starts ${latest}, the latest`, facts);
 
-  // What the manifest says, unverified: only ever a reason to hold back — a pause holds a release that does not say it
-  // is a security fix — until core's release verifies below. Nothing else is acted on, or said, before then.
   const servedAt = [coreAnswer.servedAt];
   const clock = () => new Date(Math.min(run.now.getTime(), ...servedAt.flatMap((at) => (at ? [at.getTime()] : []))));
   const paused = settings.pausedUntil(clock());
   const pausedNow = paused !== undefined && clock() < paused;
-  if (pausedNow && !releaseDeclaration(coreAnswer.packument.versions?.[latest]).security) {
-    return stop(
-      'paused',
-      `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
-      facts,
-    );
-  }
+  const pausedStop = () =>
+    stop('paused', `background updates are paused until ${paused?.toISOString()}; ${latest} waits until then`, facts);
 
-  // Core's release, verified before anything the registry says of it is acted on — a security fix, a needed decision,
-  // a major, a downgrade — or made a notice: one that does not verify is only refused.
+  // Core's release, verified before anything said of it is acted on — a security fix, a needed decision, a major, a
+  // downgrade — or made a notice: one that does not verify is only refused. A pause is decided after it too, as only
+  // what the verified release declares can pass one.
   const verifier = bundleVerifier(run);
+  const verify = (packageName: string, version: string, integrity: string): Promise<ProvenanceVerdict> =>
+    verifyProvenance({ packageName, version, integrity }, { fetch: deps.provenance?.fetch, verifyBundle: verifier });
   const coreIntegrity = releaseIntegrity(coreAnswer.packument, latest);
   if (coreIntegrity === null) return stop('held', `${corePackage}@${latest} is not on the registry yet`, facts);
-  const coreVerdict = await verifyProvenance(
-    { packageName: corePackage, version: latest, integrity: coreIntegrity },
-    { fetch: deps.provenance?.fetch, verifyBundle: verifier },
-  );
+  const coreVerdict = await verify(corePackage, latest, coreIntegrity);
   if (!coreVerdict.ok) {
     return stop('refused', `the provenance of ${corePackage}@${latest} did not verify: ${coreVerdict.field}`, facts, {
       text: BACKGROUND_WORDS.unverified(latest, coreVerdict.field),
       outcome: 'refused',
     });
   }
-  const flags = releaseDeclaration(coreAnswer.packument.versions?.[latest]);
-  if (pausedNow && !flags.security) {
-    return stop(
-      'paused',
-      `background updates are paused until ${paused.toISOString()}; ${latest} waits until then`,
-      facts,
-    );
+
+  // What a verified release declares is read from its own tarball — the bytes whose sha512 is the digest its provenance
+  // signed — never from the registry's copy of its manifest, nor checked against the integrity the registry gives
+  // (design 2026-10-22 P1). Kept per integrity, and never written by a dry run.
+  const declared = await readVerifiedDeclaration(
+    coreVerdict.provenance,
+    tarballLocation(coreAnswer.packument, latest),
+    {
+      stateDir: core.paths.stateDir,
+      ...(deps.tarballs !== undefined ? { fetch: deps.tarballs } : {}),
+      writeCache: !run.dryRun,
+    },
+  );
+  // No notice: a run that cannot read it is not a decision about the release. The next run tries again, and a job that
+  // never gets past it is not recorded as working (`JOB_WORKS`), so its notices come back (plan, Review Focus 1).
+  if (!declared.known) {
+    if (pausedNow) return pausedStop();
+    return stop('unavailable', `${corePackage}@${latest}: ${DECLARATION_UNREAD}; the next run tries again`, facts);
   }
+  const flags = { security: declared.security };
+  if (pausedNow && !flags.security) return pausedStop();
 
   if ((compareVersions(latest, current) ?? 0) < 0 || ahead.length > 0) {
     return stop('skipped', `${latest} is older than what runs here: a downgrade is never automatic`, facts, {
@@ -567,9 +590,10 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       outcome: 'skipped',
     });
   }
-  // Every release since the oldest a launcher here starts is what this run takes the machine past: a major crossed by
-  // any of them, or a decision any of them needs, waits for the person — a later release that does not say so again
-  // does not end the wait.
+  // The oldest release a launcher here starts is what this run takes the machine from: a major crossed by any launcher
+  // here, or a decision the latest declares or carries forward after it (design 2026-10-22 §8.1), waits for the person.
+  // Only the latest's verified declaration says so: which releases the registry lists between decides nothing, so a
+  // release left out of its document, or one added that does not verify, changes nothing and is never asked about.
   const from = oldestVersion(behind.map((entry) => entry.version ?? current)) ?? current;
   if (majorOf(latest) !== majorOf(from)) {
     return stop('skipped', `${latest} is a major release after ${from}: it waits for the person`, facts, {
@@ -577,42 +601,10 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       outcome: 'skipped',
     });
   }
-  const versions = coreAnswer.packument.versions;
-  const deciding = [
-    ...new Set([
-      ...(flags.needsDecision ? [latest] : []),
-      ...releasesBetween(coreAnswer.packument, from, latest).filter(
-        (version) => releaseDeclaration(versions?.[version]).needsDecision,
-      ),
-    ]),
-  ];
-  // Each whose decision is acted on is verified first, as `latest` was; one that does not verify is only refused.
-  for (const version of deciding) {
-    if (version === latest) continue;
-    const integrity = releaseIntegrity(coreAnswer.packument, version);
-    const verdict: ProvenanceVerdict =
-      integrity === null
-        ? {
-            ok: false,
-            package: corePackage,
-            version,
-            field: 'subject',
-            reason: 'the registry gives no tarball integrity for it',
-          }
-        : await verifyProvenance(
-            { packageName: corePackage, version, integrity },
-            { fetch: deps.provenance?.fetch, verifyBundle: verifier },
-          );
-    if (!verdict.ok) {
-      return stop('refused', `the provenance of ${corePackage}@${version} did not verify: ${verdict.field}`, facts, {
-        text: BACKGROUND_WORDS.unverified(latest, verdict.field),
-        outcome: 'refused',
-      });
-    }
-  }
   // What the decision is, the manifest's own words, is never said: the person reads it in the release notes.
-  if (deciding.length > 0) {
-    return stop('skipped', `${latest} needs a decision from the person (${deciding.join(', ')} says so)`, facts, {
+  const deciding = decisionNeeded(declared, from);
+  if (deciding !== null) {
+    return stop('skipped', `${latest} needs a decision from the person (${deciding} says so)`, facts, {
       text: BACKGROUND_WORDS.decision(latest),
       outcome: 'skipped',
     });
@@ -640,8 +632,7 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     );
   }
 
-  // Every package's document: its release, its tarball's integrity, and when it came out — the hold counts from the
-  // last of them, so a package published after the core is held for as long.
+  // Every package's document: its release, and its tarball's integrity.
   const answers = new Map<string, RegistryAnswer>([[corePackage, coreAnswer]]);
   for (const entry of behind) {
     if (answers.has(entry.packageName)) continue;
@@ -664,34 +655,6 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       facts,
     );
   }
-  const published = [corePackage, ...behind.map((entry) => entry.packageName)].map((name) =>
-    Date.parse(String(answers.get(name)?.packument.time?.[latest])),
-  );
-  const holdHours = flags.security ? SECURITY_HOLD_HOURS : HOLD_HOURS;
-  const last = published.every(Number.isFinite) ? Math.max(...published) : null;
-  const release = {
-    version: latest,
-    publishedAt: last === null ? null : new Date(last).toISOString(),
-    security: flags.security,
-    needsDecision: null,
-    holdHours,
-    installableAt: last === null ? null : new Date(last + holdHours * HOUR_MS).toISOString(),
-  };
-  if (last === null) {
-    return stop('held', `the registry gives no time ${latest} was published, so no hold can be counted`, {
-      ...facts,
-      release,
-    });
-  }
-  // A publish time ahead of the clock is a release whose age is not known yet: held, as a young one is.
-  const age = clock().getTime() - last;
-  if (age < holdHours * HOUR_MS) {
-    return stop(
-      'held',
-      `${latest} came out ${age < 0 ? 'after the time this machine reads now' : `${Math.floor(age / HOUR_MS)} hours ago`}; ${flags.security ? 'a security fix' : 'a release'} installs ${holdHours} hours after it came out, at ${release.installableAt}`,
-      { ...facts, release },
-    );
-  }
 
   const packages: BackgroundPackage[] = behind.map((entry) => ({
     channel: entry.channel,
@@ -700,24 +663,22 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
     to: latest,
     runtime: managedRuntimeDir(core.paths.dataDir, entry.packageName, latest),
   }));
-  // Every package verified before any is installed: one refusal installs nothing at all. Core's was, above.
+  // Every package verified before its hold is decided, and before any is installed: one refusal installs nothing at
+  // all, and the hold counts from the times their verified provenance carries. Core's was, above.
   for (const item of packages) {
     if (item.package === corePackage) {
       item.provenance = coreVerdict.provenance;
       continue;
     }
     const integrity = String(answers.get(item.package)?.packument.versions?.[latest]?.dist?.integrity);
-    const verdict: ProvenanceVerdict = await verifyProvenance(
-      { packageName: item.package, version: latest, integrity },
-      { fetch: deps.provenance?.fetch, verifyBundle: verifier },
-    );
+    const verdict = await verify(item.package, latest, integrity);
     if (!verdict.ok) {
       item.detail = `provenance refused (${verdict.field}): ${verdict.reason}`;
       const text = BACKGROUND_WORDS.unverified(latest, verdict.field);
       return stop(
         'refused',
         `the provenance of ${item.package}@${latest} did not verify: ${verdict.field}`,
-        { ...facts, release, packages },
+        { ...facts, packages },
         {
           text,
           outcome: 'refused',
@@ -725,6 +686,74 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       );
     }
     item.provenance = verdict.provenance;
+  }
+
+  // The hold (design 2026-10-22 P4): from the time Rekor signed for each package's release, or — for one whose
+  // provenance carries none — from when this machine first saw it, recorded at this machine's own clock, never the
+  // run's, which the registry's `Date` could set back (plan, gap 7). The set's counts from the last of them. The
+  // registry's `time` is never read: a registry could make a release look older than it is.
+  const set = new Map<string, VerifiedProvenance>([[corePackage, coreVerdict.provenance]]);
+  for (const item of packages) if (item.provenance !== undefined) set.set(item.package, item.provenance);
+  const unsigned = [...set.values()].filter((provenance) => provenance.signedAt === null);
+  const seen =
+    unsigned.length === 0
+      ? new Map<string, Date>()
+      : await firstSeenTimes(
+          core.paths.stateDir,
+          unsigned.map((provenance) => ({
+            package: provenance.package,
+            version: provenance.version,
+            integrity: `sha512-${Buffer.from(provenance.sha512, 'hex').toString('base64')}`,
+          })),
+          run.now,
+          { record: !run.dryRun },
+        );
+  const times = [...set.values()].map((provenance) =>
+    provenance.signedAt !== null
+      ? { at: Date.parse(provenance.signedAt), from: 'signed' as const }
+      : {
+          at: seen.get(`${provenance.package}@${provenance.version}`)?.getTime() ?? Number.NaN,
+          from: 'first-seen' as const,
+        },
+  );
+  const holdHours = flags.security ? SECURITY_HOLD_HOURS : HOLD_HOURS;
+  const known = times.every((time) => Number.isFinite(time.at));
+  const last = known ? Math.max(...times.map((time) => time.at)) : null;
+  // Where the time the hold counts from came from; a first sight, when one ties a signed time.
+  const heldFrom =
+    last === null
+      ? null
+      : times.some((time) => time.at === last && time.from === 'first-seen')
+        ? 'first-seen'
+        : 'signed';
+  const release = {
+    version: latest,
+    publishedAt: last === null ? null : new Date(last).toISOString(),
+    heldFrom,
+    security: flags.security,
+    needsDecision: null,
+    holdHours,
+    installableAt: last === null ? null : new Date(last + holdHours * HOUR_MS).toISOString(),
+  } satisfies NonNullable<BackgroundRunResult['release']>;
+  if (last === null) {
+    return stop('held', `no time ${latest} was signed or first seen here can be read, so no hold can be counted`, {
+      ...facts,
+      release,
+    });
+  }
+  // A time ahead of the clock is a release whose age is not known yet: held, as a young one is.
+  const age = clock().getTime() - last;
+  if (age < holdHours * HOUR_MS) {
+    const ago = age < 0 ? 'after the time this machine reads now' : `${Math.floor(age / HOUR_MS)} hours ago`;
+    const since =
+      heldFrom === 'first-seen'
+        ? `was first seen here ${ago}, as its provenance carries no time Rekor signed`
+        : `came out ${ago}, by the time Rekor signed for it`;
+    return stop(
+      'held',
+      `${latest} ${since}; ${flags.security ? 'a security fix' : 'a release'} installs ${holdHours} hours after that, at ${release.installableAt}`,
+      { ...facts, release },
+    );
   }
   return { go: true, partial: { ...stop('would-install', '', { ...facts, release, packages }) }, packages };
 }

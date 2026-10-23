@@ -653,11 +653,10 @@ export async function main(
   }
 
   // The rest of the day's update check, which a command handed to this child before it ended (#48): hidden, and never
-  // given the notice it is part of — it is run before the notice, as the server is.
+  // given the notice it is part of — it is run before the notice, as the server is. With core's own verifier, so what a
+  // release declares is read from its verified tarball (design 2026-10-22 P1); a test hands in its own.
   if (command === UPDATE_CHECK_CHILD_COMMAND) {
-    return runCommand(output, () =>
-      runUpdateCheckChild(core, env, sub, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
-    );
+    return runCommand(output, () => runUpdateCheckChild(core, env, sub, { deps: deps.update ?? coreUpdateDeps(core) }));
   }
 
   // The update notice (design 2026-10-16, U1): before any command but the exempt ones, the day's check, waited for
@@ -1884,10 +1883,24 @@ function renderBackground(result: BackgroundRunResult): string {
     `Runs ${result.current ?? 'nothing known'}; the registry's latest is ${result.latest ?? 'not known'}.`,
   ];
   if (result.release) {
+    // What the hold counts from (design 2026-10-22 P4): the time Rekor signed for the release, or this machine's first
+    // sight of one whose provenance carries none. Never the registry's `time`, which no hold reads any more.
     const { release } = result;
-    lines.push(
-      `${release.version} came out ${release.publishedAt ?? 'at a time the registry does not give'}${release.security ? ', a security fix' : ''}; it may install ${release.holdHours} hours after, at ${release.installableAt ?? 'a time not known'}.`,
-    );
+    const from =
+      release.publishedAt === null
+        ? "no time its hold could count from can be read, neither one Rekor signed nor this machine's first sight"
+        : `its hold counts from ${release.publishedAt}${
+            release.heldFrom === 'first-seen'
+              ? ', when this machine first saw it, as its provenance carries no time Rekor signed'
+              : release.heldFrom === 'signed'
+                ? ', when Rekor signed for it'
+                : ''
+          }`;
+    const when =
+      release.installableAt === null
+        ? 'at a time not known'
+        : `${release.holdHours} hours after, at ${release.installableAt}`;
+    lines.push(`${release.version}${release.security ? ', a security fix' : ''}: ${from}; it may install ${when}.`);
   }
   for (const item of result.packages) {
     const done = [

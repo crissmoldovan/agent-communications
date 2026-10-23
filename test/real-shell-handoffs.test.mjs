@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
@@ -47,6 +46,10 @@ import {
 } from './helpers/real-shell.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
+// The integrity of the tarball the test's verifier is shown signed for a release, from the fixture itself: the
+// deterministic tarball the stand-in registry serves (`packages/core/test/helpers/provenance-fixture.ts`).
+const { tarballOf } = await import('../packages/core/test/helpers/provenance-fixture.ts');
+
 /**
  * The acceptance criterion of 0.13.1, in real shells (CUE-403; design 2026-10-04 §1, §4 items 3 and 8).
  *
@@ -71,7 +74,8 @@ const GMAIL = builtCli('gmail');
 const VERSION = JSON.parse(readFileSync(join(ROOT, 'packages', 'core', 'package.json'), 'utf8')).version;
 /**
  * Core's CLI carrying the test's verifier (re-review of 0.20.0, severity 4): core verifies the release whose runtime it
- * registers on, and a built CLI would ask npm and Sigstore, which no test may reach. Run with type stripping.
+ * registers on, or that an npx entry's client fetches (design 2026-10-22 P5), and a built CLI would ask npm and
+ * Sigstore, which no test may reach. Run with type stripping.
  */
 const VERIFIED_CORE = [
   '--experimental-strip-types',
@@ -838,7 +842,7 @@ function managedRuntime(dataDir) {
   );
   // The lockfile npm writes, with the integrity of the tarball the test's verifier was shown signed: core holds a
   // runtime already on disk to it before it registers on it (`provenance-fixture.ts`'s `tarballOf`).
-  const integrity = `sha512-${createHash('sha512').update(`@agentcomms/core@${VERSION}`).digest('base64')}`;
+  const integrity = tarballOf('@agentcomms/core', VERSION);
   WRITES.writeFile(
     join(root, 'package-lock.json'),
     JSON.stringify({
@@ -898,11 +902,13 @@ for (const launcher of ['managed', 'npx', 'local']) {
       fakeNpx(npxDir);
       m.env.PATH = [npxDir, m.nodeBin, strippedPath()].join(process.platform === 'win32' ? ';' : ':');
     }
-    // A managed install is core's, which verifies the runtime it registers on: through the CLI with the test's
-    // verifier, the same words and folders. Every other launcher, through the built CLI as before.
+    // A managed install is core's, which verifies the runtime it registers on, and an npx one too, the release its
+    // client fetches (design 2026-10-22 P5): through the CLI with the test's verifier, the same words and folders. A
+    // local one, which registers a checkout's code and no release, through the built CLI as before.
+    const verifies = launcher !== 'local';
     const installWords = ['mcp', 'install', '--client', 'cursor', '--launcher', launcher, '--no-verify', '--json'];
     const { id, hint } = held(
-      launcher === 'managed'
+      verifies
         ? runNode([...VERIFIED_CORE, ...m.pinArgs, ...installWords], { env: m.env, cwd: m.cwd })
         : m.print(installWords),
     );
@@ -918,11 +924,11 @@ for (const launcher of ['managed', 'npx', 'local']) {
       id,
     ]);
     const words = argvOf(install).slice(1);
-    // The approval run, as handed over: core's own command with the printing process's folders. For a managed
-    // install, the same words after core's CLI, through the CLI with the test's verifier.
+    // The approval run, as handed over: core's own command with the printing process's folders. For a managed or an
+    // npx install, the same words after core's CLI, through the CLI with the test's verifier.
     const pinned = words.indexOf(PATH_OPTIONS.configDir);
     assert.ok(pinned > 0 && /cli\.(?:mjs|ts)$/.test(words[pinned - 1]), `core's own CLI, then its pins: ${install}`);
-    assert.equal(runNode(launcher === 'managed' ? [...VERIFIED_CORE, ...words.slice(pinned)] : words, m).status, 0);
+    assert.equal(runNode(verifies ? [...VERIFIED_CORE, ...words.slice(pinned)] : words, m).status, 0);
     const entry = JSON.parse(readFileSync(join(m.home, '.cursor', 'mcp.json'), 'utf8')).mcpServers.agentcomms;
     assert.deepEqual(pinsOf(entry.args), Object.fromEntries(FOUR_FOLDERS.map((key) => [key, m.folders[key]])));
     assert.ok(!entry.args.includes(PATH_OPTIONS.downloadsDir), 'downloads are a handoff’s, never a registration’s');

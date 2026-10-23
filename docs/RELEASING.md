@@ -124,7 +124,9 @@ pnpm sync:versions          # every package manifest, two plugin files, the laun
 pnpm build && pnpm run licenses # third-party notices, read from what each bundle actually contains
 
 # 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`. The tag gate refuses a version
-#    with no section, and the GitHub release is made from it.
+#    with no section, one that does not say what core declares the release to be, or one that does not carry the
+#    last needed decision forward (see "Declaring a security fix or a needed decision"), and the GitHub release is
+#    made from it.
 
 # 3. Commit and push. What is published must be what anyone else can read.
 
@@ -207,6 +209,84 @@ to find out would be a consumer whose install of `gmail-mcp` cannot resolve the 
 commit each version records, not only the version, because the GitHub release waits for it: a package at the right
 version from any other commit fails the run there, at once, and gets no release page.
 
+## Declaring a security fix or a needed decision
+
+A release can say two things about itself that change how every machine's update treats it, and carries a third
+forward from the releases before it. Only core says them, in the same field a package uses to be held back,
+`agentcommsRelease` in `packages/core/package.json`:
+
+```json
+"agentcommsRelease": { "security": true, "needsDecision": true }
+```
+
+Either key alone, or both, each `true` or `false`; with `"needsDecisionSince"` beside them or alone, as below; and no
+other key. `{}` is refused, and so is a `hold`: core is never held back (`scripts/channels.mjs`). What each does:
+
+- **`"security": true`, a security fix.** The background run holds it for 24 hours instead of 72, and a pause does not
+  hold it at all. It is announced at once wherever it would not install on its own, and there the next Gmail or Resend
+  send preview, or Slack post preview, opens with a line about it until the person answers one.
+- **`"needsDecision": true`, a release that needs a decision before it installs:** a migration, or a changed safety
+  default. It never installs in the background, and neither does a later release that takes a machine past it. The
+  by-hand update's preview names it, and the person's yes to that preview is the decision, so its changelog section
+  says what the decision is.
+- **`"needsDecisionSince": "X.Y.Z"`, the needed decision carried forward:** the newest release, up to and including
+  this one, that declared `needsDecision`, as an exact version (never a range, a prerelease or a partial version). An
+  update reads only the release it goes to, never the list of releases the registry gives, so this is how a later
+  release says that a machine from before that decision must still take it: a machine on version A updating to B waits
+  for the person when B declares `needsDecision`, or when B's `needsDecisionSince` is after A.
+
+**The changelog section must say the same, both ways.** `scripts/release-flags.mjs` reads the version's own section,
+the lines after `## X.Y.Z` up to the next `## `, and holds core's flags to its marker lines:
+
+| Core's `package.json` declares | A line of the section starts with |
+|---|---|
+| `"security": true` | `**Security fix.**` |
+| `"needsDecision": true` | `**Needs a decision before it installs.**` |
+
+A flag without its marker line is refused, and so is a marker line without its flag. A marker counts only as the very
+first words of a line, so put it there and say after it what the release fixes, or what the decision is: the GitHub
+release is made from this section. `pnpm release` and the tag gate in `release.yml` both run the check, before anything
+is sent, and each refusal names the file and the marker. `pnpm verify` does not, because the changes being made sit
+under `## Unreleased`, which names no version.
+
+**The needed decision is carried, and the check holds the carry to the changelog.** The same check reads what
+`needsDecisionSince` must be:
+
+| This release | `"needsDecisionSince"` must be |
+|---|---|
+| declares `"needsDecision": true` | this release's own version |
+| declares none, and some earlier `## X.Y.Z` section has a line starting `**Needs a decision before it installs.**` | the newest such version below this one |
+| declares none, and no earlier section has that line | absent |
+
+"Earlier" is by version, not by place in the file, so a backport to an older line released after a newer one carries
+nothing of the newer line's; what sits under `## Unreleased` is not a release and counts for nothing. A carry that is
+missing, wrong, or there when nothing was ever declared is refused, naming the value it must be. It reads the
+changelog, not the previous tag's `package.json`, because each released section's marker is what that release
+declared — this check held its flag to it — and the changelog is in the tree both release paths check, the tag gate's
+shallow checkout included, which holds no earlier tag. A prerelease cannot declare a needed decision, since its own
+version is not an exact `X.Y.Z`; no update installs a prerelease anyway.
+
+**Remove the flags in the next release, and keep `needsDecisionSince`.** Nothing else takes a flag out of core's
+`package.json` once its release is out, and left there it would declare the next release a security fix, or one
+needing a decision, too. The next version's section carries no marker, so its release is refused until the flag goes:
+delete `security` and `needsDecision` from core's `agentcommsRelease` in that release's version commit, keep both
+markers out of its section, and leave `needsDecisionSince` as it is. That carry stays in every release after, and
+changes only when a later release declares a decision of its own.
+
+**Why the release itself, and not the registry.** From 0.26.0 an update believes what a release declares only from
+the verified release: core downloads the tarball of the release it would go to, keeps it only when its SHA-512 is the
+digest its Sigstore provenance signs, and reads `package/package.json` from inside it. The registry's copy of the
+manifest decides nothing, since a registry or a mirror could add or remove a flag on a genuine release, and nor does
+which versions it lists: one left out, one added that does not verify, or five hundred change nothing, because no other
+release is asked about. So a flag or a carry counts only in the commit that is tagged and built; none can be added
+after the publish. Releases before 0.26.0 carry no `needsDecisionSince`, and none of them declared a decision, so an
+absent one means none. Machines still on 0.20.0 to 0.25.0 read `security` and `needsDecision` from the registry's copy
+of each release's manifest between theirs and the latest, which carries them as published.
+
+**0.26.0 declares nothing.** It hardens updates against registry tampering that nobody is known to be exploiting.
+Declaring `security: true` for a precaution would have given every machine on 0.20.0 to 0.25.0 the urgent notice and
+the 24-hour hold, nothing in it needs a decision, and no release before it declared one, so it carries none either.
+
 ## A package held back from release
 
 A package this repository publishes can be left out of the releases before its first one: it says so in its own
@@ -219,7 +299,8 @@ unrelated patch, would stop for the owner to publish by hand a public API nothin
 `pnpm verify`, on every release leg: it is in `PUBLISHABLE`, which those checks walk. It is left out of the release:
 `PACKAGES`, which the workflow's publish and confirm loops, the OIDC preflight and `scripts/release.mjs` read, does not
 name it, so a release never reads it from the registry, proves it, sends it or confirms it. The registry
-(`scripts/channels.mjs`) refuses a hold on core, on a private package and on one that declares nothing, and
+(`scripts/channels.mjs`) refuses a hold on core, whose `agentcommsRelease` declares its release flags instead
+([above](#declaring-a-security-fix-or-a-needed-decision)), on a private package and on one that declares nothing, and
 `test/release-packages.test.mjs` fails `pnpm verify` while a package a tag publishes depends at runtime on a held one.
 So the release of the first package that does cannot go out with the hold still in place.
 
@@ -507,8 +588,13 @@ and none of it goes to npm. A release of it holds:
 - **`THIRD_PARTY_LICENSES`**, the notices for every package and crate the app is built from.
   `pnpm --filter @agentcomms/desktop licenses` writes it, and every leg of `desktop.yml` fails when it is out of step.
 
-**No agent runs these scripts.** They need the owner's keychain, the updater key, and the version typed back in a
-terminal; without a terminal they refuse.
+**An agent may run these scripts once the owner has said so** (the owner, 2026-10-21), as Supbuddy's `/release` does:
+on the signing Mac, from a clean checkout of the tag, with the version confirmed on the command line instead of typed
+back. `--confirm X.Y.Z` must be the app's version, as typing it back must. `release-desktop.sh` also takes
+`--updater off` beside it, which stands for typing `off`: it is required when the updater is off, and refused when the
+updater is on or without `--confirm`. Without the flags, both scripts ask at a terminal, as before, and refuse without
+one. Every other check stays. The signing identity, the notary profile and the updater key stay on the signing Mac,
+whoever runs the scripts, and neither script prints a password or the key.
 
 **A desktop release never takes Latest.** GitHub's Latest release is the CLI's, made by `release.yml`. Every desktop
 release command passes `--latest=false`, so a `desktop-v*` tag cannot move it. The app does not look for Latest: it
@@ -522,11 +608,12 @@ is public.
 
 **The first signed release may have no updater.** With `plugins.updater.pubkey` in `tauri.conf.json` still empty,
 `release-desktop.sh` still builds, signs and notarises the DMG, but with updater artefacts off, and says so in a box
-you confirm by typing `off`; `publish-desktop.sh` then publishes it without `latest.json`, and says the updater stays
-off. Such a copy never updates itself: it is replaced by hand. To turn the updater on, do steps 1 and 2 below —
-generate the key, commit its `.pub` — and release the next version; from the release after that one, installed copies
-update themselves. `apps/desktop/scripts/updater-key.mjs` makes the decision: off with no pubkey; with one, the key
-must be there, mode 600, and its `.pub` the pubkey, or the release is refused before anything else is read or built.
+you confirm by typing `off` (or with `--updater off`, beside `--confirm`); `publish-desktop.sh` then publishes it
+without `latest.json`, and says the updater stays off. Such a copy never updates itself: it is replaced by hand. To
+turn the updater on, do steps 1 and 2 below — generate the key, commit its `.pub` — and release the next version; from
+the release after that one, installed copies update themselves. `apps/desktop/scripts/updater-key.mjs` makes the
+decision: off with no pubkey; with one, the key must be there, mode 600, and its `.pub` the pubkey, or the release is
+refused before anything else is read or built.
 
 ### The owner's steps
 
@@ -572,7 +659,7 @@ Each release, after `vX.Y.Z` is out:
    four desktop legs, makes the draft release and attaches the Windows and Linux files. The release stays a draft.
    If a leg fails for a reason outside the repository, re-run it: the draft is found again and uploads replace what
    is there.
-6. On the signing Mac, in a terminal, from a clean checkout of the tag, run the two scripts:
+6. On the signing Mac, from a clean checkout of the tag, run the two scripts. In a terminal:
 
    ```bash
    git checkout desktop-vX.Y.Z
@@ -580,14 +667,28 @@ Each release, after `vX.Y.Z` is out:
    apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
    ```
 
-   Both refuse a dirty tree, a tag that is not the app's version, a HEAD that is not the tag's commit and a missing
-   terminal, and ask for the version to be typed back. `release-desktop.sh` decides the updater from the key first
-   (on, off, or refused), then reads the signing environment, builds the universal app, signs, notarises and staples
-   the app and the DMG, and stages them in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they
-   were built from and whether the updater is on. `publish-desktop.sh` refuses a release already published, whatever
-   it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft, and stops if the workflow's Windows and
-   Linux files are not attached yet; run it again once they are. Then, with the updater on, it uploads `latest.json`;
-   with it off, it says the updater stays off. It publishes the release, still not Latest.
+   Or, by an agent the owner has asked to run them, with no terminal, the version confirmed on the command line (and
+   `--updater off` after it while the updater is off):
+
+   ```bash
+   git checkout desktop-vX.Y.Z
+   apps/desktop/scripts/release-desktop.sh desktop-vX.Y.Z --confirm X.Y.Z
+   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z --confirm X.Y.Z
+   ```
+
+   Both refuse a dirty tree, a tag that is not the app's version and a HEAD that is not the tag's commit. Without
+   `--confirm` they refuse a missing terminal and ask for the version to be typed back; with it, they refuse a version
+   that is not the app's. `release-desktop.sh` decides the updater from the key first (on, off, or refused), then reads
+   the signing environment, builds the universal app, signs, notarises and staples the app and the DMG, and stages them
+   in `apps/desktop/src-tauri/target/desktop-release/X.Y.Z/` with the commit they were built from and whether the
+   updater is on. Its install, its build and its bundle check all run under `CI=true`: under CI, pnpm 11.22 defaults
+   `enableGlobalVirtualStore` to false, and refuses a script whose install ran with the other setting, which stopped
+   the first real run (2026-10-21). So afterwards, before working in that checkout, run the ordinary
+   `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'` again. `publish-desktop.sh` refuses a
+   release already published, whatever it holds, attaches the signed files and `THIRD_PARTY_LICENSES` to the draft,
+   and stops if the workflow's Windows and Linux files are not attached yet; run it again once they are. Then, with the
+   updater on, it uploads `latest.json`; with it off, it says the updater stays off. It publishes the release, still
+   not Latest.
 7. Update between two signed versions with the updater on. The first such release has nothing to update from, so from
    the second on: with the previous one installed, choose Check for Updates… in the tray. It should find the new
    release, check its signature against the key in the app, install it and restart.

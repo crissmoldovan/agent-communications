@@ -27,6 +27,7 @@ import { runBackgroundUpdate } from '../src/update-background.ts';
 import { readUpdateCheck } from '../src/update-state.ts';
 import {
   attestationsEndpoint,
+  fixtureTarballs,
   integrityOf,
   packumentRegistry,
   tarballOf,
@@ -221,6 +222,7 @@ function fakes(
     runtimes,
     registry: packumentRegistry(everyPackage(latest)).read,
     verifyRelease: testReleaseVerifier(options.endpoint),
+    tarballs: fixtureTarballs,
     latestVersion: async (packageName: string) => {
       if (packageName.startsWith('@agentcomms/')) return latest;
       throw new Error(`the registry answered 404 for ${packageName}`);
@@ -228,6 +230,9 @@ function fakes(
     globalPackages: async () => ({}),
     installGlobal: async () => {
       throw new Error('no global package is installed in these tests');
+    },
+    globalRoot: async () => {
+      throw new Error('no global package is installed, or checked, in these tests');
     },
     installRuntime: async (packageName: string, version: string) => {
       runtimes.push(`${packageName}@${version}`);

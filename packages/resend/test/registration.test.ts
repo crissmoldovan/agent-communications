@@ -23,8 +23,9 @@ import { type Captured, type Harness, newHarness, tempDir } from './support/harn
  * and `comms_update` registers the entry again at a newer release with exactly that pin.
  *
  * Nothing here reaches npm, Resend, a real client config or the keychain: every client config is under a temporary
- * home, `npx` is only named in entries nothing starts (`--no-verify`), the registry `comms_update` reads is a loopback
- * stand-in, and npm's global prefix is a temporary directory.
+ * home, `npx` is only named in entries nothing starts (`--no-verify`), the registry core reads — for the release an npx
+ * entry fetches, and for `comms_update` — is a loopback stand-in, a core server that verifies a release does so with the
+ * test's verifier, and npm's global prefix is a temporary directory.
  */
 
 const LATEST = '99.0.0';
@@ -74,18 +75,25 @@ function pending(ran: Captured): { approvalId: string; preview: string; hint: st
 /** The CLI as an agent runs it: no terminal, so a change waiting for a person comes back with its id. */
 const cli = (m: Machine, argv: string[]) => m.harness.cli(['--json', ...argv], { env: m.env });
 
-/** A registry on the loopback address that names `LATEST` as every package's latest release. */
+/**
+ * A registry on the loopback address that names `LATEST` as every package's latest release, and lists this one too:
+ * the release an npx entry registered now fetches, which core verifies before it asks (design 2026-10-22 P5).
+ */
 async function registry(): Promise<{ url: string; asked: string[]; close(): Promise<void> }> {
   const asked: string[] = [];
   const server = createServer((request, response) => {
     const name = decodeURIComponent(request.url ?? '').slice(1);
     asked.push(`/${name}`);
     response.writeHead(200, { 'content-type': 'application/json' });
-    // The release's tarball integrity, the one the provenance fixture's attestations sign: what an update verifies.
+    // Each release's tarball integrity, the one the provenance fixture's attestations sign: what an install and an
+    // update verify.
     response.end(
       JSON.stringify({
         'dist-tags': { latest: LATEST },
-        versions: { [LATEST]: { dist: { integrity: tarballOf(name, LATEST) } } },
+        versions: {
+          [VERSION]: { dist: { integrity: tarballOf(name, VERSION) } },
+          [LATEST]: { dist: { integrity: tarballOf(name, LATEST) } },
+        },
       }),
     );
   });
@@ -104,8 +112,9 @@ async function registry(): Promise<{ url: string; asked: string[]; close(): Prom
  * machine running the tests reaches it: `PATH` holds only `ps`, which `prune` needs.
  */
 async function coreServer(m: Machine, extra: Record<string, string> = {}, verified = false) {
-  // An update verifies every release it registers, and a built server reads npm's attestations and Sigstore's root,
-  // which no test may reach: one that updates is core's own server, started with the test's verifier.
+  // An update verifies every release it registers, and an install the release an npx entry's client fetches (design
+  // 2026-10-22 P5), and a built server reads npm's attestations and Sigstore's root, which no test may reach: one that
+  // installs with npx or updates is core's own server, started with the test's verifier.
   const coreCli = verified
     ? fileURLToPath(new URL('../../core/test/fixtures/verified-core-server.ts', import.meta.url))
     : join(dirname(fileURLToPath(import.meta.resolve('@agentcomms/core'))), 'cli.mjs');
@@ -167,19 +176,29 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
   const server = await coreServer(m, { npm_config_registry: npm.url, npm_config_prefix: prefix });
   try {
     // ── Prepared in chat with the generic pin, claimed at the command line ──
-    const fromChat = await server.call('comms_server_install', {
-      channel: 'resend',
-      client: 'cursor',
-      account: 'acme/resend',
-      launcher: 'npx',
-      noVerify: true,
-    });
+    // It registers with npx, so core verifies the release that entry's client fetches (design 2026-10-22 P5): core's
+    // server with the test's verifier, against the loopback registry, under which this release verifies.
+    const installing = await coreServer(m, { npm_config_registry: npm.url, npm_config_prefix: prefix }, true);
+    let fromChat: Awaited<ReturnType<typeof installing.call>>;
+    try {
+      fromChat = await installing.call('comms_server_install', {
+        channel: 'resend',
+        client: 'cursor',
+        account: 'acme/resend',
+        launcher: 'npx',
+        noVerify: true,
+      });
+    } finally {
+      await installing.close();
+    }
     assert.equal(fromChat.isError, undefined, JSON.stringify(fromChat.structuredContent));
     const asked = fromChat.structuredContent as { approvalId: string; preview: string };
     assert.match(
       asked.preview,
       /registers the Resend MCP server with cursor as "resend", pinned to the account acme\/resend/,
     );
+    // Core read the release this entry's client fetches, to verify it, before it asked anybody.
+    assert.ok(npm.asked.includes('/@agentcomms/resend'), `the registry was asked about Resend: ${npm.asked}`);
     const install = ['mcp', 'install', '--client', 'cursor', '--account', 'acme/resend', '--launcher', 'npx'];
     const fromCommand = pending(await cli(m, [...install, '--no-verify']));
     assert.equal(body(fromCommand.preview), body(asked.preview), 'the same words from either surface');
@@ -219,6 +238,8 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
     assert.deepEqual((await cursorEntry(m))?.args.slice(-2), ['--account', 'acme/resend']);
 
     // ── A newer release: comms_update registers it again, pinned exactly as it was ──
+    // What the check asks the registry, apart from what the install asked to verify the release it registered.
+    const askedBefore = npm.asked.length;
     const check = await server.call('comms_update', { check: true });
     assert.equal(check.isError, undefined, JSON.stringify(check.structuredContent));
     const behind = (
@@ -227,7 +248,8 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
       .filter((item) => item.kind === 'registration')
       .map((item) => [item.channel, item.narrowing]);
     assert.deepEqual(behind, [['resend', ['--account', 'acme/resend']]]);
-    assert.ok(npm.asked.includes('/@agentcomms/resend'), `the registry was asked about Resend: ${npm.asked}`);
+    const askedByCheck = npm.asked.slice(askedBefore);
+    assert.ok(askedByCheck.includes('/@agentcomms/resend'), `the registry was asked about Resend: ${askedByCheck}`);
     const updating = await coreServer(m, { npm_config_registry: npm.url, npm_config_prefix: prefix }, true);
     try {
       const update = await updating.call('comms_update', { noVerify: true });

@@ -12,17 +12,26 @@ import { managedRuntimeDir, managedRuntimeEntry } from '../src/mcp-install.ts';
 import { updateChange } from '../src/operations/update.ts';
 import { updateRollbackChange } from '../src/operations/update-rollback.ts';
 import { updatePause } from '../src/operations/update-settings.ts';
+import { DECLARATIONS_FILE, declarationsPath } from '../src/release-declarations.ts';
+import { FIRST_SEEN_FILE } from '../src/release-first-seen.ts';
+import { canonicalTarballUrl, type TarballFetch } from '../src/release-tarball.ts';
 import {
   type BackgroundDeps,
   type BackgroundRunResult,
   offlineSelfCheck,
-  type Packument,
   type ReleaseRegistry,
   runBackgroundUpdate,
   type UpdateSettingsReader,
   updateHeldPath,
 } from '../src/update-background.ts';
-import { installUpdateJob, type UpdateJobRunner, updateJobContext, updateJobInstalled } from '../src/update-job.ts';
+import {
+  installUpdateJob,
+  readUpdateJobMarker,
+  type UpdateJobRunner,
+  updateJobContext,
+  updateJobInstalled,
+  updateJobMarkerPath,
+} from '../src/update-job.ts';
 import { updateLockPath } from '../src/update-lock.ts';
 import {
   ATTESTATIONS_BASE,
@@ -30,27 +39,31 @@ import {
   loadSigstore,
   type ProvenanceField,
   type SigstoreModules,
-  sigstoreBundleVerifier,
 } from '../src/update-provenance.ts';
 import { readUpdateCheck, updateCheckPath } from '../src/update-state.ts';
-import { BACKGROUND_WORDS } from '../src/update-words.ts';
+import { BACKGROUND_WORDS, DECLARATION_UNREAD } from '../src/update-words.ts';
 import {
-  attestationsAnswer,
+  fixtureTarballUrl,
   integrityOf,
   type ProvenanceShape,
-  provenanceBundle,
+  tarballOf,
   trustedRoot,
 } from './helpers/provenance-fixture.ts';
+import { releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
+import { integrityOfBytes, releaseTarball } from './helpers/tarball-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
  * One background run (design 2026-10-16 U5; plan Track D, Review focus 1, 2, 3 and 5): settings, the registry, the
- * holds, provenance, install, self-check, switch, audit, prune and the next session's notice.
+ * holds, provenance, install, self-check, switch, audit, prune and the next session's notice. Since 0.26.0 (design
+ * 2026-10-22 P1, P4): what a release declares is read from its verified tarball, and its hold counts from the time
+ * Rekor signed for it, or from this machine's first sight of it.
  *
- * Nothing here reaches npm or Sigstore, installs a package or schedules a job. The registry is a function; the
- * attestations are bundles `./helpers/provenance-fixture.ts` signs for the test, which sigstore-js — this package's own
- * dependency — verifies against the test's trust root; the installer writes a runtime directory the way npm
- * leaves one; the self-check, the process list and the job's runner are stand-ins; the clock is fixed.
+ * Nothing here reaches npm or Sigstore, installs a package or schedules a job. The registry, the attestations and the
+ * tarballs are one `releaseWorld`: its documents, the bundles `./helpers/provenance-fixture.ts` signs for the test,
+ * which sigstore-js — this package's own dependency — verifies against the test's trust root, and each release's own
+ * tarball, which those bundles sign. The installer writes a runtime directory the way npm leaves one; the self-check,
+ * the process list and the job's runner are stand-ins; the clock is fixed.
  */
 
 const CORE_PACKAGE = '@agentcomms/core';
@@ -94,12 +107,15 @@ function machine(config: Record<string, unknown> = {}): Machine {
   return { home, env, core, dataDir: core.paths.dataDir };
 }
 
-/** A runtime as npm leaves one: the package, the runtime's manifest pinning it, and the lockfile with its integrity. */
+/**
+ * A runtime as npm leaves one: the package, the runtime's manifest pinning it, and the lockfile with its integrity —
+ * by default the integrity of the release's own tarball, as a world that declares nothing for it serves it.
+ */
 function makeRuntime(
   m: Machine,
   packageName: string,
   version: string,
-  integrity = integrityOf(`${packageName}@${version}`),
+  integrity = tarballOf(packageName, version),
   /** More of what npm installed, by lockfile key: the packages it depends on. */
   more: Record<string, { version: string; integrity?: string }> = {},
 ) {
@@ -146,64 +162,13 @@ async function pointerOf(m: Machine, packageName: string): Promise<{ current: st
     : { current: folder(pointer.current), previous: folder(pointer.previous) };
 }
 
-interface Release {
-  version: string;
-  publishedAt: Date;
-  /** The core manifest's `agentcommsRelease`. */
-  declares?: unknown;
-  /** The packages it is on the registry for; both by default. */
-  packages?: readonly string[];
-}
-
-/** The registry: `latest` and every release, for core and Gmail, each package's tarball integrity its own. */
-function registry(latest: string, releases: readonly Release[], servedAt?: Date) {
-  const asked: string[] = [];
-  const read: ReleaseRegistry = async (packageName) => {
-    asked.push(packageName);
-    const packument: Packument = { 'dist-tags': { latest }, versions: {}, time: {} };
-    for (const release of releases) {
-      if (!(release.packages ?? [CORE_PACKAGE, GMAIL]).includes(packageName)) continue;
-      (packument.versions as Record<string, unknown>)[release.version] = {
-        dist: { integrity: integrityOf(`${packageName}@${release.version}`) },
-        ...(packageName === CORE_PACKAGE && release.declares !== undefined
-          ? { agentcommsRelease: release.declares }
-          : {}),
-      };
-      (packument.time as Record<string, unknown>)[release.version] = release.publishedAt.toISOString();
-    }
-    return { packument, ...(servedAt ? { servedAt } : {}) };
-  };
-  return { read, asked };
-}
-
 /**
- * npm's attestations endpoint: a genuine bundle for every package and version, but where `change` says otherwise, by
- * `package@version` or by `package`.
+ * The installer: a runtime written as npm leaves one — the release's own tarball, as `world` serves it, or a failure,
+ * or another tarball — and every call recorded.
  */
-function attestations(change: Record<string, Partial<ProvenanceShape> | 'missing'> = {}) {
-  const asked: string[] = [];
-  const fetch: AttestationFetch = async (url) => {
-    asked.push(url);
-    const spec = decodeURIComponent(url.slice(ATTESTATIONS_BASE.length));
-    const at = spec.lastIndexOf('@');
-    const packageName = spec.slice(0, at);
-    const version = spec.slice(at + 1);
-    const shape = change[`${packageName}@${version}`] ?? change[packageName];
-    if (shape === 'missing') return { status: 404, body: { error: 'not found' } };
-    const bundle = provenanceBundle({
-      packageName,
-      version,
-      integrity: integrityOf(`${packageName}@${version}`),
-      ...shape,
-    });
-    return { status: 200, body: attestationsAnswer(bundle) };
-  };
-  return { fetch, asked };
-}
-
-/** The installer: a runtime written as npm leaves one — or a failure, or another tarball — and every call recorded. */
 function installer(
   m: Machine,
+  world: World,
   options: {
     fail?: string;
     integrity?: Record<string, string>;
@@ -214,7 +179,13 @@ function installer(
   const install = async (packageName: string, version: string) => {
     calls.push(`${packageName}@${version}`);
     if (options.fail === packageName) throw new Error('npm could not install it');
-    return makeRuntime(m, packageName, version, options.integrity?.[packageName], options.more?.[packageName]);
+    return makeRuntime(
+      m,
+      packageName,
+      version,
+      options.integrity?.[packageName] ?? world.integrity(packageName, version),
+      options.more?.[packageName],
+    );
   };
   return { install, calls };
 }
@@ -251,26 +222,79 @@ const recorder = () => {
   return { calls, run };
 };
 
-/** Everything the run is handed: by default, a 0.20.1 out for 80 hours, genuine provenance, and nothing running. */
-function world(m: Machine, over: Partial<BackgroundDeps> & { releases?: Release[]; latest?: string } = {}) {
-  const reg = registry(over.latest ?? LATEST, over.releases ?? [{ version: LATEST, publishedAt: hoursAgo(80) }]);
-  const att = attestations();
-  const inst = installer(m);
+/** What a world is made with: its releases, `latest` for both packages, a package's own tag, and the registry's Date. */
+interface WorldOver {
+  releases?: WorldRelease[];
+  latest?: string;
+  /** A package's own `latest`, where it is not core's. */
+  latestOf?: Record<string, string>;
+  /** The `Date` every registry answer carries. */
+  servedAt?: Date;
+}
+
+/**
+ * Everything the run is handed: by default, a 0.20.1 signed by Rekor 80 hours ago, genuine provenance, its tarball
+ * served, and nothing running. The registry's `time` is the world's default, long before: the run never reads it.
+ */
+function world(m: Machine, over: Partial<BackgroundDeps> & WorldOver = {}) {
+  const { releases, latest: tag, latestOf, servedAt, ...rest } = over;
+  const latest = tag ?? LATEST;
+  const releaseWorldOf = releaseWorld(
+    { [CORE_PACKAGE]: latest, [GMAIL]: latest, ...latestOf },
+    releases ?? [{ version: latest, signedAt: hoursAgo(80) }],
+  );
+  const read: ReleaseRegistry =
+    servedAt === undefined
+      ? releaseWorldOf.registry
+      : async (packageName) => ({ ...(await releaseWorldOf.registry(packageName)), servedAt });
+  const inst = installer(m, releaseWorldOf);
   const check = checker();
   const job = recorder();
   const deps: BackgroundDeps = {
     settings: settings(),
-    registry: reg.read,
-    provenance: { fetch: att.fetch, verifyBundle: sigstoreBundleVerifier({ trustedRoot: async () => trustedRoot() }) },
+    registry: read,
+    provenance: { fetch: releaseWorldOf.attestations, verifyBundle: releaseWorldOf.verifyBundle },
+    tarballs: releaseWorldOf.tarballs,
     install: inst.install,
     selfCheck: check.selfCheck,
     processes: async () => [],
     now: () => NOW,
     job: { run: job.run, uid: 501, random: () => 0.5, now: () => NOW },
     platform: 'linux',
-    ...over,
+    ...rest,
   };
-  return { deps, registry: reg, attestations: att, installer: inst, checker: check, job };
+  return {
+    deps,
+    world: releaseWorldOf,
+    registry: { asked: releaseWorldOf.registryAsked },
+    attestations: { asked: releaseWorldOf.attestationsAsked },
+    installer: inst,
+    checker: check,
+    job,
+  };
+}
+
+/** The attestations asked for, as the run asks: core's, `@agentcomms%2fcore@<version>`, by version. */
+const coreAsked = (...versions: string[]) =>
+  versions.map((version) => `${ATTESTATIONS_BASE}@agentcomms%2fcore@${version}`);
+
+/** The first-sight records a run left, or null when it left none. */
+function firstSeen(m: Machine): { package: string; version: string; integrity: string; at: string }[] | null {
+  const path = join(m.core.paths.stateDir, FIRST_SEEN_FILE);
+  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as { seen: never[] }).seen : null;
+}
+
+/** A background job set up on this machine, as `--background-job on` leaves its marker: a run of the job records on it. */
+function jobMarker(m: Machine): void {
+  mkdirSync(m.core.paths.stateDir, { recursive: true });
+  writeFileSync(
+    updateJobMarkerPath(m.core.paths.stateDir),
+    JSON.stringify({
+      platform: 'linux',
+      installedAt: hoursAgo(24 * 5).toISOString(),
+      label: 'agentcomms-update.timer',
+    }),
+  );
 }
 
 async function audits(m: Machine) {
@@ -353,22 +377,22 @@ test('an unfinished runtime of the release that a process uses is not installed 
 // ── What is never automatic ────────────────────────────────────────────────────────────────────────────────────
 
 test('each skip — a major version, a release that needs a decision, a downgrade — installs nothing and leaves a notice', async () => {
-  const cases: [string, Release, RegExp, RegExp][] = [
+  const cases: [string, WorldRelease, RegExp, RegExp][] = [
     [
       '1.0.0',
-      { version: '1.0.0', publishedAt: hoursAgo(200) },
+      { version: '1.0.0', signedAt: hoursAgo(200) },
       /major release/,
       /new major release: it is never installed in the background/,
     ],
     [
       LATEST,
-      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: 'a new send default' } },
+      { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: 'a new send default' } },
       /needs a decision from the person \(0\.20\.1 says so\)$/,
       /needs a decision from you — it, or a release before it, says so —/,
     ],
     [
       '0.19.5',
-      { version: '0.19.5', publishedAt: hoursAgo(200) },
+      { version: '0.19.5', signedAt: hoursAgo(200) },
       /downgrade is never automatic/,
       /^The registry names 0\.19\.5 as the latest release, older than what runs here/,
     ],
@@ -389,55 +413,43 @@ test('each skip — a major version, a release that needs a decision, a downgrad
   }
 });
 
-test('a needed decision is not skipped by a later release: every release since the one installed is read, and each that needs one verified', async () => {
-  // 0.20.1 needs a decision; 0.20.2, the latest, does not say so. 0.20.2 is not installed in the background.
+test('a needed decision is not skipped by a later release: the latest carries it, and no release in range is asked about', async () => {
+  // 0.20.1 needs a decision; 0.20.2, the latest, does not declare one, and carries 0.20.1's forward (design 2026-10-22
+  // §8.1). 0.20.2 is not installed in the background.
+  const carried: WorldRelease[] = [
+    { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true, needsDecisionSince: LATEST } },
+    { version: NEXT, signedAt: hoursAgo(100), declares: { needsDecisionSince: LATEST } },
+  ];
   const m = await launched();
-  const w = world(m, {
-    latest: NEXT,
-    releases: [
-      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: true } },
-      { version: NEXT, publishedAt: hoursAgo(100) },
-    ],
-  });
+  const w = world(m, { latest: NEXT, releases: carried });
   const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
   assert.equal(result.outcome, 'skipped', result.reason);
+  assert.match(result.reason, /needs a decision from the person \(0\.20\.1 says so\)$/);
   await untouched(m, result, w.installer.calls);
   assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text, BACKGROUND_WORDS.decision(NEXT));
-  // The latest first, then the release whose decision is acted on: both verified.
-  assert.deepEqual(w.attestations.asked, [
-    `${ATTESTATIONS_BASE}@agentcomms%2fcore@${NEXT}`,
-    `${ATTESTATIONS_BASE}@agentcomms%2fcore@${LATEST}`,
-  ]);
+  // The latest alone is verified, and read: the release that needed the decision is never asked about.
+  assert.deepEqual(w.attestations.asked, coreAsked(NEXT));
+  assert.deepEqual(w.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, NEXT)]);
 
-  // The release that needs a decision does not verify: still nothing is installed, and that is all that is said.
+  // The release that needs a decision does not verify, or is not listed at all: the latest's word stands.
   const n = await launched();
-  const v = world(n, {
-    latest: NEXT,
-    releases: [
-      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: true } },
-      { version: NEXT, publishedAt: hoursAgo(100) },
-    ],
-  });
-  const att = attestations({ [`${CORE_PACKAGE}@${LATEST}`]: 'missing' });
-  const refused = await runBackgroundUpdate(
-    n.core,
-    n.env,
-    {},
-    { ...v.deps, provenance: { ...v.deps.provenance, fetch: att.fetch } },
-  );
-  assert.equal(refused.outcome, 'refused', refused.reason);
-  await untouched(n, refused, v.installer.calls);
+  const v = world(n, { latest: NEXT, releases: carried });
+  v.world.change({ [`${CORE_PACKAGE}@${LATEST}`]: 'missing' });
+  const unverified = await runBackgroundUpdate(n.core, n.env, {}, v.deps);
+  assert.equal(unverified.outcome, 'skipped', unverified.reason);
+  await untouched(n, unverified, v.installer.calls);
 
-  // A release before the one installed is no part of it: what 0.19.x declared was decided already.
+  // A decision carried from a release before the one installed was taken already: 0.19.5's is no part of it.
   const o = await launched();
   const past = world(o, {
     latest: LATEST,
     releases: [
-      { version: '0.19.5', publishedAt: hoursAgo(900), declares: { needsDecision: true } },
-      { version: LATEST, publishedAt: hoursAgo(100) },
+      { version: '0.19.5', signedAt: hoursAgo(900), declares: { needsDecision: true, needsDecisionSince: '0.19.5' } },
+      { version: LATEST, signedAt: hoursAgo(100), declares: { needsDecisionSince: '0.19.5' } },
     ],
   });
   assert.equal((await runBackgroundUpdate(o.core, o.env, {}, past.deps)).outcome, 'installed');
+  assert.ok(!past.attestations.asked.some((url) => url.endsWith('@0.19.5')), '0.19.5 is not asked for');
 });
 
 test('a major is counted from the oldest release a launcher here starts, not only from core', async () => {
@@ -445,45 +457,51 @@ test('a major is counted from the oldest release a launcher here starts, not onl
   const m = machine();
   await launch(m, CORE_PACKAGE, ['1.0.0']);
   await launch(m, GMAIL, [OLD]);
-  const w = world(m, { latest: '1.0.1', releases: [{ version: '1.0.1', publishedAt: hoursAgo(200) }] });
+  const w = world(m, { latest: '1.0.1', releases: [{ version: '1.0.1', signedAt: hoursAgo(200) }] });
   const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
   assert.equal(result.outcome, 'skipped', result.reason);
   assert.deepEqual(w.installer.calls, []);
   assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text, BACKGROUND_WORDS.major('1.0.1'));
 });
 
-test('the holds: 72 hours after publish, 24 for a security fix — counted from the last package to come out', async () => {
-  const cases: [string, Release[], BackgroundRunResult['outcome']][] = [
-    ['71 hours', [{ version: LATEST, publishedAt: hoursAgo(71) }], 'held'],
-    ['73 hours', [{ version: LATEST, publishedAt: hoursAgo(73) }], 'installed'],
+test('the holds: 72 hours after Rekor signed, 24 for a security fix — counted from the last package to be signed', async () => {
+  const cases: [string, WorldOver, BackgroundRunResult['outcome']][] = [
+    ['71 hours', { releases: [{ version: LATEST, signedAt: hoursAgo(71) }] }, 'held'],
+    ['73 hours', { releases: [{ version: LATEST, signedAt: hoursAgo(73) }] }, 'installed'],
     [
       'a security fix, 23 hours',
-      [{ version: LATEST, publishedAt: hoursAgo(23), declares: { security: true } }],
+      { releases: [{ version: LATEST, signedAt: hoursAgo(23), declares: { security: true } }] },
       'held',
     ],
     [
       'a security fix, 25 hours',
-      [{ version: LATEST, publishedAt: hoursAgo(25), declares: { security: true } }],
+      { releases: [{ version: LATEST, signedAt: hoursAgo(25), declares: { security: true } }] },
       'installed',
     ],
     [
       'not a security fix, 25 hours',
-      [{ version: LATEST, publishedAt: hoursAgo(25), declares: { security: 'yes' } }],
+      { releases: [{ version: LATEST, signedAt: hoursAgo(25), declares: { security: 'yes' } }] },
       'held',
     ],
     [
-      'core out 80 hours, Gmail 10',
-      [
-        { version: LATEST, publishedAt: hoursAgo(80), packages: [CORE_PACKAGE] },
-        { version: LATEST, publishedAt: hoursAgo(10), packages: [GMAIL] },
-      ],
+      'core signed 80 hours ago, Gmail 10',
+      {
+        releases: [
+          { version: LATEST, signedAt: hoursAgo(80), packages: [CORE_PACKAGE] },
+          { version: LATEST, signedAt: hoursAgo(10), packages: [GMAIL] },
+        ],
+      },
       'held',
     ],
-    ['Gmail not out yet', [{ version: LATEST, publishedAt: hoursAgo(80), packages: [CORE_PACKAGE] }], 'held'],
+    [
+      'Gmail not out yet',
+      { releases: [{ version: LATEST, signedAt: hoursAgo(80), packages: [CORE_PACKAGE] }], latestOf: { [GMAIL]: OLD } },
+      'held',
+    ],
   ];
-  for (const [label, releases, outcome] of cases) {
+  for (const [label, over, outcome] of cases) {
     const m = await launched();
-    const w = world(m, { releases });
+    const w = world(m, over);
     const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
     assert.equal(result.outcome, outcome, `${label}: ${result.reason}`);
     if (outcome === 'held') {
@@ -500,30 +518,31 @@ test('the holds: 72 hours after publish, 24 for a security fix — counted from 
     m.core,
     m.env,
     {},
-    world(m, { releases: [{ version: LATEST, publishedAt: hoursAgo(71) }] }).deps,
+    world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(71) }] }).deps,
   );
   assert.equal(held.release?.holdHours, 72);
+  assert.equal(held.release?.publishedAt, hoursAgo(71).toISOString());
+  assert.equal(held.release?.heldFrom, 'signed');
   assert.equal(held.release?.installableAt, new Date(hoursAgo(71).getTime() + 72 * 3_600_000).toISOString());
 });
 
-test('a clock that jumps ahead skips no hold, and a publish time ahead of the clock is held (Review focus 2)', async () => {
-  // This machine reads ten days on; the registry, serving the answer, says an hour after the release came out.
+test('a clock that jumps ahead skips no hold, and a signed time ahead of the clock is held (Review focus 2)', async () => {
+  // This machine reads ten days on; the registry, serving the answer, says an hour after the release was signed.
   const m = await launched();
-  const published = hoursAgo(1);
-  const reg = registry(
-    LATEST,
-    [{ version: LATEST, publishedAt: published }],
-    new Date(published.getTime() + 3_600_000),
-  );
-  const ahead = world(m, { registry: reg.read, now: () => new Date(NOW.getTime() + 10 * 24 * 3_600_000) });
+  const signed = hoursAgo(1);
+  const ahead = world(m, {
+    releases: [{ version: LATEST, signedAt: signed }],
+    servedAt: new Date(signed.getTime() + 3_600_000),
+    now: () => new Date(NOW.getTime() + 10 * 24 * 3_600_000),
+  });
   const jumped = await runBackgroundUpdate(m.core, m.env, {}, ahead.deps);
   assert.equal(jumped.outcome, 'held', jumped.reason);
   await untouched(m, jumped, ahead.installer.calls);
 
-  // The clock went back: the release looks published in the future, and its age is not known.
-  const back = world(m, { releases: [{ version: LATEST, publishedAt: new Date(NOW.getTime() + 3_600_000) }] });
+  // The clock went back: the release looks signed in the future, and its age is not known.
+  const back = world(m, { releases: [{ version: LATEST, signedAt: new Date(NOW.getTime() + 3_600_000) }] });
   const behind = await runBackgroundUpdate(m.core, m.env, {}, back.deps);
-  assert.equal(behind.outcome, 'held');
+  assert.equal(behind.outcome, 'held', behind.reason);
   assert.match(behind.reason, /after the time this machine reads now/);
 });
 
@@ -533,11 +552,12 @@ test('a pause holds a release, and never a security fix', async () => {
   const result = await runBackgroundUpdate(m.core, m.env, {}, paused.deps);
   assert.equal(result.outcome, 'paused');
   await untouched(m, result, paused.installer.calls);
-  assert.deepEqual(paused.attestations.asked, []);
+  // What a release declares is its verified tarball's word: core's release is verified before the pause is decided.
+  assert.deepEqual(paused.attestations.asked, coreAsked(LATEST));
 
   const fix = world(m, {
     settings: settings({ paused: new Date(NOW.getTime() + 3 * 24 * 3_600_000) }),
-    releases: [{ version: LATEST, publishedAt: hoursAgo(30), declares: { security: true } }],
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), declares: { security: true } }],
   });
   const installed = await runBackgroundUpdate(m.core, m.env, {}, fix.deps);
   assert.equal(installed.outcome, 'installed', installed.reason);
@@ -569,13 +589,8 @@ test('a provenance refusal for any pin of any package installs nothing at all, a
     const m = await launched();
     // Core verifies; Gmail, the second, does not: nothing of either is installed.
     const w = world(m);
-    const att = attestations({ [GMAIL]: change });
-    const result = await runBackgroundUpdate(
-      m.core,
-      m.env,
-      {},
-      { ...w.deps, provenance: { ...w.deps.provenance, fetch: att.fetch } },
-    );
+    w.world.change({ [GMAIL]: change });
+    const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
     assert.equal(result.outcome, 'refused', field);
     assert.match(result.reason, new RegExp(`${GMAIL}@${LATEST} did not verify: ${field}$`));
     await untouched(m, result, w.installer.calls);
@@ -589,35 +604,22 @@ test('a provenance refusal for any pin of any package installs nothing at all, a
 test('nothing the registry says of a release is acted on before its core release verifies: an unverified one is only refused', async () => {
   // Each would be a skip, a hold or a shorter hold if the registry's word were taken: unverified, each is a refusal,
   // with no notice but that one, and nothing of what it declares in the result.
-  const cases: [string, string, Release][] = [
-    ['a new major', '1.0.0', { version: '1.0.0', publishedAt: hoursAgo(200) }],
-    ['a needed decision', LATEST, { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: true } }],
-    ['a downgrade', '0.19.5', { version: '0.19.5', publishedAt: hoursAgo(200) }],
-    [
-      'a security fix, 10 hours old',
-      LATEST,
-      { version: LATEST, publishedAt: hoursAgo(10), declares: { security: true } },
-    ],
-    [
-      'a security fix, 30 hours old',
-      LATEST,
-      { version: LATEST, publishedAt: hoursAgo(30), declares: { security: true } },
-    ],
+  const cases: [string, string, WorldRelease][] = [
+    ['a new major', '1.0.0', { version: '1.0.0', signedAt: hoursAgo(200) }],
+    ['a needed decision', LATEST, { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true } }],
+    ['a downgrade', '0.19.5', { version: '0.19.5', signedAt: hoursAgo(200) }],
+    ['a security fix, 10 hours old', LATEST, { version: LATEST, signedAt: hoursAgo(10), declares: { security: true } }],
+    ['a security fix, 30 hours old', LATEST, { version: LATEST, signedAt: hoursAgo(30), declares: { security: true } }],
   ];
   for (const [label, latest, release] of cases) {
     const m = await launched();
-    const w = world(m, { latest, releases: [release] });
-    const att = attestations({ [CORE_PACKAGE]: 'missing' });
-    const result = await runBackgroundUpdate(
-      m.core,
-      m.env,
-      {},
-      { ...w.deps, provenance: { ...w.deps.provenance, fetch: att.fetch } },
-    );
+    const w = world(m, { latest, releases: [{ ...release, shape: 'missing' }] });
+    const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
     assert.equal(result.outcome, 'refused', `${label}: ${result.reason}`);
     assert.equal(result.release, undefined, `${label}: nothing it declares is reported`);
     assert.doesNotMatch(result.reason, /security|major|decision|older/, label);
-    assert.deepEqual(att.asked, [`${ATTESTATIONS_BASE}@agentcomms%2fcore@${latest}`], `${label}: core's, first`);
+    assert.deepEqual(w.attestations.asked, coreAsked(latest), `${label}: core's, first`);
+    assert.deepEqual(w.world.tarballsAsked, [], `${label}: no tarball of a release that did not verify is read`);
     await untouched(m, result, w.installer.calls);
     const notice = (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice;
     assert.equal(notice?.outcome, 'refused', label);
@@ -627,15 +629,9 @@ test('nothing the registry says of a release is acted on before its core release
   // A pause holds a release that only says it is a security fix, until it verifies; one that does is not held.
   const m = await launched();
   const pause = settings({ paused: new Date(NOW.getTime() + 3 * 24 * 3_600_000) });
-  const fix: Release = { version: LATEST, publishedAt: hoursAgo(30), declares: { security: true } };
-  const att = attestations({ [CORE_PACKAGE]: 'missing' });
+  const fix: WorldRelease = { version: LATEST, signedAt: hoursAgo(30), declares: { security: true }, shape: 'missing' };
   const unverified = world(m, { settings: pause, releases: [fix] });
-  const held = await runBackgroundUpdate(
-    m.core,
-    m.env,
-    {},
-    { ...unverified.deps, provenance: { ...unverified.deps.provenance, fetch: att.fetch } },
-  );
+  const held = await runBackgroundUpdate(m.core, m.env, {}, unverified.deps);
   assert.equal(held.outcome, 'refused', held.reason);
   await untouched(m, held, unverified.installer.calls);
 });
@@ -649,9 +645,7 @@ test('registry text and an unverified certificate never reach a notice, a reason
   // A verified release whose manifest's decision is an instruction: it waits, in fixed words, with the version only.
   const m = await launched();
   const w = world(m, {
-    releases: [
-      { version: LATEST, publishedAt: hoursAgo(200), declares: { needsDecision: hostile, security: hostile } },
-    ],
+    releases: [{ version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: hostile, security: hostile } }],
   });
   const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
   assert.equal(result.outcome, 'skipped', result.reason);
@@ -663,13 +657,8 @@ test('registry text and an unverified certificate never reach a notice, a reason
   // An attestation whose certificate's runner is an instruction: refused by the pin, which is all that is said.
   const n = await launched();
   const v = world(n);
-  const att = attestations({ [GMAIL]: { runner: hostile } });
-  const refused = await runBackgroundUpdate(
-    n.core,
-    n.env,
-    {},
-    { ...v.deps, provenance: { ...v.deps.provenance, fetch: att.fetch } },
-  );
+  v.world.change({ [GMAIL]: { runner: hostile } });
+  const refused = await runBackgroundUpdate(n.core, n.env, {}, v.deps);
   assert.equal(refused.outcome, 'refused', refused.reason);
   const left = (await readUpdateCheck(n.core.paths.stateDir)).backgroundNotice;
   assert.equal(left?.text, BACKGROUND_WORDS.unverified(LATEST, 'runner'));
@@ -683,11 +672,399 @@ test('registry text and an unverified certificate never reach a notice, a reason
     o.core,
     o.env,
     {},
-    world(o, { latest: tag, releases: [{ version: tag, publishedAt: hoursAgo(200) }] }).deps,
+    world(o, { latest: tag, releases: [{ version: tag, signedAt: hoursAgo(200) }] }).deps,
   );
   const named = (await readUpdateCheck(o.core.paths.stateDir)).backgroundNotice;
   assert.ok(!String(named?.text).includes('Ignore'), String(named?.text));
   assert.ok(!String(major.notice).includes('Ignore'), String(major.notice));
+});
+
+// ── What a release declares, and when its hold counts from (design 2026-10-22 P1, P4) ──────────────────────────
+
+test("a security fix is the tarball's word, never the registry's, both ways", async () => {
+  // The registry says it is a security fix; its verified tarball does not: held as any release is, for 72 hours.
+  const m = await launched();
+  const claimed = world(m, {
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), registrySays: { security: true } }],
+  });
+  const held = await runBackgroundUpdate(m.core, m.env, {}, claimed.deps);
+  assert.equal(held.outcome, 'held', held.reason);
+  assert.equal(held.release?.security, false);
+  assert.equal(held.release?.holdHours, 72);
+  await untouched(m, held, claimed.installer.calls);
+
+  // Its verified tarball says so, and the registry says nothing: a security fix, installed after 24 hours.
+  const n = await launched();
+  const fix = world(n, {
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), declares: { security: true }, registrySays: {} }],
+  });
+  const installed = await runBackgroundUpdate(n.core, n.env, {}, fix.deps);
+  assert.equal(installed.outcome, 'installed', installed.reason);
+  assert.equal(installed.release?.security, true);
+  assert.equal(installed.release?.holdHours, 24);
+});
+
+test("a needed decision is the tarball's word, never the registry's, both ways — its own and the one it carries", async () => {
+  const cases: [string, WorldOver, BackgroundRunResult['outcome']][] = [
+    [
+      'the latest, the registry alone says so',
+      { releases: [{ version: LATEST, signedAt: hoursAgo(80), registrySays: { needsDecision: true } }] },
+      'installed',
+    ],
+    [
+      'the latest, its tarball alone says so',
+      { releases: [{ version: LATEST, signedAt: hoursAgo(80), declares: { needsDecision: true }, registrySays: {} }] },
+      'skipped',
+    ],
+    [
+      'carried from a release in range, the registry alone says so',
+      {
+        latest: NEXT,
+        releases: [
+          { version: LATEST, signedAt: hoursAgo(200), registrySays: { needsDecision: true } },
+          { version: NEXT, signedAt: hoursAgo(80), registrySays: { needsDecisionSince: LATEST } },
+        ],
+      },
+      'installed',
+    ],
+    [
+      'carried from a release in range, its tarball alone says so',
+      {
+        latest: NEXT,
+        releases: [
+          { version: LATEST, signedAt: hoursAgo(200), registrySays: {} },
+          { version: NEXT, signedAt: hoursAgo(80), declares: { needsDecisionSince: LATEST }, registrySays: {} },
+        ],
+      },
+      'skipped',
+    ],
+  ];
+  for (const [label, over, outcome] of cases) {
+    const m = await launched();
+    const w = world(m, over);
+    const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+    assert.equal(result.outcome, outcome, `${label}: ${result.reason}`);
+    if (outcome === 'skipped') {
+      await untouched(m, result, w.installer.calls);
+      assert.match(result.reason, /needs a decision from the person \(0\.20\.1 says so\)$/, label);
+      assert.equal(
+        (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text,
+        BACKGROUND_WORDS.decision(over.latest ?? LATEST),
+        label,
+      );
+    }
+  }
+});
+
+test('an unread declaration skips this run, says why, and the next run tries again', async () => {
+  const m = await launched();
+  const unread = world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(80), serve: 'missing' }] });
+  const result = await runBackgroundUpdate(m.core, m.env, {}, unread.deps);
+  assert.equal(result.outcome, 'unavailable', result.reason);
+  assert.equal(result.reason, `${CORE_PACKAGE}@${LATEST}: ${DECLARATION_UNREAD}; the next run tries again`);
+  assert.equal(result.notice, null);
+  await untouched(m, result, unread.installer.calls);
+  assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice ?? null, null, 'no notice');
+  const [line] = await audits(m);
+  assert.equal(line?.outcome, 'failed');
+  assert.ok(String(line?.reason).includes(DECLARATION_UNREAD), String(line?.reason));
+  // Its location, then npm's canonical address, once each; and nothing unknown is cached.
+  assert.deepEqual(unread.world.tarballsAsked, [
+    fixtureTarballUrl(CORE_PACKAGE, LATEST),
+    canonicalTarballUrl(CORE_PACKAGE, LATEST),
+  ]);
+  assert.equal(existsSync(declarationsPath(m.core.paths.stateDir)), false);
+
+  // The next run, its tarball served, reads it and installs.
+  const next = world(m);
+  const installed = await runBackgroundUpdate(m.core, m.env, {}, next.deps);
+  assert.equal(installed.outcome, 'installed', installed.reason);
+});
+
+test("an unreadable declaration is never silent: the run is unavailable, and the job's run is not recorded", async () => {
+  // A mirror that blocks tarballs: every run is unavailable. Not recorded as the job working, its notices come back
+  // after two days (Review Focus 1), as for a registry that cannot be reached.
+  const m = await launched();
+  jobMarker(m);
+  const byJob = { ...m.env, AGENT_COMMS_LAUNCHER: 'core' };
+  const blocked = world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(80), serve: 'missing' }] });
+  const result = await runBackgroundUpdate(m.core, byJob, {}, blocked.deps);
+  assert.equal(result.outcome, 'unavailable', result.reason);
+  assert.equal((await readUpdateJobMarker(m.core.paths.stateDir))?.lastRun, undefined, 'recorded as the job working');
+
+  // On the same marker, the job's run that reads the declaration is recorded: the marker is one a run records on.
+  const served = await runBackgroundUpdate(m.core, byJob, {}, world(m).deps);
+  assert.equal(served.outcome, 'installed', served.reason);
+  assert.equal((await readUpdateJobMarker(m.core.paths.stateDir))?.lastRun, NOW.toISOString());
+});
+
+test("a release in range that cannot be read changes nothing: it is never asked about, and the latest's word stands", async () => {
+  // Design 2026-10-22 §8.1: which releases the registry lists decides nothing. Before it, each of these held the run
+  // back as unavailable; a registry could stall every machine with one junk version.
+  const cases: [string, WorldRelease][] = [
+    ['its tarball is not served', { version: LATEST, signedAt: hoursAgo(200), serve: 'missing' }],
+    ['it does not verify', { version: LATEST, signedAt: hoursAgo(200), shape: 'missing' }],
+    [
+      'its tarball is not the one its provenance signs',
+      { version: LATEST, signedAt: hoursAgo(200), serve: 'other-bytes' },
+    ],
+  ];
+  for (const [label, release] of cases) {
+    const m = await launched();
+    const w = world(m, { latest: NEXT, releases: [release, { version: NEXT, signedAt: hoursAgo(80) }] });
+    const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+    assert.equal(result.outcome, 'installed', `${label}: ${result.reason}`);
+    assert.ok(!w.attestations.asked.some((url) => url.endsWith(`@${LATEST}`)), `${label}: it was verified`);
+    assert.deepEqual(w.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, NEXT)], label);
+  }
+});
+
+test('while paused, core is verified and its declaration read before a security fix passes the pause', async () => {
+  const pause = settings({ paused: new Date(NOW.getTime() + 3 * 24 * 3_600_000) });
+  // The registry says it is a security fix; its verified tarball does not: the pause holds it.
+  const m = await launched();
+  const claimed = world(m, {
+    settings: pause,
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), registrySays: { security: true } }],
+  });
+  const paused = await runBackgroundUpdate(m.core, m.env, {}, claimed.deps);
+  assert.equal(paused.outcome, 'paused', paused.reason);
+  assert.deepEqual(claimed.attestations.asked, coreAsked(LATEST), 'core was verified');
+  assert.deepEqual(claimed.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, LATEST)], 'and its declaration read');
+  await untouched(m, paused, claimed.installer.calls);
+
+  // Its verified tarball says so: past the pause.
+  const n = await launched();
+  const fix = world(n, {
+    settings: pause,
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), declares: { security: true }, registrySays: {} }],
+  });
+  const installed = await runBackgroundUpdate(n.core, n.env, {}, fix.deps);
+  assert.equal(installed.outcome, 'installed', installed.reason);
+
+  // A declaration that cannot be read, while paused: the pause holds it, as any release.
+  const o = await launched();
+  const unread = world(o, {
+    settings: pause,
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), declares: { security: true }, serve: 'missing' }],
+  });
+  const waits = await runBackgroundUpdate(o.core, o.env, {}, unread.deps);
+  assert.equal(waits.outcome, 'paused', waits.reason);
+  await untouched(o, waits, unread.installer.calls);
+});
+
+test('a cached declaration is not downloaded by the next run', async () => {
+  const m = await launched();
+  const young = world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(10) }] });
+  assert.equal((await runBackgroundUpdate(m.core, m.env, {}, young.deps)).outcome, 'held');
+  assert.deepEqual(young.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, LATEST)]);
+  const cached = JSON.parse(readFileSync(declarationsPath(m.core.paths.stateDir), 'utf8')) as {
+    declarations: { version: string; integrity: string }[];
+  };
+  assert.deepEqual(
+    cached.declarations.map((record) => [record.version, record.integrity]),
+    [[LATEST, young.world.integrity(CORE_PACKAGE, LATEST)]],
+  );
+
+  const again = world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(10) }] });
+  assert.equal((await runBackgroundUpdate(m.core, m.env, {}, again.deps)).outcome, 'held');
+  assert.deepEqual(again.world.tarballsAsked, [], 'read from the cache');
+  assert.deepEqual(again.attestations.asked.slice(0, 1), coreAsked(LATEST), 'and verified again all the same');
+});
+
+test("the hold counts from each release's own signed time: a registry time set back by days changes nothing", async () => {
+  // The registry says it came out 500 hours ago; Rekor signed for it 10 hours ago: held.
+  const m = await launched();
+  const setBack = world(m, { releases: [{ version: LATEST, publishedAt: hoursAgo(500), signedAt: hoursAgo(10) }] });
+  const held = await runBackgroundUpdate(m.core, m.env, {}, setBack.deps);
+  assert.equal(held.outcome, 'held', held.reason);
+  assert.equal(held.release?.heldFrom, 'signed');
+  assert.equal(held.release?.publishedAt, hoursAgo(10).toISOString());
+  assert.match(
+    held.reason,
+    /^0\.20\.1 came out 10 hours ago, by the time Rekor signed for it; a release installs 72 hours/,
+  );
+  await untouched(m, held, setBack.installer.calls);
+
+  // Signed 80 hours ago, though the registry says it came out now: past its hold.
+  const n = await launched();
+  const late = world(n, { releases: [{ version: LATEST, publishedAt: NOW, signedAt: hoursAgo(80) }] });
+  const installed = await runBackgroundUpdate(n.core, n.env, {}, late.deps);
+  assert.equal(installed.outcome, 'installed', installed.reason);
+  assert.equal(installed.release?.heldFrom, 'signed');
+  assert.equal(firstSeen(n), null, 'a release Rekor signed for records no first sight');
+});
+
+test("the set's hold counts from the latest signed time among its packages", async () => {
+  for (const [core, gmail] of [
+    [80, 10],
+    [10, 80],
+  ] as const) {
+    const m = await launched();
+    const w = world(m, {
+      releases: [
+        { version: LATEST, signedAt: hoursAgo(core), packages: [CORE_PACKAGE] },
+        { version: LATEST, signedAt: hoursAgo(gmail), packages: [GMAIL] },
+      ],
+    });
+    const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+    assert.equal(result.outcome, 'held', `core ${core}, Gmail ${gmail}: ${result.reason}`);
+    assert.equal(result.release?.publishedAt, hoursAgo(10).toISOString());
+    await untouched(m, result, w.installer.calls);
+  }
+});
+
+test("no signed time — an inclusion proof alone, or two entries — holds from this machine's first sight, which a registry time cannot shorten", async () => {
+  const later = (hours: number) => new Date(NOW.getTime() + hours * 3_600_000);
+  for (const tlog of ['proof', 'two'] as const) {
+    const releases: WorldRelease[] = [
+      { version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog } },
+    ];
+    // The registry says it came out 1000 hours ago, and its answer's Date says 100 hours ago: neither starts the hold.
+    const m = await launched();
+    const first = world(m, { releases, servedAt: hoursAgo(100) });
+    const held = await runBackgroundUpdate(m.core, m.env, {}, first.deps);
+    assert.equal(held.outcome, 'held', `${tlog}: ${held.reason}`);
+    assert.equal(held.release?.heldFrom, 'first-seen', tlog);
+    assert.equal(held.release?.publishedAt, NOW.toISOString(), `${tlog}: first seen at this machine's own clock`);
+    assert.match(held.reason, /first seen here/, tlog);
+    await untouched(m, held, first.installer.calls);
+    assert.deepEqual(
+      firstSeen(m)?.map((sight) => [sight.package, sight.version, sight.integrity, sight.at]),
+      [
+        [CORE_PACKAGE, LATEST, first.world.integrity(CORE_PACKAGE, LATEST), NOW.toISOString()],
+        [GMAIL, LATEST, first.world.integrity(GMAIL, LATEST), NOW.toISOString()],
+      ],
+      `${tlog}: recorded`,
+    );
+
+    // 30 hours on, the registry's word honest: still held, first seen 30 hours ago.
+    const still = await runBackgroundUpdate(m.core, m.env, {}, world(m, { releases, now: () => later(30) }).deps);
+    assert.equal(still.outcome, 'held', `${tlog}: ${still.reason}`);
+    assert.equal(still.release?.publishedAt, NOW.toISOString(), tlog);
+
+    // 73 hours on: past its hold.
+    const past = await runBackgroundUpdate(m.core, m.env, {}, world(m, { releases, now: () => later(73) }).deps);
+    assert.equal(past.outcome, 'installed', `${tlog}: ${past.reason}`);
+    assert.equal(past.release?.heldFrom, 'first-seen', tlog);
+  }
+});
+
+test('a promise that does not verify refuses the release, and installs nothing', async () => {
+  const m = await launched();
+  const w = world(m, { releases: [{ version: LATEST, signedAt: hoursAgo(80), shape: { tlog: 'bad-promise' } }] });
+  const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+  assert.equal(result.outcome, 'refused', result.reason);
+  assert.match(result.reason, /@agentcomms\/core@0\.20\.1 did not verify: signature$/);
+  await untouched(m, result, w.installer.calls);
+  assert.equal(
+    (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text,
+    BACKGROUND_WORDS.unverified(LATEST, 'signature'),
+  );
+  assert.deepEqual(w.world.tarballsAsked, [], 'no tarball of a release that did not verify is read');
+  assert.equal(firstSeen(m), null);
+});
+
+test('a dry run records no first sight, and writes no cached declaration', async () => {
+  const m = await launched();
+  const signed = world(m);
+  const would = await runBackgroundUpdate(m.core, m.env, { dryRun: true }, signed.deps);
+  assert.equal(would.outcome, 'would-install', would.reason);
+  assert.deepEqual(signed.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, LATEST)], 'its declaration was read');
+  assert.equal(existsSync(declarationsPath(m.core.paths.stateDir)), false, 'and not cached');
+
+  const releases: WorldRelease[] = [{ version: LATEST, signedAt: hoursAgo(1000), shape: { tlog: 'proof' } }];
+  const unsigned = await runBackgroundUpdate(m.core, m.env, { dryRun: true }, world(m, { releases }).deps);
+  assert.equal(unsigned.outcome, 'held', unsigned.reason);
+  assert.equal(unsigned.release?.heldFrom, 'first-seen');
+  assert.equal(unsigned.release?.publishedAt, NOW.toISOString());
+  assert.equal(firstSeen(m), null, 'no first sight recorded');
+
+  // A run records both.
+  const run = await runBackgroundUpdate(m.core, m.env, {}, world(m, { releases }).deps);
+  assert.equal(run.outcome, 'held', run.reason);
+  assert.equal(firstSeen(m)?.length, 2);
+  assert.equal(existsSync(declarationsPath(m.core.paths.stateDir)), true);
+  assert.equal(DECLARATIONS_FILE, 'release-declarations.json');
+});
+
+test('every package of the set is verified before the hold is decided', async () => {
+  // Gmail's attestation is missing and the release is young, by Rekor's time and the registry's: refused, not held.
+  const m = await launched();
+  const w = world(m, { releases: [{ version: LATEST, publishedAt: hoursAgo(10), signedAt: hoursAgo(10) }] });
+  w.world.change({ [GMAIL]: 'missing' });
+  const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
+  assert.equal(result.outcome, 'refused', result.reason);
+  assert.match(result.reason, /@agentcomms\/gmail@0\.20\.1 did not verify: attestation$/);
+  await untouched(m, result, w.installer.calls);
+  assert.equal(
+    (await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text,
+    BACKGROUND_WORDS.unverified(LATEST, 'attestation'),
+  );
+});
+
+test('what a release declares is read from the bytes its provenance verified, never from the integrity the registry gives after it', async () => {
+  // A registry whose `dist.integrity` is genuine until the release has verified, and another tarball's after; and a
+  // location that serves that other tarball. Its word on the digest, read again, is not the release's.
+  const cases: { label: string; latest: string; target: string; releases: WorldRelease[]; other: unknown }[] = [
+    {
+      label: 'the latest, which another tarball would make a security fix',
+      latest: LATEST,
+      target: LATEST,
+      releases: [{ version: LATEST, signedAt: hoursAgo(30) }],
+      other: { security: true },
+    },
+    {
+      label: 'the latest, whose carried decision another tarball would take away',
+      latest: NEXT,
+      target: NEXT,
+      releases: [
+        { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true, needsDecisionSince: LATEST } },
+        { version: NEXT, signedAt: hoursAgo(80), declares: { needsDecisionSince: LATEST } },
+      ],
+      other: {},
+    },
+  ];
+  for (const { label, latest, target, releases, other } of cases) {
+    const m = await launched();
+    const w = world(m, { latest, releases });
+    const swapped = releaseTarball(CORE_PACKAGE, target, {
+      declares: other,
+      files: { 'OTHER.md': 'not the tarball its provenance signs\n' },
+    });
+    let verified = false;
+    const registry: ReleaseRegistry = async (packageName) => {
+      const answer = await w.world.registry(packageName);
+      const dist = answer.packument.versions?.[target]?.dist;
+      if (packageName === CORE_PACKAGE && dist !== undefined) {
+        const genuine = dist.integrity;
+        Object.defineProperty(dist, 'integrity', {
+          enumerable: true,
+          get: () => (verified ? integrityOfBytes(swapped) : genuine),
+        });
+      }
+      return answer;
+    };
+    const attestations: AttestationFetch = async (url) => {
+      const answer = await w.world.attestations(url);
+      if (url === coreAsked(target)[0]) verified = true;
+      return answer;
+    };
+    const tarballs: TarballFetch = async (url, init) =>
+      url === fixtureTarballUrl(CORE_PACKAGE, target)
+        ? new Response(new Uint8Array(swapped), { status: 200 })
+        : w.world.tarballs(url, init);
+    const result = await runBackgroundUpdate(
+      m.core,
+      m.env,
+      {},
+      { ...w.deps, registry, tarballs, provenance: { ...w.deps.provenance, fetch: attestations } },
+    );
+    assert.ok(verified, `${label}: the registry changed its word after the release verified`);
+    assert.equal(result.outcome, 'unavailable', `${label}: ${result.reason}`);
+    assert.ok(result.reason.includes(DECLARATION_UNREAD), `${label}: ${result.reason}`);
+    await untouched(m, result, w.installer.calls);
+  }
 });
 
 // ── A run that goes wrong part-way ─────────────────────────────────────────────────────────────────────────────
@@ -695,7 +1072,7 @@ test('registry text and an unverified certificate never reach a notice, a reason
 test('a partly failed release switches nothing: one package installed, the next not (Review focus 3)', async () => {
   const m = await launched();
   const w = world(m);
-  const failing = installer(m, { fail: GMAIL });
+  const failing = installer(m, w.world, { fail: GMAIL });
   const result = await runBackgroundUpdate(m.core, m.env, {}, { ...w.deps, install: failing.install });
   assert.equal(result.outcome, 'failed');
   assert.deepEqual(failing.calls, [`${CORE_PACKAGE}@${LATEST}`, `${GMAIL}@${LATEST}`]);
@@ -717,8 +1094,9 @@ test('a self-check that fails, or an installed tarball that is not the one verif
   await untouched(m, result, []);
 
   const n = await launched();
-  const other = installer(n, { integrity: { [GMAIL]: integrityOf('another tarball') } });
-  const swapped = await runBackgroundUpdate(n.core, n.env, {}, { ...world(n).deps, install: other.install });
+  const v = world(n);
+  const other = installer(n, v.world, { integrity: { [GMAIL]: integrityOf('another tarball') } });
+  const swapped = await runBackgroundUpdate(n.core, n.env, {}, { ...v.deps, install: other.install });
   assert.equal(swapped.outcome, 'failed');
   assert.match(swapped.reason, /not the tarball whose provenance was verified/);
   await untouched(n, swapped, []);
@@ -726,53 +1104,46 @@ test('a self-check that fails, or an installed tarball that is not the one verif
 
 test('every package of this suite in a runtime is a verified tarball, not only its own: the core Gmail depends on too', async () => {
   const nested = `node_modules/${GMAIL}/node_modules/${CORE_PACKAGE}`;
+  // The world has core's 0.20.0 too, with its own attestation: the release a nested core may be.
+  const releases: WorldRelease[] = [{ version: OLD }, { version: LATEST, signedAt: hoursAgo(80) }];
   const cases: [
     string,
-    Record<string, { version: string; integrity?: string }>,
+    (w: World) => Record<string, { version: string; integrity?: string }>,
     Record<string, 'missing'>,
     BackgroundRunResult['outcome'],
   ][] = [
     [
       'the release of core verified for its own launcher',
-      { [nested]: { version: LATEST, integrity: integrityOf(`${CORE_PACKAGE}@${LATEST}`) } },
+      (w) => ({ [nested]: { version: LATEST, integrity: w.integrity(CORE_PACKAGE, LATEST) } }),
       {},
       'installed',
     ],
     [
       'another core, whose provenance verifies',
-      { [nested]: { version: OLD, integrity: integrityOf(`${CORE_PACKAGE}@${OLD}`) } },
+      (w) => ({ [nested]: { version: OLD, integrity: w.integrity(CORE_PACKAGE, OLD) } }),
       {},
       'installed',
     ],
     [
       'another tarball of the release',
-      { [nested]: { version: LATEST, integrity: integrityOf('another tarball') } },
+      () => ({ [nested]: { version: LATEST, integrity: integrityOf('another tarball') } }),
       {},
       'failed',
     ],
     [
       'another core, published without provenance',
-      { [nested]: { version: OLD, integrity: integrityOf(`${CORE_PACKAGE}@${OLD}`) } },
+      (w) => ({ [nested]: { version: OLD, integrity: w.integrity(CORE_PACKAGE, OLD) } }),
       { [`${CORE_PACKAGE}@${OLD}`]: 'missing' },
       'failed',
     ],
-    ['one with no integrity recorded', { [nested]: { version: LATEST } }, {}, 'failed'],
+    ['one with no integrity recorded', () => ({ [nested]: { version: LATEST } }), {}, 'failed'],
   ];
   for (const [label, more, change, outcome] of cases) {
     const m = await launched();
-    const w = world(m);
-    const inst = installer(m, { more: { [GMAIL]: more } });
-    const att = attestations(change);
-    const result = await runBackgroundUpdate(
-      m.core,
-      m.env,
-      {},
-      {
-        ...w.deps,
-        install: inst.install,
-        provenance: { ...w.deps.provenance, fetch: att.fetch },
-      },
-    );
+    const w = world(m, { releases });
+    const inst = installer(m, w.world, { more: { [GMAIL]: more(w.world) } });
+    w.world.change(change);
+    const result = await runBackgroundUpdate(m.core, m.env, {}, { ...w.deps, install: inst.install });
     assert.equal(result.outcome, outcome, `${label}: ${result.reason}`);
     if (outcome === 'failed') {
       await untouched(m, result, []);
@@ -845,7 +1216,7 @@ test('update --rollback holds the release it left until a newer one is out', asy
   assert.deepEqual(again.installer.calls, []);
   assert.deepEqual(await pointerOf(m, GMAIL), { current: `${OLD}-gmail`, previous: `${LATEST}-gmail` });
 
-  const newer = world(m, { latest: NEXT, releases: [{ version: NEXT, publishedAt: hoursAgo(80) }] });
+  const newer = world(m, { latest: NEXT, releases: [{ version: NEXT, signedAt: hoursAgo(80) }] });
   const moved = await runBackgroundUpdate(m.core, m.env, {}, newer.deps);
   assert.equal(moved.outcome, 'installed', moved.reason);
   assert.deepEqual(await pointerOf(m, GMAIL), { current: `${NEXT}-gmail`, previous: `${OLD}-gmail` });
@@ -962,7 +1333,7 @@ test('a run reads Track A’s settings: the level set, 0.18’s switch, the orga
   assert.match(pausedRun.reason, /paused until/);
   const security = world(paused, {
     settings: undefined,
-    releases: [{ version: LATEST, publishedAt: hoursAgo(30), declares: { security: true } }],
+    releases: [{ version: LATEST, signedAt: hoursAgo(30), declares: { security: true } }],
   });
   assert.equal((await runBackgroundUpdate(paused.core, paused.env, {}, security.deps)).outcome, 'installed');
 
@@ -1028,13 +1399,14 @@ test('two runs at once: the second finds the first under way and does nothing', 
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const slow = installer(m);
+  const w = world(m);
+  const slow = w.installer;
   const first = runBackgroundUpdate(
     m.core,
     m.env,
     {},
     {
-      ...world(m).deps,
+      ...w.deps,
       install: async (packageName, version) => {
         await gate;
         return slow.install(packageName, version);
@@ -1074,7 +1446,7 @@ test('a dry run reads Sigstore’s trust root into a folder of its own, removed 
   };
   const m = await launched();
   const w = world(m);
-  const deps = { ...w.deps, provenance: { fetch: w.attestations.fetch }, loadSigstore: load };
+  const deps = { ...w.deps, provenance: { fetch: w.world.attestations }, loadSigstore: load };
   const dry = await runBackgroundUpdate(m.core, m.env, { dryRun: true }, deps);
   assert.equal(dry.outcome, 'would-install', dry.reason);
   assert.ok(asked.length > 0, 'the trust root was read');
@@ -1168,6 +1540,71 @@ test('agentcomms update --background [--dry-run]: the run, as the job starts it;
   assert.deepEqual(await pointerOf(m, GMAIL), { current: `${LATEST}-gmail`, previous: `${OLD}-gmail` });
 });
 
+test("agentcomms update --background says what the hold counts from: the time Rekor signed, or this machine's first sight", async () => {
+  // Since 0.26.0 (design 2026-10-22 P4) a hold never counts from the registry's `time`. The printed run used to say
+  // the release "came out" at the hold's start, and, without one, "at a time the registry does not give".
+  const printed = async (m: Machine, deps: BackgroundDeps) => {
+    const written: string[] = [];
+    const write = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      if (typeof chunk === 'string') {
+        written.push(chunk);
+        return true;
+      }
+      return (write as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+    }) as typeof process.stdout.write;
+    try {
+      const code = await main(['update', '--background', '--dry-run'], { ...m.env, CLAUDECODE: '1' }, 'linux', {
+        updateBackground: deps,
+      });
+      return { code, lines: written.join('').split('\n') };
+    } finally {
+      process.stdout.write = write;
+    }
+  };
+  const after = (at: Date, hours: number) => new Date(at.getTime() + hours * 3_600_000).toISOString();
+
+  // Signed 10 hours ago, though the registry says 500: held from the signed time.
+  const m = await launched();
+  const signed = await printed(
+    m,
+    world(m, { releases: [{ version: LATEST, publishedAt: hoursAgo(500), signedAt: hoursAgo(10) }] }).deps,
+  );
+  assert.equal(signed.code, 0, signed.lines.join('\n'));
+  assert.equal(
+    signed.lines[2],
+    `${LATEST}: its hold counts from ${hoursAgo(10).toISOString()}, when Rekor signed for it; it may install 72 hours after, at ${after(hoursAgo(10), 72)}.`,
+  );
+
+  // A security fix, signed 10 hours ago: the same, with its own hold.
+  const s = await launched();
+  const security = await printed(
+    s,
+    world(s, { releases: [{ version: LATEST, signedAt: hoursAgo(10), declares: { security: true } }] }).deps,
+  );
+  assert.equal(
+    security.lines[2],
+    `${LATEST}, a security fix: its hold counts from ${hoursAgo(10).toISOString()}, when Rekor signed for it; it may install 24 hours after, at ${after(hoursAgo(10), 24)}.`,
+  );
+
+  // No signed time (an inclusion proof alone): held from this machine's first sight, whatever the registry says.
+  const n = await launched();
+  const unsigned = await printed(
+    n,
+    world(n, {
+      releases: [{ version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog: 'proof' } }],
+    }).deps,
+  );
+  assert.equal(
+    unsigned.lines[2],
+    `${LATEST}: its hold counts from ${NOW.toISOString()}, when this machine first saw it, as its provenance carries no time Rekor signed; it may install 72 hours after, at ${after(NOW, 72)}.`,
+  );
+
+  for (const { lines } of [signed, security, unsigned]) {
+    assert.doesNotMatch(lines.join('\n'), /came out \d{4}-|the registry does not give/, 'no registry time is told');
+  }
+});
+
 test('the offline self-check: the CLI says the release, and its server answers — started with no account to reach', async () => {
   const m = machine();
   /** A runtime whose CLI says `says` for --version and, for `mcp`, answers as a server would — or exits at once. */
@@ -1244,13 +1681,14 @@ test('while a background run is under way, a person’s update and rollback are 
   const installing = new Promise<void>((resolve) => {
     reached = resolve;
   });
-  const slow = installer(m);
+  const w = world(m);
+  const slow = w.installer;
   const run = runBackgroundUpdate(
     m.core,
     m.env,
     {},
     {
-      ...world(m).deps,
+      ...w.deps,
       install: async (packageName, version) => {
         reached();
         await gate;

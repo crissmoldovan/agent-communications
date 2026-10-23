@@ -10,6 +10,7 @@ import {
   PROVENANCE_PINS,
   type ProvenanceVerdict,
   provenanceIdentity,
+  signedTimeOf,
   sigstoreBundleVerifier,
   verifyProvenance,
 } from '../src/update-provenance.ts';
@@ -111,6 +112,7 @@ test('a release built by release.yml at its tag, on a GitHub-hosted runner, veri
       sha512: Buffer.from(INTEGRITY.slice('sha512-'.length), 'base64').toString('hex'),
       logIndex: '4242',
       integratedTime: undefined,
+      signedAt: '2026-10-10T12:00:00.000Z',
     },
   );
   assert.equal(verdict.provenance.integratedTime, '2026-10-10T12:00:00.000Z');
@@ -301,4 +303,117 @@ test('sigstore-js reads an identity given as text as an unanchored pattern, whic
   // Its own behaviour, shown: the text policy takes the `-evil` tag. This is not a pin of ours — it is why ours is a RegExp.
   await sigstore(evil, { issuer: PROVENANCE_PINS.issuer, identity: text as unknown as RegExp });
   await assert.rejects(sigstore(evil, { issuer: PROVENANCE_PINS.issuer, identity: provenanceIdentity(VERSION) }));
+});
+
+// ── Rekor's signed time (design 2026-10-22 P4, §7.2; plan gap 2) ─────────────────────────────────────────────────
+//
+// A hold counts from the time Rekor signed, never the registry's `time`. sigstore-js 2.1.1 verifies an entry's
+// inclusion promise (its SET, which signs the entry's integrated time) whenever the entry carries one, and refuses the
+// bundle when it does not verify; an entry with only an inclusion proof passes on its Merkle proof and checkpoint,
+// which sign no time. So the time is taken only from a bundle with exactly one entry, and only when that entry carries
+// a promise — read from the very entity sigstore-js has just verified.
+
+/** The provenance a verified release carries, through sigstore-js and the tests' trust root. */
+async function verified(shape: Partial<ProvenanceShape>) {
+  const verdict = await verifyProvenance(RELEASE, { fetch: served(shape).fetch, verifyBundle: sigstore });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict));
+  if (!verdict.ok) throw new Error('unreachable');
+  return verdict.provenance;
+}
+
+test("Rekor's integrated time is the signed time, from the one entry sigstore-js verified", async () => {
+  const provenance = await verified({ signedAt: new Date('2026-10-10T12:00:00Z') });
+  assert.equal(provenance.signedAt, '2026-10-10T12:00:00.000Z');
+  // Each release's own: the time follows the bundle, not a default.
+  assert.equal((await verified({ signedAt: new Date('2026-10-12T08:30:00Z') })).signedAt, '2026-10-12T08:30:00.000Z');
+});
+
+test("npm's shape — a promise and an inclusion proof — gives the signed time", async () => {
+  const provenance = await verified({ tlog: 'both', signedAt: new Date('2026-10-11T09:15:00Z') });
+  assert.equal(provenance.signedAt, '2026-10-11T09:15:00.000Z');
+});
+
+test('an entry with an inclusion proof and no promise verifies, with no signed time', async () => {
+  const provenance = await verified({ tlog: 'proof', signedAt: new Date('2026-10-11T09:15:00Z') });
+  assert.equal(provenance.signedAt, null);
+  // Its integrated time is still read for display, unverified: it is not what a hold counts from.
+  assert.equal(provenance.integratedTime, '2026-10-11T09:15:00.000Z');
+});
+
+test('two entries verify, with no signed time', async () => {
+  const provenance = await verified({ tlog: 'two' });
+  assert.equal(provenance.signedAt, null);
+});
+
+test('a promise that does not verify refuses the release', async () => {
+  const refused = refusal(
+    await verifyProvenance(RELEASE, { fetch: served({ tlog: 'bad-promise' }).fetch, verifyBundle: sigstore }),
+  );
+  assert.equal(refused.field, 'signature');
+  assert.match(refused.reason, /\(TLOG_INCLUSION_PROMISE_ERROR\)/);
+});
+
+test('a bundle with no tlog entry is refused', async () => {
+  const refused = refusal(
+    await verifyProvenance(RELEASE, { fetch: served({ tlog: 'none' }).fetch, verifyBundle: sigstore }),
+  );
+  assert.equal(refused.field, 'signature');
+});
+
+test('a bundle verifier that says nothing gives no signed time', async () => {
+  const verdict = await verifyProvenance(RELEASE, { fetch: served().fetch, verifyBundle: anyBundle });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict));
+  if (!verdict.ok) return;
+  assert.equal(verdict.provenance.signedAt, null);
+  // What a verifier says that is not a time is no signed time either.
+  for (const said of [
+    { signedAt: 'yesterday' },
+    { signedAt: 1_760_000_000 },
+    { signedAt: '2026-10-10T12:00:00Z' },
+    {},
+  ]) {
+    const odd: BundleVerifier = async () => said as never;
+    const read = await verifyProvenance(RELEASE, { fetch: served().fetch, verifyBundle: odd });
+    assert.equal(read.ok && read.provenance.signedAt, null, JSON.stringify(said));
+  }
+});
+
+test('signedTimeOf takes the time only from exactly one entry that carries a promise, at a positive whole second', () => {
+  const promise = { signedEntryTimestamp: Buffer.from('set') };
+  const one = (entry: Record<string, unknown>) => ({ tlogEntries: [entry] });
+  assert.equal(
+    signedTimeOf(one({ integratedTime: '1760097600', inclusionPromise: promise })),
+    '2025-10-10T12:00:00.000Z',
+  );
+  assert.equal(
+    signedTimeOf(one({ integratedTime: 1760097600, inclusionPromise: promise })),
+    '2025-10-10T12:00:00.000Z',
+  );
+  for (const [entity, why] of [
+    [one({ integratedTime: '1760097600' }), 'no promise'],
+    [one({ integratedTime: '1760097600', inclusionPromise: undefined }), 'a promise left undefined'],
+    [one({ integratedTime: '1760097600', inclusionPromise: null }), 'a promise that is null'],
+    [one({ integratedTime: '0', inclusionPromise: promise }), 'no time'],
+    [one({ integratedTime: '-5', inclusionPromise: promise }), 'a time before 1970'],
+    [one({ integratedTime: '1760097600.5', inclusionPromise: promise }), 'part of a second'],
+    [one({ integratedTime: 'soon', inclusionPromise: promise }), 'not a number'],
+    [one({ integratedTime: '99999999999999999', inclusionPromise: promise }), 'past any date'],
+    [one({ inclusionPromise: promise }), 'no integrated time'],
+    [
+      {
+        tlogEntries: [
+          { integratedTime: '1760097600', inclusionPromise: promise },
+          { integratedTime: '1760097660', inclusionPromise: promise },
+        ],
+      },
+      'two entries',
+    ],
+    [{ tlogEntries: [] }, 'no entry'],
+    [{ tlogEntries: 'one' }, 'entries that are not a list'],
+    [{ tlogEntries: [null] }, 'an entry that is not an object'],
+    [{}, 'no entries'],
+    [null, 'no entity'],
+  ] as const) {
+    assert.equal(signedTimeOf(entity), null, why);
+  }
 });

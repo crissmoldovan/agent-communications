@@ -507,7 +507,8 @@ function pruneLines(result: PruneResult, color: boolean): string[] {
 /** One item of an update check, as a line. */
 function describeItem(item: UpdateItem): string {
   if (item.kind === 'global') {
-    return `global ${item.package} ${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
+    const again = item.reinstall ? ', to install again: an earlier update removed what did not match its release' : '';
+    return `global ${item.package} ${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}${again}`;
   }
   if (item.kind === 'runtime') {
     return item.version === item.latest
@@ -666,5 +667,7 @@ export function renderUpdate(result: UpdateResult, color: boolean): string {
     lines.push(paint(color, 'yellow', `Left for you: ${describeItem(item)}`), `  ${item.reason ?? ''}`);
   }
   if (result.next) lines.push('', result.next);
+  // On its own line, last, as a sentence: the update was installed, and only the daily check's file lags behind it.
+  if (result.recordNote) lines.push(`${result.recordNote.charAt(0).toUpperCase()}${result.recordNote.slice(1)}.`);
   return lines.join('\n');
 }

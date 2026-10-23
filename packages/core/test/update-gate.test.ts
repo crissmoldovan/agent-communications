@@ -18,6 +18,7 @@ import { CORE_CALLER } from '../src/handoffs.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
 import { changePolicyChange } from '../src/operations/change-policy.ts';
 import {
+  RECORD_DEFERRED,
   type RegistrationItem,
   type UpdateDeps,
   type UpdateReport,
@@ -27,6 +28,7 @@ import {
   updateCheckFindings,
 } from '../src/operations/update.ts';
 import { updateLevelChange, updatePause } from '../src/operations/update-settings.ts';
+import { renderUpdate } from '../src/render.ts';
 import {
   askUnderClaim,
   checkForUpdates,
@@ -50,14 +52,17 @@ import {
   readUpdateCheck,
   UPDATE_CHECK_FILE,
   UPDATE_CHECK_LEASE_MS,
+  UPDATE_CHECK_LOCK,
   UPDATE_STARTED_BY_ENV,
   type UpdateCheckRecord,
   updateVerdict,
 } from '../src/update-state.ts';
 import { BACKGROUND_WORDS } from '../src/update-words.ts';
 import { VERSION } from '../src/version.ts';
+import { globalStandIn } from './helpers/global-stand-in.ts';
 import { coreInline } from './helpers/handoffs.ts';
-import { registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
+import { holdLock } from './helpers/hold-lock.ts';
+import { fixtureTarballs, registryOf, testReleaseVerifier } from './helpers/provenance-fixture.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -164,11 +169,10 @@ function deps(latestVersion: UpdateDeps['latestVersion'], global: Record<string,
     // Each release's document, and its provenance verified against the test's own trust root: nothing reaches npm.
     registry: registryOf(async (packageName) => String(await latestVersion?.(packageName))),
     verifyRelease: testReleaseVerifier(),
+    tarballs: fixtureTarballs,
     globalPackages: async () => ({ ...installed }),
-    installGlobal: async (spec: string) => {
-      const at = spec.lastIndexOf('@');
-      installed[spec.slice(0, at)] = spec.slice(at + 1);
-    },
+    // npm installing the verified tarball it is handed, into a global folder of the test's own.
+    ...globalStandIn(tempDir('comms-global-'), installed),
     installRuntime: async () => undefined,
   } satisfies UpdateDeps;
 }
@@ -423,10 +427,10 @@ test('two processes that find the file a day old at the same moment ask the regi
     writeFileSync(go, '');
     const outcomes = await Promise.all([one.done, two.done]);
     assert.deepEqual(outcomes.map((outcome) => outcome.asked).sort(), [false, true], 'one of them asked');
-    // Once between them — the latest, then core's full document, for what its releases declare (design 2026-10-16,
-    // U5, U7: every release since the one here, not only the latest's own).
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore'], 'the registry was asked once');
-    assert.deepEqual(served.documents, ['abbreviated', 'full']);
+    // Once between them — the latest. A process with no verifier reads no document for what its releases declare: it
+    // could believe none of it (design 2026-10-22, P2).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore'], 'the registry was asked once');
+    assert.deepEqual(served.documents, ['abbreviated']);
     assert.equal((await readUpdateCheck(m.stateDir)).latest, LATEST);
   } finally {
     await served.close();
@@ -535,6 +539,9 @@ async function preparedFor<T>(m: Machine, change: GatedChange<T>): Promise<strin
 
 // ── "Restart", only where restarting starts the latest ─────────────────────────────────────────────────────────
 
+/** The lock beside the daily check's file, which every writer of it takes (`changeUpdateCheck`). */
+const checkLockOf = (m: Machine): string => join(m.stateDir, '.update-check.lock');
+
 test('an update installed but not yet loaded: the notice says to restart the client, not to update', async () => {
   const m = machine();
   // What the check found: every registration of the core server names 99.0.0.
@@ -559,8 +566,18 @@ test('an update installed but not yet loaded: the notice says to restart the cli
   try {
     assert.match(String(noticeOf(await server.call('comms_audit_tail'))), /is out; say "update"/);
     const first = (await server.call('comms_update', { noVerify: true })).structuredContent as { approvalId: string };
+    /*
+     * The record's lock is held across the apply, by two holders in turn, as every tool call's refresh holds it on a
+     * busy machine. Left to chance, it failed on a runner slow enough that the record's turn came more than 2 s after
+     * it began to wait (Windows, Node 22): the update was installed and its record silently dropped. Held, the update
+     * always waits for both, and its record is always written.
+     */
+    const held = holdLock(checkLockOf(updated), [1_000, 1_000]);
+    await held.taken;
     const applied = await server.call('comms_update', { noVerify: true, approvalId: first.approvalId });
+    await held;
     assert.equal(applied.isError, undefined, JSON.stringify(applied.structuredContent));
+    assert.equal((applied.structuredContent as { result: UpdateResult }).result.recordNote, undefined);
     const record = await readUpdateCheck(updated.stateDir);
     assert.equal(record.behind, false);
     assert.deepEqual(record.current, { registered: ['core'], global: ['core'] });
@@ -871,6 +888,137 @@ test('what an update records: an old entry by the same name in another scope is 
   );
 });
 
+// ── The record’s lock: each holder in turn, and an update’s record never silently lost ────────────────────────
+
+/**
+ * A machine whose global core is behind, its update prepared through the core server: the approval to apply it with,
+ * the record as it stands, and the server. Nothing is registered, so the update's one step is the global package.
+ */
+async function preparedUpdate() {
+  const m = machine();
+  await seed(m, { latest: LATEST, behind: true });
+  const { latestVersion } = registry();
+  const server = await connect(m, { update: deps(latestVersion) });
+  const first = (await server.call('comms_update', { noVerify: true })).structuredContent as { approvalId?: string };
+  assert.equal(typeof first.approvalId, 'string', JSON.stringify(first));
+  const apply = async () => {
+    const applied = await server.call('comms_update', { noVerify: true, approvalId: first.approvalId });
+    assert.equal(applied.isError, undefined, JSON.stringify(applied.structuredContent));
+    return { applied, result: (applied.structuredContent as { result: UpdateResult }).result };
+  };
+  return { m, server, apply };
+}
+
+test("a record lock handed on within its bound keeps a person's update record", async () => {
+  const { m, server, apply } = await preparedUpdate();
+  try {
+    /*
+     * Five holders, 1 s each, back to back, as a busy server's refreshes hold it: 5 s in all. A wait given 2 s from its
+     * start gave up while the lock was being handed on exactly as it should be, and the update's record was dropped —
+     * and so would its retry, given 2 s more. Given 2 s for each holder, the first try waits for all five.
+     */
+    const held = holdLock(checkLockOf(m), [1_000, 1_000, 1_000, 1_000, 1_000]);
+    await held.taken;
+    const { result } = await apply();
+    await held;
+    assert.equal(result.status, 'updated', JSON.stringify(result));
+    assert.equal(result.recordNote, undefined, 'the record was written, so there is nothing to say of it');
+    const record = await readUpdateCheck(m.stateDir);
+    assert.equal(record.behind, false, 'what the update did is recorded');
+    assert.deepEqual(record.current, { registered: [], global: ['core'] });
+  } finally {
+    await server.close();
+  }
+});
+
+test('a record lock held past its bound leaves the update installed, and says its record will be corrected', async () => {
+  const { m, server, apply } = await preparedUpdate();
+  try {
+    const before = await readUpdateCheck(m.stateDir);
+    /*
+     * One holder that keeps the lock until the update has answered, however long it takes to: past the first try's
+     * 2 s and the retry's. A hold of so many seconds would race the update's own work on a slow machine.
+     */
+    let answered: () => void = () => undefined;
+    const held = holdLock(checkLockOf(m), [new Promise<void>((resolve) => (answered = resolve))]);
+    await held.taken;
+    const started = Date.now();
+    let outcome: Awaited<ReturnType<typeof apply>>;
+    try {
+      outcome = await apply();
+    } finally {
+      answered();
+      await held;
+    }
+    const { applied, result } = outcome;
+    // Each try gives up only once one holder has kept the lock for 2 s: two tries are more than 4 s.
+    assert.ok(Date.now() - started >= 4_000, 'the record was tried once more before it was given up');
+    assert.equal(result.status, 'updated', 'the update was installed');
+    assert.equal(result.recordNote, RECORD_DEFERRED);
+    assert.equal(
+      (applied.structuredContent as { result: { recordNote?: unknown } }).result.recordNote,
+      RECORD_DEFERRED,
+      'the MCP result carries it',
+    );
+    assert.deepEqual(await readUpdateCheck(m.stateDir), before, 'the record is as it was');
+    assert.equal(
+      renderUpdate(result, false).split('\n').at(-1),
+      'The update was installed; its record will be corrected by the next check.',
+      'the command says it, on its own line, last',
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('changeUpdateCheck takes the lock per holder, 2 s each, 15 s in all', async () => {
+  const m = machine();
+  mkdirSync(m.stateDir, { recursive: true });
+  // Three holders, 1 s each: 3 s in all, more than the 2 s a wait counted from its start was given, and each holder
+  // half of what a wait now gives one.
+  const held = holdLock(checkLockOf(m), [1_000, 1_000, 1_000]);
+  await held.taken;
+  let over = false;
+  void held.then(() => {
+    over = true;
+  });
+  const { written } = await changeUpdateCheck(m.stateDir, (record) => ({ record: { ...record, latest: LATEST } }));
+  assert.equal(written, true);
+  assert.equal(over, true, 'it waited until the last holder had let go');
+  assert.equal((await readUpdateCheck(m.stateDir)).latest, LATEST);
+  await held;
+  assert.deepEqual(UPDATE_CHECK_LOCK, { timeoutPerHolder: true, timeoutMs: 2_000, maxWaitMs: 15_000 });
+});
+
+test('a notice decision waits 2 s at most for a lock handed on, and the notice comes on a later call', async () => {
+  const m = machine();
+  await seed(m, { latest: LATEST, behind: true });
+  const { call, close } = await connect(m);
+  try {
+    /*
+     * Six holders, 1 s each, back to back: what a writer whose record matters waits out, holder by holder. A notice is
+     * best effort and not worth that wait: the call answers while the lock is still being handed on, with no notice,
+     * and the next call once the lock is free decides it.
+     */
+    const held = holdLock(checkLockOf(m), [1_000, 1_000, 1_000, 1_000, 1_000, 1_000]);
+    await held.taken;
+    let over = false;
+    void held.then(() => {
+      over = true;
+    });
+    const first = await call('comms_audit_tail');
+    assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
+    assert.equal(over, false, 'the call waited until the lock was free');
+    assert.ok(!noticed(first), 'nothing was decided while the lock was busy');
+    await held;
+    const second = await call('comms_audit_tail');
+    assert.equal(second.isError, undefined, JSON.stringify(second.structuredContent));
+    assert.match(String(noticeOf(second)), /is out; say "update"/, 'the notice comes once the lock is free');
+  } finally {
+    await close();
+  }
+});
+
 // ── Switched off ──────────────────────────────────────────────────────────────────────────────────────────────
 
 test('CI, AGENT_COMMS_UPDATE_CHECK=off and the machine’s own setting each skip everything: no check, no notice', async () => {
@@ -1030,9 +1178,9 @@ test('a registry slower than the terminal waits is still heard from: the check f
     const record = await readUpdateCheck(m.stateDir);
     assert.equal(record.lastError, null);
     assert.equal(record.checking, null, 'the claim was given up');
-    // The latest, then core's full document, for what its releases declare (design 2026-10-16, U5, U7).
-    assert.deepEqual(served.requests, ['/@agentcomms%2fcore', '/@agentcomms%2fcore']);
-    assert.deepEqual(served.documents, ['abbreviated', 'full']);
+    // The latest, and no document for what its releases declare: nothing here verifies (design 2026-10-22, P2).
+    assert.deepEqual(served.requests, ['/@agentcomms%2fcore']);
+    assert.deepEqual(served.documents, ['abbreviated']);
   } finally {
     await served.close();
   }
@@ -1145,8 +1293,9 @@ test('a child that cannot be started loses nothing: the command asks in its own 
       assert.match(tty.err(), /agent-communications 99\.0\.0 is out/, label);
       const record = await readUpdateCheck(m.stateDir);
       assert.deepEqual([record.latest, record.checking], [LATEST, null], label);
-      // The latest, and the release's own document (design 2026-10-16, U7): one ask.
-      assert.equal(served.requests.length, asked + 2, `${label}: asked ${served.requests.length - asked} times`);
+      // The latest: one ask. Nothing here verifies, so no document is read for what a release declares (design
+      // 2026-10-22, P2).
+      assert.equal(served.requests.length, asked + 1, `${label}: asked ${served.requests.length - asked} times`);
     }
   } finally {
     await served.close();

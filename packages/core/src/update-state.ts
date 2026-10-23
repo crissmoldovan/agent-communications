@@ -4,7 +4,7 @@ import { type Config, UPDATE_LEVELS, type UpdateLevel, updateLevelOf } from './c
 import type { Core } from './core.ts';
 import { writeFileAtomic } from './fs.ts';
 import { APPROVAL_ID_PATTERN } from './ids.ts';
-import { withFileLock } from './lock.ts';
+import { type LockOptions, withFileLock } from './lock.ts';
 import { organisationsOf, profileTarget, readUpdatesBeside, shownText, updatesPathFor } from './organisations.ts';
 import { updateJobHealth, updateJobInstalled } from './update-job.ts';
 import { isBehind, isPlainVersion, isVersion } from './versions.ts';
@@ -290,13 +290,46 @@ export async function readUpdateCheck(stateDir: string): Promise<UpdateCheckReco
 }
 
 /**
+ * How every writer of the record takes the lock beside it: 2 s for each holder, and 15 s in all (design 2026-10-22, R2).
+ *
+ * Every server's tool call takes this lock for its refresh, so on a busy machine a writer often waits behind several
+ * holders in turn, each holding it for a moment. Counted from the start of the wait, 2 s was a budget for that whole
+ * queue, and a writer at the back of it gave up while the lock was being handed on exactly as it should be: a
+ * person's update was installed and its record dropped. Counted per holder, a writer gives up only on one holder that
+ * kept the lock for 2 s, which is a stuck lock; 15 s bounds a queue that never empties, as config writes are bounded.
+ */
+export const UPDATE_CHECK_LOCK: LockOptions = Object.freeze({
+  timeoutPerHolder: true,
+  timeoutMs: 2_000,
+  maxWaitMs: 15_000,
+});
+
+/**
+ * How a notice takes the lock: 2 s in all, counted from the start of the wait, however often it changes hands meanwhile.
+ *
+ * A notice is best effort. Deciding a tool call's or a command's line, the security line in a preview, and recording
+ * the person's answer to that line take the lock only for what is said, and each runs while a person or an agent
+ * waits. Waited out holder by holder, as `UPDATE_CHECK_LOCK` waits, a busy machine's queue of refreshes held them for
+ * up to 15 s. Busy past 2 s, a notice decides nothing this time, and a later call says it.
+ *
+ * Claiming the day's check is best effort too: busy past 2 s, nothing is claimed, and a later process claims it (0.26.0
+ * review B). The claim's function is not named here: this comment ships in WhatsApp's bundle, which carries none of the
+ * checker, not even its name (`packages/whatsapp/test/update-gate.test.ts`).
+ */
+export const UPDATE_NOTICE_LOCK: LockOptions = Object.freeze({ timeoutMs: 2_000 });
+
+/**
  * Reads the record, changes it and writes it back, under a lock beside it, atomically — so a server recording a check
  * and a person's "not now" arriving at the same moment each keep what the other wrote. Returns what `change` returned
  * alongside the record written; `change` returning `null` writes nothing.
+ *
+ * `lock` is how long to wait for the lock: `UPDATE_CHECK_LOCK`, for a record that matters, unless a notice or the
+ * day's claim passes `UPDATE_NOTICE_LOCK`. Busy past it, this throws LOCK_TIMEOUT, and nothing is written.
  */
 export async function changeUpdateCheck<T = void>(
   stateDir: string,
   change: (record: UpdateCheckRecord) => { record: UpdateCheckRecord; result?: T } | null,
+  lock: LockOptions = UPDATE_CHECK_LOCK,
 ): Promise<{ record: UpdateCheckRecord; result: T | undefined; written: boolean }> {
   return withFileLock(
     join(stateDir, '.update-check.lock'),
@@ -307,7 +340,7 @@ export async function changeUpdateCheck<T = void>(
       await writeFileAtomic(updateCheckPath(stateDir), `${JSON.stringify(next.record, null, 2)}\n`);
       return { record: next.record, result: next.result, written: true };
     },
-    { timeoutMs: 2_000 },
+    lock,
   );
 }
 
@@ -614,10 +647,15 @@ export async function securityAnswered(stateDir: string, approvalId: string): Pr
   try {
     // Nearly always nothing to do: read, and no lock taken.
     if (!carried(await readUpdateCheck(stateDir))) return;
-    await changeUpdateCheck(stateDir, (record) => {
-      if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
-      return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
-    });
+    // A notice's bound: the send waits 2 s at most on the answer, and busy, the line is asked once more.
+    await changeUpdateCheck(
+      stateDir,
+      (record) => {
+        if (!carried(record) || record.securityShown === null || record.securityShown === undefined) return null;
+        return { record: { ...record, securityAsked: record.securityShown.version, securityShown: null } };
+      },
+      UPDATE_NOTICE_LOCK,
+    );
   } catch {
     // The answer is the person's yes, given; failing to record it only means the line is shown once more.
   }

@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/core",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
+    "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@sigstore/bundle": "3.1.0",

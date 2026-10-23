@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
+import type { TarballFetch } from '../../src/release-tarball.ts';
 import {
   ATTESTATIONS_BASE,
   type AttestationFetch,
@@ -6,6 +7,7 @@ import {
   sigstoreBundleVerifier,
 } from '../../src/update-provenance.ts';
 import type { Packument, ReleaseRegistry, ReleaseVerifier } from '../../src/update-release.ts';
+import { integrityOfBytes, releaseTarball } from './tarball-fixture.ts';
 
 /*
  * Provenance bundles made here, for tests that must never reach npm or Sigstore (design 2026-10-16 §4).
@@ -150,6 +152,19 @@ export function trustedRoot(): Record<string, unknown> {
 
 // ── One provenance bundle ───────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * What a bundle's transparency-log entries carry, as `ProvenanceShape.tlog`:
+ * - `'promise'`: one entry with an inclusion promise (a SET) and no proof, in a v0.1 bundle: the bundle these tests
+ *   have always made, and the default.
+ * - `'both'`: one entry with a promise and an inclusion proof, as npm's provenance for 0.25.0 carries (design
+ *   2026-10-22 §7.2), in a v0.3 bundle with the certificate on its own.
+ * - `'proof'`: one entry with an inclusion proof and no promise, in a v0.2 bundle (v0.1 requires a promise).
+ * - `'two'`: two entries, each with its own promise, log index and integrated time, in a v0.1 bundle.
+ * - `'bad-promise'`: `'promise'` with one byte of the SET changed.
+ * - `'none'`: no entry at all.
+ */
+export type TlogShape = 'promise' | 'both' | 'proof' | 'two' | 'bad-promise' | 'none';
+
 /** What a bundle says. Each field defaults to what a release of `version` built by release.yml says. */
 export interface ProvenanceShape {
   packageName: string;
@@ -166,6 +181,13 @@ export interface ProvenanceShape {
   subjectName?: string;
   subjectSha512?: string;
   predicateType?: string;
+  /**
+   * When this release was signed: the certificate's validity, its SCT's time and the transparency log's integrated
+   * time all follow it. It wins over `provenanceBundle`'s second parameter, so a test can give each release its own.
+   */
+  signedAt?: Date;
+  /** What its transparency-log entries carry (`TlogShape`); `'promise'` when not given. */
+  tlog?: TlogShape;
 }
 
 const REPOSITORY = 'https://github.com/crissmoldovan/agent-communications';
@@ -221,11 +243,34 @@ function sctFor(precertificate: Buffer, at: Date): Buffer {
   return Buffer.concat([list, item, sct]);
 }
 
+/**
+ * An inclusion proof for `body` as the only leaf of a tree of size 1 (RFC 6962: its root is the leaf's hash), with a
+ * checkpoint note signed by the test's transparency log, its key hint the first 4 bytes of the log's key id.
+ */
+function inclusionProofFor(body: Buffer): Record<string, unknown> {
+  const rootHash = createHash('sha256')
+    .update(Buffer.from([0x00]))
+    .update(body)
+    .digest();
+  const note = `rekor.comms.test - 1\n1\n${rootHash.toString('base64')}\n`;
+  const signature = sign('sha256', Buffer.from(note, 'utf8'), transparencyLog.privateKey);
+  const signed = Buffer.concat([keyId(transparencyLog.publicKey).subarray(0, 4), signature]).toString('base64');
+  return {
+    logIndex: '0',
+    rootHash: rootHash.toString('base64'),
+    treeSize: '1',
+    hashes: [],
+    checkpoint: { envelope: `${note}\n— rekor.comms.test ${signed}\n` },
+  };
+}
+
 /** The bundle, as npm's endpoint holds it under `attestations[].bundle`, for exactly `shape`. */
 export function provenanceBundle(
   shape: ProvenanceShape,
-  signedAt: Date = new Date('2026-10-10T12:00:00Z'),
+  signedAtByDefault: Date = new Date('2026-10-10T12:00:00Z'),
 ): Record<string, unknown> {
+  const signedAt = shape.signedAt ?? signedAtByDefault;
+  const tlog = shape.tlog ?? 'promise';
   const tag = `refs/tags/v${shape.version}`;
   const leaf = ec();
   const fulcio = (id: string, value: string) => extension(`1.3.6.1.4.1.57264.1.${id}`, utf8(value));
@@ -294,34 +339,70 @@ export function provenanceBundle(
   );
   const integratedTime = Math.floor(signedAt.getTime() / 1000);
   const logIndex = 4242;
-  const promise = sign(
-    'sha256',
-    Buffer.from(
-      canonical({
-        body: entryBody.toString('base64'),
-        integratedTime,
-        logID: keyId(transparencyLog.publicKey).toString('hex'),
-        logIndex,
-      }),
-      'utf8',
-    ),
-    transparencyLog.privateKey,
-  );
+  /** The SET Rekor signs for an entry: over its body, integrated time, log id and log index. */
+  const promiseFor = (time: number, index: number): Buffer =>
+    sign(
+      'sha256',
+      Buffer.from(
+        canonical({
+          body: entryBody.toString('base64'),
+          integratedTime: time,
+          logID: keyId(transparencyLog.publicKey).toString('hex'),
+          logIndex: index,
+        }),
+        'utf8',
+      ),
+      transparencyLog.privateKey,
+    );
+  const entry = (time: number, index: number, carries: { promise?: Buffer; proof?: boolean }) => ({
+    logIndex: String(index),
+    logId: { keyId: keyId(transparencyLog.publicKey).toString('base64') },
+    kindVersion: { kind: 'dsse', version: '0.0.1' },
+    integratedTime: String(time),
+    ...(carries.promise === undefined
+      ? {}
+      : { inclusionPromise: { signedEntryTimestamp: carries.promise.toString('base64') } }),
+    ...(carries.proof ? { inclusionProof: inclusionProofFor(entryBody) } : {}),
+    canonicalizedBody: entryBody.toString('base64'),
+  });
+  const changed = (signature: Buffer): Buffer => {
+    const copy = Buffer.from(signature);
+    copy[copy.length - 1] = (copy[copy.length - 1] as number) ^ 0x01;
+    return copy;
+  };
+  const tlogEntries =
+    tlog === 'none'
+      ? []
+      : tlog === 'two'
+        ? [
+            entry(integratedTime, logIndex, { promise: promiseFor(integratedTime, logIndex) }),
+            entry(integratedTime + 60, logIndex + 1, { promise: promiseFor(integratedTime + 60, logIndex + 1) }),
+          ]
+        : [
+            entry(integratedTime, logIndex, {
+              ...(tlog === 'proof'
+                ? {}
+                : {
+                    promise:
+                      tlog === 'bad-promise'
+                        ? changed(promiseFor(integratedTime, logIndex))
+                        : promiseFor(integratedTime, logIndex),
+                  }),
+              proof: tlog === 'proof' || tlog === 'both',
+            }),
+          ];
+  const certificateMaterial =
+    tlog === 'both'
+      ? { certificate: { rawBytes: certificate.toString('base64') } }
+      : { x509CertificateChain: { certificates: [{ rawBytes: certificate.toString('base64') }] } };
   return {
-    mediaType: 'application/vnd.dev.sigstore.bundle+json;version=0.1',
-    verificationMaterial: {
-      x509CertificateChain: { certificates: [{ rawBytes: certificate.toString('base64') }] },
-      tlogEntries: [
-        {
-          logIndex: String(logIndex),
-          logId: { keyId: keyId(transparencyLog.publicKey).toString('base64') },
-          kindVersion: { kind: 'dsse', version: '0.0.1' },
-          integratedTime: String(integratedTime),
-          inclusionPromise: { signedEntryTimestamp: promise.toString('base64') },
-          canonicalizedBody: entryBody.toString('base64'),
-        },
-      ],
-    },
+    mediaType:
+      tlog === 'both'
+        ? 'application/vnd.dev.sigstore.bundle.v0.3+json'
+        : tlog === 'proof'
+          ? 'application/vnd.dev.sigstore.bundle+json;version=0.2'
+          : 'application/vnd.dev.sigstore.bundle+json;version=0.1',
+    verificationMaterial: { ...certificateMaterial, tlogEntries },
     dsseEnvelope: {
       payload: payload.toString('base64'),
       payloadType,
@@ -342,8 +423,48 @@ export function attestationsAnswer(bundle: Record<string, unknown>): { attestati
 
 // ── Stand-ins for an update: npm's endpoint, a registry of full documents, and the verifier ─────────────────────────
 
+const packed = new Map<string, Buffer>();
+
+/** The tarball every stand-in serves for one release (`releaseTarball`, declaring nothing), made once per process. */
+function fixtureTarball(packageName: string, version: string): Buffer {
+  const key = `${packageName}@${version}`;
+  let bytes = packed.get(key);
+  if (bytes === undefined) {
+    bytes = releaseTarball(packageName, version);
+    packed.set(key, bytes);
+  }
+  return bytes;
+}
+
 /** The tarball every stand-in serves for one release: its integrity, as the registry writes it. */
-export const tarballOf = (packageName: string, version: string): string => integrityOf(`${packageName}@${version}`);
+export const tarballOf = (packageName: string, version: string): string =>
+  integrityOfBytes(fixtureTarball(packageName, version));
+
+/** Where a stand-in registry says one release's tarball is: npm's own path, on a host no test can reach. */
+export function fixtureTarballUrl(packageName: string, version: string): string {
+  return `https://registry.comms.test/${packageName}/-/${packageName.split('/').at(-1)}-${version}.tgz`;
+}
+
+/**
+ * The tarballs a stand-in registry names (`fixtureTarballUrl`): each release's `releaseTarball`, the very bytes
+ * `tarballOf` gives the integrity of and the attestations endpoint signs. Anything else is a 404.
+ */
+export const fixtureTarballs: TarballFetch = async (url) => {
+  const found = /^https:\/\/registry\.comms\.test\/((?:@[^/]+\/)?[^/]+)\/-\/([^/]+)\.tgz$/.exec(url);
+  const packageName = found?.[1];
+  const base = packageName?.split('/').at(-1);
+  const file = found?.[2];
+  if (packageName === undefined || base === undefined || file === undefined || !file.startsWith(`${base}-`)) {
+    return new Response('not found', { status: 404 });
+  }
+  const version = file.slice(base.length + 1);
+  if (fixtureTarballUrl(packageName, version) !== url) return new Response('not found', { status: 404 });
+  const bytes = fixtureTarball(packageName, version);
+  return new Response(new Uint8Array(bytes), {
+    status: 200,
+    headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) },
+  });
+};
 
 /**
  * npm's attestations endpoint: a genuine bundle for every package and version, signing `tarballOf` it — but where
@@ -385,7 +506,8 @@ export interface ListedRelease {
 
 /**
  * A registry's full package documents: for each package, `latest` as its tag and every release in `releases` (and
- * `latest` itself), each with the tarball `tarballOf` it; `agentcommsRelease` only on core's, as the release declares.
+ * `latest` itself), each with the tarball `tarballOf` it at `fixtureTarballUrl`; `agentcommsRelease` only on core's, as
+ * the release declares.
  */
 export function packumentRegistry(
   latest: Record<string, string>,
@@ -400,7 +522,10 @@ export function packumentRegistry(
     const listed = releases.some((release) => release.version === tag) ? releases : [...releases, { version: tag }];
     for (const release of listed) {
       (packument.versions as Record<string, unknown>)[release.version] = {
-        dist: { integrity: tarballOf(packageName, release.version) },
+        dist: {
+          integrity: tarballOf(packageName, release.version),
+          tarball: fixtureTarballUrl(packageName, release.version),
+        },
         ...(packageName === '@agentcomms/core' && release.declares !== undefined
           ? { agentcommsRelease: release.declares }
           : {}),
@@ -416,7 +541,7 @@ export function packumentRegistry(
 
 /**
  * A registry whose every package's latest release is what `latestOf` says — a stand-in `latestVersion`, read again —
- * with its tarball `tarballOf` it: for a test about something else than which releases there are.
+ * with its tarball `tarballOf` it at `fixtureTarballUrl`: for a test about something else than which releases there are.
  */
 export function registryOf(latestOf: (packageName: string) => string | Promise<string>): ReleaseRegistry {
   return async (packageName) => {
@@ -424,7 +549,11 @@ export function registryOf(latestOf: (packageName: string) => string | Promise<s
     return {
       packument: {
         'dist-tags': { latest: version },
-        versions: { [version]: { dist: { integrity: tarballOf(packageName, version) } } },
+        versions: {
+          [version]: {
+            dist: { integrity: tarballOf(packageName, version), tarball: fixtureTarballUrl(packageName, version) },
+          },
+        },
       },
     };
   };

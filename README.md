@@ -143,9 +143,10 @@ registers it only once npm has installed exactly that tarball; a runtime already
 once that runtime is shown to be that tarball. A channel's own `mcp install`
 (`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
 running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
-verified and that core's command checks it; any other release it refuses. `--launcher npx` installs nothing: the
-client fetches the package from npm each time it starts it, unverified, where the managed launcher's runtime was
-verified. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
+verified and that core's command checks it; any other release it refuses. With `--launcher npx`, core verifies the
+release the entry names before it registers it, and a channel's own command, which cannot, registers it unchecked;
+either way the client fetches the package from npm again each time it starts it, unverified, where the managed
+launcher's runtime is the verified one. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
 
 ### The desktop app
 

@@ -53,6 +53,20 @@ package the release publishes depends on a held one, so the hold is lifted in th
 that ships such a package: delete `agentcommsRelease` there, and its first version then goes out by hand, as "A new
 package's first version" in `docs/RELEASING.md` describes (and "A package held back from release", step by step).
 
+**Core's `agentcommsRelease` is not a hold: it says what the release is.** `{ "security": true }` declares a security
+fix (held 24 hours instead of 72, past a pause, announced at once), `{ "needsDecision": true }` one that needs the
+person's decision before it installs (never in the background), or both; nothing else. Every machine's update reads
+them from the verified release itself, so only the tagged commit can declare them. Each must match a marker line at the
+start of a line in the version's changelog section, both ways: `**Security fix.**` for `security`,
+`**Needs a decision before it installs.**` for `needsDecision`. `pnpm release` and the tag gate refuse a flag without
+its marker and a marker without its flag, so a flag left from the last release stops the next one: remove it in that
+release's version commit. A needed decision is also carried forward, because an update reads only the release it goes
+to: `"needsDecisionSince": "X.Y.Z"` is the release's own version when it declares `needsDecision`, and otherwise the
+newest earlier release whose section has the decision marker, or absent when none has. Keep it from release to
+release; both release paths refuse it missing, wrong, or present with nothing to carry, and name the value it must be.
+The owner decides whether a release declares either flag. See `docs/RELEASING.md`, "Declaring a security fix or a
+needed decision".
+
 ## Procedure
 
 1. **Check nothing is already published at this version.** `scripts/release.mjs` does it, but knowing early is
@@ -69,7 +83,8 @@ package's first version" in `docs/RELEASING.md` describes (and "A package held b
 3. **Write the changelog entry yourself.** `## Unreleased` becomes `## X.Y.Z`. This is the one artefact a person
    writes, because it is the only one addressed to a reader rather than a machine.
    **Complete when:** the entry says what changed in terms a user would recognise, not in terms of commits. The tag
-   gate refuses a version with no `## X.Y.Z` section, and the GitHub release is made from that section.
+   gate refuses a version with no `## X.Y.Z` section, and the GitHub release is made from that section. It also
+   refuses one whose marker lines are not what core's `agentcommsRelease` declares (above): no flag, no marker.
 
 4. **Commit and push, on `main`.** What is published must be what anyone else can read.
    **Complete when:** `git status` is clean and local `main` and `origin/main` are the same commit.
@@ -140,6 +155,7 @@ package's first version" in `docs/RELEASING.md` describes (and "A package held b
 | The tag does not match the declared version | a half-renamed release is discovered by consumers |
 | `sync-versions --check` fails | the version is written in more than twenty places and they must agree |
 | CHANGELOG.md has no section for the version | the GitHub release is made from it, after the packages are out |
+| Core's release flags and the section's marker lines disagree | a flag changes every machine's hold and notice, and one left from the last release would apply to this one |
 | A package has no trusted publisher for this workflow | found before anything is published, not after the packages before it went out |
 | The tag no longer names the commit the run started from, before the preflight, the first publish or the release page | a tag moved mid-run left that run to publish the old commit and hang the release page on the new one, green |
 | A package is already at the version from another commit, or with no commit recorded | finishing it would make one version out of two builds; a moved tag did exactly that, green |
@@ -158,6 +174,7 @@ Only relevant when releasing locally with `scripts/release.mjs`.
 | A manifest version disagreeing with the root | Half-renamed releases are discovered by consumers. |
 | Not logged in to npm | Naming the failure beats a 401 from three publishes in a row. |
 | The version already on the registry | Finding this now is far better than finding it after one package has gone. |
+| Core's release flags and the changelog's marker lines disagree | The tag gate would refuse it too; a flag left from the last release would declare this one. |
 
 `--skip-verify` exists for the case where `pnpm verify` has *just* passed in this same tree. Reach for it rarely:
 the verify is the only step that installs each packed tarball into a throwaway project and runs it, which is what

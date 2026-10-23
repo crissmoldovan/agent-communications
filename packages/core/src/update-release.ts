@@ -7,12 +7,13 @@ import { REGISTRY_TIMEOUT_MS, registryUrl } from './npm.ts';
 // that reaches this one, a channel's bundle among them (WhatsApp's no-network test reads that graph).
 import type { ProvenanceRelease, ProvenanceVerdict, VerifiedProvenance } from './update-provenance.ts';
 import { PIN_WORDS } from './update-words.ts';
-import { compareVersions, isPlainVersion, isPrerelease, isVersion } from './versions.ts';
+import { compareVersions, isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * What an update reads of a release on the registry, and what it may say of it (design 2026-10-16 U5, U7, U9): the
- * package's full document, the releases between two versions, what a release's core manifest declares, and the fixed
- * words for a provenance pin that failed.
+ * package's full document, what a release's core manifest declares, and the fixed words for a provenance pin that
+ * failed. Which releases the document lists decides nothing (design 2026-10-22 §8.1): a needed decision is carried in
+ * the release an update goes to.
  *
  * Everything the registry says is data. Nothing here returns a string the registry wrote: a declaration is read as
  * flags, a version only once it is one, and a refusal is said by the pin that failed, never by the value it found.
@@ -21,10 +22,15 @@ import { compareVersions, isPlainVersion, isPrerelease, isVersion } from './vers
  * handed in (`ReleaseVerifier`), by core, which carries sigstore-js.
  */
 
-/** What an update reads of a package's document on the registry: its tags, its versions' manifests, when each came out. */
+/**
+ * What an update reads of a package's document on the registry: its tags, its versions' manifests, when each came out,
+ * and where each version's tarball is (`dist.tarball`, read by `tarballLocation` in `release-tarball.ts`).
+ */
 export interface Packument {
   'dist-tags'?: Record<string, unknown> | undefined;
-  versions?: Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown } } | undefined> | undefined;
+  versions?:
+    | Record<string, { agentcommsRelease?: unknown; dist?: { integrity?: unknown; tarball?: unknown } } | undefined>
+    | undefined;
   time?: Record<string, unknown> | undefined;
 }
 
@@ -96,42 +102,62 @@ export function releaseIntegrity(packument: Packument, version: string): string 
   return typeof integrity === 'string' && integrity.trim() !== '' ? integrity : null;
 }
 
-/**
- * What a release's core manifest declares under `agentcommsRelease` (U5): a security fix, and a decision it needs from
- * the person — as flags only. The decision's own words are never read out: they are the registry's, and an update says
- * that one is needed in its own words. A declaration this release cannot read waits for the person: it may be the
- * decision it cannot see.
- */
-export function releaseDeclaration(manifest: { agentcommsRelease?: unknown } | undefined): {
+/** What a release's core manifest declares under `agentcommsRelease`, as flags and a version, never words. */
+export interface ReleaseFlags {
   security: boolean;
   needsDecision: boolean;
-} {
+  /**
+   * The newest release, up to and including this one, that declared `needsDecision` (design 2026-10-22 §8.1), carried
+   * forward from release to release by the release check: so a decision any release before this one needs is found
+   * in this release's own verified tarball, never by listing the releases the registry says there are. Null when it
+   * carries none: no release up to it declared one. Always a plain `X.Y.Z`.
+   */
+  needsDecisionSince: string | null;
+}
+
+/**
+ * What a release's core manifest declares under `agentcommsRelease` (U5, design 2026-10-22 §8.1): a security fix, a
+ * decision it needs from the person, and the newest release up to it that needed one — as flags and a plain version
+ * only. The manifest is the one in the release's verified tarball (`release-declarations.ts`, design 2026-10-22 P1),
+ * never the registry's copy. The decision's own words are never read out: an update says that one is needed in its own
+ * words. A declaration this release cannot read waits for the person, as it may be the decision it cannot see: a field
+ * that is not an object, a `needsDecision` that is not false, or a `needsDecisionSince` that is not a plain version.
+ */
+export function releaseDeclaration(manifest: { agentcommsRelease?: unknown } | undefined): ReleaseFlags {
   const declared = manifest?.agentcommsRelease;
-  if (declared === undefined || declared === null) return { security: false, needsDecision: false };
-  if (typeof declared !== 'object' || Array.isArray(declared)) return { security: false, needsDecision: true };
-  const { security, needsDecision } = declared as Record<string, unknown>;
+  if (declared === undefined || declared === null) {
+    return { security: false, needsDecision: false, needsDecisionSince: null };
+  }
+  if (typeof declared !== 'object' || Array.isArray(declared)) {
+    return { security: false, needsDecision: true, needsDecisionSince: null };
+  }
+  const { security, needsDecision, needsDecisionSince } = declared as Record<string, unknown>;
+  const since = isPlainVersion(needsDecisionSince) ? needsDecisionSince : null;
+  const unreadable = needsDecisionSince !== undefined && since === null;
   return {
     security: security === true,
-    needsDecision: !(needsDecision === undefined || needsDecision === null || needsDecision === false),
+    needsDecision: unreadable || !(needsDecision === undefined || needsDecision === null || needsDecision === false),
+    needsDecisionSince: since,
   };
 }
 
 /**
- * Every release the registry lists after `from`, up to and including `to`, oldest first: what an update takes this
- * machine past. Prereleases are left out — no update installs one — and so is anything that is not a version, or that
- * carries build metadata, which no published version does.
+ * The release a machine running `from` must decide on before it runs `declared` (design 2026-10-22 §8.1), or null when
+ * there is none: `declared` itself when it declares `needsDecision`; otherwise the release its `needsDecisionSince`
+ * names, when that is after `from` — a decision this machine has not taken. One at or before `from` was taken when
+ * that release was installed. Nothing else counts: no release the registry lists, hidden or added, decides anything.
+ * A `from` that is not known, or not a version, cannot be shown to be past it, so it waits; a `since` after
+ * `declared`, which no release check lets through, is said as `declared`.
  */
-export function releasesBetween(packument: Packument, from: string, to: string): string[] {
-  return Object.keys(packument.versions ?? {})
-    .filter(
-      (version) =>
-        isVersion(version) &&
-        !isPrerelease(version) &&
-        !version.includes('+') &&
-        (compareVersions(version, from) ?? 0) > 0 &&
-        (compareVersions(version, to) ?? 1) <= 0,
-    )
-    .sort((a, b) => compareVersions(a, b) ?? 0);
+export function decisionNeeded(
+  declared: Pick<ReleaseFlags, 'needsDecision' | 'needsDecisionSince'> & { version: string },
+  from: string | null,
+): string | null {
+  if (declared.needsDecision) return declared.version;
+  const since = declared.needsDecisionSince;
+  if (since === null) return null;
+  if (from !== null && (compareVersions(since, from) ?? 1) <= 0) return null;
+  return (compareVersions(since, declared.version) ?? 1) > 0 ? declared.version : since;
 }
 
 /** A version's major number: what an update never crosses on its own. */
@@ -299,57 +325,4 @@ export async function verifyReleaseSet(
     verified.set(packageName, verdict.provenance);
   }
   return verified;
-}
-
-/** A release since the one installed that says it needs a decision, and whether its provenance verified. */
-export interface DecidingRelease {
-  version: string;
-  verified: boolean;
-}
-
-/** What the releases an update takes this machine past declare, as far as each verified. */
-export interface DeclaredSince {
-  /** The latest says it is a security fix, and verified. */
-  security: boolean;
-  /** One of them says it needs a decision, and verified. */
-  needsDecision: boolean;
-  /** Every one that says it needs a decision, oldest first, each with whether it verified. */
-  deciding: DecidingRelease[];
-}
-
-/**
- * What every release after `from`, up to `latest`, declares (design 2026-10-16 U5, U7; security review of 0.20.0,
- * severity 6): a decision any of them needs — a later release that does not say so again does not end it — and whether
- * `latest` is a security fix. Each declaration acted on is verified first, with `verify`; one that does not verify, or
- * where nothing here can verify (`verify` null: a channel's process, which carries no Sigstore), counts for nothing.
- * `from` null reads `latest` alone. Throws when the registry's document cannot be read.
- */
-export async function declaredSince(
-  registry: ReleaseRegistry,
-  verify: ReleaseVerifier | null,
-  packageName: string,
-  from: string | null,
-  latest: string,
-): Promise<DeclaredSince> {
-  const { packument } = await registry(packageName);
-  const declared = (version: string) => releaseDeclaration(packument.versions?.[version]);
-  const range = from === null ? [] : releasesBetween(packument, from, latest);
-  const deciding = [...new Set([...range, latest])].filter((version) => declared(version).needsDecision);
-  const verified = new Map<string, boolean>();
-  const check = async (version: string): Promise<boolean> => {
-    const known = verified.get(version);
-    if (known !== undefined) return known;
-    const integrity = releaseIntegrity(packument, version);
-    const ok =
-      verify !== null && integrity !== null && (await verify({ packageName, version, integrity }).then((v) => v.ok));
-    verified.set(version, ok);
-    return ok;
-  };
-  const decisions: DecidingRelease[] = [];
-  for (const version of deciding) decisions.push({ version, verified: await check(version) });
-  return {
-    security: declared(latest).security && (await check(latest)),
-    needsDecision: decisions.some((decision) => decision.verified),
-    deciding: decisions,
-  };
 }

@@ -3,6 +3,110 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.26.0
+
+**An update now believes what a release says about itself only from the release's own verified files, and holds it
+from a time the registry cannot set** (CUE-495). Since 0.20.0 every `@agentcomms` release has been checked with
+Sigstore before it installs, but some things were still taken on the npm registry's word: whether a release is a
+security fix or needs a decision from you, which a registry or a mirror could add or remove on a genuine release; how
+old a release is, which starts its hold; and what `npm install -g` fetched once the check was done. And on a machine
+where only a channel had run the day's check, a security fix was told as an ordinary release. None of that holds any
+more.
+
+**What changes when you update:**
+- **What a release declares comes from the release itself.** Whether it is a security fix, and whether it needs a
+  decision before it installs, is read from the `package.json` inside its own tarball, once its provenance verifies, and
+  only from bytes whose SHA-512 is the digest that provenance signs, wherever the registry or a mirror serves them. The
+  registry's copy of the manifest decides nothing, and nor does which releases it lists: only the release an update
+  would install is read, and a decision a release before it needed is carried forward in that release's own declaration.
+  So a registry that leaves out the release needing a decision, adds one that does not verify, or lists hundreds changes
+  nothing and costs no request. A declaration once read is remembered in `release-declarations.json` in the state
+  directory; one check reads it once, and stops 30 seconds into its claim. One whose declaration cannot be read is
+  unknown: the background run installs nothing that run and tries again the next (`its declaration could not be read
+  from its verified release`), no notice or preview says it is a security fix or that it is not, and `agentcomms update`
+  still shows its preview, saying so.
+- **A channel's check no longer hides a security fix.** Gmail's, Slack's and Resend's servers and commands carry no
+  Sigstore, so their day's check used to record every release as ordinary, over what core had verified. Now each hands
+  the check to core's CLI at its own version, installed beside it, which verifies. Where that core cannot be found or
+  started, or ends at once with an error before it has asked (a launcher whose Node was removed), the channel checks
+  as before, records the latest release and keeps what core verified of it; it never records a release as not being a
+  security fix. WhatsApp still never reaches the network.
+- **A global package is installed from its verified file, and checked afterwards.** `agentcomms update` (and
+  `comms_update`) hands `npm install -g` the verified tarball itself, from a private temporary file, instead of a name
+  npm would look up again. Then every file of what npm installed, and of each `@agentcomms` package inside it, must be
+  its verified tarball's, byte for byte, with nothing extra outside its own `node_modules/`, and a package that is a
+  link is a mismatch. On a mismatch, every `@agentcomms` package of the global install that does not match is removed
+  — the global package itself when it is the one — and the step fails saying what went: `the global <package> does not
+  match its verified release (…), so @agentcomms/core was removed from it: run <update> again`. Left there, it would
+  run: npm fetches a global channel's core from the registry, and the channel hands its day's check to that core. A
+  removal follows no link and touches nothing outside `npm root -g`. A channel carries core's code, so with its core
+  removed it still works and checks on its own. Running the update again installs it again: each global package a
+  mismatch was found in is recorded in `removed-globals.json` in the state directory (its name, the release, and when),
+  and the next update reinstalls it from its verified file, even at its latest release or no longer listed by npm,
+  until an install of it checks out.
+- **A first `npx` install through core verifies the release it registers.** `agentcomms mcp install --launcher npx`
+  and `comms_server_install` with `launcher: "npx"` now verify the package the entry's client will fetch, at that
+  version, before the preview and again when the approval is claimed, as `agentcomms update` already did for an npx
+  registration. One that does not verify is refused with the same `nothing was installed or changed: … could not be
+  verified` and nothing is written: registering it would be installing it. The preview is unchanged, so an approval a
+  channel's own command prepared, which cannot verify, is still claimed through core's, and checked then. What stays a
+  limit is that npx fetches the package again each time a client starts the entry, which nothing here verifies: the
+  managed launcher is the verified one.
+- **Holds count from Rekor's signed time.** The background run's 72 hours, or 24 for a security fix, now start when
+  Sigstore's transparency log signed for the release, the latest among its packages, and every package is verified
+  before the hold is decided. A release whose provenance carries no signed time is held from when this machine first
+  saw it, recorded in `release-first-seen.json`. The registry's `time` counts for nothing, so a registry can no longer
+  make a release look older to skip its hold. `update --background` says which time its hold counts from, and its
+  result's `release` gains `heldFrom` (`signed` or `first-seen`) beside `publishedAt`, which now holds that time.
+- **The desktop app's signed release can be run by an agent** once the owner has said so: `release-desktop.sh
+  desktop-vX.Y.Z --confirm X.Y.Z` (with `--updater off` while the updater is off) and `publish-desktop.sh
+  desktop-vX.Y.Z --confirm X.Y.Z` run without a terminal. Every other refusal stays, and the signing identity, the
+  notary profile and the updater key stay on the signing Mac. Its install, build and bundle check run under `CI=true`,
+  which a non-CI install had made pnpm refuse on the first real run.
+
+**What doesn't change:** nothing that worked before now fails, except an install or a hold that rested on the
+registry's word alone.
+- **Mirrors keep working.** A tarball may come from any `http` or `https` address the registry or a mirror names,
+  through up to five redirects, with one try at npm's own address after, because its SHA-512 must be the verified
+  digest wherever it came from. A machine whose registry serves no tarball, and that cannot reach npm's own address,
+  installs nothing in the background until it can: each run says so, and after 48 hours the notices come back, as for
+  a job that does not run.
+- **There is still no way past verification, and none was added** (the owner's decision). A release whose provenance
+  does not verify cannot be installed by hand, by the background run or at a first install, on the managed launcher or
+  the npx one, whatever the flag, setting, environment variable or approval. A broken release is replaced by a new one
+  that verifies.
+- The levels, the pause, the notices' words, the background job and the commands are as they were. Packages that are
+  not `@agentcomms` are still checked by npm alone, against the registry's integrity.
+- Machines on 0.20.0 to 0.25.0 read what a release declares from the registry, as before, until they update to this
+  one.
+
+**A release can now declare that it is a security fix or needs a decision**, in core's `package.json` as
+`"agentcommsRelease": { "security": true, "needsDecision": true }` (either key, or both). The release refuses one
+whose changelog section does not say the same with its marker line, both ways, so a flag left from one release cannot
+reach the next. A needed decision is carried forward: `"needsDecisionSince"` names the newest release that declared
+one, its own version where it does, and every release after keeps it, which the release check holds to the changelog
+([Releasing](docs/RELEASING.md#declaring-a-security-fix-or-a-needed-decision)). **This release declares neither, and
+carries nothing:** it hardens against registry tampering nobody is known to be exploiting, declaring it a security fix
+would have given every machine on 0.20.0 to 0.25.0 the urgent notice and the 24-hour hold for a precaution, and no
+release before it declared a decision.
+`SECURITY.md` now says what is checked, what is not, and that there is no way past verification.
+
+Also:
+- **A person's update no longer loses its record when the machine is busy.** After it installs, the update's record
+  of what is on the machine waits up to 2 seconds for each process ahead of it on `update-check.json`, 15 seconds in
+  all, and is tried twice. Still busy, the result says `the update was installed; its record will be corrected by the
+  next check` (`recordNote`), and the next check does so. A notice, and the claim of the day's check, still wait 2
+  seconds at most for that file, so neither holds a tool call or a command longer than that: busy past it, a later
+  call gives the notice, and a later process claims the check.
+- **The release's check of the event-service tests** reads imports with TypeScript's own scanner, so an apostrophe
+  inside a regular expression no longer hides an import that comes after it, nor does a quote or a backtick in one
+  that follows the head of an `if`, `while`, `for` or `with`, or a block's closing brace.
+
+Why: CUE-495, the follow-ups the 0.20.0 provenance work proposed and left. Provenance proves where a release's
+tarball came from; it says nothing of the registry's copy of its manifest, the time the registry gives it, or what
+npm fetches after the check, and a registry or a mirror in front of it could change any of those for a genuine
+release.
+
 ## 0.25.0
 
 **Laya, a judge that runs on your own Mac, is built, and switched off everywhere in this release.** A rule can already

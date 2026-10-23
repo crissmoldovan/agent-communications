@@ -150,6 +150,33 @@ try {
   );
 }
 
+// ── What the release declares ─────────────────────────────────────────────────────────────────────────────────
+// Core may declare this release a security fix, or one that needs a decision before it installs, and an update
+// believes either from the verified release: it changes the hold, the notice and whether it installs in the
+// background. Flags left in packages/core/package.json from the last release would otherwise apply to this one, so
+// they must be what this version's changelog section says, both ways; and the last needed decision must be carried
+// forward in needsDecisionSince, as the changelog gives it, since an update reads only the release it goes to. The
+// tag gate runs the same check. Loaded only here, after both Phase-E gates have passed, as the Laya gate is: reading
+// core's declaration reads the registry.
+try {
+  const { coreReleaseFlags, releaseFlagProblems } = await import('./release-flags.mjs');
+  const changelog = quiet(() => readFileSync('CHANGELOG.md', 'utf8'), '');
+  for (const problem of releaseFlagProblems({ version, changelog, flags: coreReleaseFlags() })) {
+    refuse(
+      problem,
+      'Write this version’s changelog section; declare a flag in packages/core/package.json only with its marker ' +
+        'line there, carry needsDecisionSince as the problem says, and remove one left from the last release ' +
+        '(docs/RELEASING.md, "Declaring a security fix or a needed decision").',
+    );
+  }
+} catch (error) {
+  refuse(
+    `the release flags could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+    'Fix what it names; core declares { "security": true }, { "needsDecision": true } or both, as booleans, and ' +
+      '"needsDecisionSince" as an exact X.Y.Z, and nothing else.',
+  );
+}
+
 if (failures.length > 0) {
   console.error('\nRefusing to release:\n');
   for (const { what, fix } of failures) console.error(`  ✗ ${what}\n    ${fix}\n`);

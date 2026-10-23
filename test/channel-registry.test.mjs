@@ -848,6 +848,123 @@ test('REL-c: a hold is read from the package, and refused where it cannot apply'
   );
 });
 
+test('REL-d: core declares a security fix or a needed decision, as booleans, and carries one as an exact version', async () => {
+  /*
+   * Update provenance, hardened (P1): core's `"agentcommsRelease"` says what a release is — a security fix, a release
+   * that needs a decision before it installs, or both — and the release checks hold it to the changelog. It is never a
+   * hold, and only these two keys, each true or false, mean anything — with `needsDecisionSince`, the newest release
+   * that needed a decision, carried forward as an exact `X.Y.Z` (design 2026-10-22 §8.1): anything else is refused
+   * here, before a tag.
+   */
+  const { root } = await treeWithLibrary();
+  const corePath = join(root, 'packages', 'core', 'package.json');
+  const core = JSON.parse(await readFile(corePath, 'utf8'));
+  const declare = (release) => writeFile(corePath, JSON.stringify({ ...core, agentcommsRelease: release }));
+
+  // Nothing declared reads as neither, and carries nothing.
+  const NONE = { security: false, needsDecision: false, needsDecisionSince: null };
+  assert.deepEqual(loadRegistry(root).releaseFlags, NONE);
+
+  for (const [release, flags] of [
+    [{ security: true }, { ...NONE, security: true }],
+    [
+      { needsDecision: true, security: false },
+      { ...NONE, needsDecision: true },
+    ],
+    [{ needsDecision: true }, { ...NONE, needsDecision: true }],
+    [
+      { security: true, needsDecision: true },
+      { ...NONE, security: true, needsDecision: true },
+    ],
+    // The carry, alone or beside a flag: what `scripts/release-flags.mjs` holds to the changelog.
+    [{ needsDecisionSince: '0.27.0' }, { ...NONE, needsDecisionSince: '0.27.0' }],
+    [
+      { needsDecision: true, needsDecisionSince: '0.28.0' },
+      { ...NONE, needsDecision: true, needsDecisionSince: '0.28.0' },
+    ],
+    [
+      { security: true, needsDecisionSince: '10.0.12' },
+      { ...NONE, security: true, needsDecisionSince: '10.0.12' },
+    ],
+  ]) {
+    await declare(release);
+    const registry = loadRegistry(root);
+    assert.deepEqual(registry.releaseFlags, flags, JSON.stringify(release));
+    // A declaration, not a hold: core is still the first package a tag publishes.
+    assert.ok(!registry.held.some((entry) => entry.directory === 'core'), 'core was held');
+    assert.equal(registry.packages[0], 'core');
+  }
+
+  const where = 'packages/core/package.json: ';
+  const shape = `${where}"agentcommsRelease" on core declares "security" and "needsDecision", each true or false, and "needsDecisionSince", an exact version X.Y.Z, and nothing else`;
+  const empty = `${where}"agentcommsRelease" on core declares none of "security", "needsDecision" and "needsDecisionSince"`;
+  const hold = `${where}core cannot be held back from a release: every channel depends on it at exactly its own version, so a release without it installs nothing`;
+  for (const [release, message] of [
+    [{}, empty],
+    [{ security: 'yes' }, shape],
+    [{ needsDecision: 1 }, shape],
+    [{ security: true, needsDecision: null }, shape],
+    [{ security: true, until: 1 }, shape],
+    [{ security: true, hold: 'x' }, hold],
+    [{ hold: 'Not this release.' }, hold],
+    [true, shape],
+    ['security', shape],
+    [null, shape],
+    [['security'], shape],
+    // The carry is one exact release: never a range, a prerelease, a partial version, a number or nothing.
+    [{ needsDecisionSince: '0.27' }, shape],
+    [{ needsDecisionSince: '^0.27.0' }, shape],
+    [{ needsDecisionSince: '0.27.0-rc.1' }, shape],
+    [{ needsDecisionSince: '0.27.0+build' }, shape],
+    [{ needsDecisionSince: 'v0.27.0' }, shape],
+    [{ needsDecisionSince: '00.27.0' }, shape],
+    [{ needsDecisionSince: ' 0.27.0' }, shape],
+    [{ needsDecisionSince: 27 }, shape],
+    [{ needsDecisionSince: null }, shape],
+    [{ needsDecisionSince: '' }, shape],
+    [{ needsDecisionSince: ['0.27.0'] }, shape],
+  ]) {
+    await declare(release);
+    assert.throws(
+      () => loadRegistry(root),
+      (error) => {
+        assert.equal(error.message, message, JSON.stringify(release));
+        return true;
+      },
+      JSON.stringify(release),
+    );
+  }
+  await writeFile(corePath, JSON.stringify(core));
+
+  // Another package's field is still a hold and nothing else: a channel or a library cannot declare a flag.
+  const slackPath = join(root, 'packages', 'slack', 'package.json');
+  const slack = JSON.parse(await readFile(slackPath, 'utf8'));
+  for (const [directory, path, manifest] of [
+    ['slack', slackPath, slack],
+    ['shelf', join(root, 'packages', 'shelf', 'package.json'), libraryManifest(core.version)],
+  ]) {
+    for (const [key, release] of [
+      ['security', { security: true }],
+      ['needsDecision', { needsDecision: true }],
+      ['needsDecisionSince', { needsDecisionSince: '0.27.0' }],
+    ]) {
+      await writeFile(path, JSON.stringify({ ...manifest, agentcommsRelease: release }));
+      assert.throws(
+        () => loadRegistry(root),
+        (error) => {
+          assert.equal(
+            error.message,
+            `packages/${directory}/package.json: "agentcommsRelease" has unknown key "${key}"; it is { "hold": "<why, one sentence>" } and nothing else`,
+          );
+          return true;
+        },
+      );
+    }
+    await writeFile(path, JSON.stringify(manifest));
+  }
+  assert.deepEqual(loadRegistry(root).releaseFlags, NONE);
+});
+
 /**
  * Every channel carries the core it was released with (design 2026-10-04, D4).
  *

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { ApprovalStore } from '../src/approvals.ts';
 import { newApprovalId } from '../src/ids.ts';
@@ -7,6 +8,7 @@ import { securityNotice } from '../src/update-gate.ts';
 import { readUpdateCheck, securityAnswered } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
 import { coreHandoffs } from './helpers/handoffs.ts';
+import { holdLock } from './helpers/hold-lock.ts';
 import { liveConfig } from './helpers/live-config.ts';
 import { tempDir } from './helpers/temp.ts';
 import { LATEST, launchedThrough, machine, markJobSetUp, seed } from './helpers/update-machine.ts';
@@ -113,6 +115,49 @@ test('the core wires the approval store to the security question: a send claimed
   assert.equal(await securityNotice({ core: m.core, env: m.env, running: VERSION, approvalId: id }), LINE);
   // The store's hook, as `openCore` hands it in: the same answer as `securityAnswered`.
   await m.core.approvals.answered?.(id);
+  assert.equal((await readUpdateCheck(m.stateDir)).securityAsked, LATEST);
+});
+
+/**
+ * The daily check's lock handed on for 6 s, a holder a second, as a busy machine's refreshes hand it on — longer than a
+ * preview, or the send a person approved, may wait on its account. `over()` says whether the last holder let go.
+ */
+async function handedOnFor6s(m: ReturnType<typeof machine>) {
+  const held = holdLock(join(m.stateDir, '.update-check.lock'), [1_000, 1_000, 1_000, 1_000, 1_000, 1_000]);
+  await held.taken;
+  let done = false;
+  void held.then(() => {
+    done = true;
+  });
+  return { held, over: () => done };
+}
+
+test("a preview's security line waits 2 s at most for a lock handed on, and the next preview carries it", async () => {
+  const m = machine();
+  await seed(m, { latest: LATEST, behind: true, release: SECURITY });
+  const { held, over } = await handedOnFor6s(m);
+  // Shown only once the approval it is shown on is recorded: busy, this preview goes without, and is not held up.
+  assert.equal(await securityNotice({ core: m.core, env: m.env, running: VERSION, approvalId: newApprovalId() }), null);
+  assert.equal(over(), false, 'the preview waited until the lock was free');
+  await held;
+  assert.equal(await securityNotice({ core: m.core, env: m.env, running: VERSION, approvalId: newApprovalId() }), LINE);
+});
+
+test("the person's answer to the security line waits 2 s at most for a lock handed on, and the line is asked once more", async () => {
+  const m = machine();
+  await seed(m, { latest: LATEST, behind: true, release: SECURITY });
+  const id = newApprovalId();
+  assert.equal(await securityNotice({ core: m.core, env: m.env, running: VERSION, approvalId: id }), LINE);
+  const { held, over } = await handedOnFor6s(m);
+  // The approval store awaits this as a send is approved, or claimed: the send is not held up for it.
+  await securityAnswered(m.stateDir, id);
+  assert.equal(over(), false, 'the answer waited until the lock was free');
+  assert.equal((await readUpdateCheck(m.stateDir)).securityAsked, null, 'nothing was recorded while it was busy');
+  await held;
+  // Unrecorded, the question is still open: the next preview asks it once more, and the answer to that one counts.
+  const again = newApprovalId();
+  assert.equal(await securityNotice({ core: m.core, env: m.env, running: VERSION, approvalId: again }), LINE);
+  await securityAnswered(m.stateDir, again);
   assert.equal((await readUpdateCheck(m.stateDir)).securityAsked, LATEST);
 });
 

@@ -127,3 +127,10 @@ export function backgroundNoticeLine(notice: Pick<BackgroundNotice, 'outcome' | 
   const sentences = sentencesFor(notice.outcome, notice.version);
   return sentences.includes(notice.text) ? notice.text : (sentences[0] as string);
 }
+
+/**
+ * Why a release was not acted on, or no claim is made of it (design 2026-10-22 P1): what it declares — a security fix,
+ * a decision it needs — is believed only from its verified tarball, and that could not be read. The background run's
+ * reason and the preview both say it; a notice says nothing of the release's flags instead.
+ */
+export const DECLARATION_UNREAD = 'its declaration could not be read from its verified release';

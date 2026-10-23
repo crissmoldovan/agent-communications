@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { isAbsolute } from 'node:path';
 import { displayUrl } from './mcp-clients.ts';
 import { findNpmCli } from './mcp-install.ts';
 import { childEnvironment } from './system-programs.ts';
@@ -166,8 +167,26 @@ export async function npmGlobalPackages(
 }
 
 /**
+ * `npm root --global`, through the npm beside this Node — the one `npm install -g` uses: the folder global packages are
+ * installed in, `<prefix>/lib/node_modules` on macOS and Linux and `<prefix>\node_modules` on Windows. Taken from npm,
+ * never built from a prefix, which npm reads from its own configuration. Rejects when npm fails, or answers anything but
+ * an absolute path.
+ */
+export async function npmGlobalRoot(env: NodeJS.ProcessEnv): Promise<string> {
+  const npmCli = await findNpmCli();
+  const { code, stdout } = await capture([npmCli, 'root', '--global', '--no-update-notifier'], env, 60_000);
+  const root = stdout.trim().split(/\r?\n/).at(-1)?.trim() ?? '';
+  if (code !== 0 || root === '' || !isAbsolute(root)) {
+    throw new Error('`npm root --global` did not say where global packages are installed');
+  }
+  return root;
+}
+
+/**
  * `npm install -g <spec>`, through the npm beside this Node, running no package's install script: one would run as the
- * person with nothing to check what npm installed against. Rejects with the end of what npm said when it fails.
+ * person with nothing to check what npm installed against. An update hands it the path of a release's verified tarball
+ * (`global-install.ts`), which npm installs as it is, never a name it would resolve again. Rejects with the end of what
+ * npm said when it fails.
  */
 export async function npmInstallGlobal(env: NodeJS.ProcessEnv, spec: string): Promise<void> {
   const npmCli = await findNpmCli();

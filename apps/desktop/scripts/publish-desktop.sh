@@ -6,14 +6,16 @@ umask 077
 # with the updater's latest.json when that build has the updater on, and never as Latest (desktop design DA8, DA15,
 # DA16).
 #
-#   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
+#   apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z]
 #
-# **The owner runs this, in a terminal, after release-desktop.sh, from the same clean checkout of the tag. An agent
-# never does.** docs/RELEASING.md, "The desktop app", has the steps around it. It needs `gh` signed in with push
-# rights to this repository.
+# **It runs on the signing Mac after release-desktop.sh, from the same clean checkout of the tag.** The owner runs it
+# in a terminal, and types the version back. An agent may run it once the owner has said so, with --confirm X.Y.Z, the
+# app's version, in place of typing it (0.26.0 design R1); then it needs no terminal. docs/RELEASING.md, "The desktop
+# app", has the steps around it. It needs `gh` signed in with push rights to this repository.
 #
 # QuotaMate's scripts/publish-menubar.sh (cueplusplus/quotamate), changed here:
-# - the same tag, clean-tree, commit and terminal checks as release-desktop.sh, and the version typed back;
+# - the same tag, clean-tree, commit and terminal checks as release-desktop.sh, and the version typed back, or given
+#   with --confirm;
 # - the repository is public, so the archive's address is its public download and the app needs no token;
 # - a release already published is refused, whatever it holds: only a draft is ever written to. The draft the Desktop
 #   release workflow made is used, or a draft is made (--verify-tag --draft --latest=false);
@@ -29,11 +31,28 @@ refuse() {
   exit 1
 }
 
-TAG="${1:?usage: apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z}"
+USAGE='usage: apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z [--confirm X.Y.Z]'
+TAG="${1:?$USAGE}"
+shift
+# --confirm X.Y.Z stands for typing the version back: no terminal is needed.
+CONFIRM=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --confirm)
+      [ -n "${2:-}" ] || refuse "--confirm takes the version: $USAGE"
+      CONFIRM="$2"
+      shift 2
+      ;;
+    *) refuse "unknown argument: $1" ;;
+  esac
+done
+
 REPO='crissmoldovan/agent-communications'
 VERSION="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
 [ "$TAG" = "desktop-v$VERSION" ] || refuse "the tag must be desktop-v$VERSION, the version in apps/desktop/src-tauri/tauri.conf.json."
-[ -t 0 ] && [ -t 1 ] || refuse 'run this in a terminal: it asks for the version to be typed back.'
+if [ -z "$CONFIRM" ]; then
+  [ -t 0 ] && [ -t 1 ] || refuse 'run this in a terminal: it asks for the version to be typed back.'
+fi
 [ -z "$(git status --porcelain)" ] || refuse 'the working tree is not clean: commit or remove what git status lists.'
 TAG_COMMIT="$(git rev-parse --verify --quiet "$TAG^{commit}")" || refuse "there is no tag $TAG here: fetch it."
 
@@ -63,9 +82,14 @@ REMOTE="$(git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/ta
 [ "$REMOTE" = "$BUILT" ] || refuse "$TAG on GitHub must name $BUILT: push the tag."
 
 if [ "$UPDATER" = on ]; then WITH='the signed DMG and the updater manifest'; else WITH='the signed DMG, and its updater OFF'; fi
-printf 'This publishes Agent Comms %s as %s on %s, with %s.\nType the version to go on: ' "$VERSION" "$TAG" "$REPO" "$WITH"
-read -r TYPED
-[ "$TYPED" = "$VERSION" ] || refuse 'the version typed back does not match; nothing was published.'
+if [ -n "$CONFIRM" ]; then
+  [ "$CONFIRM" = "$VERSION" ] || refuse 'the version given to --confirm does not match; nothing was published.'
+  printf 'This publishes Agent Comms %s as %s on %s, with %s: confirmed with --confirm.\n' "$VERSION" "$TAG" "$REPO" "$WITH"
+else
+  printf 'This publishes Agent Comms %s as %s on %s, with %s.\nType the version to go on: ' "$VERSION" "$TAG" "$REPO" "$WITH"
+  read -r TYPED
+  [ "$TYPED" = "$VERSION" ] || refuse 'the version typed back does not match; nothing was published.'
+fi
 
 TEMP="$(mktemp -d)"
 trap 'rm -rf "$TEMP"' EXIT

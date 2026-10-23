@@ -20,6 +20,13 @@
  * `scripts/packages.mjs` leaves it out of what a tag publishes while every check still walks it. Core is never held,
  * and a hold on a package no release would publish anyway — a private one, or one that declares nothing — is refused.
  *
+ * **Release flags** (update provenance, hardened, P1). Core's `"agentcommsRelease"` says what a release is instead:
+ * `{ "security": true }` for a security fix, `{ "needsDecision": true }` for one that needs a decision before it
+ * installs, or both, each true or false; and `"needsDecisionSince": "X.Y.Z"`, the newest release up to this one that
+ * needed a decision, carried forward from release to release (design 2026-10-22 §8.1) — those three keys and nothing
+ * else. It lands in `releaseFlags`, and `scripts/release-flags.mjs` refuses a release whose flags its own changelog
+ * section does not say, or whose carry is not the one the changelog gives.
+ *
  * Plain JavaScript with no dependencies, on purpose: the release workflow runs `node scripts/packages.mjs` — which
  * reads this — in a job that installs nothing. So this only *reads* the channel manifests. They are *checked*, against
  * core's zod schema and against each other, by `scripts/sync-channels.mjs`, which `pnpm verify` runs; and core's
@@ -46,6 +53,8 @@ export const SCOPE = '@agentcomms';
  * - `services`: each package with a D14 `"agentcommsPackage": { "kind": "service", … }`, as
  *   `{ directory, packageName, declaration, packageJson }`, by directory;
  * - `held`: each package held back from release, as `{ directory, packageName, reason }`, by directory;
+ * - `releaseFlags`: what core's `"agentcommsRelease"` declares, as `{ security, needsDecision, needsDecisionSince }`,
+ *   false, false and null when it declares nothing;
  * - `undeclared`: each package that is not private and declares neither, as `{ directory, packageName }` — except a
  *   server-only package a channel runs its server through, which is that channel's.
  *
@@ -59,6 +68,7 @@ export function readDeclarations(root = ROOT) {
   const services = [];
   const holds = [];
   const plain = [];
+  let releaseFlags = { security: false, needsDecision: false, needsDecisionSince: null };
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const packageJson = readPackageJson(root, entry.name);
@@ -79,7 +89,10 @@ export function readDeclarations(root = ROOT) {
         libraries.push(readLibrary(entry.name, packageJson));
       }
     } else if (packageJson.private !== true) plain.push({ directory: entry.name, packageName: packageJson.name });
-    if (packageJson.agentcommsRelease !== undefined) holds.push({ directory: entry.name, packageJson });
+    // Core's field declares what a release is; every other package's is a hold.
+    if (packageJson.agentcommsRelease === undefined) continue;
+    if (entry.name === 'core') releaseFlags = readReleaseFlags(entry.name, packageJson);
+    else holds.push({ directory: entry.name, packageJson });
   }
   channels.sort((a, b) =>
     a.directory === 'core' ? -1 : b.directory === 'core' ? 1 : a.directory < b.directory ? -1 : 1,
@@ -93,7 +106,7 @@ export function readDeclarations(root = ROOT) {
     .map(({ directory, packageJson }) => readHold(directory, packageJson, undeclared))
     .sort(byDirectory);
   assertSkillPrefixes(channels, services);
-  return { channels, libraries, services, held, undeclared };
+  return { channels, libraries, services, held, releaseFlags, undeclared };
 }
 
 /** A generated CLI shim has one unambiguous, path-free command name across every declared server. */
@@ -354,17 +367,51 @@ function exportsName(path, name) {
   return false;
 }
 
+/** An exact release, `X.Y.Z`: never a range, a prerelease, build metadata or a partial version. */
+const EXACT_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
 /**
- * One hold, from a package whose `"agentcommsRelease"` field is set: exactly `{ "hold": "<why, one line>" }`, on a
- * package a release would otherwise publish, and never on core.
+ * What core's `"agentcommsRelease"` field declares: `{ "security": true }`, `{ "needsDecision": true }` or both, each
+ * key true or false, and `"needsDecisionSince"`, an exact version `X.Y.Z`, alone or beside them — no other key (update
+ * provenance, hardened, P1 and §8.1). `{}`, which declares nothing, is refused, and so is a hold: core is never held
+ * back. Whether the carry is the right one is the changelog's to say (`scripts/release-flags.mjs`).
  */
-function readHold(directory, packageJson, undeclared) {
+function readReleaseFlags(directory, packageJson) {
   const where = `packages/${directory}/package.json`;
-  if (directory === 'core') {
+  const release = packageJson.agentcommsRelease;
+  const shape = `${where}: "agentcommsRelease" on core declares "security" and "needsDecision", each true or false, and "needsDecisionSince", an exact version X.Y.Z, and nothing else`;
+  if (release === null || typeof release !== 'object' || Array.isArray(release)) throw new Error(shape);
+  if (Object.hasOwn(release, 'hold')) {
     throw new Error(
       `${where}: core cannot be held back from a release: every channel depends on it at exactly its own version, so a release without it installs nothing`,
     );
   }
+  const keys = Object.keys(release);
+  if (keys.length === 0) {
+    throw new Error(
+      `${where}: "agentcommsRelease" on core declares none of "security", "needsDecision" and "needsDecisionSince"`,
+    );
+  }
+  for (const key of keys) {
+    const value = release[key];
+    const flag = (key === 'security' || key === 'needsDecision') && typeof value === 'boolean';
+    const carry = key === 'needsDecisionSince' && typeof value === 'string' && EXACT_VERSION.test(value);
+    if (!flag && !carry) throw new Error(shape);
+  }
+  return {
+    security: release.security === true,
+    needsDecision: release.needsDecision === true,
+    needsDecisionSince: release.needsDecisionSince ?? null,
+  };
+}
+
+/**
+ * One hold, from a package other than core whose `"agentcommsRelease"` field is set: exactly
+ * `{ "hold": "<why, one line>" }`, on a package a release would otherwise publish. Core's field is its release flags
+ * (`readReleaseFlags`), never a hold.
+ */
+function readHold(directory, packageJson, undeclared) {
+  const where = `packages/${directory}/package.json`;
   if (packageJson.private === true) {
     throw new Error(`${where}: "agentcommsRelease" on a private package, which no release publishes anyway`);
   }
@@ -464,6 +511,8 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
  * - `channels`: the entries `readChannels` returns.
  * - `libraries`, `services`, `held` and `undeclared`: the entries `readDeclarations` returns. A library feeds
  *   `packages` and nothing else here; a service also feeds the surface views from its D14 declaration.
+ * - `releaseFlags`: what core declares this release to be, `{ security, needsDecision, needsDecisionSince }`
+ *   (`readDeclarations`), which `scripts/release-flags.mjs` holds to the changelog.
  * - `packages`: every package to publish, in publish order — each channel, any package a channel's server is run
  *   through (`server.npxPackage`, Gmail's `gmail-mcp`), each library and each service. Held packages are among them: what a tag
  *   leaves out is `scripts/packages.mjs`'s to say.
@@ -478,7 +527,7 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
  * - `platforms`: the platform words accounts are named with (`cue/<platform>`).
  */
 export function loadRegistry(root = ROOT) {
-  const { channels, libraries, services, held, undeclared } = readDeclarations(root);
+  const { channels, libraries, services, held, releaseFlags, undeclared } = readDeclarations(root);
   const wrappers = wrappersOf(channels);
   const packages = publishOrder(root, [
     ...channels.map((c) => c.directory),
@@ -622,6 +671,7 @@ export function loadRegistry(root = ROOT) {
     libraries,
     services,
     held,
+    releaseFlags,
     undeclared,
     packages,
     wrappers,

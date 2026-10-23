@@ -2,7 +2,7 @@
 name: comms-update
 description: "Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a result carrying `update` ('agent-communications 0.20.0 is out; say \"update\" when it suits you'), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings."
 license: MIT
-compatibility: "@agentcomms/core@0.25.0"
+compatibility: "@agentcomms/core@0.26.0"
 metadata:
   group: communications
   lifecycle: release
@@ -110,9 +110,26 @@ with `comms_approval_wait` (`agentcomms approval wait <id>`), in repeated defaul
 again once it answers `claimable: true`. When the person says no, revoke it at once:
 `comms_approval_revoke` (`agentcomms approvals revoke <id>`).
 
+The preview may name a release the update takes the computer past with `its declaration could not be read from its
+verified release, so whether it needs a decision from you is not known`. Say so, and ask the person to read that
+release's notes before they approve, as for one that says it needs a decision.
+
 The result lists each step with its `outcome`. A registration that did not start, or a runtime that
 did not install, is reported as `failed` with its `detail`: say which, and do not call the update done.
 `manual` lists the entries left for the person.
+
+- **A global step that fails with `the global <package> does not match its verified release (…)`** means
+  what npm installed is not the release that was verified. What did not match was removed, and the step says what:
+  `so it was removed` (that global command is gone until it is installed again) or `so @agentcomms/core was removed
+  from it` (the channel still works, and checks for updates on its own). `could not be removed` means it is still
+  there, and still runs: say so plainly. Tell the person, then update again: `comms_update` with `check: true`, then
+  a new preview, which says `reinstalls the global <package> …`, and their yes. The update installs it again from its
+  verified file. If it fails the same way again, what npm is given is still not the verified release: say so, and do
+  not try again unasked. Never install the package by hand with `npm install -g` to get past it: that is not checked
+  against the verified release.
+- **A result that carries `recordNote`** (`the update was installed; its record will be corrected by the next check`)
+  needs nothing. The update is done; only this computer's record of it waits for the next check. Say so if a notice
+  still names the older release before then.
 
 ## 3. Restart, then clear out the old versions
 
