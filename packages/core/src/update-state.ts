@@ -312,8 +312,9 @@ export const UPDATE_CHECK_LOCK: LockOptions = Object.freeze({
  * waits. Waited out holder by holder, as `UPDATE_CHECK_LOCK` waits, a busy machine's queue of refreshes held them for
  * up to 15 s. Busy past 2 s, a notice decides nothing this time, and a later call says it.
  *
- * Claiming the day's check is best effort too (`claimUpdateCheck`): busy past 2 s, nothing is claimed, and a later
- * process claims it (0.26.0 review B).
+ * Claiming the day's check is best effort too: busy past 2 s, nothing is claimed, and a later process claims it (0.26.0
+ * review B). The claim's function is not named here: this comment ships in WhatsApp's bundle, which carries none of the
+ * checker, not even its name (`packages/whatsapp/test/update-gate.test.ts`).
  */
 export const UPDATE_NOTICE_LOCK: LockOptions = Object.freeze({ timeoutMs: 2_000 });
 
