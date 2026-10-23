@@ -328,3 +328,38 @@ A fresh builder read this design cold and asked three questions. Each is settled
      `security: true` would give every 0.20–0.25 machine the urgent notice and the 24-hour hold for a precaution.
      And with question 1 settled, no setup stops updating, so `needsDecision` isn't warranted either.
    - **The owner may overrule this before the tag.**
+
+## 8. Settled after review (2026-10-23)
+
+Two independent reviews read the joined branch (`0d7a1e01`). Their findings that change the design are settled here,
+each as the lead's call.
+
+1. **A needed decision is carried forward in the verified release, not found by listing releases** (review A, findings
+   2–4).
+   - **Why:** P1 found a needed decision by scanning every version the registry listed between the machine's version
+     and the target. Which versions exist is the registry's word.
+     - A registry or mirror that leaves out the release needing a decision gets the next one installed with no
+       decision (severity 5).
+     - A single unverifiable junk version in the range made the facts unknown, and so wiped a verified security
+       claim (severity 3).
+     - 500 junk versions cost 501 attestation requests in one check (severity 3).
+   - **So:** core's `agentcommsRelease` gains `needsDecisionSince`, the newest release, up to and including this one,
+     that declared `needsDecision`, carried forward by the release check:
+     - a release that declares `needsDecision: true` must carry its own version there;
+     - every other release must carry the previous release's value, or nothing when no release ever has.
+   - **What a check reads:** only the target release's verified declaration. A machine at version A updating to B
+     needs a decision when B's `needsDecisionSince` is above A, or when B itself declares one. Its security flag is
+     B's own.
+   - **The range scan goes, and with it all three problems.**
+   - **Releases before 0.26.0 carry no field, and none of them declared a decision,** so a missing field means none.
+2. **A substituted nested package does not survive a failed global update** (review A, finding 1, severity 6).
+   - **Why:** P3 left a mismatching global in place. A nested `@agentcomms/core` that npm resolved from the registry
+     would stay, and 0.26.0's channel hand-off (P2) would then start it as the person.
+   - **So:** on a mismatch, every mismatching `@agentcomms` package folder of the global install is removed before the
+     step fails, the top-level package included. The channel then finds no core and falls back to its own check.
+     Running the update again installs from verified files once more.
+3. **Review B's four findings are fixed as found:**
+   1. the day's claim waits 2 s at most for its lock;
+   2. a check reads each declaration at most once, within its claim's lease;
+   3. a core check child that exits before it settles counts as not started;
+   4. the R3 reader handles a regular expression after a statement header's `)` or a block's `}`.
