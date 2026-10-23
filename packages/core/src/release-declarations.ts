@@ -6,7 +6,7 @@ import { downloadVerifiedTarball, type TarballFetch, type TarballProblem, tarbal
 // Types only: sigstore-js stays out of whatever reaches this module. The provenance is verified by the caller.
 import type { VerifiedProvenance } from './update-provenance.ts';
 import { releaseDeclaration } from './update-release.ts';
-import { isVersion } from './versions.ts';
+import { isPlainVersion, isVersion } from './versions.ts';
 
 /**
  * What a release declares — a security fix, a decision it needs from the person — read from its verified tarball, and
@@ -14,10 +14,11 @@ import { isVersion } from './versions.ts';
  * could add or remove either flag on a genuine release. The tarball whose sha512 is the verified provenance digest is
  * the release's own.
  *
- * What was read is kept per integrity, content-free — the version, the integrity and the two flags, never a word of the
- * manifest — in `<state>/release-declarations.json`, so neither the daily check nor the background run downloads one
- * release twice. A declaration that cannot be read is unknown: it is never cached, and the caller fails closed. The
- * cache saves downloads, not verification: the caller verifies the release first, every time.
+ * What was read is kept per integrity, content-free — the version, the integrity, the two flags and the release a
+ * needed decision is carried from (design 2026-10-22 §8.1), never a word of the manifest — in
+ * `<state>/release-declarations.json`, so neither the daily check nor the background run downloads a release it read.
+ * A declaration that cannot be read is unknown: it is never cached, so the next check or run tries it again, and the
+ * caller fails closed. The cache saves downloads, not verification: the caller verifies the release first, every time.
  */
 
 export const DECLARATIONS_FILE = 'release-declarations.json';
@@ -32,23 +33,36 @@ export interface DeclarationRecord {
   integrity: string;
   security: boolean;
   needsDecision: boolean;
+  /** The newest release up to this one that declared `needsDecision`, as it carries it; null for none. */
+  needsDecisionSince: string | null;
 }
 
 export type DeclarationRead =
-  | { known: true; version: string; security: boolean; needsDecision: boolean; from: 'cache' | 'tarball' }
+  | {
+      known: true;
+      version: string;
+      security: boolean;
+      needsDecision: boolean;
+      needsDecisionSince: string | null;
+      from: 'cache' | 'tarball';
+    }
   | { known: false; version: string; problem: TarballProblem };
 
 export function declarationsPath(stateDir: string): string {
   return join(stateDir, DECLARATIONS_FILE);
 }
 
-/** A record as the cache keeps it, or null for anything else: only these four keys, each of its type. */
+/**
+ * A record as the cache keeps it, or null for anything else: only these five keys, each of its type. One without
+ * `needsDecisionSince`, as a build before it was carried wrote, is no record: it costs a download, never a decision.
+ */
 function recordOf(value: unknown): DeclarationRecord | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const { version, integrity, security, needsDecision } = value as Record<string, unknown>;
+  const { version, integrity, security, needsDecision, needsDecisionSince } = value as Record<string, unknown>;
   if (!isVersion(version) || typeof integrity !== 'string' || !INTEGRITY.test(integrity)) return null;
   if (typeof security !== 'boolean' || typeof needsDecision !== 'boolean') return null;
-  return { version, integrity, security, needsDecision };
+  if (needsDecisionSince !== null && !isPlainVersion(needsDecisionSince)) return null;
+  return { version, integrity, security, needsDecision, needsDecisionSince };
 }
 
 /** The cache's records; a file that is missing or cannot be read counts as empty. */
@@ -84,13 +98,13 @@ async function remember(stateDir: string, record: DeclarationRecord): Promise<vo
 /**
  * What a verified release declares: from the cache, by its integrity and version, or else from its tarball — the bytes
  * whose sha512 is `provenance.sha512`, from `location` or npm's canonical address — whose `package/package.json` must
- * name the release itself. Unknown, with the problem, when it cannot be read. A known declaration is cached unless
- * `writeCache` is false (a dry run); an unknown one never is.
+ * name the release itself. Unknown, with the problem, when it cannot be read, or when `signal` ends the read first. A
+ * known declaration is cached unless `writeCache` is false (a dry run); an unknown one never is.
  */
 export async function readVerifiedDeclaration(
   provenance: Pick<VerifiedProvenance, 'package' | 'version' | 'sha512'>,
   location: string | null,
-  options: { stateDir: string; fetch?: TarballFetch; writeCache?: boolean; timeoutMs?: number },
+  options: { stateDir: string; fetch?: TarballFetch; writeCache?: boolean; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<DeclarationRead> {
   const { version } = provenance;
   const integrity = `sha512-${Buffer.from(provenance.sha512, 'hex').toString('base64')}`;
@@ -98,7 +112,8 @@ export async function readVerifiedDeclaration(
     (record) => record.integrity === integrity && record.version === version,
   );
   if (hit !== undefined) {
-    return { known: true, version, security: hit.security, needsDecision: hit.needsDecision, from: 'cache' };
+    const { security, needsDecision, needsDecisionSince } = hit;
+    return { known: true, version, security, needsDecision, needsDecisionSince, from: 'cache' };
   }
   const download = await downloadVerifiedTarball(
     { packageName: provenance.package, version, sha512: provenance.sha512 },
@@ -106,6 +121,7 @@ export async function readVerifiedDeclaration(
     {
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     },
   );
   if (!download.ok) return { known: false, version, problem: download.problem };
@@ -114,7 +130,9 @@ export async function readVerifiedDeclaration(
   if (read.manifest.name !== provenance.package || read.manifest.version !== version) {
     return { known: false, version, problem: 'identity' };
   }
-  const { security, needsDecision } = releaseDeclaration(read.manifest);
-  if (options.writeCache !== false) await remember(options.stateDir, { version, integrity, security, needsDecision });
-  return { known: true, version, security, needsDecision, from: 'tarball' };
+  const { security, needsDecision, needsDecisionSince } = releaseDeclaration(read.manifest);
+  if (options.writeCache !== false) {
+    await remember(options.stateDir, { version, integrity, security, needsDecision, needsDecisionSince });
+  }
+  return { known: true, version, security, needsDecision, needsDecisionSince, from: 'tarball' };
 }

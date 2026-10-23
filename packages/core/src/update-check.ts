@@ -205,13 +205,14 @@ async function ask(
     });
     return;
   }
-  // What the releases declare — a security fix, a decision one of them needs (design 2026-10-16, U5, U7) — each read
-  // from its verified tarball (design 2026-10-22 P1), where this process can verify: core's hands in its verifier, a
-  // channel's has none, and reads nothing (P2). Read first for the releases since this one, so a machine that cannot be
-  // read still learns it; the check then reads them since the oldest release it finds here. A test's stand-in
-  // registry hands in its own, or none is read. Null: read, and not known now. Undefined: not read here. For either, the
-  // record keeps what core's verified check found of the same version — a version npm never publishes twice — and
-  // otherwise makes no claim.
+  // What the latest declares — a security fix, a decision a release on the way needs (design 2026-10-16, U5, U7) —
+  // read from its own verified tarball (design 2026-10-22 P1, §8.1), where this process can verify: core's hands in
+  // its verifier, a channel's has none, and reads nothing (P2). Read first for this release, so a machine that cannot
+  // be read still learns it; the check then asks again for the oldest release it finds here. The one reader is handed
+  // to the check, so its answer — known or not, within its deadline — is the check's too: the tarball is not asked for
+  // again (review B of 0.26.0, finding 2). A test's stand-in registry hands in its own, or none is read. Null: read,
+  // and not known now. Undefined: not read here. For either, the record keeps what core's verified check found of the
+  // same version — a version npm never publishes twice — and otherwise makes no claim.
   const read = deps.releaseFacts !== undefined ? deps.releaseFacts : releaseFactsReader(env, deps, core.paths.stateDir);
   const release: ReleaseFacts | null | undefined =
     read === null

@@ -8,12 +8,13 @@ import type { CliCommandCaller } from '../src/cli-command.ts';
 import { openCore } from '../src/core.ts';
 import { releaseFactsReader, type UpdateDeps, updateCheck } from '../src/operations/update.ts';
 import { PATH_OPTIONS } from '../src/paths.ts';
-import { type DeclaredSince, declaredSince, factsOf } from '../src/release-facts.ts';
+import { type DeclaredFor, declaredFor, factsOf, targetDeclaration } from '../src/release-facts.ts';
 import { checkForUpdates, claimUpdateCheck } from '../src/update-check.ts';
 import { securityNotice, updateToolNotice } from '../src/update-gate.ts';
 import type { ReleaseRegistry } from '../src/update-release.ts';
 import { changeUpdateCheck, readUpdateCheck } from '../src/update-state.ts';
 import { VERSION } from '../src/version.ts';
+import { fixtureTarballUrl } from './helpers/provenance-fixture.ts';
 import { loopbackRegistry, releaseWorld, type World, type WorldRelease } from './helpers/release-world.ts';
 import { tempDir } from './helpers/temp.ts';
 import { type Machine, machine, seed } from './helpers/update-machine.ts';
@@ -22,11 +23,12 @@ import { type Machine, machine, seed } from './helpers/update-machine.ts';
  * The daily check and `update --check` believe what a release declares — a security fix, a decision it needs — only
  * from its verified tarball (design 2026-10-22 P1), and a check that cannot verify erases nothing (P2).
  *
- * Every release whose declaration matters is verified first, then read from the bytes whose sha512 its provenance
- * signs: the registry's document is read for which releases there are, and where each tarball is, never for what one
- * declares. A declaration that cannot be read is unknown, and the record then makes no claim: `release` is null,
- * never a stored `security: false`. A check with no verifier — a channel's — reads none, and keeps what core's
- * verified check left for the same release.
+ * The release the check names is the only one read (§8.1): verified first, then read from the bytes whose sha512 its
+ * provenance signs. The registry's document is read for its integrity and where its tarball is, never for what it
+ * declares, nor for which other releases there are: a decision a release before it needed is carried forward in its
+ * own `needsDecisionSince`. A declaration that cannot be read is unknown, and the record then makes no claim:
+ * `release` is null, never a stored `security: false`. A check with no verifier — a channel's — reads none, and keeps
+ * what core's verified check left for the same release.
  *
  * The world here is the registry, npm's attestations and the tarballs, all stand-ins, with the real verifier over the
  * test's own trust root; one test runs core's CLI as a child against the world on 127.0.0.1, under the loopback seal.
@@ -50,9 +52,19 @@ function worldOf(...releases: WorldRelease[]): World {
   return releaseWorld({ [CORE]: LATEST }, releases);
 }
 
-/** Where `declaredSince` reads from: the world's registry, its verifier and its tarballs, and a state folder. */
+/** Where `targetDeclaration` reads from: the world's registry, its verifier and its tarballs, and a state folder. */
 function sources(world: World, stateDir = tempDir('comms-release-facts-')) {
   return { registry: world.registry, verify: world.verifyRelease, stateDir, tarballs: world.tarballs };
+}
+
+/** What `version` declares for a machine whose oldest release is `from`, read through `sources`. */
+async function declaredSince(
+  from: ReturnType<typeof sources>,
+  packageName: string,
+  oldest: string | null,
+  version: string,
+): Promise<DeclaredFor> {
+  return declaredFor(await targetDeclaration(from, packageName, version), oldest);
 }
 
 /** The update's stand-ins for a check with the world's reader: the latest is the world's, and nothing is installed. */
@@ -111,8 +123,8 @@ test('each flag is read from the verified tarball whose packument says the other
     const declared = await declaredSince(sources(world), CORE, null, LATEST);
     assert.deepEqual(
       declared,
-      { security, needsDecision, deciding: needsDecision ? [LATEST] : [], unread: [] },
-      `${label}: declaredSince`,
+      { security, needsDecision, deciding: needsDecision ? LATEST : null, unread: false },
+      `${label}: what it declares`,
     );
     assert.equal(world.tarballsAsked.length, 1, `${label}: its tarball was read`);
     // The same through the check, with a verifier: what the record keeps is the tarball's word.
@@ -121,28 +133,37 @@ test('each flag is read from the verified tarball whose packument says the other
   }
 });
 
-test('a release in range that needs a decision is found from its tarball, though the registry says nothing', async () => {
+test('a decision the latest carries forward is found from its tarball, though the registry says nothing', async () => {
   const world = worldOf(
     { version: '97.0.0' },
-    { version: BEFORE, declares: { needsDecision: true }, registrySays: {} },
-    { version: LATEST, registrySays: { needsDecision: true } },
+    { version: BEFORE, declares: { needsDecision: true, needsDecisionSince: BEFORE }, registrySays: {} },
+    { version: LATEST, declares: { needsDecisionSince: BEFORE }, registrySays: {} },
   );
   const declared = await declaredSince(sources(world), CORE, '97.0.0', LATEST);
-  assert.deepEqual(declared, { security: false, needsDecision: true, deciding: [BEFORE], unread: [] });
+  assert.deepEqual(declared, { security: false, needsDecision: true, deciding: BEFORE, unread: false });
   assert.equal(world.registryAsked.length, 1, 'the registry document is read once');
-  // Every release after 97.0.0 is verified, and read from its own tarball.
-  assert.equal(world.attestationsAsked.length, 2);
-  assert.equal(world.tarballsAsked.length, 2);
-  // A decision is not ended by a later release that does not say so again.
+  // Only the latest is verified, and read from its own tarball: 98.0.0 is never asked about.
+  assert.deepEqual(world.attestationsAsked.length, 1);
+  assert.deepEqual(world.tarballsAsked, [fixtureTarballUrl(CORE, LATEST)]);
+  // A decision is not ended by a later release that does not declare it again: the later release carries it.
   const { release } = await checked(world);
   assert.deepEqual(release, { version: LATEST, security: false, needsDecision: true });
+  // The registry's word alone carries nothing: a decision its document says the latest carries, and its tarball does
+  // not, is none.
+  const registryOnly = worldOf({ version: LATEST, registrySays: { needsDecisionSince: LATEST } });
+  assert.deepEqual(await declaredSince(sources(registryOnly), CORE, '97.0.0', LATEST), {
+    security: false,
+    needsDecision: false,
+    deciding: null,
+    unread: false,
+  });
 });
 
 test('an unread declaration makes no claim', async () => {
   // The latest's tarball cannot be had, from where the registry says or from npm's own address.
   const world = worldOf({ version: LATEST, declares: { security: true }, serve: 'missing' });
   const declared = await declaredSince(sources(world), CORE, null, LATEST);
-  assert.deepEqual(declared, { security: null, needsDecision: null, deciding: [], unread: [LATEST] });
+  assert.deepEqual(declared, { security: null, needsDecision: null, deciding: null, unread: true });
   assert.equal(factsOf(LATEST, declared), null);
 
   const { m, release } = await checked(worldOf({ version: LATEST, declares: { security: true }, serve: 'missing' }));
@@ -173,14 +194,15 @@ test('an unread declaration makes no claim', async () => {
   })('comms_audit_tail');
   assert.match(String(said), /fixes a security problem/);
 
-  // A release in range that cannot be read leaves whether a decision is needed unknown, not false.
+  // A release in range whose tarball cannot be had is never asked for: the latest's verified word stands (§8.1).
   const range = worldOf(
-    { version: BEFORE, declares: { needsDecision: true }, serve: 'missing' },
-    { version: LATEST, declares: { security: true } },
+    { version: BEFORE, declares: { needsDecision: true, needsDecisionSince: BEFORE }, serve: 'missing' },
+    { version: LATEST, declares: { security: true, needsDecisionSince: BEFORE } },
   );
   const inRange = await declaredSince(sources(range), CORE, '97.0.0', LATEST);
-  assert.deepEqual(inRange, { security: true, needsDecision: null, deciding: [], unread: [BEFORE] });
-  assert.equal(factsOf(LATEST, inRange), null, 'the latest is known, and the range is not: no facts');
+  assert.deepEqual(inRange, { security: true, needsDecision: true, deciding: BEFORE, unread: false });
+  assert.deepEqual(factsOf(LATEST, inRange), { version: LATEST, security: true, needsDecision: true });
+  assert.deepEqual(range.tarballsAsked, [fixtureTarballUrl(CORE, LATEST)], 'only the latest is read');
 });
 
 test("a release that does not verify is unread, never counted from the registry's word", async () => {
@@ -190,7 +212,7 @@ test("a release that does not verify is unread, never counted from the registry'
     const declared = await declaredSince(sources(world), CORE, null, LATEST);
     assert.deepEqual(
       declared,
-      { security: null, needsDecision: null, deciding: [], unread: [LATEST] },
+      { security: null, needsDecision: null, deciding: null, unread: true },
       JSON.stringify(shape),
     );
     assert.deepEqual(world.tarballsAsked, [], 'a release that did not verify is not downloaded');
@@ -199,17 +221,19 @@ test("a release that does not verify is unread, never counted from the registry'
     );
     assert.equal(release, null, JSON.stringify(shape));
   }
-  // One in range: unread, so a decision it might need is not known — never "none needed".
+  // One in range is no part of it: never verified, never read, and a decision it might need is what the latest
+  // carries (§8.1) — here none.
   const range = worldOf(
     { version: BEFORE, declares: { needsDecision: true }, registrySays: { needsDecision: true }, shape: 'missing' },
     { version: LATEST },
   );
   assert.deepEqual(await declaredSince(sources(range), CORE, '97.0.0', LATEST), {
     security: false,
-    needsDecision: null,
-    deciding: [],
-    unread: [BEFORE],
+    needsDecision: false,
+    deciding: null,
+    unread: false,
   });
+  assert.ok(!range.attestationsAsked.some((url) => url.endsWith(`@${BEFORE}`)), 'it was asked about');
   // A version the registry gives no integrity for is unread too: nothing to verify it against.
   const bare = worldOf({ version: LATEST, declares: { security: true } });
   const registry: ReleaseRegistry = async (packageName) => {
@@ -220,28 +244,49 @@ test("a release that does not verify is unread, never counted from the registry'
   assert.deepEqual(await declaredSince({ ...sources(bare), registry }, CORE, null, LATEST), {
     security: null,
     needsDecision: null,
-    deciding: [],
-    unread: [LATEST],
+    deciding: null,
+    unread: true,
   });
   assert.deepEqual([bare.attestationsAsked, bare.tarballsAsked], [[], []], 'nothing was asked of it');
 });
 
-test('the record holds facts only when both are known, and a decision once any read release says so', () => {
-  const known = (over: Partial<DeclaredSince>): DeclaredSince => ({
+test('the record holds facts only when the latest was read, and a decision when it declares or carries one', () => {
+  const known = (over: Partial<DeclaredFor>): DeclaredFor => ({
     security: false,
     needsDecision: false,
-    deciding: [],
-    unread: [],
+    deciding: null,
+    unread: false,
     ...over,
   });
   assert.deepEqual(factsOf(LATEST, known({})), { version: LATEST, security: false, needsDecision: false });
-  assert.deepEqual(factsOf(LATEST, known({ security: true, needsDecision: true, deciding: [BEFORE] })), {
+  assert.deepEqual(factsOf(LATEST, known({ security: true, needsDecision: true, deciding: BEFORE })), {
     version: LATEST,
     security: true,
     needsDecision: true,
   });
   assert.equal(factsOf(LATEST, known({ security: null })), null);
-  assert.equal(factsOf(LATEST, known({ needsDecision: null, unread: [BEFORE] })), null);
+  assert.equal(factsOf(LATEST, known({ security: null, needsDecision: null, unread: true })), null);
+
+  // What the latest declares, for each machine: its own decision always, the one it carries after the machine's
+  // oldest release only.
+  const read = (needsDecision: boolean, needsDecisionSince: string | null) =>
+    ({ known: true, version: LATEST, security: false, needsDecision, needsDecisionSince }) as const;
+  assert.equal(declaredFor(read(true, LATEST), LATEST).deciding, LATEST);
+  assert.equal(declaredFor(read(false, BEFORE), '97.0.0').deciding, BEFORE);
+  assert.equal(declaredFor(read(false, BEFORE), BEFORE).deciding, null, 'taken when 98.0.0 was installed');
+  assert.equal(declaredFor(read(false, BEFORE), LATEST).deciding, null);
+  assert.equal(declaredFor(read(false, null), '0.0.1').deciding, null);
+  // A machine whose oldest release is not known, or not a version, cannot be shown to have taken it: it waits.
+  assert.equal(declaredFor(read(false, BEFORE), null).deciding, BEFORE);
+  assert.equal(declaredFor(read(false, BEFORE), 'not a version').deciding, BEFORE);
+  // A carry after the release itself, which no release check lets through, is said as the release.
+  assert.equal(declaredFor(read(false, '100.0.0'), '97.0.0').deciding, LATEST);
+  assert.deepEqual(declaredFor({ known: false, version: LATEST }, '97.0.0'), {
+    security: null,
+    needsDecision: null,
+    deciding: null,
+    unread: true,
+  });
 });
 
 test('with no verifier, a check reads no declaration and keeps the verified one', async () => {

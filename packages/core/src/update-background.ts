@@ -47,6 +47,7 @@ import {
   verifyProvenance,
 } from './update-provenance.ts';
 import {
+  decisionNeeded,
   majorOf,
   npmRegistry,
   oldestVersion,
@@ -54,7 +55,6 @@ import {
   type ReleaseRegistry,
   type ReleaseVerifier,
   releaseIntegrity,
-  releasesBetween,
   runtimeIntegrityProblem,
 } from './update-release.ts';
 import {
@@ -81,12 +81,13 @@ import { compareVersions, isPrerelease, isVersion } from './versions.ts';
  *    turned off — and the run stops.
  * 2. **The registry.** `latest` of the core, its release verified first (`update-provenance.ts`), and what it declares
  *    read from its verified tarball (`release-declarations.ts`; design 2026-10-22 P1) — never from the registry's copy
- *    of its manifest. Never automatic: a major version, a release this run takes the machine past whose verified
- *    tarball declares `agentcommsRelease.needsDecision`, a downgrade — each a notice. Held: a release that was rolled
- *    back, until a newer one exists (`update-held.json`); one signed under 72 hours ago, or 24 for a security fix. A
- *    pause holds everything but a security fix. A release this run takes the machine past whose declaration cannot be
- *    read — it does not verify, or its tarball cannot be had — holds the run back, `unavailable`: the next run tries
- *    again, and a job that is never past it is reported as not running.
+ *    of its manifest, and of no other release (§8.1). Never automatic: a major version, a release that needs a
+ *    decision — the latest declares `agentcommsRelease.needsDecision`, or carries a `needsDecisionSince` after the
+ *    oldest release a launcher here starts — a downgrade — each a notice. Held: a release that was rolled back, until a
+ *    newer one exists (`update-held.json`); one signed under 72 hours ago, or 24 for a security fix. A pause holds
+ *    everything but a security fix. A latest whose declaration cannot be read — its tarball cannot be had — holds the
+ *    run back, `unavailable`: the next run tries again, and a job that is never past it is reported as not running.
+ *    Which versions the registry lists decides nothing, and costs nothing: none of them is verified or read.
  * 3. **Provenance** of every package to install, before its hold is decided. Any refusal stops the whole run: nothing
  *    is installed. The hold counts from the time Rekor signed for each package's release, the latest of them
  *    (`VerifiedProvenance.signedAt`; design 2026-10-22 P4), or, for a release whose provenance carries none, from when
@@ -565,19 +566,22 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
   // What a verified release declares is read from its own tarball — the bytes whose sha512 is the digest its provenance
   // signed — never from the registry's copy of its manifest, nor checked against the integrity the registry gives
   // (design 2026-10-22 P1). Kept per integrity, and never written by a dry run.
-  const declarationOf = (provenance: VerifiedProvenance) =>
-    readVerifiedDeclaration(provenance, tarballLocation(coreAnswer.packument, provenance.version), {
+  const declared = await readVerifiedDeclaration(
+    coreVerdict.provenance,
+    tarballLocation(coreAnswer.packument, latest),
+    {
       stateDir: core.paths.stateDir,
       ...(deps.tarballs !== undefined ? { fetch: deps.tarballs } : {}),
       writeCache: !run.dryRun,
-    });
+    },
+  );
   // No notice: a run that cannot read it is not a decision about the release. The next run tries again, and a job that
   // never gets past it is not recorded as working (`JOB_WORKS`), so its notices come back (plan, Review Focus 1).
-  const unread = (version: string, why = '') =>
-    stop('unavailable', `${corePackage}@${version}${why}: ${DECLARATION_UNREAD}; the next run tries again`, facts);
-  const coreDeclared = await declarationOf(coreVerdict.provenance);
-  if (!coreDeclared.known) return pausedNow ? pausedStop() : unread(latest);
-  const flags = { security: coreDeclared.security, needsDecision: coreDeclared.needsDecision };
+  if (!declared.known) {
+    if (pausedNow) return pausedStop();
+    return stop('unavailable', `${corePackage}@${latest}: ${DECLARATION_UNREAD}; the next run tries again`, facts);
+  }
+  const flags = { security: declared.security };
   if (pausedNow && !flags.security) return pausedStop();
 
   if ((compareVersions(latest, current) ?? 0) < 0 || ahead.length > 0) {
@@ -586,9 +590,10 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       outcome: 'skipped',
     });
   }
-  // Every release since the oldest a launcher here starts is what this run takes the machine past: a major crossed by
-  // any of them, or a decision any of them needs, waits for the person — a later release that does not say so again
-  // does not end the wait.
+  // The oldest release a launcher here starts is what this run takes the machine from: a major crossed by any launcher
+  // here, or a decision the latest declares or carries forward after it (design 2026-10-22 §8.1), waits for the person.
+  // Only the latest's verified declaration says so: which releases the registry lists between decides nothing, so a
+  // release left out of its document, or one added that does not verify, changes nothing and is never asked about.
   const from = oldestVersion(behind.map((entry) => entry.version ?? current)) ?? current;
   if (majorOf(latest) !== majorOf(from)) {
     return stop('skipped', `${latest} is a major release after ${from}: it waits for the person`, facts, {
@@ -596,36 +601,14 @@ async function decide(run: Run): Promise<Settled | { go: true; partial: Settled;
       outcome: 'skipped',
     });
   }
-  // Each is verified, and its declaration read from its verified tarball, as the latest's was. One that does not
-  // verify, or whose declaration cannot be read, is not known not to need a decision: the run holds back. It is not
-  // refused — it is not the release that would be installed (plan, gap 5). A decision one of them is known to need is
-  // said first, as it is known whatever the others say.
-  const deciding = flags.needsDecision ? [latest] : [];
-  const notRead: { version: string; why: string }[] = [];
-  for (const version of releasesBetween(coreAnswer.packument, from, latest)) {
-    if (version === latest) continue;
-    const integrity = releaseIntegrity(coreAnswer.packument, version);
-    const verdict = integrity === null ? null : await verify(corePackage, version, integrity);
-    if (verdict === null || !verdict.ok) {
-      notRead.push({
-        version,
-        why: `, a release this run takes the machine past, did not verify (${verdict === null ? 'subject' : verdict.field})`,
-      });
-      continue;
-    }
-    const declared = await declarationOf(verdict.provenance);
-    if (!declared.known) notRead.push({ version, why: ', a release this run takes the machine past' });
-    else if (declared.needsDecision) deciding.push(version);
-  }
   // What the decision is, the manifest's own words, is never said: the person reads it in the release notes.
-  if (deciding.length > 0) {
-    return stop('skipped', `${latest} needs a decision from the person (${deciding.join(', ')} says so)`, facts, {
+  const deciding = decisionNeeded(declared, from);
+  if (deciding !== null) {
+    return stop('skipped', `${latest} needs a decision from the person (${deciding} says so)`, facts, {
       text: BACKGROUND_WORDS.decision(latest),
       outcome: 'skipped',
     });
   }
-  const first = notRead[0];
-  if (first !== undefined) return unread(first.version, first.why);
 
   const held = await readHeldReleases(core.paths.stateDir);
   if (held === null) {

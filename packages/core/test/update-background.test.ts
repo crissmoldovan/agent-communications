@@ -413,45 +413,39 @@ test('each skip — a major version, a release that needs a decision, a downgrad
   }
 });
 
-test('a needed decision is not skipped by a later release: every release since the one installed is verified, and its declaration read', async () => {
-  // 0.20.1 needs a decision; 0.20.2, the latest, does not say so. 0.20.2 is not installed in the background.
+test('a needed decision is not skipped by a later release: the latest carries it, and no release in range is asked about', async () => {
+  // 0.20.1 needs a decision; 0.20.2, the latest, does not declare one, and carries 0.20.1's forward (design 2026-10-22
+  // §8.1). 0.20.2 is not installed in the background.
+  const carried: WorldRelease[] = [
+    { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true, needsDecisionSince: LATEST } },
+    { version: NEXT, signedAt: hoursAgo(100), declares: { needsDecisionSince: LATEST } },
+  ];
   const m = await launched();
-  const w = world(m, {
-    latest: NEXT,
-    releases: [
-      { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true } },
-      { version: NEXT, signedAt: hoursAgo(100) },
-    ],
-  });
+  const w = world(m, { latest: NEXT, releases: carried });
   const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
   assert.equal(result.outcome, 'skipped', result.reason);
+  assert.match(result.reason, /needs a decision from the person \(0\.20\.1 says so\)$/);
   await untouched(m, result, w.installer.calls);
   assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice?.text, BACKGROUND_WORDS.decision(NEXT));
-  // The latest first, then each release in range: both verified.
-  assert.deepEqual(w.attestations.asked, coreAsked(NEXT, LATEST));
+  // The latest alone is verified, and read: the release that needed the decision is never asked about.
+  assert.deepEqual(w.attestations.asked, coreAsked(NEXT));
+  assert.deepEqual(w.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, NEXT)]);
 
-  // The release that needs a decision does not verify: its declaration is not known, so the run holds back — not a
-  // refusal, as it is not the release that would be installed (plan, gap 5) — and nothing is installed.
+  // The release that needs a decision does not verify, or is not listed at all: the latest's word stands.
   const n = await launched();
-  const v = world(n, {
-    latest: NEXT,
-    releases: [
-      { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true } },
-      { version: NEXT, signedAt: hoursAgo(100) },
-    ],
-  });
+  const v = world(n, { latest: NEXT, releases: carried });
   v.world.change({ [`${CORE_PACKAGE}@${LATEST}`]: 'missing' });
   const unverified = await runBackgroundUpdate(n.core, n.env, {}, v.deps);
-  assert.equal(unverified.outcome, 'unavailable', unverified.reason);
+  assert.equal(unverified.outcome, 'skipped', unverified.reason);
   await untouched(n, unverified, v.installer.calls);
 
-  // A release before the one installed is no part of it: what 0.19.x declared was decided already.
+  // A decision carried from a release before the one installed was taken already: 0.19.5's is no part of it.
   const o = await launched();
   const past = world(o, {
     latest: LATEST,
     releases: [
-      { version: '0.19.5', signedAt: hoursAgo(900), declares: { needsDecision: true } },
-      { version: LATEST, signedAt: hoursAgo(100) },
+      { version: '0.19.5', signedAt: hoursAgo(900), declares: { needsDecision: true, needsDecisionSince: '0.19.5' } },
+      { version: LATEST, signedAt: hoursAgo(100), declares: { needsDecisionSince: '0.19.5' } },
     ],
   });
   assert.equal((await runBackgroundUpdate(o.core, o.env, {}, past.deps)).outcome, 'installed');
@@ -710,7 +704,7 @@ test("a security fix is the tarball's word, never the registry's, both ways", as
   assert.equal(installed.release?.holdHours, 24);
 });
 
-test("a needed decision is the tarball's word, never the registry's, both ways — for the latest and for a release in range", async () => {
+test("a needed decision is the tarball's word, never the registry's, both ways — its own and the one it carries", async () => {
   const cases: [string, WorldOver, BackgroundRunResult['outcome']][] = [
     [
       'the latest, the registry alone says so',
@@ -723,23 +717,23 @@ test("a needed decision is the tarball's word, never the registry's, both ways �
       'skipped',
     ],
     [
-      'a release in range, the registry alone says so',
+      'carried from a release in range, the registry alone says so',
       {
         latest: NEXT,
         releases: [
           { version: LATEST, signedAt: hoursAgo(200), registrySays: { needsDecision: true } },
-          { version: NEXT, signedAt: hoursAgo(80) },
+          { version: NEXT, signedAt: hoursAgo(80), registrySays: { needsDecisionSince: LATEST } },
         ],
       },
       'installed',
     ],
     [
-      'a release in range, its tarball alone says so',
+      'carried from a release in range, its tarball alone says so',
       {
         latest: NEXT,
         releases: [
-          { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true }, registrySays: {} },
-          { version: NEXT, signedAt: hoursAgo(80) },
+          { version: LATEST, signedAt: hoursAgo(200), registrySays: {} },
+          { version: NEXT, signedAt: hoursAgo(80), declares: { needsDecisionSince: LATEST }, registrySays: {} },
         ],
       },
       'skipped',
@@ -804,7 +798,9 @@ test("an unreadable declaration is never silent: the run is unavailable, and the
   assert.equal((await readUpdateJobMarker(m.core.paths.stateDir))?.lastRun, NOW.toISOString());
 });
 
-test('a release in range whose declaration cannot be read holds the run back, and is not refused', async () => {
+test("a release in range that cannot be read changes nothing: it is never asked about, and the latest's word stands", async () => {
+  // Design 2026-10-22 §8.1: which releases the registry lists decides nothing. Before it, each of these held the run
+  // back as unavailable; a registry could stall every machine with one junk version.
   const cases: [string, WorldRelease][] = [
     ['its tarball is not served', { version: LATEST, signedAt: hoursAgo(200), serve: 'missing' }],
     ['it does not verify', { version: LATEST, signedAt: hoursAgo(200), shape: 'missing' }],
@@ -817,12 +813,9 @@ test('a release in range whose declaration cannot be read holds the run back, an
     const m = await launched();
     const w = world(m, { latest: NEXT, releases: [release, { version: NEXT, signedAt: hoursAgo(80) }] });
     const result = await runBackgroundUpdate(m.core, m.env, {}, w.deps);
-    assert.equal(result.outcome, 'unavailable', `${label}: ${result.reason}`);
-    assert.ok(result.reason.startsWith(`${CORE_PACKAGE}@${LATEST}`), `${label}: ${result.reason}`);
-    assert.ok(result.reason.includes(DECLARATION_UNREAD), `${label}: ${result.reason}`);
-    assert.equal(result.notice, null, label);
-    await untouched(m, result, w.installer.calls);
-    assert.equal((await readUpdateCheck(m.core.paths.stateDir)).backgroundNotice ?? null, null, label);
+    assert.equal(result.outcome, 'installed', `${label}: ${result.reason}`);
+    assert.ok(!w.attestations.asked.some((url) => url.endsWith(`@${LATEST}`)), `${label}: it was verified`);
+    assert.deepEqual(w.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, NEXT)], label);
   }
 });
 
@@ -1022,12 +1015,12 @@ test('what a release declares is read from the bytes its provenance verified, ne
       other: { security: true },
     },
     {
-      label: 'a release in range, whose decision another tarball would take away',
+      label: 'the latest, whose carried decision another tarball would take away',
       latest: NEXT,
-      target: LATEST,
+      target: NEXT,
       releases: [
-        { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true } },
-        { version: NEXT, signedAt: hoursAgo(80) },
+        { version: LATEST, signedAt: hoursAgo(200), declares: { needsDecision: true, needsDecisionSince: LATEST } },
+        { version: NEXT, signedAt: hoursAgo(80), declares: { needsDecisionSince: LATEST } },
       ],
       other: {},
     },
