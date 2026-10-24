@@ -10,7 +10,7 @@ use crate::allowlist::{service_run, Call};
 use crate::commands::context;
 use crate::ipc::{AppError, CliResult, EventServiceState, EventServiceStatus};
 use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for, Product};
-use crate::paths::{Folders, Platform};
+use crate::paths::{Folders, PathEnv, Platform};
 use crate::runner::{command_for, run, RunContext};
 use crate::{settings, window, AppState};
 use regex::Regex;
@@ -1323,6 +1323,42 @@ pub fn unavailable() -> EventServiceState {
 
 /// `full_disk_access` when no WhatsApp account needs it, or off macOS (D6).
 pub const FULL_DISK_ACCESS_NOT_NEEDED: &str = "not-needed";
+/// `full_disk_access` when the app can open WhatsApp's database.
+pub const FULL_DISK_ACCESS_GRANTED: &str = "granted";
+/// `full_disk_access` when macOS refuses it: the service the app starts counts as the app's, so it could not read
+/// WhatsApp either (D6).
+pub const FULL_DISK_ACCESS_MISSING: &str = "missing";
+/// WhatsApp for Mac's database, under the home folder: what the service reads WhatsApp's events from.
+pub const WHATSAPP_DATABASE: &str =
+    "Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite";
+/// How long the app keeps its answer to whether a WhatsApp account exists, which `whatsapp status` gives.
+const WHATSAPP_ACCOUNTS_KEPT: Duration = Duration::from_secs(10 * 60);
+
+/// What `full_disk_access` says (D6, plan Task 2 Step 7): not needed off macOS, or without a WhatsApp account; else
+/// granted when WhatsApp's database opens read-only (`open`), missing when macOS refuses it (`EPERM` or `EACCES`), and
+/// not needed for any other answer — a database that is not there is not one Full Disk Access would open. `open` is
+/// asked only when it matters.
+pub fn full_disk_access_from(
+    platform: Platform,
+    whatsapp_account: bool,
+    open: impl FnOnce() -> io::Result<()>,
+) -> &'static str {
+    if platform != Platform::MacOs || !whatsapp_account {
+        return FULL_DISK_ACCESS_NOT_NEEDED;
+    }
+    match open() {
+        Ok(()) => FULL_DISK_ACCESS_GRANTED,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => FULL_DISK_ACCESS_MISSING,
+        Err(_) => FULL_DISK_ACCESS_NOT_NEEDED,
+    }
+}
+
+/// Whether `whatsapp status`'s data lists an account.
+pub fn has_whatsapp_account(data: &serde_json::Value) -> bool {
+    data.get("accounts")
+        .and_then(|accounts| accounts.as_array())
+        .is_some_and(|accounts| !accounts.is_empty())
+}
 
 // The app's side: the supervisor in Tauri's state, its watchdog thread, the commands' work, and Quit.
 
@@ -1369,6 +1405,10 @@ pub struct EventService {
     wake: Wake,
     /// Set once Quit asks, or stops the service to quit: a second Quit adds nothing.
     asking: AtomicBool,
+    /// Whether a WhatsApp account exists, and when that was asked.
+    whatsapp: Mutex<Option<(Instant, bool)>>,
+    /// Set while Full Disk Access is being looked at.
+    checking_access: AtomicBool,
 }
 
 /// Starts the supervisor, in `setup`: loads the record, and starts the watchdog, which looks at once and then every
@@ -1441,7 +1481,59 @@ fn command(app: &AppHandle, work: impl FnOnce(&mut Supervisor, &RunContext)) -> 
 
 /// `event_service_state`: read only, so the watchdog is not woken.
 pub fn current(app: &AppHandle) -> EventServiceState {
+    refresh_full_disk_access(app);
     with_supervisor(app, |_, _| {}).map_or_else(unavailable, |(_, state)| state)
+}
+
+/// Whether a WhatsApp account exists: its launcher is there, and `whatsapp status` — the call the Accounts screen
+/// reads WhatsApp's accounts with — lists one. Kept for `WHATSAPP_ACCOUNTS_KEPT`.
+fn whatsapp_account(service: &EventService, ctx: &RunContext) -> bool {
+    if let Some((at, exists)) = *lock(&service.whatsapp) {
+        if at.elapsed() < WHATSAPP_ACCOUNTS_KEPT {
+            return exists;
+        }
+    }
+    let exists = find_launcher(&ctx.folders, ctx.platform, Product::Whatsapp).is_some()
+        && matches!(
+            run(&Call::Doctor { product: Product::Whatsapp }, ctx),
+            CliResult::Ok { data, .. } if has_whatsapp_account(&data)
+        );
+    *lock(&service.whatsapp) = Some((Instant::now(), exists));
+    exists
+}
+
+/// Looks at Full Disk Access again (D6), on a thread of its own, so the window's read never waits for `whatsapp
+/// status`; what it finds reaches the window as `event-service:changed`. Only when the window reads the state, never
+/// on the watchdog's timer: opening WhatsApp's database is asked of macOS no more often than that. Only on macOS.
+fn refresh_full_disk_access(app: &AppHandle) {
+    if Platform::current() != Platform::MacOs {
+        return;
+    }
+    let Some(service) = app.try_state::<EventService>() else {
+        return;
+    };
+    if service.checking_access.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    let spawned = thread::Builder::new()
+        .name("full-disk-access".into())
+        .spawn(move || {
+            let service = app.state::<EventService>();
+            let ctx = context(&app.state::<AppState>());
+            let account = whatsapp_account(&service, &ctx);
+            let home = PathEnv::from_process().home;
+            let access = full_disk_access_from(Platform::current(), account, || {
+                File::open(Path::new(&home).join(WHATSAPP_DATABASE)).map(drop)
+            });
+            with_supervisor(&app, |supervisor, _| {
+                supervisor.full_disk_access = access.to_string();
+            });
+            service.checking_access.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        service.checking_access.store(false, Ordering::SeqCst);
+    }
 }
 
 /// `set_event_service`.
@@ -2811,6 +2903,69 @@ exit 64
         fake.unmark("running");
         fake.finish(&mut supervisor);
         fake.finish(&mut adopted);
+    }
+
+    #[test]
+    fn full_disk_access_is_asked_only_for_whatsapp_on_macos() {
+        let never =
+            || -> io::Result<()> { panic!("WhatsApp's database was opened when nothing needs it") };
+        assert_eq!(
+            full_disk_access_from(Platform::MacOs, false, never),
+            "not-needed"
+        );
+        assert_eq!(
+            full_disk_access_from(Platform::Linux, true, never),
+            "not-needed"
+        );
+        assert_eq!(
+            full_disk_access_from(Platform::Windows, true, never),
+            "not-needed"
+        );
+        assert_eq!(
+            full_disk_access_from(Platform::MacOs, true, || Ok(())),
+            "granted"
+        );
+        assert_eq!(
+            full_disk_access_from(Platform::MacOs, true, || Err(
+                io::ErrorKind::PermissionDenied.into()
+            )),
+            "missing"
+        );
+        // macOS answers EPERM for a protected file, and EACCES for one its mode refuses: both are missing.
+        #[cfg(unix)]
+        for refused in [libc::EPERM, libc::EACCES] {
+            assert_eq!(
+                full_disk_access_from(Platform::MacOs, true, || Err(io::Error::from_raw_os_error(
+                    refused
+                ))),
+                "missing",
+                "{refused}"
+            );
+        }
+        // Any other answer — WhatsApp's database is not there — is not one Full Disk Access would change.
+        assert_eq!(
+            full_disk_access_from(
+                Platform::MacOs,
+                true,
+                || Err(io::ErrorKind::NotFound.into())
+            ),
+            "not-needed"
+        );
+        assert_eq!(
+            WHATSAPP_DATABASE,
+            "Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite"
+        );
+        assert_eq!(
+            FULL_DISK_ACCESS_PANE,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+        );
+        // An account is one `whatsapp status` lists.
+        assert!(has_whatsapp_account(&json!({
+            "accounts": [{ "account": "example/whatsapp", "access": { "state": "denied" } }]
+        })));
+        for none in [json!({ "accounts": [] }), json!({}), json!([]), json!(null)] {
+            assert!(!has_whatsapp_account(&none), "{none}");
+        }
     }
 
     #[test]
