@@ -676,6 +676,15 @@ pub const QUIT_REQUESTED: &str = "quit-requested";
 /// Why there is no switch on Windows (B1-G).
 pub const WINDOWS_LINE: &str = "The event service doesn't run on Windows yet.";
 
+/// How long the watchdog waits to read the clean-stop marker again, when the app's service from an earlier run has
+/// gone with no marker for it yet.
+const MARKER_GRACE: Duration = Duration::from_secs(1);
+
+/// The clean-stop marker in `events`, when there is one the app can read.
+fn read_marker(events: &Path) -> Option<StopMarker> {
+    read_small(&events.join(MARKER_FILE), 4096).and_then(|text| parse_marker(&text))
+}
+
 /// `<state>/events`: the service's own folder, where its log and its marker are too.
 pub fn events_dir(folders: &Folders) -> PathBuf {
     PathBuf::from(&folders.state_dir).join("events")
@@ -906,17 +915,26 @@ impl Supervisor {
 
     /// What the watchdog sees: the process, `agent-events status`, the marker, whether the database exists, and the
     /// launcher and its version. Nothing in the event database is opened.
+    ///
+    /// The service writes its marker after its control socket closes, so `status` can say it is not running while its
+    /// process still is (Task 1). A recorded PID that is still `events-daemon run` is therefore alive, whatever
+    /// `status` says, and `decide` waits for it. Once it is gone with no marker for it yet, the marker is read once
+    /// more, after `MARKER_GRACE`, before it can count as a crash.
     fn observe(&mut self, ctx: &RunContext) -> Observation {
         let process = self.process();
         let owner = self.owner_now(ctx);
         let events = events_dir(&ctx.folders);
         let installed_version = installed_version(&ctx.folders, ctx.platform);
         self.installed_version = installed_version.clone();
+        let mut marker = read_marker(&events);
+        if process == Process::Gone && !stopped_cleanly(&self.record, marker.as_ref()) {
+            thread::sleep(MARKER_GRACE);
+            marker = read_marker(&events);
+        }
         Observation {
             owner,
             process,
-            marker: read_small(&events.join(MARKER_FILE), 4096)
-                .and_then(|text| parse_marker(&text)),
+            marker,
             database_exists: fs::symlink_metadata(events.join(DATABASE_FILE)).is_ok(),
             installed: find_launcher(&ctx.folders, ctx.platform, Product::EventsDaemon).is_some(),
             installed_version,
@@ -1871,6 +1889,38 @@ mod tests {
         );
     }
 
+    /// Task 1's service closes its control socket before it writes its marker and ends, so for a moment `status` says
+    /// it is not running while its process still is: nothing is judged until the PID is gone.
+    #[test]
+    fn status_not_running_while_the_pid_is_still_ours_and_no_marker_is_nothing_yet() {
+        for owner in [NotRunning, Unknown] {
+            assert_eq!(
+                decide(&app_started(), &seen(owner, Process::Alive), now()),
+                Nothing,
+                "{owner:?}"
+            );
+        }
+        // Gone, with its marker: stopped. Gone without one: a crash.
+        let marker = StopMarker {
+            pid: PID,
+            at: "2026-10-25T11:59:59.000Z".into(),
+        };
+        let stopped = Observation {
+            marker: Some(marker),
+            ..seen(NotRunning, Process::Gone)
+        };
+        assert_eq!(
+            decide(&app_started(), &stopped, now()),
+            MarkStoppedFromOutside
+        );
+        assert_eq!(
+            decide(&app_started(), &seen(NotRunning, Process::Gone), now()),
+            Restart {
+                after: Duration::from_secs(1)
+            }
+        );
+    }
+
     #[test]
     fn a_terminal_started_service_that_goes_away_is_not_restarted() {
         assert_eq!(
@@ -2664,7 +2714,7 @@ exit 64
             format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n"),
         )
         .expect("a marker");
-        let mut supervisor = fake.supervisor(record);
+        let mut supervisor = fake.supervisor(record.clone());
         supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(!supervisor.record().wanted);
         assert_eq!(
@@ -2676,6 +2726,28 @@ exit 64
         );
         assert!(!fake.has("run-argv"), "a stop is not restarted");
         fake.finish(&mut supervisor);
+        // A marker written just after the PID is seen gone is still read: once more, a moment later (Task 1).
+        fs::remove_file(events.join(MARKER_FILE)).expect("removed");
+        let late = events.join(MARKER_FILE);
+        let text = format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n");
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            fs::write(late, text).expect("a marker");
+        });
+        let mut read_again = fake.supervisor(record.clone());
+        read_again.tick(&fake.ctx, SystemTime::now());
+        writer.join().expect("written");
+        assert!(!read_again.record().wanted, "read again, and stopped");
+        assert!(!fake.has("run-argv"));
+        fake.finish(&mut read_again);
+        // With none, even after that wait, it crashed: restarted after its wait.
+        fs::remove_file(events.join(MARKER_FILE)).expect("removed");
+        let mut crashed = fake.supervisor(record);
+        crashed.tick(&fake.ctx, SystemTime::now());
+        assert!(crashed.record().wanted);
+        assert_eq!(crashed.record().recent_failures.len(), 1);
+        assert!(crashed.restart_due.is_some());
+        fake.finish(&mut crashed);
     }
 
     #[test]
