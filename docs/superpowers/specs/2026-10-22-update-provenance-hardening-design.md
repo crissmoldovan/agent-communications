@@ -172,6 +172,11 @@ install it compares the runtime's `package-lock.json` with that digest (`runtime
   verified against the trusted root's Rekor key.
 - **Check what sigstore-js verifies:** the builder confirms, from `@sigstore/verify` 2.1.1's source, whether that SET
   is what `tlogThreshold: 1` verified. If it isn't guaranteed, or not exposed, core verifies the SET itself.
+  - **2026-10-24, 0.26.2:** core moved to `@sigstore/verify` 3.1.1 (the owner's choice of the 3.x line, which keeps Node
+    22.12). Its source was read again: every carried SET is still verified, so the signed time holds as above. It takes
+    a time only from an entry with a promise and refuses a bundle with none, so a bundle whose one entry has only an
+    inclusion proof is now refused, where 2.1.1 verified it and the hold counted from first sight. 2.1.1 had checked the
+    certificate at that unsigned time (GHSA-xgjw-pm74-86q4).
 - **No signed time (lead's call, §7):** a release without one counts its hold from the moment this machine first saw
   that release. That moment is recorded, content-free, in the background run's state. A registry can't make it
   earlier, so the hold is never shorter than intended, and never permanent.

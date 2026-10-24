@@ -158,7 +158,8 @@ export function trustedRoot(): Record<string, unknown> {
  *   have always made, and the default.
  * - `'both'`: one entry with a promise and an inclusion proof, as npm's provenance for 0.25.0 carries (design
  *   2026-10-22 §7.2), in a v0.3 bundle with the certificate on its own.
- * - `'proof'`: one entry with an inclusion proof and no promise, in a v0.2 bundle (v0.1 requires a promise).
+ * - `'proof'`: one entry with an inclusion proof and no promise, in a v0.2 bundle (v0.1 requires a promise). sigstore-js
+ *   refuses it since @sigstore/verify 3.1.1, which takes no time from a proof (`TIMESTAMP_ERROR`).
  * - `'two'`: two entries, each with its own promise, log index and integrated time, in a v0.1 bundle.
  * - `'bad-promise'`: `'promise'` with one byte of the SET changed.
  * - `'none'`: no entry at all.

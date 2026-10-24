@@ -207,8 +207,9 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
   security fix, from the time Rekor signed for its provenance, and a set of packages from the latest of their times;
   every package of the set is verified before the hold is decided. That time is used only when the bundle carries
   exactly one transparency-log entry whose inclusion promise sigstore-js verified against the trusted root, and a
-  promise that does not verify refuses the release. A release with no signed time (an inclusion proof alone, or two
-  entries) is held from when this machine first saw it, recorded at this machine's own clock. No hold reads the
+  promise that does not verify refuses the release, and so does a bundle whose only entry carries an inclusion proof
+  and no promise, which gives no signed time at all (since 0.26.2). A release with no single signed time (two entries)
+  is held from when this machine first saw it, recorded at this machine's own clock. No hold reads the
   registry's `time`, and its `Date` can only make the clock earlier, so a registry can lengthen a hold but never
   shorten it. The machine's own clock is trusted: one running behind when a release is first seen shortens that
   release's hold by as much.

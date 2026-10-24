@@ -63,17 +63,17 @@ function refusal(verdict: ProvenanceVerdict): { field: string; reason: string } 
   return verdict as { field: string; reason: string };
 }
 
-test('sigstore-js is this package’s own dependency, imported by name, at the versions sigstore-js 3.1.0 carries', async () => {
+test('sigstore-js is this package’s own dependency, imported by name, at the sigstore-js 4 line’s fixed versions', async () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     dependencies: Record<string, string>;
   };
   assert.deepEqual(
     Object.fromEntries(Object.entries(manifest.dependencies).filter(([name]) => name.startsWith('@sigstore/'))),
     {
-      '@sigstore/bundle': '3.1.0',
-      '@sigstore/protobuf-specs': '0.4.3',
-      '@sigstore/tuf': '3.1.1',
-      '@sigstore/verify': '2.1.1',
+      '@sigstore/bundle': '4.0.0',
+      '@sigstore/protobuf-specs': '0.5.2',
+      '@sigstore/tuf': '4.0.2',
+      '@sigstore/verify': '3.1.1',
     },
   );
   for (const name of ['@sigstore/verify', '@sigstore/bundle', '@sigstore/tuf', '@sigstore/protobuf-specs']) {
@@ -307,11 +307,13 @@ test('sigstore-js reads an identity given as text as an unanchored pattern, whic
 
 // ── Rekor's signed time (design 2026-10-22 P4, §7.2; plan gap 2) ─────────────────────────────────────────────────
 //
-// A hold counts from the time Rekor signed, never the registry's `time`. sigstore-js 2.1.1 verifies an entry's
-// inclusion promise (its SET, which signs the entry's integrated time) whenever the entry carries one, and refuses the
-// bundle when it does not verify; an entry with only an inclusion proof passes on its Merkle proof and checkpoint,
-// which sign no time. So the time is taken only from a bundle with exactly one entry, and only when that entry carries
-// a promise — read from the very entity sigstore-js has just verified.
+// A hold counts from the time Rekor signed, never the registry's `time`. sigstore-js (@sigstore/verify 3.1.1) verifies
+// an entry's inclusion promise (its SET, which signs the entry's integrated time) whenever the entry carries one, and
+// refuses the bundle when it does not verify. It takes a time only from an entry with a promise, and refuses a bundle
+// with no such time (`TIMESTAMP_ERROR`), so an entry with only an inclusion proof, whose Merkle proof and checkpoint
+// sign no time, is refused (GHSA-xgjw-pm74-86q4: 2.1.1 used that unsigned time for the certificate's validity). So the
+// time is taken only from a bundle with exactly one entry, and only when that entry carries a promise — read from the
+// very entity sigstore-js has just verified.
 
 /** The provenance a verified release carries, through sigstore-js and the tests' trust root. */
 async function verified(shape: Partial<ProvenanceShape>) {
@@ -333,11 +335,16 @@ test("npm's shape — a promise and an inclusion proof — gives the signed time
   assert.equal(provenance.signedAt, '2026-10-11T09:15:00.000Z');
 });
 
-test('an entry with an inclusion proof and no promise verifies, with no signed time', async () => {
-  const provenance = await verified({ tlog: 'proof', signedAt: new Date('2026-10-11T09:15:00Z') });
-  assert.equal(provenance.signedAt, null);
-  // Its integrated time is still read for display, unverified: it is not what a hold counts from.
-  assert.equal(provenance.integratedTime, '2026-10-11T09:15:00.000Z');
+test('an entry with an inclusion proof and no promise is refused: it carries no time Rekor signed', async () => {
+  const refused = refusal(
+    await verifyProvenance(RELEASE, {
+      fetch: served({ tlog: 'proof', signedAt: new Date('2026-10-11T09:15:00Z') }).fetch,
+      verifyBundle: sigstore,
+    }),
+  );
+  assert.equal(refused.field, 'signature');
+  // sigstore-js 2.1.1 took the entry's unsigned integrated time as a timestamp, and checked the certificate against it.
+  assert.match(refused.reason, /\(TIMESTAMP_ERROR\)/);
 });
 
 test('two entries verify, with no signed time', async () => {
