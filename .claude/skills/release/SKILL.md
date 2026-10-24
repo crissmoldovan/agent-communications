@@ -94,7 +94,9 @@ needed decision".
    **Complete when:** it prints that everything a release checks has passed.
 
 6. **Tag, and push the tag. This publishes.** `git tag vX.Y.Z && git push origin vX.Y.Z`. Six verify legs run
-   first and the publish is skipped if any fails, but nothing asks for confirmation after the push. Before the first
+   first and the publish is skipped if any fails, but nothing asks for confirmation after the push. A green dry run
+   of the same tree (the pull request's, merged with nothing else on `main`) counts for them, and the tag's run says
+   which one it reused instead of running them again (docs/RELEASING.md, "A tag reuses a green dry run"). Before the first
    package is sent, the **OIDC preflight** exchanges an ID token for every package it is about to send, exactly as
    the publish will; if any has no trusted publisher for this workflow, the run fails there, naming it, with nothing
    published. A package already at this version from this commit is neither sent nor asked about.

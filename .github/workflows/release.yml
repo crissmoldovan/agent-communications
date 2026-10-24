@@ -20,9 +20,9 @@ name: Release
 # that is always opened is worse than none — it reports a control nobody is exercising.
 #
 # What remains is real rather than ceremonial: the environment accepts `v*` tags and nothing else, the tag must
-# match the version the repository declares and still name the commit the run started from, six verify legs, the
-# Node 22.12.0 leg and the Laya release gate must pass first, and every published version carries provenance naming the
-# commit and the run. The residual risk is stated in
+# match the version the repository declares and still name the commit the run started from, six verify legs (on this
+# run, or on a green dry run of this exact tree: see the `verified` job), the Node 22.12.0 leg and the Laya release gate
+# must pass first, and every published version carries provenance naming the commit and the run. The residual risk is stated in
 # docs/RELEASING.md rather than papered over: anything that can push a tag to this repository can publish.
 
 on:
@@ -45,8 +45,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # **A pushed tag reuses a green dry run of its exact tree.** The dry run on the pull request's head already ran every
+  # verify leg, and the tag names the merge commit, whose tree is the same when `main` had not moved. Git names a tree by
+  # the hash of every file in it, this workflow included, so that run checked these files with these legs; running them
+  # again took about 80 minutes and found nothing new. `scripts/release-ci.mjs verified` names the run, or none, and then
+  # the legs run as before: no match, an API error and a dispatched run (a dry run itself) all verify. The other jobs
+  # below are minutes, and always run.
+  verified:
+    name: a green dry run of this exact tree
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # to list this workflow's dry runs and read their commits
+    outputs:
+      run: ${{ steps.lookup.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+      - id: lookup
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-ci.mjs verified "$GITHUB_SHA"
+
   verify:
     name: verify (${{ matrix.os }}, node ${{ matrix.node }})
+    needs: verified
+    if: needs.verified.outputs.run == ''
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -163,8 +192,13 @@ jobs:
 
   publish:
     name: publish to npm
-    needs: [verify, old-node, browser, laya]
-    if: ${{ inputs.dry-run != true }}
+    needs: [verified, verify, old-node, browser, laya]
+    # Every leg passed, or none ran because a green dry run of this exact tree had (the `verified` job above); and every
+    # other job passed. `!cancelled()` lets it start after the skipped legs, which a bare `needs` would not.
+    if: >-
+      ${{ !cancelled() && inputs.dry-run != true && needs.verified.result == 'success'
+      && needs.old-node.result == 'success' && needs.browser.result == 'success' && needs.laya.result == 'success'
+      && (needs.verify.result == 'success' || (needs.verify.result == 'skipped' && needs.verified.outputs.run != '')) }}
     # Accepts `v*` tags only. It is also one of the claims each package's trusted publisher names, so renaming it
     # fails the OIDC preflight below for every package.
     environment: release
@@ -333,7 +367,9 @@ jobs:
   github-release:
     name: GitHub release
     needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Asked of the publish itself: when the verify legs were skipped for a green dry run, a bare condition would skip
+    # this job too, as GitHub skips a job below any skipped one, and the packages would go out with no release page.
+    if: ${{ !cancelled() && needs.publish.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       # To create the release, and nothing else. The publish job keeps `contents: read`.

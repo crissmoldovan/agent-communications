@@ -134,11 +134,22 @@ pnpm build && pnpm run licenses # third-party notices, read from what each bundl
 pnpm release                # every check, then stops before sending anything
 
 # 5. Tag, and push the tag. This publishes: once the six verify legs and the OIDC preflight pass, the packages go
-#    out, and nothing asks first.
+#    out, and nothing asks first. The legs do not run again for a tag whose tree a green dry run already verified.
 git tag vX.Y.Z && git push origin vX.Y.Z
 
-# 6. Watch it. Six verify legs, the OIDC preflight, the publish, the registry check, then the GitHub release.
+# 6. Watch it. The verify legs (or the green dry run they reuse), the OIDC preflight, the publish, the registry check,
+#    then the GitHub release.
 ```
+
+**A tag reuses a green dry run of its exact tree.** The pull request's dry run (`gh workflow run release.yml --ref
+<branch> -f dry-run=true`) runs every verify leg on its head. When the pull request is merged with nothing else on
+`main` since, the merge commit has that same tree, and Git names a tree by the hash of every file in it, the workflow
+included. So the tag's run asks, in its `verified` job, for a successful dispatched run of `release.yml` whose head
+commit has the tagged commit's tree (`scripts/release-ci.mjs verified`), and when it finds one it skips the six legs,
+which took about 80 minutes to find nothing new. The Node 22.12.0 leg, the browser job and the Laya gate are minutes,
+and run every time. Anything less than a match runs the legs as before: no such run, a failed or cancelled one, one of
+another tree, a run started by a push, or an API that cannot be asked. The run names the dry run it reused, with its
+link. If `main` moved before the merge, the merge commit's tree is new, and its legs run.
 
 **The tag now comes before the publish, because it is what starts it** — the reverse of the local flow, where the
 tag recorded something already done. A tag whose run has finished without publishing anything names a release that
