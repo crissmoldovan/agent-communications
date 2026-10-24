@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { AppSettings, FolderOverrides, Folders, UpdaterState } from '../ipc.ts';
+import { LOGIN_ITEM_UNKNOWN } from '../screens/Settings.tsx';
 import { createFakeBridge, EXAMPLE_FOLDERS, EXAMPLE_INSTALLATION } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 
@@ -141,6 +142,20 @@ describe('Settings', () => {
     expect(await screen.findByText("Starting at login isn't offered here.")).toBeTruthy();
     const off = screen.getByRole('switch', { name: 'Start at login' });
     expect(off.getAttribute('aria-disabled') === 'true' || off.hasAttribute('data-disabled')).toBe(true);
+  });
+
+  it('when macOS does not answer about the login item, Settings still open and say so, with the switch off and disabled', async () => {
+    // On 2026-10-24 a Mac whose login-items service had stopped answering froze the whole window on opening Settings.
+    const silent = createFakeBridge({
+      getSettings: async () => settings({}, EXAMPLE_FOLDERS, { loginItem: null }),
+    });
+    renderApp(silent, { screen: 'settings' });
+    expect(await screen.findByText(LOGIN_ITEM_UNKNOWN)).toBeTruthy();
+    const login = screen.getByRole('switch', { name: 'Start at login' });
+    expect(login.getAttribute('aria-checked')).toBe('false');
+    expect(login.getAttribute('aria-disabled') === 'true' || login.hasAttribute('data-disabled')).toBe(true);
+    // The rest of Settings is there as usual.
+    expect(region('Folders')).toBeTruthy();
   });
 
   it('the updater checks when asked, and installs only an update that is available', async () => {

@@ -69,6 +69,10 @@ function draftsOf(overrides: FolderOverrides): Drafts {
   };
 }
 
+/** What Settings say when macOS did not answer whether the app starts at login (`loginItem` null). */
+export const LOGIN_ITEM_UNKNOWN =
+  "macOS isn't answering whether Agent Comms starts at login: its login-items service is not responding. Restarting the Mac usually brings it back.";
+
 /** Start at login: a switch that takes effect at once, through the app (`set_login_item`). */
 function LoginItem({ settings, onChange }: { settings: AppSettings; onChange: (next: AppSettings) => void }) {
   const bridge = useBridge();
@@ -89,11 +93,14 @@ function LoginItem({ settings, onChange }: { settings: AppSettings; onChange: (n
     <>
       <Switch
         label="Start at login"
-        checked={settings.loginItem}
-        disabled={!settings.loginItemAvailable || busy}
+        checked={settings.loginItem === true}
+        disabled={!settings.loginItemAvailable || settings.loginItem === null || busy}
         onCheckedChange={(on) => void toggle(on)}
       />
       {settings.loginItemAvailable ? null : <p className="text-fg-muted">Starting at login isn't offered here.</p>}
+      {settings.loginItemAvailable && settings.loginItem === null ? (
+        <p className="text-fg-muted">{LOGIN_ITEM_UNKNOWN}</p>
+      ) : null}
       {problem === null ? null : (
         <p role="alert" className="text-danger">
           <UntrustedText text={problem} />

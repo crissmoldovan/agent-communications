@@ -208,7 +208,8 @@ pub struct AppSettings {
     pub launcher: String,
     /// Why the app would not run it — it is not there, or `check_launcher` refuses it — or none.
     pub launcher_problem: Option<String>,
-    pub login_item: bool,
+    /// Whether the app starts at login, or none when the system did not answer in time (`login_item`).
+    pub login_item: Option<bool>,
     pub login_item_available: bool,
 }
 
@@ -343,20 +344,20 @@ mod tests {
             data_dir: "/d".into(),
             secrets_dir: "/x".into(),
         };
+        let settings = |login_item| AppSettings {
+            folders: FolderOverrides {
+                config_dir: Some("/c".into()),
+                state_dir: None,
+                data_dir: None,
+            },
+            resolved: folders.clone(),
+            launcher: "/d/launch/core".into(),
+            launcher_problem: Some("there is no launcher here".into()),
+            login_item,
+            login_item_available: true,
+        };
         assert_eq!(
-            serde_json::to_value(AppSettings {
-                folders: FolderOverrides {
-                    config_dir: Some("/c".into()),
-                    state_dir: None,
-                    data_dir: None
-                },
-                resolved: folders.clone(),
-                launcher: "/d/launch/core".into(),
-                launcher_problem: Some("there is no launcher here".into()),
-                login_item: false,
-                login_item_available: true,
-            })
-            .expect("json"),
+            serde_json::to_value(settings(Some(false))).expect("json"),
             json!({
                 "folders": { "configDir": "/c", "stateDir": null, "dataDir": null },
                 "resolved": { "configDir": "/c", "stateDir": "/s", "dataDir": "/d", "secretsDir": "/x" },
@@ -365,6 +366,11 @@ mod tests {
                 "loginItem": false,
                 "loginItemAvailable": true
             })
+        );
+        // The system did not answer in time: the window is told so, not told "off".
+        assert_eq!(
+            serde_json::to_value(settings(None)).expect("json")["loginItem"],
+            serde_json::Value::Null
         );
         assert_eq!(
             serde_json::to_value(Installation {
