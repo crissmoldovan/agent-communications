@@ -32,3 +32,18 @@ test('pnpm test runs the root suite and then every package suite, without stoppi
   assert.match(runner, /\nsuites\.push\(\{\n {2}name: "the packages' suites",/);
   assert.match(runner, /process\.exit\(failed\.length === 0 \? 0 : 1\)/, 'a failure anywhere still fails the run');
 });
+
+test('off CI, every suite of a run keeps its temporary folders in one folder of its own, removed at the end', async () => {
+  const runner = await readFile(join(ROOT, 'scripts', 'run-tests.mjs'), 'utf8');
+  // Short on POSIX, under /tmp, so a Unix socket below it has more room than under macOS's per-user folder.
+  assert.match(runner, /mkdtempSync\(join\(process\.platform === 'win32' \? tmpdir\(\) : '\/tmp', 'ac-tests-'\)\)/);
+  assert.match(runner, /const scratch = process\.env\.CI\n\s+\? undefined/, 'a CI runner keeps its own');
+  assert.match(runner, /\{ \.\.\.process\.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch \}/);
+  // Both suites get it.
+  assert.equal(
+    runner.match(/\{ cwd: ROOT, env, stdio: 'inherit'/g)?.length,
+    4,
+    'the root suite, and pnpm each of three ways',
+  );
+  assert.match(runner, /rmSync\(scratch, \{ recursive: true, force: true, maxRetries: 10, retryDelay: 200 \}\)/);
+});

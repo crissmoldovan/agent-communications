@@ -9,18 +9,31 @@
  *
  * pnpm is run as it ran this script: `npm_execpath`, through this Node when it is a script, and by name otherwise
  * (through the shell on Windows, where it is a `.cmd`).
+ *
+ * **Off CI, every suite's temporary folders go in one folder made for this run, removed at its end.** Tests that make
+ * theirs with a bare `mkdtemp` and never remove it had left 358,889 folders in one Mac's temp folder by 2026-10-23
+ * (`test/helpers/temp-dir.mjs` says the same of an earlier 1.3 million). `TMPDIR`, `TMP` and `TEMP` name
+ * `/tmp/ac-tests-XXXXXX` (`%TEMP%\ac-tests-XXXXXX` on Windows), shorter than macOS's own per-user folder, so a Unix
+ * socket path below it has more room, not less. A CI runner is thrown away after each job, so CI keeps its own.
  */
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const scratch = process.env.CI
+  ? undefined
+  : mkdtempSync(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'ac-tests-'));
+const env = scratch === undefined ? process.env : { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
 
 function pnpm(args) {
   const execPath = process.env.npm_execpath ?? '';
   if (/\.[cm]?js$/u.test(execPath))
-    return spawnSync(process.execPath, [execPath, ...args], { cwd: ROOT, stdio: 'inherit' });
-  if (execPath && /pnpm/iu.test(execPath)) return spawnSync(execPath, args, { cwd: ROOT, stdio: 'inherit' });
-  return spawnSync('pnpm', args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
+    return spawnSync(process.execPath, [execPath, ...args], { cwd: ROOT, env, stdio: 'inherit' });
+  if (execPath && /pnpm/iu.test(execPath)) return spawnSync(execPath, args, { cwd: ROOT, env, stdio: 'inherit' });
+  return spawnSync('pnpm', args, { cwd: ROOT, env, stdio: 'inherit', shell: process.platform === 'win32' });
 }
 
 const suites = [
@@ -29,7 +42,7 @@ const suites = [
     result: spawnSync(
       process.execPath,
       ['--import', './test/helpers/loopback-seal-preload.mjs', '--test', 'test/**/*.test.mjs'],
-      { cwd: ROOT, stdio: 'inherit' },
+      { cwd: ROOT, env, stdio: 'inherit' },
     ),
   },
 ];
@@ -42,5 +55,12 @@ const failed = suites.filter(({ result }) => result.status !== 0);
 for (const { name, result } of failed) {
   const why = result.error ? result.error.message : `exit ${result.status ?? result.signal}`;
   console.error(`::error::${name} failed (${why}); every suite still ran, so the output above has each failure`);
+}
+if (scratch !== undefined) {
+  try {
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (error) {
+    console.error(`::warning::could not remove this run's temporary folder ${scratch}: ${error?.message ?? error}`);
+  }
 }
 process.exit(failed.length === 0 ? 0 : 1);
