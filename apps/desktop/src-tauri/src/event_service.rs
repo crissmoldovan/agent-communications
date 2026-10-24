@@ -1158,10 +1158,13 @@ impl Supervisor {
                             .unwrap_or("the version installed")
                     ),
                 );
-                self.stop(ctx);
-                self.record = forget(&self.record);
-                self.restarting = true;
-                self.start(ctx, observed, now);
+                // Started over only once the old one has let go of the database; otherwise its PID stays recorded,
+                // and the next look tries again.
+                if self.stop(ctx) {
+                    self.record = forget(&self.record);
+                    self.restarting = true;
+                    self.start(ctx, observed, now);
+                }
             }
             Action::Restart { after } => {
                 self.note(
@@ -1266,28 +1269,36 @@ impl Supervisor {
 
     /// Stops the running service through the events CLI's `stop`, and waits for it to go. Only when that does not stop it
     /// is the recorded PID sent SIGTERM, and only once it is checked to be `events-daemon run` (Review Focus 3).
-    fn stop(&mut self, ctx: &RunContext) {
+    /// Whether it went.
+    fn stop(&mut self, ctx: &RunContext) -> bool {
+        let asked_at = SystemTime::now();
         let asked = matches!(
             run(&Call::EventsStop {}, ctx),
             CliResult::Ok { exit: 0, .. }
         );
-        if !(asked && self.wait_gone(ctx, STOP_WAIT)) && self.terminate() {
-            self.wait_gone(ctx, STOP_WAIT);
+        let mut gone = asked && self.wait_gone(ctx, STOP_WAIT, asked_at);
+        if !gone && self.terminate() {
+            gone = self.wait_gone(ctx, STOP_WAIT, asked_at);
         }
         if let Some(mut child) = self.child.take() {
             let _ = child.try_wait();
         }
         self.owner_now(ctx);
+        gone
     }
 
-    /// Waits, at most `limit`, for the service to go: the app's own process to end, or, for an adopted one, `status` to
-    /// say it no longer runs.
-    fn wait_gone(&mut self, ctx: &RunContext, limit: Duration) -> bool {
+    /// Waits, at most `limit`, for the service to let go of the database: the app's own process to end; an adopted
+    /// one's PID to go, when it is known, or else `status` to say it no longer runs and its marker, newer than the stop
+    /// request at `asked_at`, to be there. Its socket closes before it lets go and writes its marker (Task 1), so `status`
+    /// alone says it has gone too soon.
+    fn wait_gone(&mut self, ctx: &RunContext, limit: Duration, asked_at: SystemTime) -> bool {
         let deadline = Instant::now() + limit;
         loop {
             let gone = match self.process() {
                 Process::Alive => false,
-                Process::NoneRecorded => self.owner_now(ctx) != Owner::Running,
+                Process::NoneRecorded => {
+                    self.owner_now(ctx) != Owner::Running && self.marked_since(ctx, asked_at)
+                }
                 Process::Exited(_) | Process::Gone => true,
             };
             if gone {
@@ -1298,6 +1309,15 @@ impl Supervisor {
             }
             thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// Whether a clean-stop marker newer than `asked_at` is there: for the recorded PID, or any when there is none.
+    fn marked_since(&self, ctx: &RunContext, asked_at: SystemTime) -> bool {
+        let since = parse_iso(&iso(asked_at)).unwrap_or(asked_at);
+        read_marker(&events_dir(&ctx.folders)).is_some_and(|marker| {
+            self.record.pid.is_none_or(|pid| marker.pid == pid)
+                && parse_iso(&marker.at).is_some_and(|at| at >= since)
+        })
     }
 
     /// SIGTERM to the recorded PID, only for a service the app started, and only while it is `events-daemon run`;
@@ -1424,7 +1444,8 @@ impl Supervisor {
         self.set_wanted(ctx, true, now);
     }
 
-    /// Restart to use it (D5): whatever runs is stopped, then the app starts the version installed now, as its own.
+    /// Restart to use it (D5): whatever runs is stopped, and once it has let go of the database (`wait_gone`) the app
+    /// starts the version installed now, as its own.
     pub fn restart(&mut self, ctx: &RunContext, now: SystemTime) {
         self.restart_due = None;
         self.first_start_question = false;
@@ -1432,8 +1453,12 @@ impl Supervisor {
         self.record.first_start_answered = true;
         self.record.recent_failures.clear();
         let observed = self.observe(ctx);
-        if observed.owner == Owner::Running || observed.process == Process::Alive {
-            self.stop(ctx);
+        let running = observed.owner == Owner::Running || observed.process == Process::Alive;
+        if running && !self.stop(ctx) {
+            // Still holding the database: nothing is started over it, which it would refuse, as a crash. The watchdog
+            // looks again.
+            self.save();
+            return;
         }
         self.child = None;
         self.record = forget(&self.record);
@@ -3026,7 +3051,9 @@ case $1 in
   run)
     printf '%s\n' "$@" > "$here/run-argv"
     if [ -f "$here/crash" ]; then printf 'the runtime could not start: boom\n' >&2; exit 1; fi
-    if [ -f "$here/refuse" ]; then printf 'another local event service owner is already running\n' >&2; exit 78; fi
+    if [ -f "$here/refuse" ] || [ -f "$here/lock" ]; then
+      printf 'another local event service owner is already running\n' >&2; exit 78
+    fi
     state=
     previous=
     for word in "$@"; do
@@ -3367,6 +3394,79 @@ exit 64
         fake.unmark("running");
         fake.finish(&mut supervisor);
         fake.finish(&mut unknown);
+    }
+
+    /// Restart to use it, on a service a terminal started: the app starts its own only once the old owner has let go.
+    /// Its socket closes first, so `status` says it is not running while it still holds the database (Task 1): the app
+    /// waits for its PID to go, when it knows it, or for its marker, newer than the stop request, when it does not.
+    #[cfg(unix)]
+    #[test]
+    fn restart_to_use_it_waits_for_the_old_owner_to_let_go() {
+        use std::os::unix::fs::PermissionsExt;
+        // An owner a terminal started: it holds the lock; asked to stop, it closes its socket at once, lets go of the
+        // lock half a second later, writes its marker, and ends half a second after that.
+        const OWNER: &str = r#"#!/bin/sh
+: > "$FAKE_HERE/lock"
+: > "$FAKE_HERE/running"
+while [ ! -f "$FAKE_HERE/stop" ]; do sleep 0.1; done
+rm -f "$FAKE_HERE/stop" "$FAKE_HERE/running"
+sleep 0.5
+rm -f "$FAKE_HERE/lock"
+mkdir -p "$FAKE_STATE/events"
+printf '{"version":1,"pid":%s,"at":"%s","reason":"request"}\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" \
+  > "$FAKE_STATE/events/last-stop.json"
+sleep 0.5
+exit 0
+"#;
+        for (name, known) in [
+            // As the launcher starts it: its PID is found, and waited for.
+            (
+                "runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+                true,
+            ),
+            // As a global install starts it: its command line names no events-daemon, so only its marker tells.
+            ("bin/agent-events", false),
+        ] {
+            let fake = Fake::new();
+            let path = fake.dir.path().join(name);
+            fs::create_dir_all(path.parent().expect("a folder")).expect("its folder");
+            fs::write(&path, OWNER).expect("an owner");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("runnable");
+            let mut old = std::process::Command::new(&path)
+                .args(["run", "--state-dir", &fake.ctx.folders.state_dir])
+                .env("FAKE_HERE", fake.dir.path().join("launch"))
+                .env("FAKE_STATE", &fake.ctx.folders.state_dir)
+                .spawn()
+                .expect("started");
+            eventually("it holds the database", || {
+                fake.has("lock") && fake.has("running")
+            });
+            let mut supervisor = fake.supervisor(ServiceRecord::default());
+            supervisor.tick(&fake.ctx, SystemTime::now());
+            assert!(!supervisor.record().started_by_app, "{name}");
+            assert_eq!(supervisor.record().pid.is_some(), known, "{name}");
+            supervisor.restart(&fake.ctx, SystemTime::now());
+            assert!(
+                supervisor.record().started_by_app,
+                "{name}: the app's own now"
+            );
+            assert!(
+                supervisor.record().recent_failures.is_empty(),
+                "{name}: its start was not refused"
+            );
+            eventually("the new one runs", || fake.has("running"));
+            assert_eq!(supervisor.state(&fake.ctx).restarts, 1, "{name}");
+            if known {
+                assert!(
+                    old.try_wait().expect("asked").is_some(),
+                    "{name}: the old one ended first"
+                );
+            }
+            let _ = old.kill();
+            let _ = old.wait();
+            supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+            fake.finish(&mut supervisor);
+        }
     }
 
     #[cfg(unix)]
