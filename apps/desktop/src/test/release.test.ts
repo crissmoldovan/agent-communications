@@ -201,7 +201,7 @@ describe('the desktop workflows', () => {
     expect(attach).toMatch(/needs: \[check-tag, draft, bundle\]/);
     expect(block(attach, 'permissions', 4)).toBe('    permissions:\n      contents: write');
     expect(attach).not.toMatch(/actions\/checkout|pnpm|node |npm |cargo|tauri/);
-    expect(attach).toMatch(/uses: actions\/download-artifact@[0-9a-f]{40} # v7/);
+    expect(attach).toMatch(/uses: actions\/download-artifact@[0-9a-f]{40} # v8(?:\.\d+){0,2}\n/);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow and shell text, not a template
     const upload = attach.indexOf('gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber');
     expect(upload).toBeGreaterThan(attach.indexOf(isDraft));

@@ -89,7 +89,7 @@ jobs:
           --run-copy "$RUNNER_TEMP/laya-quality-run.json"
       - name: keep the two content-free results for the owner
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: laya-gate-results
           path: |
@@ -99,7 +99,7 @@ jobs:
           retention-days: 7
       - name: this run's own copy of its quality result, unzipped, for the release to check
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           path: ${{ runner.temp }}/laya-quality-run.json
           archive: false
@@ -107,7 +107,7 @@ jobs:
           retention-days: 90
       - name: this run's own copy of its boundary result, unzipped, for the release to check
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           path: ${{ runner.temp }}/laya-boundary-run.json
           archive: false
