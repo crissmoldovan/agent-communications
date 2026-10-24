@@ -243,10 +243,111 @@ pub enum UpdaterStatus {
     Error,
 }
 
+/// Where the event service the app runs stands (0.27.0 D2, D4, D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EventServiceStatus {
+    /// It does not run here: Windows (B1-G).
+    Unavailable,
+    Stopped,
+    /// Started, or about to be restarted, and not answering yet.
+    Starting,
+    Running,
+    /// It stopped 5 times in 10 minutes, so the app stopped restarting it.
+    GaveUp,
+}
+
+/// The event service as the app runs it, from its supervisor (`event_service`): returned by its commands and carried
+/// by `event-service:changed`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventServiceState {
+    /// False on Windows.
+    pub available: bool,
+    /// The switch.
+    pub wanted: bool,
+    pub status: EventServiceStatus,
+    /// `"app"` or `"terminal"`, while it runs.
+    pub started_by: Option<String>,
+    /// When the running one was started, or adopted (ISO 8601).
+    pub since: Option<String>,
+    /// The running one's version, from the launcher's `.current` when it was started.
+    pub version: Option<String>,
+    /// The version installed now, when it differs from the running one's (D5).
+    pub newer_version: Option<String>,
+    pub restarts: u32,
+    pub last_restart_at: Option<String>,
+    /// When a clean stop the app did not ask for turned the switch off (D4).
+    pub stopped_from_outside_at: Option<String>,
+    /// The last 20 lines of `service.log`, only when it gave up.
+    pub log_tail: Vec<String>,
+    /// Whether the first start waits for the person's answer (P1).
+    pub first_start_question: bool,
+    /// `"granted"`, `"missing"` or `"not-needed"` (D6).
+    pub full_disk_access: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::allowlist::ID;
+
+    #[test]
+    fn the_event_service_state_crosses_in_camel_case() {
+        let state = EventServiceState {
+            available: true,
+            wanted: true,
+            status: EventServiceStatus::GaveUp,
+            started_by: Some("app".into()),
+            since: Some("2026-10-25T11:00:00.000Z".into()),
+            version: Some("0.26.2".into()),
+            newer_version: Some("0.27.0".into()),
+            restarts: 4,
+            last_restart_at: Some("2026-10-25T11:58:00.000Z".into()),
+            stopped_from_outside_at: None,
+            log_tail: vec!["the runtime could not start".into()],
+            first_start_question: false,
+            full_disk_access: "not-needed".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(state).expect("json"),
+            json!({
+                "available": true,
+                "wanted": true,
+                "status": "gaveUp",
+                "startedBy": "app",
+                "since": "2026-10-25T11:00:00.000Z",
+                "version": "0.26.2",
+                "newerVersion": "0.27.0",
+                "restarts": 4,
+                "lastRestartAt": "2026-10-25T11:58:00.000Z",
+                "stoppedFromOutsideAt": null,
+                "logTail": ["the runtime could not start"],
+                "firstStartQuestion": false,
+                "fullDiskAccess": "not-needed"
+            })
+        );
+        let statuses: Vec<serde_json::Value> = [
+            EventServiceStatus::Unavailable,
+            EventServiceStatus::Stopped,
+            EventServiceStatus::Starting,
+            EventServiceStatus::Running,
+            EventServiceStatus::GaveUp,
+        ]
+        .into_iter()
+        .map(|status| serde_json::to_value(status).expect("json"))
+        .collect();
+        assert_eq!(
+            statuses,
+            [
+                json!("unavailable"),
+                json!("stopped"),
+                json!("starting"),
+                json!("running"),
+                json!("gaveUp")
+            ]
+        );
+    }
     use serde_json::json;
 
     #[test]

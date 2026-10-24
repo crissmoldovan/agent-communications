@@ -1,7 +1,9 @@
 //! The main window: Supbuddy's shell (desktop design DA2), with nothing loaded but the app itself.
 
+use crate::event_service::{self, QuitRoute};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::menu::MenuEvent;
 use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -65,22 +67,57 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// The app's own events: any exit (Quit, Cmd+Q, an update's restart) marks the app as quitting, so a close it causes is
-/// not turned into a hide; on macOS, clicking the Dock icon shows the window again.
+/// The app's own events. An exit the app did not start itself (`QUITTING` not set) is held while Quit asks about the
+/// event service, or stops it first (P3); any other marks the app as quitting, so a close it causes is not turned into a
+/// hide. On macOS, clicking the Dock icon shows the window again.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 pub fn on_run_event(app: &AppHandle, event: RunEvent) {
     match event {
-        RunEvent::ExitRequested { .. } => QUITTING.store(true, Ordering::SeqCst),
+        RunEvent::ExitRequested { api, .. } => {
+            if QUITTING.load(Ordering::SeqCst) {
+                return;
+            }
+            match event_service::on_quit(app) {
+                QuitRoute::Quit => QUITTING.store(true, Ordering::SeqCst),
+                QuitRoute::Ask | QuitRoute::StopThenQuit => api.prevent_exit(),
+            }
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => show(app),
         _ => {}
     }
 }
 
-/// The macOS menu bar: Tauri's default, whose Quit (Cmd+Q) quits and whose Close Window hides to the tray.
+/// The app menu's own Quit item. macOS's predefined Quit sends `terminate:`, which ends the app without an exit
+/// request anyone can hold, so Cmd+Q is this item instead, and asks about the event service first (P3).
+pub const QUIT_ITEM: &str = "app-quit";
+pub const QUIT_LABEL: &str = "Quit Agent Comms";
+pub const QUIT_KEYS: &str = "CmdOrCtrl+Q";
+
+/// The macOS menu bar: Tauri's default, whose Close Window hides to the tray, with its Quit (Cmd+Q) the app's own.
 #[cfg(target_os = "macos")]
 pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    tauri::menu::Menu::default(app)
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(first)) = menu.items()?.into_iter().next() {
+        let quit = first.items()?.iter().position(|item| {
+            matches!(item, MenuItemKind::Predefined(predefined)
+                if predefined.text().is_ok_and(|text| text.starts_with("Quit")))
+        });
+        if let Some(at) = quit {
+            first.remove_at(at)?;
+            let own = MenuItem::with_id(app, QUIT_ITEM, QUIT_LABEL, true, Some(QUIT_KEYS))?;
+            first.insert(&own, at)?;
+        }
+    }
+    Ok(menu)
+}
+
+/// The app menu's events: its Quit asks first, as the tray's does.
+pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
+    if event.id().as_ref() == QUIT_ITEM && event_service::on_quit(app) == QuitRoute::Quit {
+        event_service::quit(app);
+    }
 }
 
 /// Builds the main window: 1200×800, never smaller than 900×600, its title bar over the app's header on macOS.
@@ -164,6 +201,30 @@ mod tests {
         assert_eq!(on_close(true), CloseAction::Close);
         // The app starts not quitting, so the first close hides.
         assert!(!QUITTING.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// Cmd+Q is the app's own item, and an exit the app did not start goes through the event service's question
+    /// (P3): never Tauri's predefined Quit, which nothing can hold.
+    #[test]
+    fn cmd_q_and_an_unasked_exit_ask_about_the_event_service_first() {
+        assert_eq!(QUIT_ITEM, "app-quit");
+        assert_ne!(QUIT_ITEM, crate::tray::TrayAction::Quit.id());
+        assert_eq!(QUIT_LABEL, "Quit Agent Comms");
+        assert_eq!(QUIT_KEYS, "CmdOrCtrl+Q");
+        let source = include_str!("window.rs");
+        let code = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        let exit = &code[code
+            .find("RunEvent::ExitRequested { api, .. } => {")
+            .expect("the exit arm")..];
+        let exit = &exit[..exit.find("#[cfg(target_os").expect("its end")];
+        assert!(
+            exit.contains("if QUITTING.load(Ordering::SeqCst)"),
+            "{exit}"
+        );
+        assert!(exit.contains("event_service::on_quit(app)"), "{exit}");
+        assert!(exit.contains("api.prevent_exit()"), "{exit}");
+        let lib = include_str!("lib.rs");
+        assert!(lib.contains(".on_menu_event(window::on_menu_event)"));
     }
 
     #[test]
