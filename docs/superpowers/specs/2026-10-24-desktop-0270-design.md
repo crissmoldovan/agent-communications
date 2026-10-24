@@ -316,3 +316,9 @@ packages, and `motion-reduce` on colour transitions.
 plus the matching `cue-ui-NN` reports in cue-ui's `docs/feature-requests`.
 
 **The mockup the owner approved for the look:** https://claude.ai/artifact/7Z14fMx8Cp3fPfjtxDDJKj
+
+**A sixth ask, a theme of its own** (the owner, 2026-10-25: "I really like the generic look and feel… we may want to
+have this one as a dedicated new theme"):
+- a new cue-ui theme preset, like `quotamate`, built from the mockup's colours, type, radii and soft shadows;
+- the values are listed in CUE-571, item 6;
+- 0.28.0 uses that preset.
