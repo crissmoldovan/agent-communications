@@ -286,3 +286,33 @@ one screen?
 
 **The owner (2026-10-25): "Build it all, then show me."** All eight screens are reworked straight through. The owner
 sees the finished app, with screenshots in dark and light, before 0.27.0 is tagged.
+
+## 8. Split into two releases (the owner, 2026-10-25)
+
+Checked against `@cueplusplus/ui` 0.29.0, the installed package and the cue-ui repository at `05e80433`. The mockup's
+look needs five things cue-ui does not have.
+
+1. **A label typeface separate from the code face.** About twenty components set labels in `font-mono` directly: the
+   sidebar, tabs ("mono labels"), chips, description lists, title and app bars, items, pagination, empty states. Only
+   page titles route through `--cue-style-display-face`.
+2. **A soft panel.** `Panel` is "one hairline rim, one raised surface, one radius", with a ruled `PanelHeader`. The
+   `quotamate` theme (1.1.2) softens the rim colour but keeps it. QuotaMate's soft panels are its menu-bar app's own
+   CSS.
+3. **Gliding highlights.** Tabs draw an accent underline, with no `Tabs.Indicator` wrapped. `SegmentedControl` tints
+   the active segment. `Sidebar.Item` marks `active` statically.
+4. **Swipeable tabs** that slide their panels in from the side they came from. `layout/carousel` (Embla) exists, but
+   nothing joins it to `Tabs`.
+5. **Motion tokens:** durations and easings. Components transition colours only.
+
+Present already: `Switch`, `Row` with `interactive` hover, `surface-1` to `surface-3`, the radius tokens, the theme
+packages, and `motion-reduce` on colour transitions.
+
+**The owner chose to split the release:**
+- **0.27.0** ships D1 (the updater) and D2, D4, D5, D6, D8 and D9 (the event service run by the app), on today's
+  look.
+- **0.28.0** ships the redesign (D3, D7, D10), built once cue-ui has the five pieces.
+
+**The five pieces are requested from cue-ui** as one Linear issue (Cueplusplus team, project agent-communications),
+plus the matching `cue-ui-NN` reports in cue-ui's `docs/feature-requests`.
+
+**The mockup the owner approved for the look:** https://claude.ai/artifact/7Z14fMx8Cp3fPfjtxDDJKj
