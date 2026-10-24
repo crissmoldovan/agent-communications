@@ -2387,6 +2387,18 @@ A normal available update does not stop the daemon. A required update pauses pol
 `disclosing` I/O may finish and everything else waits. The global pause stops polling, judge calls and delivery
 claims; it does not erase state.
 
+**Note, 2026-10-25 (0.27.0; desktop design 2026-10-24, D2, D4, D5 and D9).** The desktop app now runs the daemon:
+- It starts `agent-events run` itself, detached, through its launcher.
+- It keeps the daemon running when the app quits, unless the person chooses **Stop it**, and starts it at login with
+  the app.
+- It restarts a daemon it started after a crash, but never after a clean stop. A clean stop writes `last-stop.json`
+  beside the database, so it can be told from a crash.
+- It moves a daemon it started onto a newly installed version within a minute.
+
+For a daemon the desktop app runs, this replaces the two sentences above on quitting and on a normal update. A daemon
+started from a terminal keeps them. It is the first part of D15's "autostart/update recovery"; Appendix A is
+unchanged.
+
 The owner's **global switch** is separate from operational pause and is the `event_settings.enabled` row in D8.
 `agent-events disable-all`, its MCP peer and the app switch are one immediate tightening: a single SQLite transaction
 sets it false and increments `switchGeneration`; purges all source staging and ingest rows; marks every nonterminal
@@ -2820,6 +2832,10 @@ part: without a signing configuration it publishes only prereleases and refuses 
   which replaces `sandbox-exec` if Apple removes it and belongs with D14's signing work.
 - **OS service:** a future design must cover per-platform identity, owner-only state, autostart/update recovery and the
   human-only installation credentials or privileges each operating system requires.
+  - **Note, 2026-10-25 (0.27.0):** the desktop app now covers part of this without an OS service. It starts the
+    daemon at login with the app, restarts one it started after a crash, and moves it onto a new version (see the
+    note under D12). It installs no launchd, systemd or Windows service, and needs no privileges. An OS service of its
+    own is still this future design.
 
 ## 4. Phases
 

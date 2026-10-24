@@ -62,7 +62,9 @@ test('the local event service README states its boundaries for the person using 
   const readme = await readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8');
   const prose = readme.replace(/\s+/g, ' ');
   assert.match(prose, /foreground owner/i);
-  assert.match(prose, /no background service or autostart/i);
+  assert.match(prose, /no OS service of its own/i);
+  assert.match(prose, /the desktop app can run it for you/i);
+  assert.match(prose, /A clean stop writes `last-stop\.json`/i);
   assert.match(prose, /macOS or Linux/i);
   assert.match(prose, /Windows is refused/i);
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);

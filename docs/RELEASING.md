@@ -626,9 +626,15 @@ the release after that one, installed copies update themselves. `apps/desktop/sc
 decision: off with no pubkey; with one, the key must be there, mode 600, and its `.pub` the pubkey, or the release is
 refused before anything else is read or built.
 
+**The updater is on from `desktop-v0.27.0`.** The key was generated on the signing Mac on 2026-10-25, and its `.pub`
+is committed as `plugins.updater.pubkey`. So every release from 0.27.0 is built with updater artefacts and published
+with `latest.json`, and `--updater off` is refused. desktop-v0.27.0 is the one copy the owner installs by hand over an
+older one; from 0.27.1, installed copies find and install updates themselves. Losing the key, or its password, means
+every installed copy has to be replaced by hand again, so both are backed up outside the signing Mac.
+
 ### The owner's steps
 
-Once (steps 1 and 2 turn the updater on, and may wait until after the first signed release; see above):
+Once (steps 1 and 2 turn the updater on; they were done on 2026-10-25, for 0.27.0):
 
 1. Generate the updater key, and keep it readable by you alone:
 
@@ -678,8 +684,8 @@ Each release, after `vX.Y.Z` is out:
    apps/desktop/scripts/publish-desktop.sh desktop-vX.Y.Z
    ```
 
-   Or, by an agent the owner has asked to run them, with no terminal, the version confirmed on the command line (and
-   `--updater off` after it while the updater is off):
+   Or, by an agent the owner has asked to run them, with no terminal, the version confirmed on the command line (and,
+   before 0.27.0, `--updater off` after it while the updater was off):
 
    ```bash
    git checkout desktop-vX.Y.Z
