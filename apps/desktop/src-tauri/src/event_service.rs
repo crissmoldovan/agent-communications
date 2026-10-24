@@ -116,11 +116,22 @@ pub enum Process {
     Gone,
 }
 
-/// `<state>/events/last-stop.json`: the PID of an owner that stopped cleanly, and when (P2).
+/// `<state>/events/last-stop.json`: the PID of an owner that stopped cleanly, when, and why (P2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StopMarker {
     pub pid: u32,
     pub at: String,
+    pub reason: StopReason,
+}
+
+/// Why an owner stopped cleanly: a stop request through its control socket — `agent-events stop`, the events_stop
+/// tool, the app's own switch — is the person's; a signal — a logout, a shutdown, a kill — is not, and counts as a
+/// crash (the lead's call, amending D4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StopReason {
+    Request,
+    Signal,
 }
 
 /// What the watchdog saw.
@@ -154,7 +165,8 @@ pub enum Action {
 /// is off. Otherwise, by what became of the process the record names:
 /// - **alive:** nothing, unless it is the app's own, answering, and the launcher now names another version (D5);
 /// - **the app's child ended**, or **its recorded PID is gone:** another owner running is adopted (Review Focus 1); a
-///   clean stop — exit 0, or a marker for that PID newer than its start (P2) — turns the switch off (D4); anything else
+///   stop by request — a marker for that PID, newer than its start, with reason `request` (P2), and for the child an
+///   exit 0 too — turns the switch off (D4); anything else, a stop by signal (a logout, a shutdown, a kill) included,
 ///   is a crash, restarted after 1 s, 5 s, then 30 s, until the fifth within ten minutes gives up;
 /// - **none:** an adopted service that is no longer running turns the switch off, since it was never the app's (D4);
 ///   an owner running is adopted; after giving up, or with no launcher, nothing; a database from before with the
@@ -181,7 +193,9 @@ pub fn decide(record: &ServiceRecord, observed: &Observation, now: SystemTime) -
         Process::Exited(exit) => {
             if running {
                 Action::Adopt
-            } else if exit == ChildExit::Code(0) {
+            } else if exit == ChildExit::Code(0)
+                && stopped_by_request(record, observed.marker.as_ref())
+            {
                 Action::MarkStoppedFromOutside
             } else {
                 crashed(record, now)
@@ -190,7 +204,8 @@ pub fn decide(record: &ServiceRecord, observed: &Observation, now: SystemTime) -
         Process::Gone => {
             if running {
                 Action::Adopt
-            } else if !record.started_by_app || stopped_cleanly(record, observed.marker.as_ref()) {
+            } else if !record.started_by_app || stopped_by_request(record, observed.marker.as_ref())
+            {
                 Action::MarkStoppedFromOutside
             } else {
                 crashed(record, now)
@@ -227,8 +242,8 @@ fn differs(running: Option<&str>, installed: Option<&str>) -> bool {
     matches!((running, installed), (Some(running), Some(installed)) if running != installed)
 }
 
-/// Whether the marker says the app's service stopped cleanly: for its PID, and newer than its start (P2).
-fn stopped_cleanly(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
+/// Whether the marker is this service's: for its PID, and newer than its start (P2).
+fn marked(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
     let (Some(marker), Some(pid), Some(started)) = (
         marker,
         record.pid,
@@ -237,6 +252,11 @@ fn stopped_cleanly(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool 
         return false;
     };
     marker.pid == pid && parse_iso(&marker.at).is_some_and(|at| at > started)
+}
+
+/// Whether the person stopped the app's service: its marker says a stop by request. A stop by signal is a crash.
+fn stopped_by_request(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
+    marked(record, marker) && marker.is_some_and(|marker| marker.reason == StopReason::Request)
 }
 
 /// The failures the record keeps, as times; one it cannot read is dropped.
@@ -616,17 +636,23 @@ pub fn installed_version(folders: &Folders, platform: Platform) -> Option<String
     )?)
 }
 
-/// `last-stop.json` as Task 1 writes it, `{"version":1,"pid":…,"at":"<ISO>"}`; anything else is no marker.
+/// `last-stop.json` as Task 1 writes it, `{"version":1,"pid":…,"at":"<ISO>","reason":"request"|"signal"}`;
+/// anything else, a marker without its reason too, is no marker.
 pub fn parse_marker(text: &str) -> Option<StopMarker> {
     #[derive(Deserialize)]
     struct MarkerFile {
         version: u64,
         pid: u64,
         at: String,
+        reason: StopReason,
     }
     let file: MarkerFile = serde_json::from_str(text).ok()?;
     let pid = u32::try_from(file.pid).ok().filter(|pid| *pid > 0)?;
-    (file.version == 1 && parse_iso(&file.at).is_some()).then_some(StopMarker { pid, at: file.at })
+    (file.version == 1 && parse_iso(&file.at).is_some()).then_some(StopMarker {
+        pid,
+        at: file.at,
+        reason: file.reason,
+    })
 }
 
 /// The record kept in `dir`: the default — wanted, nothing known — when there is none, or the app cannot read it.
@@ -927,8 +953,8 @@ impl Supervisor {
     ///
     /// The service writes its marker after its control socket closes, so `status` can say it is not running while its
     /// process still is (Task 1). A recorded PID that is still `events-daemon run` is therefore alive, whatever
-    /// `status` says, and `decide` waits for it. Once it is gone with no marker for it yet, the marker is read once
-    /// more, after `MARKER_GRACE`, before it can count as a crash.
+    /// `status` says, and `decide` waits for it. Once it is gone, or the app's child has exited 0, with no marker for it
+    /// yet, the marker is read once more, after `MARKER_GRACE`, before it can count as a crash.
     fn observe(&mut self, ctx: &RunContext) -> Observation {
         let process = self.process();
         let owner = self.owner_now(ctx);
@@ -936,7 +962,8 @@ impl Supervisor {
         let installed_version = installed_version(&ctx.folders, ctx.platform);
         self.installed_version = installed_version.clone();
         let mut marker = read_marker(&events);
-        if process == Process::Gone && !stopped_cleanly(&self.record, marker.as_ref()) {
+        let ended = matches!(process, Process::Gone | Process::Exited(ChildExit::Code(0)));
+        if ended && self.record.started_by_app && !marked(&self.record, marker.as_ref()) {
             thread::sleep(MARKER_GRACE);
             marker = read_marker(&events);
         }
@@ -1777,7 +1804,15 @@ mod tests {
 
     #[test]
     fn child_exit_zero_is_stopped_from_outside_and_turns_the_switch_off() {
-        let stopped = seen(NotRunning, Process::Exited(ChildExit::Code(0)));
+        // A clean exit with its marker for a stop request: the person stopped it.
+        let stopped = Observation {
+            marker: Some(StopMarker {
+                pid: PID,
+                at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
+            }),
+            ..seen(NotRunning, Process::Exited(ChildExit::Code(0)))
+        };
         let action = decide(&app_started(), &stopped, now());
         assert_eq!(action, MarkStoppedFromOutside);
         let after = recorded(&app_started(), action, &stopped, now());
@@ -1791,6 +1826,79 @@ mod tests {
             decide(&after, &seen(NotRunning, Process::NoneRecorded), now()),
             Nothing
         );
+    }
+
+    /// A logout or a shutdown SIGTERMs the service, which stops cleanly and says so: that is not the person's stop, so
+    /// it is restarted, counted toward giving up, and the switch stays on. Only a stop by request turns it off — on the
+    /// child-exit path and the recorded-PID path alike — and a clean exit with no marker at all is a crash.
+    #[test]
+    fn a_stop_by_signal_is_a_crash_and_only_a_stop_by_request_turns_the_switch_off() {
+        let request = StopMarker {
+            pid: PID,
+            at: "2026-10-25T11:30:00.000Z".into(),
+            reason: StopReason::Request,
+        };
+        let signal = StopMarker {
+            reason: StopReason::Signal,
+            ..request.clone()
+        };
+        let first = Restart {
+            after: Duration::from_secs(1),
+        };
+        for process in [Process::Gone, Process::Exited(ChildExit::Code(0))] {
+            let with = |marker: Option<StopMarker>| Observation {
+                marker,
+                ..seen(NotRunning, process)
+            };
+            // Gone or exited, with a marker for a stop by request: stopped from outside.
+            let stopped = with(Some(request.clone()));
+            assert_eq!(
+                decide(&app_started(), &stopped, now()),
+                MarkStoppedFromOutside,
+                "{process:?}"
+            );
+            // With a marker for a stop by signal: a crash, restarted after its wait, the switch left on.
+            let signalled = with(Some(signal.clone()));
+            let action = decide(&app_started(), &signalled, now());
+            assert_eq!(action, first, "{process:?}");
+            let after = recorded(&app_started(), action, &signalled, now());
+            assert!(after.wanted, "{process:?}");
+            assert_eq!(after.recent_failures.len(), 1, "counted: {process:?}");
+            // With none: a crash.
+            assert_eq!(
+                decide(&app_started(), &with(None), now()),
+                first,
+                "{process:?}"
+            );
+            // Signalled five times in ten minutes: given up, like any crash.
+            let four = ServiceRecord {
+                recent_failures: failures(&[
+                    "2026-10-25T11:51:00.000Z",
+                    "2026-10-25T11:53:00.000Z",
+                    "2026-10-25T11:55:00.000Z",
+                    "2026-10-25T11:58:00.000Z",
+                ]),
+                ..app_started()
+            };
+            assert_eq!(decide(&four, &signalled, now()), GiveUp, "{process:?}");
+        }
+        // A stop by request for another PID, or from before this start, is no stop of this one.
+        for other in [
+            StopMarker {
+                pid: PID + 1,
+                ..request.clone()
+            },
+            StopMarker {
+                at: "2026-10-25T10:00:00.000Z".into(),
+                ..request.clone()
+            },
+        ] {
+            let exited = Observation {
+                marker: Some(other.clone()),
+                ..seen(NotRunning, Process::Exited(ChildExit::Code(0)))
+            };
+            assert_eq!(decide(&app_started(), &exited, now()), first, "{other:?}");
+        }
     }
 
     #[test]
@@ -1922,6 +2030,7 @@ mod tests {
         let stopped = gone(StopMarker {
             pid: PID,
             at: "2026-10-25T11:30:00.000Z".into(),
+            reason: StopReason::Request,
         });
         let action = decide(&app_started(), &stopped, now());
         assert_eq!(action, MarkStoppedFromOutside);
@@ -1931,18 +2040,22 @@ mod tests {
             StopMarker {
                 pid: PID,
                 at: "2026-10-25T10:59:59.999Z".into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID,
                 at: STARTED.into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID + 1,
                 at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID,
                 at: "not a time".into(),
+                reason: StopReason::Request,
             },
         ] {
             assert_eq!(
@@ -2005,6 +2118,7 @@ mod tests {
         let marker = StopMarker {
             pid: PID,
             at: "2026-10-25T11:59:59.000Z".into(),
+            reason: StopReason::Request,
         };
         let stopped = Observation {
             marker: Some(marker),
@@ -2453,10 +2567,13 @@ mod tests {
     #[test]
     fn the_clean_stop_marker_is_read_as_task_1_writes_it() {
         assert_eq!(
-            parse_marker("{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\"}\n"),
+            parse_marker(
+                "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"request\"}\n"
+            ),
             Some(StopMarker {
                 pid: 4242,
-                at: "2026-10-25T11:30:00.000Z".into()
+                at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
             })
         );
         for bad in [
@@ -2468,9 +2585,21 @@ mod tests {
             "{\"version\":1,\"pid\":\"4242\",\"at\":\"2026-10-25T11:30:00.000Z\"}",
             "{\"version\":1,\"pid\":4242,\"at\":\"yesterday\"}",
             "{\"version\":1,\"pid\":4242}",
+            // Its reason is required: there is no marker without one.
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\"}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"kill\"}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":1}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"Request\"}",
         ] {
             assert_eq!(parse_marker(bad), None, "{bad:?}");
         }
+        assert_eq!(
+            parse_marker(
+                "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"signal\"}"
+            )
+            .map(|marker| marker.reason),
+            Some(StopReason::Signal)
+        );
     }
 
     /// A stand-in for `<data>/launch/events-daemon`, in a temporary installation: `status` reads a file, `stop` asks
@@ -2493,11 +2622,25 @@ case $1 in
     printf '%s\n' "$@" > "$here/run-argv"
     if [ -f "$here/crash" ]; then printf 'the runtime could not start: boom\n' >&2; exit 1; fi
     if [ -f "$here/refuse" ]; then printf 'another local event service owner is already running\n' >&2; exit 78; fi
-    trap 'rm -f "$here/running"; exit 0' TERM
+    state=
+    previous=
+    for word in "$@"; do
+      [ "$previous" = "--state-dir" ] && state=$word
+      previous=$word
+    done
+    # The clean-stop marker, as the service writes it: to the second, which the tests allow for.
+    marker() {
+      mkdir -p "$state/events"
+      printf '{"version":1,"pid":%s,"at":"%s","reason":"%s"}\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$1" \
+        > "$state/events/last-stop.json.tmp"
+      mv "$state/events/last-stop.json.tmp" "$state/events/last-stop.json"
+    }
+    trap 'rm -f "$here/running"; marker signal; exit 0' TERM
     : > "$here/running"
     printf 'the service runs\n'
     while [ ! -f "$here/stop" ]; do sleep 0.1; done
     rm -f "$here/stop" "$here/running"
+    marker request
     exit 0 ;;
 esac
 exit 64
@@ -2642,6 +2785,54 @@ exit 64
         fake.unmark("run-argv");
         supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(!fake.has("run-argv"));
+        fake.finish(&mut supervisor);
+    }
+
+    /// The app's own service, stopped from outside: a SIGTERM — a logout — restarts it with the switch on; a stop
+    /// request at a terminal turns the switch off.
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_from_outside_restarts_the_service_and_a_stop_request_turns_the_switch_off() {
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        eventually("it runs", || fake.has("running"));
+        // The fake's marker is to the second: past the start's second, so it is newer than the start.
+        std::thread::sleep(Duration::from_millis(1100));
+        let pid = supervisor.record().pid.expect("started");
+        // SAFETY: kill takes a PID and a signal; the PID is this test's own child.
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
+        eventually("it stops", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(0)))
+        });
+        let signalled = SystemTime::now();
+        supervisor.tick(&fake.ctx, signalled);
+        assert!(
+            supervisor.record().wanted,
+            "a logout is not the person's stop"
+        );
+        assert_eq!(supervisor.record().recent_failures.len(), 1);
+        assert!(supervisor.restart_due.is_some());
+        assert_eq!(supervisor.state(&fake.ctx).stopped_from_outside_at, None);
+        // Its 1 s wait, waited for real: the record's start is then the real time the marker is compared with.
+        std::thread::sleep(Duration::from_millis(1100));
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        let again = supervisor.record().pid.expect("restarted");
+        assert_ne!(again, pid);
+        assert_eq!(supervisor.state(&fake.ctx).restarts, 1);
+        eventually("it runs again", || fake.has("running"));
+        std::thread::sleep(Duration::from_millis(1100));
+        // A stop request from outside — `stop` at a terminal — is the person's: the switch turns off.
+        fake.mark("stop");
+        eventually("it stops", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(0)))
+        });
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!supervisor.record().wanted);
+        assert!(supervisor
+            .state(&fake.ctx)
+            .stopped_from_outside_at
+            .is_some());
         fake.finish(&mut supervisor);
     }
 
@@ -2812,7 +3003,7 @@ exit 64
         let at = iso(started + Duration::from_secs(30));
         fs::write(
             events.join(MARKER_FILE),
-            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n"),
+            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\",\"reason\":\"request\"}}\n"),
         )
         .expect("a marker");
         let mut supervisor = fake.supervisor(record.clone());
@@ -2830,7 +3021,8 @@ exit 64
         // A marker written just after the PID is seen gone is still read: once more, a moment later (Task 1).
         fs::remove_file(events.join(MARKER_FILE)).expect("removed");
         let late = events.join(MARKER_FILE);
-        let text = format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n");
+        let text =
+            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\",\"reason\":\"request\"}}\n");
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(300));
             fs::write(late, text).expect("a marker");

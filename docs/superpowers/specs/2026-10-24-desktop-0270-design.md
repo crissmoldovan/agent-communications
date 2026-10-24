@@ -223,6 +223,12 @@ signal or a non-zero code.
 - **An adopted service** (started from a terminal) that goes away is not restarted, because it was never the app's.
   The Events screen offers Start.
 - This needs nothing from the daemon. The app watches the exit of its own child.
+- **Amended (lead's call, 2026-10-25, after review):** a logout or a shutdown SIGTERMs the service, and it stops
+  cleanly. That is not the person's decision. So a stop **by request** — the control socket's `stop`, as
+  `agent-events stop`, the `events_stop` tool and the app's own switch send it — is a stop, and turns the switch off.
+  A stop **by signal** — SIGINT, SIGTERM, SIGHUP: a logout, a shutdown, a kill — counts as a crash: it is restarted
+  with the usual waits, counts toward giving up, and leaves the switch on. The daemon's `last-stop.json` says which,
+  as its `reason`, and the app reads it on both paths: its own child's exit and a recorded PID that is gone.
 
 ### D5. A new version of the service (lead's call)
 
