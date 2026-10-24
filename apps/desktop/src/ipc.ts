@@ -120,7 +120,8 @@ export interface AppSettings {
   launcher: string;
   /** Why the app would not run it — it is not there, or it is on a share or open to other users — or null. */
   launcherProblem: string | null;
-  loginItem: boolean;
+  /** Whether the app starts at login, or null when macOS did not answer in time. */
+  loginItem: boolean | null;
   loginItemAvailable: boolean;
 }
 

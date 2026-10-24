@@ -25,8 +25,18 @@ What doesn't change:
 
 A test now holds `@sigstore/verify` at 3.1.1 or later and `@sigstore/core` at 3.2.1 or later, as it holds 0.26.1's
 fixes. Because this release is declared a security fix too, the background update installs it 24 hours after it is
-published, past a pause, and it is announced where it would not install on its own, as 0.26.1 was. The desktop app
-does not change: `desktop-v0.26.1` stays current.
+published, past a pause, and it is announced where it would not install on its own, as 0.26.1 was.
+
+**The desktop app, `desktop-v0.26.2` (added 2026-10-24): Settings no longer freeze the app when macOS stops
+answering about login items.**
+- **What happened:** opening Settings asked macOS whether Agent Comms starts at login, and asked it on the app's main
+  thread. On a Mac whose login-items service had stopped answering (macOS 14's `backgroundtaskmanagementd` restarting
+  every few seconds, which Apple's own `sfltool dumpbtm` hangs on too), that question never returned. The whole window
+  stopped responding, and only quitting the app ended it.
+- **What changes:** Settings ask on a thread of their own and wait 3 seconds at most. If macOS has not answered by then,
+  Settings open as usual, the "Start at login" switch is off and disabled, and a line says macOS is not answering and
+  that restarting the Mac usually brings it back. Switching it, and saving the folders, work the same way.
+- The app also takes `lucide-react` 1.61.0, its icons.
 
 **Upgrading.** Nothing to change, and nothing to migrate. `agentcomms update` (or `comms_update`) moves each client's
 managed runtime to 0.26.2. Restart the client afterwards, and restart a running `agent-events run`.
