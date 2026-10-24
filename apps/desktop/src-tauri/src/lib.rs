@@ -59,7 +59,9 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_autostart::Builder::new().build());
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(window::app_menu);
+    let builder = builder
+        .menu(window::app_menu)
+        .on_menu_event(window::on_menu_event);
     builder
         .manage(AppState::default())
         .manage(updater::Updates::default())

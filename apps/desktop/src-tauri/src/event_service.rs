@@ -19,7 +19,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1340,6 +1340,8 @@ pub struct EventService {
     supervisor: Mutex<Option<Supervisor>>,
     shown: Mutex<Shown>,
     wake: Wake,
+    /// Set once Quit asks, or stops the service to quit: a second Quit adds nothing.
+    asking: AtomicBool,
 }
 
 /// Starts the supervisor, in `setup`: loads the record, and starts the watchdog, which looks at once and then every
@@ -1458,6 +1460,65 @@ pub fn open_full_disk_access(app: &AppHandle) -> Result<(), AppError> {
     app.opener()
         .open_url(FULL_DISK_ACCESS_PANE, None::<&str>)
         .map_err(|error| AppError::io(format!("System Settings could not be opened: {error}")))
+}
+
+/// What a Quit comes to (P3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitRoute {
+    /// The app quits, and leaves the service as it is: nothing of the app's runs, or Keep running was remembered.
+    Quit,
+    /// The window is shown and asks "Keep the event service running?"; `answer_quit` quits.
+    Ask,
+    /// Stop it was remembered: the service the app started is stopped, then the app quits.
+    StopThenQuit,
+}
+
+/// Whether Quit asks: only while a service the app started runs, and no answer is remembered (P3).
+pub fn quit_route(app_service_running: bool, answer: Option<QuitAnswer>) -> QuitRoute {
+    match (app_service_running, answer) {
+        (false, _) | (true, Some(QuitAnswer::Keep)) => QuitRoute::Quit,
+        (true, Some(QuitAnswer::Stop)) => QuitRoute::StopThenQuit,
+        (true, None) => QuitRoute::Ask,
+    }
+}
+
+/// Whether this Quit is the first to ask: a second while the question is open asks nothing more.
+fn first_to_ask(asking: &AtomicBool) -> bool {
+    !asking.swap(true, Ordering::SeqCst)
+}
+
+/// Quit, from the tray, the app menu (Cmd+Q) or an exit the app did not start itself. Called on the main thread, so it
+/// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown and brought forward,
+/// and the first such Quit sends `quit-requested`; a second, while it asks, only brings the window forward again, and
+/// never quits past the question (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, then quits.
+/// On `Quit` the caller quits.
+pub fn on_quit(app: &AppHandle) -> QuitRoute {
+    let Some(service) = app.try_state::<EventService>() else {
+        return QuitRoute::Quit;
+    };
+    let route = {
+        let shown = lock(&service.shown);
+        quit_route(shown.app_service_running, shown.quit_answer)
+    };
+    match route {
+        QuitRoute::Quit => {}
+        QuitRoute::Ask => {
+            window::show(app);
+            if first_to_ask(&service.asking) {
+                let _ = app.emit(QUIT_REQUESTED, ());
+            }
+        }
+        QuitRoute::StopThenQuit => {
+            if first_to_ask(&service.asking) {
+                let app = app.clone();
+                thread::spawn(move || {
+                    with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
+                    quit(&app);
+                });
+            }
+        }
+    }
+    route
 }
 
 /// Quits: from here on a close closes.
@@ -2615,6 +2676,60 @@ exit 64
         );
         assert!(!fake.has("run-argv"), "a stop is not restarted");
         fake.finish(&mut supervisor);
+    }
+
+    #[test]
+    fn quit_asks_only_while_a_service_the_app_started_runs_and_no_answer_is_kept() {
+        assert_eq!(quit_route(false, None), QuitRoute::Quit);
+        assert_eq!(quit_route(false, Some(QuitAnswer::Stop)), QuitRoute::Quit);
+        assert_eq!(quit_route(false, Some(QuitAnswer::Keep)), QuitRoute::Quit);
+        assert_eq!(quit_route(true, None), QuitRoute::Ask);
+        assert_eq!(quit_route(true, Some(QuitAnswer::Keep)), QuitRoute::Quit);
+        assert_eq!(
+            quit_route(true, Some(QuitAnswer::Stop)),
+            QuitRoute::StopThenQuit
+        );
+        // Quit pressed twice: the question is asked once (Review Focus 5).
+        let asking = AtomicBool::new(false);
+        assert!(first_to_ask(&asking));
+        assert!(!first_to_ask(&asking));
+        assert!(!first_to_ask(&asking));
+    }
+
+    /// A service a terminal started is not the app's to ask about; one the app started is, until it stops.
+    #[cfg(unix)]
+    #[test]
+    fn the_quit_question_is_about_the_apps_own_service_and_stop_it_stops_that_one() {
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        assert!(!supervisor.app_service_running());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        eventually("it runs", || fake.has("running"));
+        assert!(supervisor.app_service_running());
+        supervisor.remember_quit(QuitAnswer::Stop);
+        assert_eq!(load_record(&fake.app).quit_answer, Some(QuitAnswer::Stop));
+        supervisor.stop_for_quit(&fake.ctx);
+        assert!(fake.has("stop-argv"), "through agent-events stop");
+        assert!(!fake.has("running"));
+        assert!(!supervisor.app_service_running());
+        // Stopped by the app, and forgotten: the switch stays on, so the next run starts it again, and the marker of
+        // this clean stop is not taken for one from outside.
+        let kept = load_record(&fake.app);
+        assert!(kept.wanted);
+        assert_eq!(kept.pid, None);
+        assert_eq!(kept.started_at, None);
+        // A terminal's service: nothing of the app's runs, so Quit does not ask.
+        fake.mark("running");
+        let mut adopted = fake.supervisor(ServiceRecord::default());
+        adopted.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(
+            adopted.state(&fake.ctx).started_by.as_deref(),
+            Some("terminal")
+        );
+        assert!(!adopted.app_service_running());
+        fake.unmark("running");
+        fake.finish(&mut supervisor);
+        fake.finish(&mut adopted);
     }
 
     #[test]
