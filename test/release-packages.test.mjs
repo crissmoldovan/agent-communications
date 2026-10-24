@@ -964,7 +964,11 @@ test('a tag gets its GitHub release from the changelog, after the publish is con
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const job = workflow.slice(stepIndex(workflow, '\n  github-release:\n'));
   assert.match(job, /needs: publish/, 'it must wait for the publish job, whose last step confirms the registry');
-  assert.match(job, /if: startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  // Asked of the publish itself, so a run that skipped its verify legs for a green dry run still makes the page.
+  assert.match(
+    job,
+    /if: \$\{\{ !cancelled\(\) && needs\.publish\.result == 'success' && startsWith\(github\.ref, 'refs\/tags\/v'\) \}\}/,
+  );
   assert.match(job, /contents: write/);
   assert.match(job, /node scripts\/release-ci\.mjs notes "\$version"/, 'the body is the changelog section');
   assert.match(job, /gh release view/, 'a re-run leaves an existing release alone');
@@ -1975,7 +1979,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
       .exec(publish)?.[1]
       .split(',')
       .map((need) => need.trim()) ?? [];
-  assert.deepEqual(needs.sort(), ['browser', 'laya', 'old-node', 'verify']);
+  assert.deepEqual(needs.sort(), ['browser', 'laya', 'old-node', 'verified', 'verify']);
   assert.match(jobBlock(workflow, 'verify'), /node: \[22\.18\.0, 24\]/, 'the matrix keeps its own Node versions');
   // The test is there, and the repository's own tooling floor stays where it is.
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
@@ -1999,7 +2003,7 @@ test('BRW-b: the release cannot publish without event vectors and loopback SSE C
     .exec(publish)?.[1]
     .split(',')
     .map((need) => need.trim());
-  assert.deepEqual(needs?.sort(), ['browser', 'laya', 'old-node', 'verify']);
+  assert.deepEqual(needs?.sort(), ['browser', 'laya', 'old-node', 'verified', 'verify']);
 
   const job = jobBlock(workflow, 'browser');
   assert.ok(job, 'there is a browser job');

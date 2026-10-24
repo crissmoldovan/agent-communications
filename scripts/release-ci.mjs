@@ -6,12 +6,14 @@
  *   node scripts/release-ci.mjs preflight 0.4.1 <commit>   # each of those trusts this workflow, or nothing is sent
  *   node scripts/release-ci.mjs tag v0.4.1 <commit>        # the tag on origin still names this commit, or fails
  *   node scripts/release-ci.mjs notes 0.4.1                # prints the CHANGELOG section for a version, or fails
+ *   node scripts/release-ci.mjs verified <commit>          # a green dry run of this commit's exact tree, or none
  *
- * All four run in `.github/workflows/release.yml`, and `test/release-packages.test.mjs` runs them against a fake
- * registry, a fake `git` and a scratch changelog.
+ * All five run in `.github/workflows/release.yml`. `test/release-packages.test.mjs` runs the first four against a fake
+ * registry, a fake `git` and a scratch changelog, and `test/release-verified.test.mjs` runs `verified` against a fake
+ * GitHub API and a scratch repository.
  */
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -286,6 +288,73 @@ async function tag(name, commit) {
   console.log(`  ✓ ${name} still names ${commit}`);
 }
 
+/**
+ * Whether a green dry run already verified this commit's exact tree, so that the tag's run need not verify it again.
+ *
+ * **Why.** A release is checked twice: the dry run on the pull request's head runs every verify leg, and the tag's run
+ * ran them all again on the merge commit, whose tree is the same when `main` had not moved: about 80 minutes of the
+ * same work. Git names a tree by the hash of every file in it, `.github/workflows/release.yml` included, so a dry run of
+ * a commit with this tree ran these very legs over these very files.
+ *
+ * **What counts.** A run of `release.yml` started by `workflow_dispatch` (a dry run, or a release started by hand),
+ * concluded `success`, whose head commit has this tree. A dispatch never skips its verify legs (the tag's lookup runs
+ * only on a pushed tag), so its success means every leg passed. A push run, a failed or cancelled one, or one of
+ * another tree does not count.
+ *
+ * **It can only say yes from a match.** No match, an API error or a refusal prints why and writes an empty `run`, and
+ * the verify legs run as they always did: the worst it can do is cost the time it was meant to save.
+ *
+ * Writes `run=<id>` (or `run=`) to `$GITHUB_OUTPUT` when that is set. It reads the API with the job's token
+ * (`actions: read`, `contents: read`), from `$GITHUB_API_URL` and `$GITHUB_REPOSITORY`, as Actions sets them.
+ */
+async function verified(commit) {
+  if (!COMMIT.test(commit ?? '')) fail('usage: release-ci.mjs verified <commit>');
+  const answer = async (run, message) => {
+    console.log(message);
+    if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `run=${run}\n`);
+  };
+  let tree;
+  try {
+    ({ stdout: tree } = await execFileAsync('git', ['rev-parse', `${commit}^{tree}`], { encoding: 'utf8' }));
+    tree = tree.trim();
+  } catch (error) {
+    return answer('', `  no tree for ${commit} (${error?.message ?? error}): the verify legs run`);
+  }
+  const repository = process.env.GITHUB_REPOSITORY ?? '';
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) {
+    return answer('', `  no repository named in GITHUB_REPOSITORY: the verify legs run`);
+  }
+  const api = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+  };
+  const read = async (path) => {
+    const response = await fetch(`${api}/repos/${repository}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`${response.status} for ${path}`);
+    return response.json();
+  };
+  try {
+    const listed = await read('/actions/workflows/release.yml/runs?event=workflow_dispatch&status=success&per_page=30');
+    const trees = new Map([[commit, tree]]);
+    for (const run of listed?.workflow_runs ?? []) {
+      if (run?.event !== 'workflow_dispatch' || run?.conclusion !== 'success' || !COMMIT.test(run?.head_sha ?? '')) {
+        continue;
+      }
+      if (!trees.has(run.head_sha)) trees.set(run.head_sha, (await read(`/git/commits/${run.head_sha}`))?.tree?.sha);
+      if (trees.get(run.head_sha) === tree) {
+        return answer(
+          String(run.id),
+          `  ✓ dry run ${run.id} verified this exact tree, ${tree}, at ${run.head_sha}: the verify legs do not run again (${run.html_url ?? ''})`,
+        );
+      }
+    }
+  } catch (error) {
+    return answer('', `  could not ask which dry runs passed (${error?.message ?? error}): the verify legs run`);
+  }
+  return answer('', `  no green dry run verified this tree, ${tree}: the verify legs run`);
+}
+
 /** What `git ls-remote origin` prints for `patterns`. Retried like the registry reads: a flaky answer costs a retry. */
 async function lsRemote(name, patterns) {
   let last = 'no answer';
@@ -344,9 +413,10 @@ if (command === 'pending') await pending(rest[0], rest[1]);
 else if (command === 'preflight') await preflight(rest[0], rest[1]);
 else if (command === 'tag') await tag(rest[0], rest[1]);
 else if (command === 'notes') await notes(rest[0]);
+else if (command === 'verified') await verified(rest[0]);
 else {
   fail(
     'usage: release-ci.mjs pending <version> <commit> | preflight <version> <commit> | tag <tag> <commit> | ' +
-      'notes <version>',
+      'notes <version> | verified <commit>',
   );
 }

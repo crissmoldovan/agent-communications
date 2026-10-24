@@ -17,3 +17,14 @@ updates:
     groups:
       dependencies:
         patterns: ["*"]
+    # Updates no grouped proposal can carry, each held for a reason of its own: in one group, any of them made the whole
+    # proposal unmergeable (#62, #82, #92).
+    ignore:
+      # Node 22 is the oldest Node the packages support, so their typings stay on Node 22 (#68).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Laya's runtime is pinned by its reviewed lock, and moves only with a new review (docs/RELEASING.md).
+      - dependency-name: "@receptron/laya"
+      # sigstore-js's 4.x line needs Node ^22.22.2 or ^24.15.0; it waits for a release that raises the Node floor (0.26.2).
+      - dependency-name: "@sigstore/*"
+        update-types: ["version-update:semver-major"]

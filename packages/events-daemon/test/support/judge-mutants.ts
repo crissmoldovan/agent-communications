@@ -616,6 +616,13 @@ async function copyMutationClosure(root: string): Promise<void> {
   });
 }
 
+/**
+ * Each of E3's oracle runs, the unmutated one and the mutant's. It was 30 s, half or a quarter of what the other strict
+ * runners give theirs (60 s for E-final, 120 s for cut-over and Laya), and on a loaded Mac an oracle that takes a few
+ * seconds alone outran it and failed the whole E3 pass.
+ */
+const STRICT_CHILD_TIMEOUT_MS = 120_000;
+
 /** Runs exactly one named test in a copied production closure and accepts only one TAP failure. */
 export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promise<void> {
   const mutationRoot = join(mutantsRoot, mutation.id);
@@ -643,7 +650,7 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       args,
       cwd: root,
       env: environment,
-      timeoutMs: 30_000,
+      timeoutMs: STRICT_CHILD_TIMEOUT_MS,
     });
     if (baseline.output.includes('EPERM')) throw new Error(`${mutation.id}: baseline is blocked by EPERM`);
     if (
@@ -669,7 +676,7 @@ export async function expectJudgeMutationToFail(mutation: JudgeMutation): Promis
       args: ['--import', pathToFileURL(observer).href, ...args],
       cwd: root,
       env: environment,
-      timeoutMs: 30_000,
+      timeoutMs: STRICT_CHILD_TIMEOUT_MS,
     });
     assert.ok(
       result.output.includes(`E3_MUTANT_LOADED:${mutation.id}`),

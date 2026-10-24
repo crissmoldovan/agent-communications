@@ -3,6 +3,34 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.26.2
+
+**Security fix.** The libraries that verify every update now come from sigstore-js's 3.x line: `@sigstore/verify`
+3.1.1, `@sigstore/bundle` 4.0.0, `@sigstore/tuf` 4.0.2 and `@sigstore/protobuf-specs` 0.5.2, with `@sigstore/core`
+3.2.1 beneath them. They fix two weaknesses in the versions 0.20.0 to 0.26.1 used:
+- **A time nobody signed.** A provenance bundle whose transparency-log entry carries only an inclusion proof gives no
+  time that Rekor signed, yet `@sigstore/verify` 2.1.1 took that entry's integrated time and checked the release's
+  signing certificate against it (GHSA-xgjw-pm74-86q4, moderate). No hold ever counted from that time. Such a bundle
+  is now refused, where before it verified and was held from the time this machine first saw it.
+- **The envelope's type** (GHSA-jfc7-64v2-mr8c, moderate, in `@sigstore/core` up to 3.2.0, which included the 2.0.0 we
+  shipped). agentcomms was never exposed: it refuses any provenance envelope that is not exactly an in-toto statement
+  before verifying it. Tools such as `npm audit` stop reporting it.
+
+What doesn't change:
+- **Releases keep verifying.** npm's provenance for every agentcomms release carries both a signed promise and an
+  inclusion proof, and verifies exactly as before. The hold still counts from the time Rekor signed.
+- **No Node upgrade is needed.** The packages still run on Node 22.12 or later. The newer 4.x line needs Node 22.22.2
+  or 24.15, so it waits for a release that raises the Node floor on purpose.
+- **The Sigstore cache in the state directory stays valid.**
+
+A test now holds `@sigstore/verify` at 3.1.1 or later and `@sigstore/core` at 3.2.1 or later, as it holds 0.26.1's
+fixes. Because this release is declared a security fix too, the background update installs it 24 hours after it is
+published, past a pause, and it is announced where it would not install on its own, as 0.26.1 was. The desktop app
+does not change: `desktop-v0.26.1` stays current.
+
+**Upgrading.** Nothing to change, and nothing to migrate. `agentcomms update` (or `comms_update`) moves each client's
+managed runtime to 0.26.2. Restart the client afterwards, and restart a running `agent-events run`.
+
 ## 0.26.1
 
 **Security fix.** Three libraries agentcomms ships had published advisories against the versions in 0.26.0. This

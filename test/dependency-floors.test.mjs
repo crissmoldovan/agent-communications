@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
  *   is one they can get;
  * - **the lockfile,** for a library a bundle inlines (a devDependency): the build copies whatever it resolved.
  *
- * Both are held to each floor here. A floor is raised when an advisory lands, and never lowered.
+ * Both are held to each floor here. A library no manifest names, one a dependency brings in, is held in the lockfile
+ * alone (`transitive`). A floor is raised when an advisory lands, and never lowered.
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -39,6 +40,19 @@ const FLOORS = [
     floor: '4.6.6',
     // Every MCP tool's input, and the desktop app's reading of each CLI answer, is validated with it.
     advisories: ['GHSA-mrhx-c7xc-m3w5: memory exhaustion validating oversized constrained collections'],
+  },
+  {
+    name: '@sigstore/verify',
+    floor: '3.1.1',
+    // Core verifies every update's provenance with it. 2.1.1 had the same flaw, though the advisory names 3.1.0 alone.
+    advisories: ['GHSA-xgjw-pm74-86q4: an unsigned integrated time was used to check the certificate'],
+  },
+  {
+    name: '@sigstore/core',
+    floor: '3.2.1',
+    transitive: true,
+    // @sigstore/verify's own dependency, for the DSSE envelope it checks.
+    advisories: ['GHSA-jfc7-64v2-mr8c: a DSSE payloadType type-binding failure'],
   },
 ];
 
@@ -90,7 +104,8 @@ async function manifests() {
 test('every declared range of a library with an advisory starts at or above its fixed version', async () => {
   const ranges = await catalog();
   const all = await manifests();
-  for (const { name, floor, advisories } of FLOORS) {
+  for (const { name, floor, advisories, transitive } of FLOORS) {
+    if (transitive) continue;
     let declared = 0;
     for (const { file, manifest } of all) {
       for (const section of SECTIONS) {

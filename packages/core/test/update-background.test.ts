@@ -914,9 +914,9 @@ test("the set's hold counts from the latest signed time among its packages", asy
   }
 });
 
-test("no signed time — an inclusion proof alone, or two entries — holds from this machine's first sight, which a registry time cannot shorten", async () => {
+test("no signed time — two entries — holds from this machine's first sight, which a registry time cannot shorten", async () => {
   const later = (hours: number) => new Date(NOW.getTime() + hours * 3_600_000);
-  for (const tlog of ['proof', 'two'] as const) {
+  for (const tlog of ['two'] as const) {
     const releases: WorldRelease[] = [
       { version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog } },
     ];
@@ -973,7 +973,7 @@ test('a dry run records no first sight, and writes no cached declaration', async
   assert.deepEqual(signed.world.tarballsAsked, [fixtureTarballUrl(CORE_PACKAGE, LATEST)], 'its declaration was read');
   assert.equal(existsSync(declarationsPath(m.core.paths.stateDir)), false, 'and not cached');
 
-  const releases: WorldRelease[] = [{ version: LATEST, signedAt: hoursAgo(1000), shape: { tlog: 'proof' } }];
+  const releases: WorldRelease[] = [{ version: LATEST, signedAt: hoursAgo(1000), shape: { tlog: 'two' } }];
   const unsigned = await runBackgroundUpdate(m.core, m.env, { dryRun: true }, world(m, { releases }).deps);
   assert.equal(unsigned.outcome, 'held', unsigned.reason);
   assert.equal(unsigned.release?.heldFrom, 'first-seen');
@@ -1587,12 +1587,12 @@ test("agentcomms update --background says what the hold counts from: the time Re
     `${LATEST}, a security fix: its hold counts from ${hoursAgo(10).toISOString()}, when Rekor signed for it; it may install 24 hours after, at ${after(hoursAgo(10), 24)}.`,
   );
 
-  // No signed time (an inclusion proof alone): held from this machine's first sight, whatever the registry says.
+  // No signed time (two entries, so no one time): held from this machine's first sight, whatever the registry says.
   const n = await launched();
   const unsigned = await printed(
     n,
     world(n, {
-      releases: [{ version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog: 'proof' } }],
+      releases: [{ version: LATEST, publishedAt: hoursAgo(1000), signedAt: hoursAgo(1000), shape: { tlog: 'two' } }],
     }).deps,
   );
   assert.equal(

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import {
@@ -42,9 +42,14 @@ const normalInstall = ['pnpm', 'install', '--frozen-lockfile', '--filter', `'!${
  * The whole checkout, as Git lists it (tracked, and untracked but not ignored), in a fresh repository whose history
  * holds every file but Task 3's fragment: E2 Task 12's matrix reads the plan, every fragment, test and source, so a
  * case is a complete copy that each test changes in one place.
+ *
+ * Built once per test process (`sharedTemplate`) and cloned for each case (`cloneCase`). Copying the checkout file by
+ * file and hashing every file into a commit took about 16 s a case on a Mac and 35 s on GitHub's Windows runners, for
+ * each of some 85 cases: most of every verify leg. A local clone links the template's objects and checks the same
+ * files out, `.gitattributes` deciding their bytes as it does for the runner's own checkout, in about 3 s.
  */
-async function copyCase(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'events-e2-proof-'));
+async function buildCaseTemplate(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'events-e2-template-'));
   const listed = (await runGit(repositoryRoot, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']))
     .split('\0')
     .filter(Boolean);
@@ -59,6 +64,33 @@ async function copyCase(): Promise<string> {
   }
   await initialiseCaseHistory(root);
   return root;
+}
+
+let template: Promise<string> | undefined;
+
+/** The template this process's cases are cloned from, built on first use and removed when the file's tests end. */
+function sharedTemplate(): Promise<string> {
+  template ??= buildCaseTemplate();
+  return template;
+}
+
+after(async () => {
+  if (template !== undefined) await rm(await template, { recursive: true, force: true });
+});
+
+/** One case: a clone of `source` with the same history, its own configuration, and Task 3's fragment untracked. */
+async function cloneCase(source: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'events-e2-proof-'));
+  await runGit(tmpdir(), ['clone', '--quiet', '--local', '--', source, root]);
+  await runGit(root, ['remote', 'remove', 'origin']);
+  await configureCase(root);
+  const taskFragment = 'packages/events-daemon/test/fixtures/laya/cases/task-3.json';
+  await cp(join(source, taskFragment), join(root, taskFragment));
+  return root;
+}
+
+async function copyCase(): Promise<string> {
+  return cloneCase(await sharedTemplate());
 }
 
 async function runGit(root: string, args: readonly string[]): Promise<string> {
@@ -82,15 +114,20 @@ async function runGit(root: string, args: readonly string[]): Promise<string> {
 async function initialiseCaseHistory(root: string): Promise<void> {
   const taskFragment = 'packages/events-daemon/test/fixtures/laya/cases/task-3.json';
   await runGit(root, ['init', '--quiet']);
+  await configureCase(root);
+  await runGit(root, ['add', '--all']);
+  await runGit(root, ['rm', '--cached', '--quiet', '--', taskFragment]);
+  await runGit(root, ['commit', '--quiet', '-m', 'fixture baseline']);
+}
+
+/** A case's own configuration, which a clone does not carry: its committer, and no maintenance. */
+async function configureCase(root: string): Promise<void> {
   await runGit(root, ['config', 'user.email', 'laya-fixture@example.test']);
   await runGit(root, ['config', 'user.name', 'Laya fixture']);
   // As the runner's copies (`MUTATION_COPY_GIT_CONFIG`): no commit here starts a detached `git maintenance` that would
   // still be writing below `.git/objects` when the case is removed (E2 CI round 1).
   await runGit(root, ['config', 'maintenance.auto', 'false']);
   await runGit(root, ['config', 'gc.auto', '0']);
-  await runGit(root, ['add', '--all']);
-  await runGit(root, ['rm', '--cached', '--quiet', '--', taskFragment]);
-  await runGit(root, ['commit', '--quiet', '-m', 'fixture baseline']);
 }
 
 async function commitTaskFragment(root: string, message: string): Promise<void> {
@@ -812,7 +849,10 @@ test('E2 mutation: a copied repository’s commits start no Git maintenance, so 
       const runnerCopy = await mkdtemp(join(tmpdir(), 'events-e2-runner-copy-'));
       roots.push(runnerCopy);
       await copyRepositoryTree(runnerCopy, { buildsDaemon: false });
-      roots.push(await copyCase());
+      // A template of its own, so its commit is traced whatever ran first, and a case cloned from it.
+      const fresh = await buildCaseTemplate();
+      roots.push(fresh);
+      roots.push(await cloneCase(fresh));
     });
     const maintenance = /: git (?:-c \S+ )*(?:maintenance|gc)(?: |$)/u;
     assert.ok(

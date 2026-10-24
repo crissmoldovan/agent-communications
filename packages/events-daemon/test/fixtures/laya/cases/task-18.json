@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "task": 18,
+  "owners": [
+    {
+      "id": "task-18"
+    }
+  ],
+  "section5": [],
+  "traceability": [],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-18.json",
+      "owner": "task-18"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t18-release-needs-laya",
+      "kind": "production",
+      "owner": "task-18",
+      "source": ".github/workflows/release.yml",
+      "testFile": "test/laya-release-gate.test.mjs",
+      "testName": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "testPattern": "E2 release gate workflow: the publish needs the Laya release gate, which holds no publish credential",
+      "before": "    needs: [verified, verify, old-node, browser, laya]\n",
+      "after": "    needs: [verified, verify, old-node, browser]\n"
+    }
+  ],
+  "supersedes": [
+    {
+      "task": 10,
+      "mutant": "e2-t10-release-needs-laya",
+      "replacement": "e2-t18-release-needs-laya",
+      "reason": "0.26.2 (2026-10-24): a pushed tag reuses a green dry run of its exact tree, so the publish job also needs the new `verified` job, and its needs line became `needs: [verified, verify, old-node, browser, laya]`. The frozen anchor matches nothing any more; the replacement removes `laya` from the new line, and the same named test kills it."
+    }
+  ],
+  "matrix": [
+    {
+      "row": "fixture/task-18.json",
+      "owner": "task-18",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    }
+  ]
+}

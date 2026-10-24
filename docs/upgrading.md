@@ -355,8 +355,8 @@ nothing unless all of this holds:
   clock set ahead skips no hold and ends no pause early. The run's result says which time the hold counts from:
   `release.publishedAt`, with `release.heldFrom` `signed` or `first-seen`.
 - **Its provenance verifies**, for every package it would install: npm's SLSA provenance attestation, verified with
-  sigstore-js (its verifier's parts, `@sigstore/verify` and the rest at sigstore-js 3.1.0's versions, are dependencies of
-  `@agentcomms/core`) — must be issued by `https://token.actions.githubusercontent.com`
+  sigstore-js (its verifier's parts, `@sigstore/verify` 3.1.1 and the rest of the line sigstore-js 4 carries, are
+  dependencies of `@agentcomms/core`) — must be issued by `https://token.actions.githubusercontent.com`
   for exactly `https://github.com/crissmoldovan/agent-communications/.github/workflows/release.yml@refs/tags/v<version>`,
   built on a `github-hosted` runner from this repository at that tag, and sign the very tarball the registry names. A
   version with no attestation, or any other identity, is refused, and nothing at all is installed.

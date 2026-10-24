@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/core",
-  "version": "0.26.1",
+  "version": "0.26.2",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
@@ -39,10 +39,10 @@
     "test": "node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@sigstore/bundle": "3.1.0",
-    "@sigstore/protobuf-specs": "0.4.3",
-    "@sigstore/tuf": "3.1.1",
-    "@sigstore/verify": "2.1.1",
+    "@sigstore/bundle": "4.0.0",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/tuf": "4.0.2",
+    "@sigstore/verify": "3.1.1",
     "dom-serializer": "^3.1.1",
     "domhandler": "^6.0.1",
     "html-to-text": "^10.0.1",

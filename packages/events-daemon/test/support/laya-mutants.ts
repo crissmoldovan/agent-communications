@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { endOracleGroupsWithThisRunner } from './mutation-runner-exit.ts';
@@ -924,6 +924,14 @@ async function expectCargoMutationToFail(mutation: LayaMutation): Promise<LayaMu
  * Runs every task fragment's production mutations in `legs` (by default the legs `pnpm verify` runs) and confirms
  * none was skipped there; every registered mutation names a leg, and the other legs' runner confirms its own.
  */
+/**
+ * How many mutants the full pass runs at once. Each has a copy, an oracle and a process group of its own, so none
+ * shares anything with another; one at a time, the pass took 33.6 minutes on GitHub's macOS runner, most of its verify
+ * leg. One core is left to the runner, and three at most: two on a three-core macOS runner, three on a four-core
+ * Linux one. A Cargo mutant builds the desktop crate in its copy, so that leg runs one at a time.
+ */
+export const LAYA_MUTATION_CONCURRENCY: number = Math.max(1, Math.min(3, availableParallelism() - 1));
+
 export async function expectEveryLayaMutationToFail(
   options: { readonly legs?: readonly LayaMutationLeg[] } = {},
 ): Promise<readonly ({ readonly mutation: LayaMutation } & LayaMutationExecution)[]> {
@@ -931,16 +939,32 @@ export async function expectEveryLayaMutationToFail(
   const mutations = (await loadLayaMutations()).filter((mutation) => legs.includes(mutation.leg));
   const executed = new Set<string>();
   const platformSkipped = new Map<string, LayaMutationPlatformSkip>();
-  const results: ({ readonly mutation: LayaMutation } & LayaMutationExecution)[] = [];
-  for (const mutation of mutations) {
-    const execution = await expectLayaMutationToFail(mutation);
-    if (execution.platformSkipped) {
-      platformSkipped.set(mutation.id, { platform: process.platform, baselineOutput: execution.baselineOutput });
-    } else {
-      executed.add(mutation.id);
+  const results: ({ readonly mutation: LayaMutation } & LayaMutationExecution)[] = new Array(mutations.length);
+  const concurrency = legs.includes('cargo') ? 1 : LAYA_MUTATION_CONCURRENCY;
+  // Each worker takes the next mutant in manifest order. After a failure no new mutant starts, every one already
+  // running finishes, and the first failure is what the pass throws: nothing is left running behind a failed test.
+  let next = 0;
+  let failure: { readonly error: unknown } | undefined;
+  const worker = async (): Promise<void> => {
+    while (failure === undefined && next < mutations.length) {
+      const index = next;
+      next += 1;
+      const mutation = mutations[index] as LayaMutation;
+      try {
+        const execution = await expectLayaMutationToFail(mutation);
+        if (execution.platformSkipped) {
+          platformSkipped.set(mutation.id, { platform: process.platform, baselineOutput: execution.baselineOutput });
+        } else {
+          executed.add(mutation.id);
+        }
+        results[index] = { mutation, ...execution };
+      } catch (error) {
+        failure ??= { error };
+      }
     }
-    results.push({ mutation, ...execution });
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, mutations.length) }, worker));
+  if (failure !== undefined) throw failure.error;
   assertEveryLayaMutationExecuted(mutations, executed, platformSkipped);
   return results;
 }

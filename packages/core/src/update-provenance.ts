@@ -21,21 +21,26 @@
  * not that it is safe (§2): the hold before a background install is the other half.
  *
  * **Rekor's signed time** (design 2026-10-22 P4 and §7.2): a hold counts from the time Rekor signed, `signedAt`, never
- * from the registry's `time`. How @sigstore/verify 2.1.1 verifies it, read in this repository's installed copy on
- * 2026-10-22 (`dist/bundle/index.js`, `dist/verifier.js`, `dist/timestamp/index.js`, `dist/timestamp/set.js`):
- * - `toSignedEntity` makes each of the bundle's tlog entries one of the entity's timestamps: the same objects as the
- *   entity's `tlogEntries`. `Verifier.verify` verifies every one (`verifyTLogTimestamp`), and `tlogThreshold: 1` asks
- *   for at least one.
- * - An entry that carries an inclusion promise (`inclusionPromise !== undefined`) has that SET verified against the
- *   trusted root's tlog keys. The SET signs the entry's body, integrated time, log index and log id. A SET that does
- *   not verify throws `TLOG_INCLUSION_PROMISE_ERROR`, and the whole bundle is refused.
- * - An entry with only an inclusion proof passes on its Merkle proof and its checkpoint's signature. Neither covers
- *   the integrated time, so that time is not signed.
+ * from the registry's `time`. How @sigstore/verify 3.1.1 verifies it, read in its published copy on 2026-10-24
+ * (`dist/bundle/index.js`, `dist/verifier.js`, `dist/timestamp/index.js`, `dist/tlog/index.js`, `dist/tlog/set.js`):
+ * - `toSignedEntity` keeps the bundle's tlog entries as the entity's `tlogEntries`, and makes each entry with an
+ *   integrated time one of the entity's timestamps: the same objects.
+ * - `Verifier.verify` takes a time only from an entry that carries an inclusion promise (`getTLogTimestamp`). With
+ *   fewer such times than `timestampThreshold: 1` it refuses the bundle (`TIMESTAMP_ERROR`), and it checks the
+ *   certificate at those times alone.
+ * - It then verifies every entry's inclusion (`verifyTLogs`), and `tlogThreshold: 1` asks for at least one entry.
+ *   - An entry that carries a promise (`inclusionPromise !== undefined`) has that SET verified against the trusted
+ *     root's tlog keys. The SET signs the entry's body, integrated time, log index and log id. A SET that does not
+ *     verify throws `TLOG_INCLUSION_PROMISE_ERROR`, and the whole bundle is refused.
+ *   - An entry that carries an inclusion proof has its Merkle proof and its checkpoint's signature verified. Neither
+ *     covers the integrated time.
+ * - So an entry with only an inclusion proof gives no time, and its bundle is refused. 2.1.1 took that unsigned time
+ *   and checked the certificate against it (GHSA-xgjw-pm74-86q4).
  * - `verify` returns the signer, and no timestamps.
  * So `signedTimeOf` reads the time from the very entity sigstore-js has just verified, and only when that entity has
- * exactly one entry and the entry carries a promise. Anything else gives no signed time, and a hold then counts from
- * this machine's first sight of the release (`release-first-seen.ts`). `integratedTime`, read from the raw bundle,
- * is kept for display only: it is not verified, and no hold counts from it.
+ * exactly one entry and the entry carries a promise. Anything else that verifies, such as two entries, gives no signed
+ * time, and a hold then counts from this machine's first sight of the release (`release-first-seen.ts`).
+ * `integratedTime`, read from the raw bundle, is kept for display only: no hold counts from it.
  *
  * Nothing here installs or writes anything. The fetch and the verifier are injectable, so a test reads fixtures and no
  * test reaches npm or Sigstore.
@@ -525,7 +530,7 @@ export interface SigstoreModules {
   verify: {
     Verifier: new (
       material: unknown,
-      options?: { tlogThreshold?: number; ctlogThreshold?: number },
+      options?: { tlogThreshold?: number; ctlogThreshold?: number; timestampThreshold?: number },
     ) => { verify(entity: unknown, policy?: unknown): unknown };
     toSignedEntity(bundle: unknown): unknown;
     toTrustMaterial(root: unknown): unknown;
@@ -536,8 +541,8 @@ export interface SigstoreModules {
 }
 
 /**
- * sigstore-js's verification modules — `@sigstore/verify`, `/bundle`, `/tuf` and `/protobuf-specs`, at the versions
- * sigstore-js 3.1.0 carries — imported by name as this package's own declared dependencies, and only when a bundle is
+ * sigstore-js's verification modules — `@sigstore/verify`, `/bundle`, `/tuf` and `/protobuf-specs`, at the fixed
+ * versions of the line sigstore-js 4 carries — imported by name as this package's own declared dependencies, and only when a bundle is
  * to be verified: nothing else here, and nothing a channel's server or command starts, loads them. Core's bundle keeps
  * them external, so npm installs them beside it, each with its own licence (Apache-2.0), and no channel's bundle
  * inlines them (`pnpm run licenses` counts what each bundle inlines).
@@ -583,6 +588,8 @@ export function sigstoreBundleVerifier(
     const verifier = new sigstore.verify.Verifier(sigstore.verify.toTrustMaterial(root), {
       tlogThreshold: 1,
       ctlogThreshold: 1,
+      // One time Rekor signed, at least: never 0, which would check the certificate at no time at all.
+      timestampThreshold: 1,
     });
     const entity = sigstore.verify.toSignedEntity(sigstore.bundle.bundleFromJSON(bundle));
     verifier.verify(entity, { subjectAlternativeName: policy.identity, extensions: { issuer: policy.issuer } });
