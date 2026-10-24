@@ -297,6 +297,9 @@ describe('the desktop workflows', () => {
       expect([two.asks, two.sleeps]).toEqual([1, 0]);
       expect(two.stderr).toContain('expected one release for desktop-v9.9.9, found: 1 2');
     },
+    // It starts bash about a dozen times, its pauses faked: about 2 s alone, and 15 s on a loaded Mac, past vitest's
+    // default 5 s.
+    30_000,
   );
 
   it("leaves the npm release workflow's trigger to v* tags, and its publish job builds the packages alone", () => {
