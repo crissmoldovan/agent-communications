@@ -1571,8 +1571,10 @@ pub struct EventService {
     supervisor: Mutex<Option<Supervisor>>,
     shown: Mutex<Shown>,
     wake: Wake,
-    /// Set once Quit asks, or stops the service to quit: a second Quit adds nothing.
-    asking: AtomicBool,
+    /// Set once a remembered Stop it is under way: a second Quit stops nothing more.
+    stopping: AtomicBool,
+    /// Set by the quit question's first answer, the only one acted on.
+    answered: AtomicBool,
     /// Whether a WhatsApp account exists, and when that was asked.
     whatsapp: Mutex<Option<(Instant, bool)>>,
     /// Set while Full Disk Access is being looked at.
@@ -1769,16 +1771,46 @@ pub fn quit_route(app_service_running: bool, answer: Option<QuitAnswer>) -> Quit
     }
 }
 
-/// Whether this Quit is the first to ask: a second while the question is open asks nothing more.
+/// Whether this is the first: set once, by the first caller.
 fn first_to_ask(asking: &AtomicBool) -> bool {
     !asking.swap(true, Ordering::SeqCst)
 }
 
+/// What one Quit does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitStep {
+    /// The caller quits.
+    Quit,
+    /// The window is shown, brought forward, and sent `quit-requested`.
+    ShowAndAsk,
+    /// A thread stops the app's service, then quits.
+    StopThenQuit,
+    /// Already stopping to quit: nothing more.
+    Nothing,
+}
+
+/// What a Quit on `route` does, `stopping` being set once a Stop it is under way.
+pub fn quit_step(route: QuitRoute, stopping: &AtomicBool) -> QuitStep {
+    match route {
+        QuitRoute::Quit => QuitStep::Quit,
+        // Every time: the window may have missed the last one, before React mounted or across a reload, and its dialog
+        // opens once however often it is asked.
+        QuitRoute::Ask => QuitStep::ShowAndAsk,
+        QuitRoute::StopThenQuit if first_to_ask(stopping) => QuitStep::StopThenQuit,
+        QuitRoute::StopThenQuit => QuitStep::Nothing,
+    }
+}
+
+/// Whether this answer to the quit question is the first: the one acted on.
+fn first_answer(answered: &AtomicBool) -> bool {
+    first_to_ask(answered)
+}
+
 /// Quit, from the tray, the app menu (Cmd+Q) or an exit the app did not start itself. Called on the main thread, so it
-/// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown and brought forward,
-/// and the first such Quit sends `quit-requested`; a second, while it asks, only brings the window forward again, and
-/// never quits past the question (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, then quits.
-/// On `Quit` the caller quits.
+/// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown, brought forward and
+/// sent `quit-requested`, every time, so a window that missed it is asked again; nothing quits past the question, and
+/// only its first answer is acted on (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, once,
+/// then quits. On `Quit` the caller quits.
 pub fn on_quit(app: &AppHandle) -> QuitRoute {
     let Some(service) = app.try_state::<EventService>() else {
         return QuitRoute::Quit;
@@ -1787,22 +1819,18 @@ pub fn on_quit(app: &AppHandle) -> QuitRoute {
         let shown = lock(&service.shown);
         quit_route(shown.app_service_running, shown.quit_answer)
     };
-    match route {
-        QuitRoute::Quit => {}
-        QuitRoute::Ask => {
+    match quit_step(route, &service.stopping) {
+        QuitStep::Quit | QuitStep::Nothing => {}
+        QuitStep::ShowAndAsk => {
             window::show(app);
-            if first_to_ask(&service.asking) {
-                let _ = app.emit(QUIT_REQUESTED, ());
-            }
+            let _ = app.emit(QUIT_REQUESTED, ());
         }
-        QuitRoute::StopThenQuit => {
-            if first_to_ask(&service.asking) {
-                let app = app.clone();
-                thread::spawn(move || {
-                    with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
-                    quit(&app);
-                });
-            }
+        QuitStep::StopThenQuit => {
+            let app = app.clone();
+            thread::spawn(move || {
+                with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
+                quit(&app);
+            });
         }
     }
     route
@@ -1814,8 +1842,15 @@ pub fn quit(app: &AppHandle) {
     app.exit(0);
 }
 
-/// `answer_quit`: keeps the answer when asked to, stops a service the app started on Stop it, then quits (P3).
+/// `answer_quit`: keeps the answer when asked to, stops a service the app started on Stop it, then quits (P3). Only
+/// the first answer is acted on.
 pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), AppError> {
+    // Asked on every Quit, answered once: a second answer, while the first quits, does nothing.
+    if let Some(service) = app.try_state::<EventService>() {
+        if !first_answer(&service.answered) {
+            return Ok(());
+        }
+    }
     let answer = if keep {
         QuitAnswer::Keep
     } else {
@@ -3470,11 +3505,27 @@ exit 64
             quit_route(true, Some(QuitAnswer::Stop)),
             QuitRoute::StopThenQuit
         );
-        // Quit pressed twice: the question is asked once (Review Focus 5).
-        let asking = AtomicBool::new(false);
-        assert!(first_to_ask(&asking));
-        assert!(!first_to_ask(&asking));
-        assert!(!first_to_ask(&asking));
+        // Quit pressed while it asks: asked again, every time, since the window may have missed the last one — before
+        // React mounted, or across a reload. Its dialog opens once however often it is asked (Review Focus 5).
+        let stopping = AtomicBool::new(false);
+        for _ in 0..3 {
+            assert_eq!(quit_step(QuitRoute::Ask, &stopping), QuitStep::ShowAndAsk);
+        }
+        assert_eq!(quit_step(QuitRoute::Quit, &stopping), QuitStep::Quit);
+        // A remembered Stop it stops once: a second Quit while it stops does nothing more.
+        assert_eq!(
+            quit_step(QuitRoute::StopThenQuit, &stopping),
+            QuitStep::StopThenQuit
+        );
+        assert_eq!(
+            quit_step(QuitRoute::StopThenQuit, &stopping),
+            QuitStep::Nothing
+        );
+        // However often it was asked, one answer is acted on.
+        let answered = AtomicBool::new(false);
+        assert!(first_answer(&answered));
+        assert!(!first_answer(&answered));
+        assert!(!first_answer(&answered));
     }
 
     /// A service a terminal started is not the app's to ask about; one the app started is, until it stops.
