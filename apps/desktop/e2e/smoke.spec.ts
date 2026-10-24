@@ -48,7 +48,7 @@ test('opens on Overview with the seven sections', async ({ page }) => {
   expect(commands).toContain('cli:approvalsPending');
   for (const command of commands) {
     expect(command).toMatch(
-      /^(installation|take_deep_link|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor))$/,
+      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor))$/,
     );
   }
 });

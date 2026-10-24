@@ -1,5 +1,6 @@
 import { Button, Spinner } from '@cueplusplus/ui';
 import { type ComponentType, useEffect, useState } from 'react';
+import { FirstStartQuestion, QuitQuestion } from './components/EventServiceQuestions.tsx';
 import { UntrustedText } from './components/UntrustedText.tsx';
 import { COPY, type Screen } from './copy.ts';
 import { useAppData } from './data.tsx';
@@ -28,9 +29,20 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
 
 /**
  * The app: the install screen when nothing is installed, otherwise the shell and the screen chosen. A deep link opens
- * Approvals.
+ * Approvals. The event service's two questions (P1, P3) are the whole app's, over whatever is shown: Quit waits for
+ * its answer even while the installation is still being read.
  */
-export function App({ initialScreen = 'overview' }: { initialScreen?: Screen | undefined }) {
+export function App({ initialScreen }: { initialScreen?: Screen | undefined }) {
+  return (
+    <>
+      <Main initialScreen={initialScreen} />
+      <FirstStartQuestion />
+      <QuitQuestion />
+    </>
+  );
+}
+
+function Main({ initialScreen = 'overview' }: { initialScreen?: Screen | undefined }) {
   const { installation, deepLink } = useAppData();
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [settingsFirst, setSettingsFirst] = useState(false);

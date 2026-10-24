@@ -2,7 +2,7 @@
  * A bridge for tests: every command answers from fixtures — recorded CLI JSON, or fake data written by hand — and
  * every call is recorded. Nothing is run, opened or copied, and no test reaches Tauri, a CLI, the network or a home.
  */
-import type { AppEvents, Bridge, Call, CliResult, Folders, Installation, Product } from '../ipc.ts';
+import type { AppEvents, Bridge, Call, CliResult, EventServiceState, Folders, Installation, Product } from '../ipc.ts';
 import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
 import accountsResend from './fixtures/accounts-resend.populated.json';
@@ -40,6 +40,64 @@ export const EXAMPLE_INSTALLATION: Installation = {
   folders: EXAMPLE_FOLDERS,
   problem: null,
 };
+
+/** The event service running, started by the app at 0.27.0: what every test sees unless it says otherwise. */
+const SERVICE_RUNNING: EventServiceState = {
+  available: true,
+  wanted: true,
+  status: 'running',
+  startedBy: 'app',
+  since: '2026-10-25T09:00:00.000Z',
+  version: '0.27.0',
+  newerVersion: null,
+  restarts: 0,
+  lastRestartAt: null,
+  stoppedFromOutsideAt: null,
+  logTail: [],
+  firstStartQuestion: false,
+  fullDiskAccess: 'not-needed',
+};
+
+/** Nothing running: what each state that is not running clears. */
+const NOT_RUNNING = { status: 'stopped', startedBy: null, since: null, version: null } as const;
+
+/** The event service's supervisor in each state the window shows (plan, Task 2's `EventServiceState`). */
+export const EVENT_SERVICE = {
+  running: SERVICE_RUNNING,
+  starting: { ...SERVICE_RUNNING, status: 'starting', since: null, version: null },
+  /** Switched off in the app. */
+  stopped: { ...SERVICE_RUNNING, ...NOT_RUNNING, wanted: false },
+  /** A clean stop the app did not ask for, at a terminal or through the events tools: the switch turned off (D4). */
+  stoppedFromOutside: {
+    ...SERVICE_RUNNING,
+    ...NOT_RUNNING,
+    wanted: false,
+    stoppedFromOutsideAt: '2026-10-25T10:04:00.000Z',
+  },
+  /** One started from a terminal, which went away: not the app's to restart (D4). */
+  terminalGone: { ...SERVICE_RUNNING, ...NOT_RUNNING },
+  /** Five failed starts in ten minutes, with the last lines of its log, one of them hostile. */
+  gaveUp: {
+    ...SERVICE_RUNNING,
+    ...NOT_RUNNING,
+    status: 'gaveUp',
+    restarts: 4,
+    lastRestartAt: '2026-10-25T10:09:30.000Z',
+    logTail: [
+      '2026-10-25T10:09:31.000Z events: opening the event database',
+      'Error: Cannot find module /example/home/.local/share/agent-communications/runtime/owner.mjs',
+      '<img src=x onerror=alert(1)>',
+    ],
+  },
+  /** One adopted from a terminal, older than the version installed now (D5). */
+  olderAdopted: { ...SERVICE_RUNNING, startedBy: 'terminal', version: '0.26.2', newerVersion: '0.27.0' },
+  /** The first automatic start, on a Mac where the service has run before (P1). */
+  firstStart: { ...SERVICE_RUNNING, ...NOT_RUNNING, firstStartQuestion: true },
+  /** A WhatsApp account, and no Full Disk Access for the app (D6). */
+  fullDiskAccessMissing: { ...SERVICE_RUNNING, fullDiskAccess: 'missing' },
+  /** Windows, where the service does not run (B1-G). */
+  windows: { ...SERVICE_RUNNING, ...NOT_RUNNING, available: false, wanted: false, status: 'unavailable' },
+} satisfies Record<string, EventServiceState>;
 
 /**
  * A fixture's answer for a call: its data, or a function of the call that gives it. For `version` it is the version
@@ -162,14 +220,32 @@ export function createFakeBridge(
     async takeDeepLink() {
       return null;
     },
+    async eventServiceState() {
+      return EVENT_SERVICE.running;
+    },
+    async setEventService(on) {
+      return on ? EVENT_SERVICE.running : EVENT_SERVICE.stopped;
+    },
+    async eventServiceRetry() {
+      return EVENT_SERVICE.starting;
+    },
+    async restartEventService() {
+      return EVENT_SERVICE.starting;
+    },
+    async answerFirstStart(start) {
+      return start ? EVENT_SERVICE.starting : EVENT_SERVICE.stopped;
+    },
+    async openFullDiskAccess() {},
+    async answerQuit() {},
   };
 
   const bridge = { calls } as FakeBridge;
   for (const command of Object.keys(defaults) as (keyof typeof defaults)[]) {
-    const implementation = (handlers[command] ?? defaults[command]) as (argument?: unknown) => Promise<unknown>;
-    (bridge as unknown as Record<string, unknown>)[command] = (argument?: unknown) => {
-      record(command, argument);
-      return implementation(argument);
+    const implementation = (handlers[command] ?? defaults[command]) as (...args: unknown[]) => Promise<unknown>;
+    // A command of one argument is recorded with that argument; one of more, with the list of them.
+    (bridge as unknown as Record<string, unknown>)[command] = (...args: unknown[]) => {
+      record(command, args.length > 1 ? args : args[0]);
+      return implementation(...args);
     };
   }
   bridge.on = async (event, handler) => {

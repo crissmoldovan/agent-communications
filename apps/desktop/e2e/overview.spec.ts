@@ -84,7 +84,7 @@ test('Overview shows the version, approvals waiting and each doctor', async ({ p
   expect(calls).not.toContain('cli:doctor:gmail');
   for (const call of calls) {
     expect(call).toMatch(
-      /^(installation|take_deep_link|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+))$/,
+      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+))$/,
     );
   }
 });
