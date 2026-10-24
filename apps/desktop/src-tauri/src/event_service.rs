@@ -2,7 +2,7 @@
 //!
 //! The app starts `<data>/launch/events-daemon run` detached, through DA4's launcher and pins, with its output in a
 //! capped log, and records what it started in its own settings folder (`event-service.json`). A watchdog asks
-//! `agent-events status` every 15 seconds, and a pure decision, `decide`, chooses what to do: start, adopt, restart,
+//! the events CLI's `status` every 15 seconds, and a pure decision, `decide`, chooses what to do: start, adopt, restart,
 //! say it was stopped from outside, give up, restart on a new version, ask first, or nothing. Every side effect is
 //! `apply`'s.
 
@@ -86,7 +86,7 @@ impl Default for ServiceRecord {
     }
 }
 
-/// What `agent-events status` said of the owner.
+/// What the events CLI's `status` said of the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
     Running,
@@ -662,7 +662,7 @@ pub fn save_record(dir: &Path, record: &ServiceRecord) -> Result<(), AppError> {
 
 // The supervisor: what `apply` does to processes and files, and the watchdog that runs it.
 
-/// How often the watchdog asks `agent-events status` (plan, Global Constraints).
+/// How often the watchdog asks the events CLI's `status` (plan, Global Constraints).
 pub const WATCH_EVERY: Duration = Duration::from_secs(15);
 /// How soon it looks again while a service it started is not answering yet, so the window sees it running, for the
 /// first `SOON_FOR` after the start.
@@ -753,7 +753,7 @@ pub fn log_tail(path: &Path, lines: usize) -> Vec<String> {
     kept[kept.len().saturating_sub(lines)..].to_vec()
 }
 
-/// What `agent-events status` said, read: `owner` is `running` or `not-running`; anything else is unknown.
+/// What the events CLI's `status` said, read: `owner` is `running` or `not-running`; anything else is unknown.
 fn owner_of(result: &CliResult) -> Owner {
     let CliResult::Ok { data, .. } = result else {
         return Owner::Unknown;
@@ -922,7 +922,7 @@ impl Supervisor {
         self.owner
     }
 
-    /// What the watchdog sees: the process, `agent-events status`, the marker, whether the database exists, and the
+    /// What the watchdog sees: the process, the events CLI's `status`, the marker, whether the database exists, and the
     /// launcher and its version. Nothing in the event database is opened.
     ///
     /// The service writes its marker after its control socket closes, so `status` can say it is not running while its
@@ -1095,7 +1095,7 @@ impl Supervisor {
         self.save();
     }
 
-    /// Stops the running service through `agent-events stop`, and waits for it to go. Only when that does not stop it
+    /// Stops the running service through the events CLI's `stop`, and waits for it to go. Only when that does not stop it
     /// is the recorded PID sent SIGTERM, and only once it is checked to be `events-daemon run` (Review Focus 3).
     fn stop(&mut self, ctx: &RunContext) {
         let asked = matches!(
@@ -1215,7 +1215,7 @@ impl Supervisor {
 
     /// The switch. On: wanted, with its failures cleared, and a service the app knew of that is no longer there
     /// forgotten, so it starts one, or adopts one running — also after an adopted one went, or a stop from outside
-    /// (D4). Off: whatever runs is stopped through `agent-events stop`. Either is the first-start question's answer.
+    /// (D4). Off: whatever runs is stopped through the events CLI's `stop`. Either is the first-start question's answer.
     pub fn set_wanted(&mut self, ctx: &RunContext, on: bool, now: SystemTime) {
         self.restart_due = None;
         self.restarting = false;
@@ -2045,7 +2045,7 @@ mod tests {
 
     #[test]
     fn already_running_owner_when_starting_is_adopted() {
-        // The app's start was refused because a terminal's `agent-events run` owns the database (Review Focus 1).
+        // The app's start was refused because a terminal's the events CLI's `run` owns the database (Review Focus 1).
         let refused = seen(Running, Process::Exited(ChildExit::Code(78)));
         let action = decide(&app_started(), &refused, now());
         assert_eq!(action, Adopt);
@@ -2625,7 +2625,7 @@ exit 64
         assert_eq!(state.newer_version, None);
         assert!(supervisor.app_service_running());
         assert_eq!(load_record(&fake.app).pid, Some(pid), "kept");
-        // Off: through `agent-events stop`, and it is gone, and forgotten.
+        // Off: through the events CLI's `stop`, and it is gone, and forgotten.
         supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
         let stop = fs::read_to_string(fake.path("stop-argv")).expect("stop was asked");
         assert_eq!(stop.lines().take(2).collect::<Vec<_>>(), ["stop", "--json"]);
@@ -2882,7 +2882,7 @@ exit 64
         supervisor.remember_quit(QuitAnswer::Stop);
         assert_eq!(load_record(&fake.app).quit_answer, Some(QuitAnswer::Stop));
         supervisor.stop_for_quit(&fake.ctx);
-        assert!(fake.has("stop-argv"), "through agent-events stop");
+        assert!(fake.has("stop-argv"), "through the events CLI's stop");
         assert!(!fake.has("running"));
         assert!(!supervisor.app_service_running());
         // Stopped by the app, and forgotten: the switch stays on, so the next run starts it again, and the marker of
