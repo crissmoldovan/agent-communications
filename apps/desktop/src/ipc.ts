@@ -6,6 +6,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+/*
+ * The event service's types, commands and events are Task 2's (plan 2026-10-25-desktop-0270, Task 2's Interfaces), in
+ * its names: `event_service.rs` and `ipc.rs` define them, and the window only shows and asks.
+ */
+
 /** The six products a launcher starts (`launchers.rs`). */
 export type Product = 'core' | 'gmail' | 'slack' | 'resend' | 'whatsapp' | 'events-daemon';
 
@@ -138,15 +143,51 @@ export interface UpdaterState {
   message: string | null;
 }
 
+/** Where the event service the app runs stands (`event_service.rs`, `EventServiceStatus`). */
+export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'gaveUp';
+
+/** Whether the service the app starts may read WhatsApp's database (D6): only asked when a WhatsApp account exists. */
+export type FullDiskAccess = 'granted' | 'missing' | 'not-needed';
+
+/** The event service as the app runs it (D2, D4, D5, D6, P1), from its supervisor. */
+export interface EventServiceState {
+  /** False on Windows, where the service does not run (B1-G). */
+  available: boolean;
+  /** The switch: whether the person wants it running. */
+  wanted: boolean;
+  status: EventServiceStatus;
+  /** Who started the one running: the app, or a terminal (an adopted one). */
+  startedBy: 'app' | 'terminal' | null;
+  /** When the running one started, as an ISO time. */
+  since: string | null;
+  /** The running one's version, from the launcher's `.current` when it started. */
+  version: string | null;
+  /** The version installed now, when it differs from the running one's. */
+  newerVersion: string | null;
+  restarts: number;
+  lastRestartAt: string | null;
+  /** When a clean stop the app did not ask for turned the switch off (D4). */
+  stoppedFromOutsideAt: string | null;
+  /** The last lines of the service's log, only when the app gave up restarting it. */
+  logTail: string[];
+  /** Whether the first automatic start waits for the person's answer (P1). */
+  firstStartQuestion: boolean;
+  fullDiskAccess: FullDiskAccess;
+}
+
 /** The events Rust emits to the window, and what each carries. */
 export interface AppEvents {
   'deep-link': DeepLinkTarget;
   'window-visibility': { visible: boolean };
   updater: UpdaterState;
   'data-changed': null;
+  /** The event service's state, whenever it changes. */
+  'event-service:changed': EventServiceState;
+  /** Quit was pressed, and the window is asked whether to keep the event service running (P3). */
+  'quit-requested': null;
 }
 
-/** The fourteen commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** The twenty-one commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -166,6 +207,18 @@ export interface Bridge {
   checkForUpdates(): Promise<UpdaterState>;
   installUpdate(): Promise<void>;
   takeDeepLink(): Promise<DeepLinkTarget | null>;
+  eventServiceState(): Promise<EventServiceState>;
+  /** The switch: on starts the service (or adopts a running one), off stops it through the events CLI's stop. */
+  setEventService(on: boolean): Promise<EventServiceState>;
+  /** Try again, after the app gave up restarting it. */
+  eventServiceRetry(): Promise<EventServiceState>;
+  /** Restart it on the version installed now. */
+  restartEventService(): Promise<EventServiceState>;
+  answerFirstStart(start: boolean): Promise<EventServiceState>;
+  /** Opens System Settings at Full Disk Access. */
+  openFullDiskAccess(): Promise<void>;
+  /** The answer to the quit question; the app then quits. */
+  answerQuit(keep: boolean, remember: boolean): Promise<void>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -187,6 +240,13 @@ export const tauriBridge: Bridge = {
   checkForUpdates: () => invoke('check_for_updates'),
   installUpdate: () => invoke('install_update'),
   takeDeepLink: () => invoke('take_deep_link'),
+  eventServiceState: () => invoke('event_service_state'),
+  setEventService: (on) => invoke('set_event_service', { on }),
+  eventServiceRetry: () => invoke('event_service_retry'),
+  restartEventService: () => invoke('restart_event_service'),
+  answerFirstStart: (start) => invoke('answer_first_start', { start }),
+  openFullDiskAccess: () => invoke('open_full_disk_access'),
+  answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 
