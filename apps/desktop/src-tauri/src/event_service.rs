@@ -1008,6 +1008,8 @@ pub struct Supervisor {
     owner: Owner,
     installed_version: Option<String>,
     full_disk_access: String,
+    /// Set, under the supervisor's lock, once the app is quitting: from then on nothing is started.
+    quitting: bool,
 }
 
 impl Supervisor {
@@ -1027,6 +1029,7 @@ impl Supervisor {
             owner: Owner::Unknown,
             installed_version: None,
             full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
+            quitting: false,
         }
     }
 
@@ -1111,7 +1114,7 @@ impl Supervisor {
 
     /// One look: observe, decide, apply. While a restart waits, nothing is asked until it is due.
     pub fn tick(&mut self, ctx: &RunContext, now: SystemTime) {
-        if self.platform == Platform::Windows {
+        if self.platform == Platform::Windows || self.quitting {
             return;
         }
         self.trim_log(ctx);
@@ -1216,6 +1219,9 @@ impl Supervisor {
     /// is a failed start, and is counted.
     fn start(&mut self, ctx: &RunContext, observed: &Observation, now: SystemTime) {
         let restart = std::mem::take(&mut self.restarting);
+        if self.quitting {
+            return;
+        }
         self.first_start_question = false;
         match spawn_service(ctx) {
             Ok(child) => {
@@ -1450,9 +1456,17 @@ impl Supervisor {
         self.save();
     }
 
+    /// The app is quitting: from now on nothing is started, so a tick that was waiting for the lock cannot start a
+    /// detached service as the app exits. Set before any stop for quitting.
+    pub fn begin_quit(&mut self) {
+        self.quitting = true;
+        self.restart_due = None;
+    }
+
     /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
-    /// The switch stays on, so the app starts it again when it next runs (D2).
+    /// The switch stays on, so the app starts it again when it next runs (D2): it stops for this run only.
     pub fn stop_for_quit(&mut self, ctx: &RunContext) {
+        self.begin_quit();
         if self.app_service_running() {
             self.stop(ctx);
             self.record = forget(&self.record);
@@ -1857,6 +1871,7 @@ pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), Ap
         QuitAnswer::Stop
     };
     with_supervisor(app, |supervisor, ctx| {
+        supervisor.begin_quit();
         if remember {
             supervisor.remember_quit(answer);
         }
@@ -3550,6 +3565,16 @@ exit 64
         assert!(kept.wanted);
         assert_eq!(kept.pid, None);
         assert_eq!(kept.started_at, None);
+        // Quitting: a tick that was waiting for the lock starts nothing, as the app exits, even when a restart was due.
+        fake.unmark("run-argv");
+        supervisor.restart_due = Some(SystemTime::now());
+        supervisor.tick(&fake.ctx, SystemTime::now() + Duration::from_secs(60));
+        assert!(!fake.has("run-argv"), "nothing started while quitting");
+        assert_eq!(supervisor.record().pid, None);
+        assert!(
+            supervisor.record().wanted,
+            "for this run only: the next starts it again"
+        );
         // A terminal's service: nothing of the app's runs, so Quit does not ask.
         fake.mark("running");
         let mut adopted = fake.supervisor(ServiceRecord::default());
