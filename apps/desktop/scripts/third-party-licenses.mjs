@@ -389,7 +389,7 @@ async function main() {
           problems.push(`apps/desktop: the build uses ${key}, and THIRD_PARTY_LICENSES has no notice for it`);
         }
         problems.push(
-          'apps/desktop/THIRD_PARTY_LICENSES is out of date — run `pnpm --filter @agentcomms/desktop licenses`',
+          'apps/desktop/THIRD_PARTY_LICENSES is out of date — run `pnpm --filter @agentcomms/desktop run licenses`',
         );
       }
     }

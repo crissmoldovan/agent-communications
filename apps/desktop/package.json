@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/desktop",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "private": true,
   "description": "Agent Comms: the tray app that shows this machine's agent-communications. Never published to npm.",
   "type": "module",
@@ -23,7 +23,7 @@
     "@cueplusplus/tokens": "0.29.0",
     "@cueplusplus/ui": "0.29.0",
     "@tauri-apps/api": "2.12.4",
-    "lucide-react": "1.59.0",
+    "lucide-react": "1.60.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "zod": "catalog:"

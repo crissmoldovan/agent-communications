@@ -347,6 +347,8 @@ async function releaseTree() {
       await cp(join(ROOT, declaration.skills.contract), target);
     }
   }
+  // The copied core declares whatever this release is; every test here starts from nothing declared.
+  await declare(root, undefined);
   return root;
 }
 

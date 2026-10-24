@@ -3,6 +3,49 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.26.1
+
+**Security fix.** Three libraries agentcomms ships had published advisories against the versions in 0.26.0. This
+release moves each one past the version that fixed it:
+- **Reading mail: `postal-mime` 4.1.4** (at least 4.0.11). Core reads every sender's address and encoded-word
+  headers with it. A header made of many joinable encoded words made it spend CPU quadratically, so anyone who could
+  send you mail could make reading their message stall (GHSA-f2hq-32vh-53cc, high).
+- **Building mail: Nodemailer 10.1.7.** The Gmail channel builds every message it sends with it. Its address parser
+  could end an address early at a nested comment, at a `>` inside a quoted local part, or at a `;` inside a quoted
+  string or comment, and so read the address differently from how it was written (GHSA-8c8m-p3m8-cjg8,
+  GHSA-85x2-q946-cp5h, GHSA-m943-m63m-w62w, moderate).
+- **Checking input: Zod 4.6.7.** Every MCP tool's input is checked with it, and so is the desktop app's reading of
+  each CLI answer. An oversized input could exhaust its memory (GHSA-mrhx-c7xc-m3w5, high).
+
+Because the release declares itself a security fix, the background update installs it 24 hours after it is
+published instead of 72, and a pause does not hold it. Where it would not install on its own, it is announced at
+once, and the next Gmail or Resend send preview, or Slack post preview, opens with a line about it until you answer
+one. A test now holds each of the three libraries at or above its fixed version, in every declared range and in every
+copy the lockfile resolves, so none of them can slip back.
+
+Also updated:
+- the Google client libraries: `@googleapis/gmail` 22.0.2 and `google-auth-library` 11.3.1, whose HTTP client,
+  gaxios 8, requires Node 22, as agentcomms already does;
+- the keychain binding, `@napi-rs/keyring` 2.1.2;
+- Playwright 1.64.1, which uses the same browser builds;
+- `lucide-react` 1.60.0 in the desktop app;
+- tsdown 0.23.1.
+
+The desktop app's licence check now names the command that rewrites its notices,
+`pnpm --filter @agentcomms/desktop run licenses`; the command it named before ran pnpm's own `licenses` command
+instead. The desktop app follows as `desktop-v0.26.1`, with the same Zod.
+
+**Not in this release,** although the same dependency proposal offered them:
+- the Sigstore libraries' new majors (`@sigstore/verify` 4, `@sigstore/bundle` and `@sigstore/tuf` 5). Every
+  update's verification rests on them, so they get a review and a release of their own. No advisory affects the
+  versions in use.
+- `@types/node` 26. Node 22 is the oldest Node the packages support, so their typings stay on Node 22.
+- Laya's runtime 0.2.0. Laya stays off, and its runtime is pinned by its reviewed lock, which moves only with a new
+  review.
+
+**Upgrading.** Nothing to change, and nothing to migrate. `agentcomms update` (or `comms_update`) moves each client's
+managed runtime to 0.26.1. Restart the client afterwards, and restart a running `agent-events run`.
+
 ## 0.26.0
 
 **An update now believes what a release says about itself only from the release's own verified files, and holds it

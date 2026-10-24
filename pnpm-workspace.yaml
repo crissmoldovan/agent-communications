@@ -6,9 +6,9 @@ packages:
 catalog:
   "@biomejs/biome": 2.5.15
   "@types/node": ^22.18.0
-  tsdown: 0.23.0
+  tsdown: 0.23.1
   typescript: 7.0.2
-  zod: ^4.6.5
+  zod: ^4.6.7
 
 # Supply-chain defaults (pnpm 11): refuse versions younger than a day, and build nothing
 # with install scripts unless it is listed here.
