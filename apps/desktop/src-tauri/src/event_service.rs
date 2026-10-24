@@ -1219,7 +1219,7 @@ impl Supervisor {
     }
 
     /// Starts the service, and records it as the app's: its PID, when, and the version installed. A start that fails
-    /// is a failed start, and is counted.
+    /// is a failed start: counted, and tried again after the waits a crash gets.
     fn start(&mut self, ctx: &RunContext, observed: &Observation, now: SystemTime) {
         let restart = std::mem::take(&mut self.restarting);
         if self.quitting {
@@ -1258,10 +1258,20 @@ impl Supervisor {
                         error.message
                     ),
                 );
+                // A failed start waits as a crash does, 1 s, 5 s, then 30 s, until the fifth gives up.
+                let next = crashed(&self.record, now);
                 self.record = ServiceRecord {
                     recent_failures: with_failure(&self.record, now),
                     ..forget(&self.record)
                 };
+                match next {
+                    Action::Restart { after } => self.restart_due = Some(now + after),
+                    _ => self.note(
+                        ctx,
+                        now,
+                        "It could not start 5 times in 10 minutes, so Agent Comms stopped trying.",
+                    ),
+                }
             }
         }
         self.save();
@@ -3467,6 +3477,52 @@ exit 0
             supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
             fake.finish(&mut supervisor);
         }
+    }
+
+    /// A start that fails before the service runs — here a launcher others may change, which the app refuses to run
+    /// (DA16) — waits as a crash does, 1 s, 5 s, then 30 s, and gives up at the fifth, never a flat retry.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_that_fails_waits_1s_5s_then_30s_and_gives_up_at_the_fifth() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new();
+        fs::set_permissions(
+            fake.path("events-daemon"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .expect("open to all");
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        let mut at = SystemTime::now();
+        let mut waits = Vec::new();
+        for attempt in 1..=5 {
+            supervisor.tick(&fake.ctx, at);
+            assert_eq!(supervisor.record().pid, None, "refused, attempt {attempt}");
+            assert_eq!(supervisor.record().recent_failures.len(), attempt);
+            let Some(due) = supervisor.restart_due else {
+                waits.push(None);
+                break;
+            };
+            waits.push(due.duration_since(at).ok().map(|wait| wait.as_secs()));
+            // Not before its wait.
+            supervisor.tick(&fake.ctx, at + Duration::from_millis(500));
+            assert_eq!(supervisor.record().recent_failures.len(), attempt);
+            at = due;
+        }
+        assert_eq!(waits, [Some(1), Some(5), Some(30), Some(30), None]);
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::GaveUp);
+        assert!(state
+            .log_tail
+            .iter()
+            .any(|line| line.contains("Agent Comms could not start the event service")));
+        assert!(!fake.has("run-argv"), "the refused launcher never ran");
+        supervisor.tick(&fake.ctx, at + Duration::from_secs(3600));
+        assert_eq!(
+            supervisor.record().recent_failures.len(),
+            5,
+            "no more tries"
+        );
+        fake.finish(&mut supervisor);
     }
 
     #[cfg(unix)]
