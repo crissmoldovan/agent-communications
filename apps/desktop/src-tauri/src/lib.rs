@@ -3,6 +3,7 @@
 pub mod allowlist;
 pub mod commands;
 pub mod deeplink;
+pub mod event_service;
 pub mod grammar;
 pub mod ipc;
 pub mod launchers;
