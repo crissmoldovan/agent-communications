@@ -223,6 +223,16 @@ signal or a non-zero code.
 - **An adopted service** (started from a terminal) that goes away is not restarted, because it was never the app's.
   The Events screen offers Start.
 - This needs nothing from the daemon. The app watches the exit of its own child.
+- **Amended after the branch review (lead's call, 2026-10-25):** "a clean shutdown" means a stop someone asked for, not
+  one the system did.
+  - **Why:** at logout or shutdown, macOS and Linux send SIGTERM to every process left in the session. The daemon stops
+    cleanly on it. Read literally, D4 would then turn the switch off after every restart, and the service would never
+    come back at login, against D2.
+  - **The rule:** the daemon's clean-stop marker (plan P2) says why it stopped, with `"reason": "request"` (the control
+    socket's stop: `agent-events stop`, `events_stop`, or the app's switch) or `"signal"` (SIGINT, SIGTERM, SIGHUP).
+  - Only `request` turns the switch off. `signal` counts as a crash: the app starts the service again with the usual
+    waits, counting toward giving up.
+  - This applies both when the app finds its service gone at launch or on a check, and when its own child exits.
 
 ### D5. A new version of the service (lead's call)
 

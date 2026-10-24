@@ -163,8 +163,8 @@ The tray shows how many approvals wait, and closing the window hides it there.
   It starts at login when the app does.
 - **After a crash, the app restarts it,** waiting 1 s, 5 s, then 30 s between tries. After 5 failed starts in 10
   minutes it stops trying, and Events shows the last lines of the log with **Try again**. A service you stop yourself
-  (`agent-events stop`, or switching it off) stays stopped. A service started from a terminal is used as it is, and
-  never restarted by the app.
+  (`agent-events stop`, or switching it off) stays stopped; a logout, a restart or a `kill` doesn't count, and the
+  service comes back with the app. A service started from a terminal is used as it is, and never restarted by the app.
 - **A new version takes over within a minute** of the background update installing it.
 - **The first start after the upgrade asks first** ("Start the event service?") if the service has run on this Mac
   before, since it resumes whatever it was set to do.

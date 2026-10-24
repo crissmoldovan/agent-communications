@@ -17,7 +17,8 @@ ran only while `agent-events run` held a terminal open, and every desktop releas
 - **A crash is restarted; a stop is not.** If a service the app started crashes, the app starts it again after 1 s,
   5 s, then 30 s, and shows "Restarted 2 min ago". After 5 failed starts in 10 minutes it stops trying, and Events
   shows the last lines of `service.log` with **Try again**. A service stopped on purpose (`agent-events stop`, the
-  `events_stop` tool, or the switch) stays stopped, and Events says "Stopped from outside at <time>".
+  `events_stop` tool, or the switch) stays stopped, and Events says "Stopped from outside at <time>". A logout, a
+  restart or a `kill` is not a stop on purpose: the service comes back with the app.
 - **A new version takes over.** When the background update installs a newer event service, the app moves a service
   it started onto it within a minute. A service started from a terminal gets **Restart to use it** instead.
 - **The first start after the upgrade asks** "Start the event service?" if the service has run on this Mac before,
@@ -37,7 +38,8 @@ pop-up, and installs only when you choose Install and restart, after its signatu
 files are still built by CI without the updater key, so theirs stays off: install a newer release over them.
 
 **`@agentcomms/events-daemon`:** a clean stop now writes `last-stop.json` beside the event database, with the owner's
-PID and the time, so whatever runs the service can tell a stop from a crash. Nothing else about `agent-events`
+PID, the time, and whether it was asked to stop or got a signal. Whatever runs the service can then tell a stop from a
+crash, and a requested stop from a logout. Nothing else about `agent-events`
 changes, and nothing is needed from you.
 
 This release is not a security fix: 0.26.2's declaration ends with it, so the background update treats 0.27.0 as an
