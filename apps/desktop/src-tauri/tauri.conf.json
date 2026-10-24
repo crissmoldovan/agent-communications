@@ -34,6 +34,10 @@
   },
   "plugins": {
     "deep-link": { "desktop": { "schemes": ["agentcomms"] } },
-    "updater": { "pubkey": "", "endpoints": [], "requireSignedVersion": true }
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxNDY4NEJERDEzQjkwREYKUldUZmtEdlJ2WVJHTVdqVVVxUHdiSkM0RU1LZXB3VmFveUY3Z0o0RXR4cXpTYW13ZXpCb3I2QUgK",
+      "endpoints": [],
+      "requireSignedVersion": true
+    }
   }
 }
