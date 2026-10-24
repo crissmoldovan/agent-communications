@@ -1,15 +1,17 @@
-//! The fourteen commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
+//! The twenty-one commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
 use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId};
 use crate::ipc::{
-    AppError, AppSettings, CliResult, DeepLinkTarget, Installation, ProfileOpened, TerminalCommand,
-    TerminalOutcome, UpdaterState,
+    AppError, AppSettings, CliResult, DeepLinkTarget, EventServiceState, Installation,
+    ProfileOpened, TerminalCommand, TerminalOutcome, UpdaterState,
 };
 use crate::launchers::discover;
 use crate::paths::FolderOverrides;
 use crate::runner::{run, RunContext};
-use crate::{deeplink, links, login_item, settings, terminal, tray, updater, AppState};
+use crate::{
+    deeplink, event_service, links, login_item, settings, terminal, tray, updater, AppState,
+};
 use tauri::{AppHandle, Manager, State};
 
 /// Every command, in the order `build.rs` declares them; a test checks the two and the capability file agree.
@@ -28,6 +30,13 @@ pub const NAMES: &[&str] = &[
     "check_for_updates",
     "install_update",
     "take_deep_link",
+    "event_service_state",
+    "set_event_service",
+    "event_service_retry",
+    "restart_event_service",
+    "answer_first_start",
+    "open_full_disk_access",
+    "answer_quit",
 ];
 
 /// This machine's run context, with Settings' folder overrides.
@@ -192,6 +201,54 @@ pub fn take_deep_link(app: AppHandle) -> Result<Option<DeepLinkTarget>, AppError
     Ok(deeplink::take(&app))
 }
 
+/// Where the event service the app runs stands (0.27.0 D2). Off the main thread, as every event-service command is:
+/// each waits for the supervisor, which runs the events CLI.
+#[tauri::command]
+pub async fn event_service_state(app: AppHandle) -> Result<EventServiceState, AppError> {
+    blocking(move || event_service::current(&app)).await
+}
+
+/// The switch: on starts the service, or adopts one running, even when it was already on; off stops it through the
+/// events CLI's `stop`.
+#[tauri::command]
+pub async fn set_event_service(on: bool, app: AppHandle) -> Result<EventServiceState, AppError> {
+    blocking(move || event_service::set_wanted(&app, on)).await
+}
+
+/// Try again, after the app gave up restarting the service.
+#[tauri::command]
+pub async fn event_service_retry(app: AppHandle) -> Result<EventServiceState, AppError> {
+    blocking(move || event_service::retry(&app)).await
+}
+
+/// Restart to use it: stops the service that runs, and starts the version installed now (D5).
+#[tauri::command]
+pub async fn restart_event_service(app: AppHandle) -> Result<EventServiceState, AppError> {
+    blocking(move || event_service::restart(&app)).await
+}
+
+/// The first-start question's answer (P1): Start, or Not now, which leaves the switch off.
+#[tauri::command]
+pub async fn answer_first_start(
+    start: bool,
+    app: AppHandle,
+) -> Result<EventServiceState, AppError> {
+    blocking(move || event_service::answer_first_start(&app, start)).await
+}
+
+/// Opens System Settings at Full Disk Access (D6), on macOS.
+#[tauri::command]
+pub async fn open_full_disk_access(app: AppHandle) -> Result<(), AppError> {
+    blocking(move || event_service::open_full_disk_access(&app)).await?
+}
+
+/// The quit question's answer (P3): kept when Remember my answer is set, the service stopped on Stop it, then the app
+/// quits.
+#[tauri::command]
+pub async fn answer_quit(keep: bool, remember: bool, app: AppHandle) -> Result<(), AppError> {
+    blocking(move || event_service::answer_quit(&app, keep, remember)).await?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,7 +269,7 @@ mod tests {
 
     #[test]
     fn capabilities_grant_exactly_the_commands() {
-        assert_eq!(NAMES.len(), 14);
+        assert_eq!(NAMES.len(), 21);
         assert_eq!(build_rs_commands(), NAMES);
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json"))
@@ -274,7 +331,15 @@ mod tests {
             })
             .collect();
         assert_eq!(blocks.len(), NAMES.len());
+        let mut event_service = 0;
         for block in blocks {
+            if block.contains("event_service::") {
+                event_service += 1;
+                assert!(
+                    block.trim_start().starts_with("pub async fn ") && block.contains("blocking("),
+                    "an event-service command waits for the supervisor, so it is async and off the main thread:\n{block}"
+                );
+            }
             if block.contains("settings::") || block.contains("login_item::") {
                 assert!(
                     block.trim_start().starts_with("pub async fn "),
@@ -286,5 +351,6 @@ mod tests {
                 );
             }
         }
+        assert_eq!(event_service, 7, "the event service's seven commands");
     }
 }

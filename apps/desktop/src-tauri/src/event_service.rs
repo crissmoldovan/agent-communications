@@ -6,16 +6,25 @@
 //! say it was stopped from outside, give up, restart on a new version, ask first, or nothing. Every side effect is
 //! `apply`'s.
 
-use crate::ipc::AppError;
-use crate::launchers::{launcher_path, Product};
+use crate::allowlist::{service_run, Call};
+use crate::commands::context;
+use crate::ipc::{AppError, CliResult, EventServiceState, EventServiceStatus};
+use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for, Product};
 use crate::paths::{Folders, Platform};
+use crate::runner::{command_for, run, RunContext};
+use crate::{settings, window, AppState};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Path;
-use std::sync::LazyLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::Ordering;
+use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 /// The most the service's log holds, in bytes: a write that would pass it drops the older half first.
 pub const LOG_CAP: u64 = 1_000_000;
@@ -640,6 +649,840 @@ pub fn save_record(dir: &Path, record: &ServiceRecord) -> Result<(), AppError> {
         let _ = fs::remove_file(&temporary);
         failed(error)
     })
+}
+
+// The supervisor: what `apply` does to processes and files, and the watchdog that runs it.
+
+/// How often the watchdog asks `agent-events status` (plan, Global Constraints).
+pub const WATCH_EVERY: Duration = Duration::from_secs(15);
+/// How soon it looks again while a service it started is not answering yet, so the window sees it running, for the
+/// first `SOON_FOR` after the start.
+const SOON: Duration = Duration::from_secs(2);
+const SOON_FOR: Duration = Duration::from_secs(60);
+/// How long a stop waits for the service to go, after the CLI's stop and again after a signal.
+pub const STOP_WAIT: Duration = Duration::from_secs(20);
+/// The service's output, in `<state>/events`.
+pub const LOG_FILE: &str = "service.log";
+/// Task 1's clean-stop marker, in `<state>/events`.
+pub const MARKER_FILE: &str = "last-stop.json";
+/// The service's database, in `<state>/events`: the app only asks whether it exists (P1), and never opens it.
+pub const DATABASE_FILE: &str = "events.sqlite";
+/// How many of the log's last lines the window is shown when the app gives up.
+pub const LOG_TAIL_LINES: usize = 20;
+/// The event the window hears the state by, whenever it changes.
+pub const CHANGED: &str = "event-service:changed";
+/// The event that asks the window whether to keep the service running (P3).
+pub const QUIT_REQUESTED: &str = "quit-requested";
+/// Why there is no switch on Windows (B1-G).
+pub const WINDOWS_LINE: &str = "The event service doesn't run on Windows yet.";
+
+/// `<state>/events`: the service's own folder, where its log and its marker are too.
+pub fn events_dir(folders: &Folders) -> PathBuf {
+    PathBuf::from(&folders.state_dir).join("events")
+}
+
+/// `<state>/events`, made owner-only where it is missing, as the service makes it.
+fn ensure_events_dir(folders: &Folders) -> io::Result<PathBuf> {
+    let dir = events_dir(folders);
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir)?;
+    Ok(dir)
+}
+
+/// The last `lines` lines of the log, as plain text: from its last 64 KiB, with control characters replaced.
+pub fn log_tail(path: &Path, lines: usize) -> Vec<String> {
+    const READ: u64 = 64 * 1024;
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
+    let start = file
+        .metadata()
+        .map(|metadata| metadata.len().saturating_sub(READ))
+        .unwrap_or(0);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err()
+        || file.take(READ).read_to_end(&mut bytes).is_err()
+    {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut all: Vec<&str> = text.split('\n').collect();
+    if start > 0 && !all.is_empty() {
+        all.remove(0);
+    }
+    let kept: Vec<String> = all
+        .into_iter()
+        .map(|line| {
+            line.trim_end_matches('\r')
+                .chars()
+                .map(|c| {
+                    if c.is_control() && c != '\t' {
+                        '\u{FFFD}'
+                    } else {
+                        c
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    kept[kept.len().saturating_sub(lines)..].to_vec()
+}
+
+/// What `agent-events status` said, read: `owner` is `running` or `not-running`; anything else is unknown.
+fn owner_of(result: &CliResult) -> Owner {
+    let CliResult::Ok { data, .. } = result else {
+        return Owner::Unknown;
+    };
+    match data.get("owner").and_then(|owner| owner.as_str()) {
+        Some("running") => Owner::Running,
+        Some("not-running") => Owner::NotRunning,
+        _ => Owner::Unknown,
+    }
+}
+
+fn exit_of(status: ExitStatus) -> ChildExit {
+    if let Some(code) = status.code() {
+        return ChildExit::Code(code);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return ChildExit::Signal(signal);
+        }
+    }
+    ChildExit::Code(-1)
+}
+
+/// Starts `<data>/launch/events-daemon run` with the pins, detached (plan, Global Constraints):
+/// - in a process group of its own, so it outlives the app and a terminal's signals never reach it;
+/// - stdin closed, stdout and stderr appended to `<state>/events/service.log`;
+/// - the environment every call gets (`runner::command_for`), and its launcher checked as every call's is (DA16).
+///
+/// No shell, never `npx`, and never on Windows.
+pub fn spawn_service(ctx: &RunContext) -> Result<Child, AppError> {
+    if ctx.platform == Platform::Windows || cfg!(windows) {
+        return Err(AppError::refused(WINDOWS_LINE));
+    }
+    let launcher =
+        find_launcher(&ctx.folders, ctx.platform, Product::EventsDaemon).ok_or_else(|| {
+            AppError::not_installed(format!(
+                "there is no events-daemon launcher at {}",
+                launcher_path(&ctx.folders, ctx.platform, Product::EventsDaemon)
+            ))
+        })?;
+    check_launcher(&launcher, ctx.platform)?;
+    let program = program_for(&launcher, ctx.platform, ctx.node.as_deref())?;
+    let log_failed = |error: io::Error| {
+        AppError::io(format!(
+            "the event service's log in {} could not be opened: {error}",
+            events_dir(&ctx.folders).display()
+        ))
+    };
+    let events = ensure_events_dir(&ctx.folders).map_err(log_failed)?;
+    let log = open_log(&events.join(LOG_FILE)).map_err(log_failed)?;
+    let errors = log.try_clone().map_err(log_failed)?;
+    let mut command = command_for(&service_run(), &program, &ctx.folders, false);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(errors));
+    detach(&mut command);
+    command.spawn().map_err(|error| {
+        AppError::io(format!(
+            "the events-daemon launcher could not be started: {error}"
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn detach(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn detach(_command: &mut Command) {}
+
+/// The supervisor: the record, the app's own child, and what the window is told. `decide` chooses; this does it.
+pub struct Supervisor {
+    record: ServiceRecord,
+    /// Where the record is kept; none keeps it in memory only.
+    record_dir: Option<PathBuf>,
+    platform: Platform,
+    /// The service the app started in this run: its exit is known, since it is the app's child.
+    child: Option<Child>,
+    started: Option<Instant>,
+    /// When a restart is due, while it waits (1 s, 5 s, then 30 s).
+    restart_due: Option<SystemTime>,
+    /// Set while a start is a restart, so it is counted.
+    restarting: bool,
+    restarts: u32,
+    last_restart_at: Option<String>,
+    stopped_from_outside_at: Option<String>,
+    first_start_question: bool,
+    /// What `status` last said, and the version installed then.
+    owner: Owner,
+    installed_version: Option<String>,
+    full_disk_access: String,
+}
+
+impl Supervisor {
+    pub fn new(record: ServiceRecord, record_dir: Option<PathBuf>, platform: Platform) -> Self {
+        Supervisor {
+            record,
+            record_dir,
+            platform,
+            child: None,
+            started: None,
+            restart_due: None,
+            restarting: false,
+            restarts: 0,
+            last_restart_at: None,
+            stopped_from_outside_at: None,
+            first_start_question: false,
+            owner: Owner::Unknown,
+            installed_version: None,
+            full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
+        }
+    }
+
+    pub fn record(&self) -> &ServiceRecord {
+        &self.record
+    }
+
+    fn save(&self) {
+        if let Some(dir) = &self.record_dir {
+            let _ = save_record(dir, &self.record);
+        }
+    }
+
+    /// A line of the app's own in the service's log, so the tail shown on giving up says what the app did.
+    fn note(&self, ctx: &RunContext, now: SystemTime, line: &str) {
+        if let Ok(events) = ensure_events_dir(&ctx.folders) {
+            let _ = append_capped(
+                &events.join(LOG_FILE),
+                format!("[{}] {line}\n", iso(now)).as_bytes(),
+                LOG_CAP,
+            );
+        }
+    }
+
+    /// Keeps the log within its cap, for what the service wrote since.
+    fn trim_log(&self, ctx: &RunContext) {
+        let log = events_dir(&ctx.folders).join(LOG_FILE);
+        if fs::symlink_metadata(&log).is_ok_and(|metadata| metadata.is_file()) {
+            let _ = append_capped(&log, &[], LOG_CAP);
+        }
+    }
+
+    /// What became of the process the record names: the app's child is asked; a PID from an earlier run is read.
+    fn process(&mut self) -> Process {
+        if let Some(child) = &mut self.child {
+            return match child.try_wait() {
+                Ok(None) => Process::Alive,
+                Ok(Some(status)) => Process::Exited(exit_of(status)),
+                Err(_) => Process::Gone,
+            };
+        }
+        match self.record.pid {
+            Some(pid) if is_our_service(pid) => Process::Alive,
+            Some(_) => Process::Gone,
+            None => Process::NoneRecorded,
+        }
+    }
+
+    fn owner_now(&mut self, ctx: &RunContext) -> Owner {
+        self.owner = owner_of(&run(&Call::EventsStatus {}, ctx));
+        self.owner
+    }
+
+    /// What the watchdog sees: the process, `agent-events status`, the marker, whether the database exists, and the
+    /// launcher and its version. Nothing in the event database is opened.
+    fn observe(&mut self, ctx: &RunContext) -> Observation {
+        let process = self.process();
+        let owner = self.owner_now(ctx);
+        let events = events_dir(&ctx.folders);
+        let installed_version = installed_version(&ctx.folders, ctx.platform);
+        self.installed_version = installed_version.clone();
+        Observation {
+            owner,
+            process,
+            marker: read_small(&events.join(MARKER_FILE), 4096)
+                .and_then(|text| parse_marker(&text)),
+            database_exists: fs::symlink_metadata(events.join(DATABASE_FILE)).is_ok(),
+            installed: find_launcher(&ctx.folders, ctx.platform, Product::EventsDaemon).is_some(),
+            installed_version,
+        }
+    }
+
+    /// One look: observe, decide, apply. While a restart waits, nothing is asked until it is due.
+    pub fn tick(&mut self, ctx: &RunContext, now: SystemTime) {
+        if self.platform == Platform::Windows {
+            return;
+        }
+        self.trim_log(ctx);
+        if let Some(due) = self.restart_due {
+            if now < due {
+                return;
+            }
+            self.restart_due = None;
+            self.restarting = true;
+        }
+        let observed = self.observe(ctx);
+        let action = decide(&self.record, &observed, now);
+        self.apply(ctx, action, &observed, now);
+        self.restarting = false;
+    }
+
+    /// Does what `decide` chose.
+    fn apply(&mut self, ctx: &RunContext, action: Action, observed: &Observation, now: SystemTime) {
+        match action {
+            Action::Nothing => {
+                // Off, with a process of the app's that has since gone: forgotten.
+                if !self.record.wanted
+                    && matches!(observed.process, Process::Exited(_) | Process::Gone)
+                {
+                    self.child = None;
+                    self.record = forget(&self.record);
+                    self.save();
+                }
+            }
+            Action::AskFirstStart => self.first_start_question = true,
+            Action::Start => self.start(ctx, observed, now),
+            Action::RestartForVersion => {
+                self.note(
+                    ctx,
+                    now,
+                    &format!(
+                        "Agent Comms restarts the event service on {}.",
+                        observed
+                            .installed_version
+                            .as_deref()
+                            .unwrap_or("the version installed")
+                    ),
+                );
+                self.stop(ctx);
+                self.record = forget(&self.record);
+                self.restarting = true;
+                self.start(ctx, observed, now);
+            }
+            Action::Restart { after } => {
+                self.note(
+                    ctx,
+                    now,
+                    &format!(
+                        "The event service stopped {}; Agent Comms starts it again in {} s.",
+                        how(observed.process),
+                        after.as_secs()
+                    ),
+                );
+                self.child = None;
+                self.record = recorded(&self.record, action, observed, now);
+                self.restart_due = Some(now + after);
+                self.save();
+            }
+            Action::GiveUp => {
+                self.note(
+                    ctx,
+                    now,
+                    &format!(
+                        "The event service stopped {}. It stopped 5 times in 10 minutes, so Agent Comms stopped restarting it.",
+                        how(observed.process)
+                    ),
+                );
+                self.child = None;
+                self.record = recorded(&self.record, action, observed, now);
+                self.save();
+            }
+            Action::Adopt => {
+                self.child = None;
+                self.record = recorded(&self.record, action, observed, now);
+                self.save();
+            }
+            Action::MarkStoppedFromOutside => {
+                let at = observed
+                    .marker
+                    .as_ref()
+                    .filter(|marker| Some(marker.pid) == self.record.pid)
+                    .map(|marker| marker.at.clone())
+                    .unwrap_or_else(|| iso(now));
+                self.child = None;
+                self.record = recorded(&self.record, action, observed, now);
+                self.stopped_from_outside_at = Some(at);
+                self.save();
+            }
+        }
+    }
+
+    /// Starts the service, and records it as the app's: its PID, when, and the version installed. A start that fails
+    /// is a failed start, and is counted.
+    fn start(&mut self, ctx: &RunContext, observed: &Observation, now: SystemTime) {
+        let restart = std::mem::take(&mut self.restarting);
+        self.first_start_question = false;
+        match spawn_service(ctx) {
+            Ok(child) => {
+                let pid = child.id();
+                self.record = ServiceRecord {
+                    pid: Some(pid),
+                    started_at: Some(iso(now)),
+                    version: observed.installed_version.clone(),
+                    started_by_app: true,
+                    first_start_answered: true,
+                    ..self.record.clone()
+                };
+                self.child = Some(child);
+                self.started = Some(Instant::now());
+                if restart {
+                    self.restarts += 1;
+                    self.last_restart_at = Some(iso(now));
+                }
+                self.note(
+                    ctx,
+                    now,
+                    &format!("Agent Comms started the event service (process {pid})."),
+                );
+            }
+            Err(error) => {
+                self.note(
+                    ctx,
+                    now,
+                    &format!(
+                        "Agent Comms could not start the event service: {}",
+                        error.message
+                    ),
+                );
+                self.record = ServiceRecord {
+                    recent_failures: with_failure(&self.record, now),
+                    ..forget(&self.record)
+                };
+            }
+        }
+        self.save();
+    }
+
+    /// Stops the running service through `agent-events stop`, and waits for it to go. Only when that does not stop it
+    /// is the recorded PID sent SIGTERM, and only once it is checked to be `events-daemon run` (Review Focus 3).
+    fn stop(&mut self, ctx: &RunContext) {
+        let asked = matches!(
+            run(&Call::EventsStop {}, ctx),
+            CliResult::Ok { exit: 0, .. }
+        );
+        if !(asked && self.wait_gone(ctx, STOP_WAIT)) && self.terminate() {
+            self.wait_gone(ctx, STOP_WAIT);
+        }
+        if let Some(mut child) = self.child.take() {
+            let _ = child.try_wait();
+        }
+        self.owner_now(ctx);
+    }
+
+    /// Waits, at most `limit`, for the service to go: the app's own process to end, or, for an adopted one, `status` to
+    /// say it no longer runs.
+    fn wait_gone(&mut self, ctx: &RunContext, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            let gone = match self.process() {
+                Process::Alive => false,
+                Process::NoneRecorded => self.owner_now(ctx) != Owner::Running,
+                Process::Exited(_) | Process::Gone => true,
+            };
+            if gone {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// SIGTERM to the recorded PID, only while it is `events-daemon run`; whether one was sent.
+    fn terminate(&self) -> bool {
+        #[cfg(unix)]
+        if let Some(pid) = self.record.pid.filter(|pid| is_our_service(*pid)) {
+            if let Ok(pid) = libc::pid_t::try_from(pid) {
+                // SAFETY: kill takes a PID and a signal and touches no memory; the PID was just checked to be the
+                // service's.
+                return unsafe { libc::kill(pid, libc::SIGTERM) } == 0;
+            }
+        }
+        false
+    }
+
+    /// How long the watchdog sleeps: until a restart is due, a little while a start is not answering yet, else 15 s.
+    pub fn next_wait(&mut self, now: SystemTime) -> Duration {
+        if let Some(due) = self.restart_due {
+            return due
+                .duration_since(now)
+                .unwrap_or(Duration::ZERO)
+                .min(WATCH_EVERY);
+        }
+        let starting = self.owner != Owner::Running
+            && self.started.is_some_and(|at| at.elapsed() < SOON_FOR)
+            && self.process() == Process::Alive;
+        if starting {
+            SOON
+        } else {
+            WATCH_EVERY
+        }
+    }
+
+    /// Whether a service the app started runs: what the quit question is asked about (P3).
+    pub fn app_service_running(&mut self) -> bool {
+        self.record.started_by_app && self.process() == Process::Alive
+    }
+
+    /// The state the window is shown.
+    pub fn state(&mut self, ctx: &RunContext) -> EventServiceState {
+        if self.platform == Platform::Windows {
+            return unavailable();
+        }
+        let process = self.process();
+        let running = self.owner == Owner::Running;
+        let status = if running {
+            EventServiceStatus::Running
+        } else if process == Process::Alive || self.restart_due.is_some() {
+            EventServiceStatus::Starting
+        } else if self.record.wanted && given_up(&self.record) {
+            EventServiceStatus::GaveUp
+        } else {
+            EventServiceStatus::Stopped
+        };
+        let ours = self.record.started_by_app && process == Process::Alive;
+        let known = self.record.started_at.is_some();
+        EventServiceState {
+            available: true,
+            wanted: self.record.wanted,
+            status,
+            started_by: running.then(|| if ours { "app" } else { "terminal" }.to_string()),
+            since: running.then(|| self.record.started_at.clone()).flatten(),
+            version: running.then(|| self.record.version.clone()).flatten(),
+            newer_version: (running
+                && known
+                && differs(
+                    self.record.version.as_deref(),
+                    self.installed_version.as_deref(),
+                ))
+            .then(|| self.installed_version.clone())
+            .flatten(),
+            restarts: self.restarts,
+            last_restart_at: self.last_restart_at.clone(),
+            stopped_from_outside_at: self.stopped_from_outside_at.clone(),
+            log_tail: if status == EventServiceStatus::GaveUp {
+                log_tail(&events_dir(&ctx.folders).join(LOG_FILE), LOG_TAIL_LINES)
+            } else {
+                Vec::new()
+            },
+            first_start_question: self.first_start_question,
+            full_disk_access: self.full_disk_access.clone(),
+        }
+    }
+
+    /// The switch. On: wanted, with its failures cleared, and a service the app knew of that is no longer there
+    /// forgotten, so it starts one, or adopts one running — also after an adopted one went, or a stop from outside
+    /// (D4). Off: whatever runs is stopped through `agent-events stop`. Either is the first-start question's answer.
+    pub fn set_wanted(&mut self, ctx: &RunContext, on: bool, now: SystemTime) {
+        self.restart_due = None;
+        self.restarting = false;
+        self.first_start_question = false;
+        self.record.first_start_answered = true;
+        if on {
+            self.record.wanted = true;
+            self.record.recent_failures.clear();
+            self.stopped_from_outside_at = None;
+            let mut observed = self.observe(ctx);
+            if observed.owner != Owner::Running && observed.process != Process::Alive {
+                self.child = None;
+                self.record = forget(&self.record);
+                observed.process = Process::NoneRecorded;
+            }
+            let action = decide(&self.record, &observed, now);
+            self.apply(ctx, action, &observed, now);
+        } else {
+            self.record.wanted = false;
+            let observed = self.observe(ctx);
+            if observed.owner == Owner::Running || observed.process == Process::Alive {
+                self.stop(ctx);
+            }
+            self.child = None;
+            self.record = forget(&self.record);
+        }
+        self.save();
+    }
+
+    /// Try again, after giving up: the switch on again, with the failures forgotten.
+    pub fn retry(&mut self, ctx: &RunContext, now: SystemTime) {
+        self.set_wanted(ctx, true, now);
+    }
+
+    /// Restart to use it (D5): whatever runs is stopped, then the app starts the version installed now, as its own.
+    pub fn restart(&mut self, ctx: &RunContext, now: SystemTime) {
+        self.restart_due = None;
+        self.first_start_question = false;
+        self.record.wanted = true;
+        self.record.first_start_answered = true;
+        self.record.recent_failures.clear();
+        let observed = self.observe(ctx);
+        if observed.owner == Owner::Running || observed.process == Process::Alive {
+            self.stop(ctx);
+        }
+        self.child = None;
+        self.record = forget(&self.record);
+        self.restarting = true;
+        let observed = self.observe(ctx);
+        let action = decide(&self.record, &observed, now);
+        self.apply(ctx, action, &observed, now);
+        self.restarting = false;
+        self.save();
+    }
+
+    /// The first-start question's answer (P1): Start starts it, Not now leaves the switch off.
+    pub fn answer_first_start(&mut self, ctx: &RunContext, start: bool, now: SystemTime) {
+        self.set_wanted(ctx, start, now);
+    }
+
+    /// Keeps the quit question's answer, for Remember my answer.
+    pub fn remember_quit(&mut self, answer: QuitAnswer) {
+        self.record.quit_answer = Some(answer);
+        self.save();
+    }
+
+    /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
+    /// The switch stays on, so the app starts it again when it next runs (D2).
+    pub fn stop_for_quit(&mut self, ctx: &RunContext) {
+        if self.app_service_running() {
+            self.stop(ctx);
+            self.record = forget(&self.record);
+            self.save();
+        }
+    }
+}
+
+/// How a crash ended, for the log.
+fn how(process: Process) -> String {
+    match process {
+        Process::Exited(ChildExit::Code(code)) => format!("with exit code {code}"),
+        Process::Exited(ChildExit::Signal(signal)) => format!("on signal {signal}"),
+        _ => "without a clean stop".into(),
+    }
+}
+
+/// The state on Windows, where the service does not run (B1-G).
+pub fn unavailable() -> EventServiceState {
+    EventServiceState {
+        available: false,
+        wanted: false,
+        status: EventServiceStatus::Unavailable,
+        started_by: None,
+        since: None,
+        version: None,
+        newer_version: None,
+        restarts: 0,
+        last_restart_at: None,
+        stopped_from_outside_at: None,
+        log_tail: Vec::new(),
+        first_start_question: false,
+        full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
+    }
+}
+
+/// `full_disk_access` when no WhatsApp account needs it, or off macOS (D6).
+pub const FULL_DISK_ACCESS_NOT_NEEDED: &str = "not-needed";
+
+// The app's side: the supervisor in Tauri's state, its watchdog thread, the commands' work, and Quit.
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Wakes the watchdog early, after a command.
+#[derive(Default)]
+struct Wake {
+    woken: Mutex<bool>,
+    signal: Condvar,
+}
+
+impl Wake {
+    fn notify(&self) {
+        *lock(&self.woken) = true;
+        self.signal.notify_all();
+    }
+
+    fn wait(&self, timeout: Duration) {
+        let woken = lock(&self.woken);
+        let (mut woken, _) = self
+            .signal
+            .wait_timeout_while(woken, timeout, |woken| !*woken)
+            .unwrap_or_else(PoisonError::into_inner);
+        *woken = false;
+    }
+}
+
+/// What the main thread may read without waiting for the supervisor: the last state, and what Quit needs.
+#[derive(Default)]
+struct Shown {
+    state: Option<EventServiceState>,
+    app_service_running: bool,
+    quit_answer: Option<QuitAnswer>,
+}
+
+/// The event service as the app holds it. The supervisor is none on Windows, where nothing is ever started.
+#[derive(Default)]
+pub struct EventService {
+    supervisor: Mutex<Option<Supervisor>>,
+    shown: Mutex<Shown>,
+    wake: Wake,
+}
+
+/// Starts the supervisor, in `setup`: loads the record, and starts the watchdog, which looks at once and then every
+/// 15 seconds. Wanted by default (D2), so a first launch, or a launch at login, starts the service. Nothing on Windows.
+pub fn start(app: &AppHandle) {
+    if Platform::current() == Platform::Windows {
+        return;
+    }
+    let Some(service) = app.try_state::<EventService>() else {
+        return;
+    };
+    let dir = settings::settings_dir(app).ok();
+    let record = dir.as_deref().map(load_record).unwrap_or_default();
+    *lock(&service.supervisor) = Some(Supervisor::new(record, dir, Platform::current()));
+    let app = app.clone();
+    let _ = thread::Builder::new()
+        .name("event-service".into())
+        .spawn(move || loop {
+            let wait = with_supervisor(&app, |supervisor, ctx| {
+                supervisor.tick(ctx, SystemTime::now());
+                supervisor.next_wait(SystemTime::now())
+            })
+            .map_or(WATCH_EVERY, |(wait, _)| wait);
+            match app.try_state::<EventService>() {
+                Some(service) => service.wake.wait(wait),
+                None => thread::sleep(wait),
+            }
+        });
+}
+
+/// Runs `work` on the supervisor, then tells the window the state when it changed. Never from the main thread: the
+/// supervisor runs the events CLI.
+fn with_supervisor<T>(
+    app: &AppHandle,
+    work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
+) -> Option<(T, EventServiceState)> {
+    let service = app.try_state::<EventService>()?;
+    let ctx = context(&app.state::<AppState>());
+    let mut held = lock(&service.supervisor);
+    let supervisor = held.as_mut()?;
+    let answer = work(supervisor, &ctx);
+    let state = supervisor.state(&ctx);
+    let running = supervisor.app_service_running();
+    let quit_answer = supervisor.record().quit_answer;
+    drop(held);
+    let changed = {
+        let mut shown = lock(&service.shown);
+        shown.app_service_running = running;
+        shown.quit_answer = quit_answer;
+        let changed = shown.state.as_ref() != Some(&state);
+        shown.state = Some(state.clone());
+        changed
+    };
+    if changed {
+        let _ = app.emit(CHANGED, &state);
+    }
+    Some((answer, state))
+}
+
+/// A command's work, and the state after it; the watchdog is woken to look again.
+fn command(app: &AppHandle, work: impl FnOnce(&mut Supervisor, &RunContext)) -> EventServiceState {
+    let Some((_, state)) = with_supervisor(app, work) else {
+        return unavailable();
+    };
+    if let Some(service) = app.try_state::<EventService>() {
+        service.wake.notify();
+    }
+    state
+}
+
+/// `event_service_state`: read only, so the watchdog is not woken.
+pub fn current(app: &AppHandle) -> EventServiceState {
+    with_supervisor(app, |_, _| {}).map_or_else(unavailable, |(_, state)| state)
+}
+
+/// `set_event_service`.
+pub fn set_wanted(app: &AppHandle, on: bool) -> EventServiceState {
+    command(app, |supervisor, ctx| {
+        supervisor.set_wanted(ctx, on, SystemTime::now())
+    })
+}
+
+/// `event_service_retry`.
+pub fn retry(app: &AppHandle) -> EventServiceState {
+    command(app, |supervisor, ctx| {
+        supervisor.retry(ctx, SystemTime::now())
+    })
+}
+
+/// `restart_event_service`.
+pub fn restart(app: &AppHandle) -> EventServiceState {
+    command(app, |supervisor, ctx| {
+        supervisor.restart(ctx, SystemTime::now())
+    })
+}
+
+/// `answer_first_start`.
+pub fn answer_first_start(app: &AppHandle, start: bool) -> EventServiceState {
+    command(app, |supervisor, ctx| {
+        supervisor.answer_first_start(ctx, start, SystemTime::now())
+    })
+}
+
+/// The pane of System Settings that gives Full Disk Access (D6).
+pub const FULL_DISK_ACCESS_PANE: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+
+/// `open_full_disk_access`: System Settings at Full Disk Access, on macOS; the address is the app's own, never one
+/// from the window.
+pub fn open_full_disk_access(app: &AppHandle) -> Result<(), AppError> {
+    if Platform::current() != Platform::MacOs {
+        return Err(AppError::refused(
+            "Full Disk Access is a macOS setting: nothing needs it here",
+        ));
+    }
+    app.opener()
+        .open_url(FULL_DISK_ACCESS_PANE, None::<&str>)
+        .map_err(|error| AppError::io(format!("System Settings could not be opened: {error}")))
+}
+
+/// Quits: from here on a close closes.
+pub fn quit(app: &AppHandle) {
+    window::QUITTING.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+/// `answer_quit`: keeps the answer when asked to, stops a service the app started on Stop it, then quits (P3).
+pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), AppError> {
+    let answer = if keep {
+        QuitAnswer::Keep
+    } else {
+        QuitAnswer::Stop
+    };
+    with_supervisor(app, |supervisor, ctx| {
+        if remember {
+            supervisor.remember_quit(answer);
+        }
+        if !keep {
+            supervisor.stop_for_quit(ctx);
+        }
+    });
+    quit(app);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1416,5 +2259,385 @@ mod tests {
         ] {
             assert_eq!(parse_marker(bad), None, "{bad:?}");
         }
+    }
+
+    /// A stand-in for `<data>/launch/events-daemon`, in a temporary installation: `status` reads a file, `stop` asks
+    /// the running one to stop through another, and `run` runs until it is asked — or crashes, or is refused as a
+    /// second owner, when told to. It writes what it was given beside itself. No real service is ever started.
+    #[cfg(unix)]
+    const FAKE_SERVICE: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+case $1 in
+  status)
+    if [ -f "$here/running" ]; then printf '{"owner":"running","enabled":false,"paused":false}\n'
+    else printf '{"owner":"not-running"}\n'; fi
+    exit 0 ;;
+  stop)
+    printf '%s\n' "$@" > "$here/stop-argv"
+    if [ -f "$here/running" ]; then : > "$here/stop"; printf '{"stopping":true}\n'; exit 0; fi
+    printf 'the local event service is not running\n' >&2
+    exit 69 ;;
+  run)
+    printf '%s\n' "$@" > "$here/run-argv"
+    if [ -f "$here/crash" ]; then printf 'the runtime could not start: boom\n' >&2; exit 1; fi
+    if [ -f "$here/refuse" ]; then printf 'another local event service owner is already running\n' >&2; exit 78; fi
+    trap 'rm -f "$here/running"; exit 0' TERM
+    : > "$here/running"
+    printf 'the service runs\n'
+    while [ ! -f "$here/stop" ]; do sleep 0.1; done
+    rm -f "$here/stop" "$here/running"
+    exit 0 ;;
+esac
+exit 64
+"#;
+
+    #[cfg(unix)]
+    struct Fake {
+        dir: tempfile::TempDir,
+        ctx: RunContext,
+        app: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl Fake {
+        fn new() -> Fake {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().expect("a folder");
+            let launch = dir.path().join("launch");
+            fs::create_dir_all(&launch).expect("launch");
+            let launcher = launch.join("events-daemon");
+            fs::write(&launcher, FAKE_SERVICE).expect("a launcher");
+            fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).expect("runnable");
+            fs::write(
+                launch.join("events-daemon.current"),
+                "current=0.26.2-events-daemon\n",
+            )
+            .expect("a pointer");
+            let data = dir.path().to_string_lossy().into_owned();
+            let ctx = RunContext {
+                folders: Folders {
+                    config_dir: format!("{data}/config"),
+                    state_dir: format!("{data}/state"),
+                    data_dir: data.clone(),
+                    secrets_dir: format!("{data}/secrets"),
+                },
+                platform: Platform::current(),
+                node: None,
+            };
+            let app = dir.path().join("app");
+            Fake { dir, ctx, app }
+        }
+
+        fn path(&self, name: &str) -> std::path::PathBuf {
+            self.dir.path().join("launch").join(name)
+        }
+
+        fn mark(&self, name: &str) {
+            fs::write(self.path(name), "").expect("a mark");
+        }
+
+        fn unmark(&self, name: &str) {
+            let _ = fs::remove_file(self.path(name));
+        }
+
+        fn has(&self, name: &str) -> bool {
+            self.path(name).exists()
+        }
+
+        fn log(&self) -> String {
+            fs::read_to_string(events_dir(&self.ctx.folders).join(LOG_FILE)).unwrap_or_default()
+        }
+
+        fn supervisor(&self, record: ServiceRecord) -> Supervisor {
+            Supervisor::new(record, Some(self.app.clone()), Platform::current())
+        }
+
+        /// Stops whatever the test left running.
+        fn finish(&self, supervisor: &mut Supervisor) {
+            self.mark("stop");
+            if let Some(mut child) = supervisor.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !check() {
+            assert!(std::time::Instant::now() < deadline, "{what}, in time");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_service_starts_detached_with_the_pins_and_the_switch_stops_it_through_the_cli() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        let pid = supervisor.record().pid.expect("started");
+        assert!(supervisor.record().started_by_app);
+        assert!(supervisor.record().first_start_answered);
+        assert_eq!(supervisor.record().version.as_deref(), Some("0.26.2"));
+        // Its own process group, so it outlives the app and a terminal's signals never reach it.
+        // SAFETY: getpgid takes a PID and touches no memory.
+        assert_eq!(
+            unsafe { libc::getpgid(pid as libc::pid_t) },
+            pid as libc::pid_t
+        );
+        let events = events_dir(&fake.ctx.folders);
+        let mode = fs::metadata(&events).expect("made").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{mode:o}");
+        eventually("it runs", || fake.has("running"));
+        // `run`, then the four pins, and nothing else: no `--json`, no shell.
+        let mut expected = vec!["run".to_string()];
+        expected.extend(fake.ctx.folders.pins());
+        let argv = fs::read_to_string(fake.path("run-argv")).expect("its words");
+        assert_eq!(argv.lines().collect::<Vec<_>>(), expected);
+        // Its output, and the app's own line, in the log.
+        eventually("its output is in the log", || {
+            fake.log().contains("the service runs\n")
+        });
+        assert!(fake.log().contains(&format!(
+            "Agent Comms started the event service (process {pid})."
+        )));
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Running);
+        assert_eq!(state.started_by.as_deref(), Some("app"));
+        assert_eq!(state.version.as_deref(), Some("0.26.2"));
+        assert_eq!(state.since, supervisor.record().started_at);
+        assert_eq!(state.newer_version, None);
+        assert!(supervisor.app_service_running());
+        assert_eq!(load_record(&fake.app).pid, Some(pid), "kept");
+        // Off: through `agent-events stop`, and it is gone, and forgotten.
+        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        let stop = fs::read_to_string(fake.path("stop-argv")).expect("stop was asked");
+        assert_eq!(stop.lines().take(2).collect::<Vec<_>>(), ["stop", "--json"]);
+        assert!(!fake.has("running"));
+        assert!(supervisor.child.is_none());
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Stopped);
+        assert!(!state.wanted);
+        assert_eq!(state.stopped_from_outside_at, None, "the app's own stop");
+        let kept = load_record(&fake.app);
+        assert!(!kept.wanted);
+        assert_eq!(kept.pid, None);
+        // Off, the watchdog starts nothing.
+        fake.unmark("run-argv");
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.has("run-argv"));
+        fake.finish(&mut supervisor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_crash_is_restarted_after_its_wait_and_a_start_refused_for_another_owner_is_adopted() {
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        fake.mark("crash");
+        let start = SystemTime::now();
+        supervisor.tick(&fake.ctx, start);
+        eventually("it crashes", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(1)))
+        });
+        supervisor.tick(&fake.ctx, start);
+        assert_eq!(supervisor.record().recent_failures.len(), 1);
+        assert_eq!(supervisor.record().pid, None);
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        assert_eq!(supervisor.next_wait(start), Duration::from_secs(1));
+        // Not before its wait is over.
+        fake.unmark("run-argv");
+        supervisor.tick(&fake.ctx, start + Duration::from_millis(500));
+        assert!(!fake.has("run-argv"));
+        // Due: started again, and counted. Now a terminal's owner holds the database, so this one is refused…
+        fake.unmark("crash");
+        fake.mark("refuse");
+        supervisor.tick(&fake.ctx, start + Duration::from_secs(2));
+        assert!(supervisor.record().pid.is_some());
+        assert_eq!(supervisor.state(&fake.ctx).restarts, 1);
+        assert!(supervisor.state(&fake.ctx).last_restart_at.is_some());
+        eventually("it is refused", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(78)))
+        });
+        // …and the one running is adopted: no restart, and no failure (Review Focus 1).
+        fake.mark("running");
+        supervisor.tick(&fake.ctx, start + Duration::from_secs(3));
+        assert!(!supervisor.record().started_by_app);
+        assert_eq!(supervisor.record().pid, None);
+        assert_eq!(supervisor.record().recent_failures.len(), 1);
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Running);
+        assert_eq!(state.started_by.as_deref(), Some("terminal"));
+        assert!(!supervisor.app_service_running());
+        fake.unmark("run-argv");
+        for later in 4..7 {
+            supervisor.tick(&fake.ctx, start + Duration::from_secs(later));
+        }
+        assert!(!fake.has("run-argv"), "an adopted service is left alone");
+        // The terminal's service goes: not restarted, the switch off, and said so (D4).
+        fake.unmark("running");
+        supervisor.tick(&fake.ctx, start + Duration::from_secs(8));
+        assert!(!supervisor.record().wanted);
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Stopped);
+        assert!(state.stopped_from_outside_at.is_some());
+        assert!(!fake.has("run-argv"));
+        // The switch on again starts the app's own, at once.
+        fake.unmark("refuse");
+        supervisor.set_wanted(&fake.ctx, true, SystemTime::now());
+        assert!(supervisor.record().started_by_app);
+        assert!(supervisor.record().recent_failures.is_empty());
+        assert_eq!(supervisor.state(&fake.ctx).stopped_from_outside_at, None);
+        eventually("it runs", || fake.has("running"));
+        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        fake.finish(&mut supervisor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn five_quick_deaths_give_up_and_show_the_log_tail_until_try_again() {
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        fake.mark("crash");
+        let mut at = SystemTime::now();
+        for _ in 0..5 {
+            supervisor.tick(&fake.ctx, at);
+            eventually("it crashes", || {
+                matches!(supervisor.process(), Process::Exited(_))
+            });
+            supervisor.tick(&fake.ctx, at);
+            at += Duration::from_secs(31);
+        }
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::GaveUp);
+        assert!(state.wanted);
+        assert_eq!(state.restarts, 4);
+        assert!(state.log_tail.len() <= LOG_TAIL_LINES);
+        assert!(state.log_tail.iter().any(|line| line.contains("boom")));
+        assert!(state
+            .log_tail
+            .last()
+            .is_some_and(|line| line.ends_with("so Agent Comms stopped restarting it.")));
+        // No more tries, an hour later either.
+        fake.unmark("run-argv");
+        supervisor.tick(&fake.ctx, at + Duration::from_secs(3600));
+        assert!(!fake.has("run-argv"));
+        // Try again: it starts.
+        fake.unmark("crash");
+        supervisor.retry(&fake.ctx, SystemTime::now());
+        assert!(supervisor.record().recent_failures.is_empty());
+        eventually("it runs", || fake.has("running"));
+        assert!(supervisor.state(&fake.ctx).log_tail.is_empty());
+        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        fake.finish(&mut supervisor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_pid_that_is_another_program_is_never_signalled() {
+        let fake = Fake::new();
+        let mut other = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep started");
+        std::thread::sleep(Duration::from_millis(200));
+        let now = SystemTime::now();
+        let record = ServiceRecord {
+            pid: Some(other.id()),
+            started_at: Some(iso(now - Duration::from_secs(60))),
+            version: Some("0.26.2".into()),
+            started_by_app: true,
+            first_start_answered: true,
+            ..ServiceRecord::default()
+        };
+        // Switched off: the CLI finds nothing running, and the PID, another program now, is sent nothing.
+        let mut off = fake.supervisor(record.clone());
+        off.set_wanted(&fake.ctx, false, now);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            other.try_wait().expect("asked").is_none(),
+            "the other program still runs"
+        );
+        // Watched: the app's service is gone, not adopted, and the other program is still left alone.
+        let mut watched = Supervisor::new(record, None, Platform::current());
+        fake.mark("crash");
+        watched.tick(&fake.ctx, now);
+        assert_eq!(watched.record().pid, None);
+        assert_eq!(watched.record().recent_failures.len(), 1);
+        assert!(watched.restart_due.is_some());
+        assert!(other.try_wait().expect("asked").is_none());
+        let _ = other.kill();
+        let _ = other.wait();
+        fake.finish(&mut watched);
+        fake.finish(&mut off);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_marker_newer_than_the_start_for_its_pid_is_a_stop_from_outside() {
+        let fake = Fake::new();
+        let mut ended = std::process::Command::new("true").spawn().expect("started");
+        let pid = ended.id();
+        let _ = ended.wait();
+        let started = SystemTime::now() - Duration::from_secs(60);
+        let record = ServiceRecord {
+            pid: Some(pid),
+            started_at: Some(iso(started)),
+            version: Some("0.26.2".into()),
+            started_by_app: true,
+            first_start_answered: true,
+            ..ServiceRecord::default()
+        };
+        let events = events_dir(&fake.ctx.folders);
+        fs::create_dir_all(&events).expect("events");
+        let at = iso(started + Duration::from_secs(30));
+        fs::write(
+            events.join(MARKER_FILE),
+            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n"),
+        )
+        .expect("a marker");
+        let mut supervisor = fake.supervisor(record);
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!supervisor.record().wanted);
+        assert_eq!(
+            supervisor
+                .state(&fake.ctx)
+                .stopped_from_outside_at
+                .as_deref(),
+            Some(at.as_str())
+        );
+        assert!(!fake.has("run-argv"), "a stop is not restarted");
+        fake.finish(&mut supervisor);
+    }
+
+    #[test]
+    fn windows_never_starts_the_service() {
+        let windows = RunContext {
+            folders: Folders {
+                config_dir: r"C:\Users\example\AppData\Roaming\agent-communications".into(),
+                state_dir: r"C:\Users\example\AppData\Local\agent-communications\state".into(),
+                data_dir: r"C:\Users\example\AppData\Local\agent-communications".into(),
+                secrets_dir: r"C:\Users\example\AppData\Local\agent-communications\secrets".into(),
+            },
+            platform: Platform::Windows,
+            node: Some(r"C:\node\node.exe".into()),
+        };
+        let refused = spawn_service(&windows).expect_err("never on Windows");
+        assert_eq!(refused.code, "APP_REFUSED");
+        assert_eq!(refused.message, WINDOWS_LINE);
+        let mut supervisor = Supervisor::new(ServiceRecord::default(), None, Platform::Windows);
+        supervisor.tick(&windows, now());
+        assert_eq!(supervisor.record().pid, None);
+        let state = supervisor.state(&windows);
+        assert_eq!(state, unavailable());
+        assert!(!state.available);
+        assert_eq!(state.status, EventServiceStatus::Unavailable);
     }
 }

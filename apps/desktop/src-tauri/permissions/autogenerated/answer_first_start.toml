@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-answer-first-start"
+description = "Enables the answer_first_start command without any pre-configured scope."
+commands.allow = ["answer_first_start"]
+
+[[permission]]
+identifier = "deny-answer-first-start"
+description = "Denies the answer_first_start command without any pre-configured scope."
+commands.deny = ["answer_first_start"]
