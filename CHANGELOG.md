@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.27.0
 
 **The desktop app, Agent Comms, now runs the event service for you, and updates itself.** Until now the event service
 ran only while `agent-events run` held a terminal open, and every desktop release had to be installed by hand.
