@@ -2391,8 +2391,10 @@ claims; it does not erase state.
 - It starts `agent-events run` itself, detached, through its launcher.
 - It keeps the daemon running when the app quits, unless the person chooses **Stop it**, and starts it at login with
   the app.
-- It restarts a daemon it started after a crash, but never after a clean stop. A clean stop writes `last-stop.json`
-  beside the database, so it can be told from a crash.
+- It restarts a daemon it started after a crash, but never after a stop the person asked for. A clean stop writes
+  `last-stop.json` beside the database, with its reason: `request` for a stop request (`agent-events stop`, the
+  `events_stop` tool, the app's own switch), `signal` for SIGINT or SIGTERM. A stop by signal — a logout, a shutdown, a
+  kill — is not the person's decision, and counts as a crash (the lead's call, amending the desktop design's D4).
 - It moves a daemon it started onto a newly installed version within a minute.
 
 For a daemon the desktop app runs, this replaces the two sentences above on quitting and on a normal update. A daemon

@@ -199,6 +199,11 @@ export interface EventOwnerOptions {
    */
   readonly dataDir?: string | undefined;
   /**
+   * Test seam only: where `runEventOwner` hears SIGINT and SIGTERM. Production leaves it unset: the process. A test
+   * emits them here, so the test runner's own handlers on the process never run.
+   */
+  readonly signals?: Pick<NodeJS.EventEmitter, 'once' | 'off'> | undefined;
+  /**
    * Test seam only: strict-parsed synthetic reviewed Laya bytes, the content-free sandbox probe spawn, the sealed
    * network the production fetcher dials, a free-space probe, artifact failpoints and the worker start (Task 7's
    * frame-compatible stand-in behind the real boundary proof, as E2 Task 8's supervisor tests start it). Production
@@ -1587,35 +1592,45 @@ async function startOwnerWithLock(
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */
 export async function runEventOwner(options: EventOwnerOptions = {}): Promise<void> {
   const stateDir = options.stateDir ?? resolvePaths().stateDir;
+  const signals = options.signals ?? process;
   const owner = await startEventOwner({ ...options, stateDir });
+  // A stop by request — the control socket's `stop`, as `agent-events stop`, the events_stop tool and the desktop app's
+  // switch send it — unless a signal stopped it: a logout, a shutdown or a kill is not the person's decision.
+  let reason: LastStopReason = 'request';
   const stop = () => {
+    reason = 'signal';
     void owner.stop();
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  signals.once('SIGINT', stop);
+  signals.once('SIGTERM', stop);
   try {
     await owner.stopped;
   } finally {
-    process.off('SIGINT', stop);
-    process.off('SIGTERM', stop);
+    signals.off('SIGINT', stop);
+    signals.off('SIGTERM', stop);
     await owner.stop();
   }
   // Reached only after a clean stop: a start that throws never gets here, and neither does a stop that does.
-  await writeLastStop(eventPaths(stateDir));
+  await writeLastStop(eventPaths(stateDir), reason);
 }
 
 const LAST_STOP_FILE = 'last-stop.json';
 
+/** Why the owner stopped: a stop request through its control socket, or a signal. */
+export type LastStopReason = 'request' | 'signal';
+
 /**
- * The clean-stop marker (desktop 0.27.0, P2): `{"version":1,"pid":…,"at":"<ISO 8601>"}` beside the database. A
- * supervisor that no longer has this process as its child reads it to tell a stop from a crash: a marker for the
- * service's PID, newer than its start, means it was stopped. Owner-only like the instance record, and written
- * atomically, so a reader sees the previous marker or this one, never a part of either.
+ * The clean-stop marker (desktop 0.27.0, P2): `{"version":1,"pid":…,"at":"<ISO 8601>","reason":"request"|"signal"}`
+ * beside the database. A supervisor that no longer has this process as its child reads it to tell a stop from a crash:
+ * a marker for the service's PID, newer than its start, with reason `request`, means the person stopped it; reason
+ * `signal` — a logout, a shutdown, a kill — is not their decision, and the desktop app restarts it as after a crash.
+ * Owner-only like the instance record, and written atomically, so a reader sees the previous marker or this one, never
+ * a part of either.
  */
-async function writeLastStop(paths: EventPaths): Promise<void> {
+async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise<void> {
   const target = join(paths.root, LAST_STOP_FILE);
   const temporary = join(paths.root, `${LAST_STOP_FILE}.${randomBytes(8).toString('hex')}.tmp`);
-  const marker = { version: 1, pid: process.pid, at: new Date().toISOString() };
+  const marker = { version: 1, pid: process.pid, at: new Date().toISOString(), reason };
   try {
     await writeFile(temporary, `${JSON.stringify(marker)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     await chmod(temporary, 0o600);

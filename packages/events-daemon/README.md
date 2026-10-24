@@ -25,7 +25,8 @@ agent-events run                     # in a terminal you keep open: the owner of
 
 `agent-events run` starts the **foreground owner**. It owns the event database while that terminal runs, and stops
 cleanly on `agent-events stop` or when the terminal closes. A clean stop writes `last-stop.json` beside the
-database, with the owner's PID and the time, so a supervisor can tell it from a crash. From 0.27.0 the desktop app can
+database, with the owner's PID, the time and why it stopped — `request` for a stop request such as `agent-events stop`,
+`signal` for SIGINT or SIGTERM — so a supervisor can tell a stop the person asked for from a crash or a logout. From 0.27.0 the desktop app can
 run it for you: it starts it in the background, restarts it after a crash and keeps it running after the app quits
 (see [the desktop app](../../README.md#the-desktop-app)). There is still no OS service of its own (launchd, systemd
 or a Windows service). Its state lives in an owner-only directory. A state directory so

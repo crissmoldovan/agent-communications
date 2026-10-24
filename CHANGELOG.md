@@ -37,7 +37,8 @@ pop-up, and installs only when you choose Install and restart, after its signatu
 files are still built by CI without the updater key, so theirs stays off: install a newer release over them.
 
 **`@agentcomms/events-daemon`:** a clean stop now writes `last-stop.json` beside the event database, with the owner's
-PID and the time, so whatever runs the service can tell a stop from a crash. Nothing else about `agent-events`
+PID, the time and why it stopped — a stop request such as `agent-events stop`, or a signal such as a logout's — so
+whatever runs the service can tell a stop you asked for from a crash. Nothing else about `agent-events`
 changes, and nothing is needed from you.
 
 This release is not a security fix: 0.26.2's declaration ends with it, so the background update treats 0.27.0 as an
