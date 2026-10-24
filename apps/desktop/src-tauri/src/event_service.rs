@@ -10,7 +10,7 @@ use crate::allowlist::{service_run, Call};
 use crate::commands::context;
 use crate::ipc::{AppError, CliResult, EventServiceState, EventServiceStatus};
 use crate::launchers::{check_launcher, find_launcher, launcher_path, program_for, Product};
-use crate::paths::{Folders, PathEnv, Platform};
+use crate::paths::{resolve_folders, Folders, PathEnv, Platform};
 use crate::runner::{command_for, run, RunContext};
 use crate::{settings, window, AppState};
 use regex::Regex;
@@ -56,11 +56,13 @@ pub enum QuitAnswer {
 pub struct ServiceRecord {
     /// The switch: on unless the person switched it off (D2).
     pub wanted: bool,
-    /// The process the app started, while it knows of one.
+    /// The process of the service the app knows of: the one it started, or the one it adopted, when its command line
+    /// was found.
     pub pid: Option<u32>,
     /// When the app started it, or adopted one a terminal started (ISO 8601).
     pub started_at: Option<String>,
-    /// The installed version when it was started or adopted, from the launcher's `.current`.
+    /// The version it runs: for the app's own, the launcher's `.current` when it was started; for an adopted one, what
+    /// its command line names, or none.
     pub version: Option<String>,
     /// Whether the service the app knows of is the app's own; an adopted one is not.
     pub started_by_app: bool,
@@ -116,11 +118,22 @@ pub enum Process {
     Gone,
 }
 
-/// `<state>/events/last-stop.json`: the PID of an owner that stopped cleanly, and when (P2).
+/// `<state>/events/last-stop.json`: the PID of an owner that stopped cleanly, when, and why (P2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StopMarker {
     pub pid: u32,
     pub at: String,
+    pub reason: StopReason,
+}
+
+/// Why an owner stopped cleanly: a stop request through its control socket — the events CLI's `stop`, the events_stop
+/// tool, the app's own switch — is the person's; a signal — a logout, a shutdown, a kill — is not, and counts as a
+/// crash (the lead's call, amending D4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StopReason {
+    Request,
+    Signal,
 }
 
 /// What the watchdog saw.
@@ -154,7 +167,8 @@ pub enum Action {
 /// is off. Otherwise, by what became of the process the record names:
 /// - **alive:** nothing, unless it is the app's own, answering, and the launcher now names another version (D5);
 /// - **the app's child ended**, or **its recorded PID is gone:** another owner running is adopted (Review Focus 1); a
-///   clean stop — exit 0, or a marker for that PID newer than its start (P2) — turns the switch off (D4); anything else
+///   stop by request — a marker for that PID, newer than its start, with reason `request` (P2), and for the child an
+///   exit 0 too — turns the switch off (D4); anything else, a stop by signal (a logout, a shutdown, a kill) included,
 ///   is a crash, restarted after 1 s, 5 s, then 30 s, until the fifth within ten minutes gives up;
 /// - **none:** an adopted service that is no longer running turns the switch off, since it was never the app's (D4);
 ///   an owner running is adopted; after giving up, or with no launcher, nothing; a database from before with the
@@ -181,7 +195,9 @@ pub fn decide(record: &ServiceRecord, observed: &Observation, now: SystemTime) -
         Process::Exited(exit) => {
             if running {
                 Action::Adopt
-            } else if exit == ChildExit::Code(0) {
+            } else if exit == ChildExit::Code(0)
+                && stopped_by_request(record, observed.marker.as_ref())
+            {
                 Action::MarkStoppedFromOutside
             } else {
                 crashed(record, now)
@@ -190,7 +206,8 @@ pub fn decide(record: &ServiceRecord, observed: &Observation, now: SystemTime) -
         Process::Gone => {
             if running {
                 Action::Adopt
-            } else if !record.started_by_app || stopped_cleanly(record, observed.marker.as_ref()) {
+            } else if !record.started_by_app || stopped_by_request(record, observed.marker.as_ref())
+            {
                 Action::MarkStoppedFromOutside
             } else {
                 crashed(record, now)
@@ -217,9 +234,10 @@ pub fn decide(record: &ServiceRecord, observed: &Observation, now: SystemTime) -
     }
 }
 
-/// Whether the service the record knows of is one a terminal started, which the app adopted.
+/// Whether the service the record knows of is one a terminal started, which the app adopted (with its PID, when its
+/// command line was found).
 fn adopted(record: &ServiceRecord) -> bool {
-    record.started_at.is_some() && record.pid.is_none() && !record.started_by_app
+    record.started_at.is_some() && !record.started_by_app
 }
 
 /// Two versions, both known, that are not the same.
@@ -227,8 +245,8 @@ fn differs(running: Option<&str>, installed: Option<&str>) -> bool {
     matches!((running, installed), (Some(running), Some(installed)) if running != installed)
 }
 
-/// Whether the marker says the app's service stopped cleanly: for its PID, and newer than its start (P2).
-fn stopped_cleanly(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
+/// Whether the marker is this service's: for its PID, and newer than its start (P2).
+fn marked(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
     let (Some(marker), Some(pid), Some(started)) = (
         marker,
         record.pid,
@@ -237,6 +255,11 @@ fn stopped_cleanly(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool 
         return false;
     };
     marker.pid == pid && parse_iso(&marker.at).is_some_and(|at| at > started)
+}
+
+/// Whether the person stopped the app's service: its marker says a stop by request. A stop by signal is a crash.
+fn stopped_by_request(record: &ServiceRecord, marker: Option<&StopMarker>) -> bool {
+    marked(record, marker) && marker.is_some_and(|marker| marker.reason == StopReason::Request)
 }
 
 /// The failures the record keeps, as times; one it cannot read is dropped.
@@ -289,15 +312,11 @@ fn forget(record: &ServiceRecord) -> ServiceRecord {
 
 /// The record after `action`, before any process is started or stopped (`Start` and `RestartForVersion` record their
 /// process once it has started).
-/// - **adopted:** no PID, not the app's, since now, on the installed version;
+/// - **adopted:** not the app's, since now; its PID and version unknown until `apply` reads them from its command
+///   line, and never the installed version;
 /// - **stopped from outside:** forgotten, and the switch off (D4);
 /// - **a restart, or giving up:** forgotten, with a failure at `now`.
-pub fn recorded(
-    record: &ServiceRecord,
-    action: Action,
-    observed: &Observation,
-    now: SystemTime,
-) -> ServiceRecord {
+pub fn recorded(record: &ServiceRecord, action: Action, now: SystemTime) -> ServiceRecord {
     match action {
         Action::Nothing | Action::AskFirstStart | Action::Start | Action::RestartForVersion => {
             record.clone()
@@ -305,7 +324,7 @@ pub fn recorded(
         Action::Adopt => ServiceRecord {
             pid: None,
             started_at: Some(iso(now)),
-            version: observed.installed_version.clone(),
+            version: None,
             started_by_app: false,
             ..record.clone()
         },
@@ -477,16 +496,149 @@ pub fn append_capped(path: &Path, bytes: &[u8], cap: u64) -> io::Result<()> {
     file.write_all(new)
 }
 
-/// Whether a command line is `events-daemon run`: a word naming events-daemon — its launcher, `<data>/launch/
+/// The events CLI's own options that take a value: the folder pins (`packages/events-daemon/src/cli/program.ts`).
+const OPTIONS_WITH_A_VALUE: &[&str] = &[
+    "--config-dir",
+    "--state-dir",
+    "--data-dir",
+    "--secrets-dir",
+    "--downloads-dir",
+];
+
+/// Where a command line's `events-daemon run` is: the word naming events-daemon — its launcher, `<data>/launch/
 /// events-daemon`, or its runtime's CLI, `…/@agentcomms/events-daemon/dist/cli.mjs`, either of which has a part
-/// `events-daemon` — followed by `run`.
-pub fn is_service_command_line(args: &[String]) -> bool {
-    args.windows(2).any(|pair| {
-        pair[1] == "run"
-            && pair[0]
-                .split(['/', '\\'])
-                .any(|part| part == "events-daemon")
+/// `events-daemon` — whose subcommand is `run`. The subcommand is the first word after it that is no option, and no
+/// option's value, since the CLI takes its pins before or after it.
+fn service_word(args: &[String]) -> Option<usize> {
+    (0..args.len()).find(|at| {
+        if !args[*at]
+            .split(['/', '\\'])
+            .any(|part| part == "events-daemon")
+        {
+            return false;
+        }
+        let mut words = args[at + 1..].iter();
+        while let Some(word) = words.next() {
+            if OPTIONS_WITH_A_VALUE.contains(&word.as_str()) {
+                words.next();
+            } else if !word.starts_with("--") {
+                return word == "run";
+            }
+        }
+        false
     })
+}
+
+/// Whether a command line is `events-daemon run` (`service_word`).
+pub fn is_service_command_line(args: &[String]) -> bool {
+    service_word(args).is_some()
+}
+
+/// The version a service's command line runs, when the launcher's runtime path names it: its events-daemon word is
+/// `…/runtime/<version>-events-daemon/…`, as core's launcher starts it. Started any other way — a global install,
+/// `npx` — it is unknown.
+pub fn running_version(args: &[String]) -> Option<String> {
+    let parts: Vec<&str> = args[service_word(args)?].split(['/', '\\']).collect();
+    parts.windows(2).find_map(|folders| {
+        (folders[0] == "runtime")
+            .then(|| folders[1].strip_suffix("-events-daemon"))
+            .flatten()
+            .filter(|version| VERSION.is_match(version))
+            .map(str::to_string)
+    })
+}
+
+/// The state folder a command line pins, as `--state-dir <dir>` or `--state-dir=<dir>`.
+fn state_pin(args: &[String]) -> Option<&str> {
+    args.iter().enumerate().find_map(|(at, word)| {
+        if word == "--state-dir" {
+            args.get(at + 1).map(String::as_str)
+        } else {
+            word.strip_prefix("--state-dir=")
+        }
+    })
+}
+
+/// The service the app adopts, among `processes`: the one `events-daemon run` for this state folder — pinned to it,
+/// or pinned to none when this folder is the default one — other than `except`, the app's own child. Its PID, and the
+/// version its command line names. One or none: two is not knowing which.
+pub fn pick_adopted(
+    processes: &[(u32, Vec<String>)],
+    state_dir: &str,
+    default_state_dir: &str,
+    except: Option<u32>,
+) -> Option<(u32, Option<String>)> {
+    let mut found = processes.iter().filter(|(pid, args)| {
+        Some(*pid) != except
+            && is_service_command_line(args)
+            && match state_pin(args) {
+                Some(pin) => pin == state_dir,
+                None => state_dir == default_state_dir,
+            }
+    });
+    let (pid, args) = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    Some((*pid, running_version(args)))
+}
+
+/// Every process the app may read the command line of, but itself: its PID and its words.
+fn service_processes() -> Vec<(u32, Vec<String>)> {
+    let me = std::process::id();
+    process_ids()
+        .into_iter()
+        .filter(|pid| *pid > 1 && *pid != me)
+        .filter_map(|pid| Some((pid, process_args(pid)?)))
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn process_ids() -> Vec<u32> {
+    // SAFETY: with no buffer, proc_listallpids only counts the processes.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let Ok(count) = usize::try_from(count) else {
+        return Vec::new();
+    };
+    let mut pids: Vec<libc::pid_t> = vec![0; count + 64];
+    let bytes = libc::c_int::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
+        .unwrap_or(libc::c_int::MAX);
+    // SAFETY: `pids` is writable for `bytes` bytes; the kernel fills at most that many and says how many PIDs it wrote.
+    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    let Ok(filled) = usize::try_from(filled) else {
+        return Vec::new();
+    };
+    pids.truncate(filled.min(pids.len()));
+    pids.into_iter()
+        .filter_map(|pid| u32::try_from(pid).ok())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn process_ids() -> Vec<u32> {
+    fs::read_dir("/proc")
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn process_ids() -> Vec<u32> {
+    Vec::new()
+}
+
+/// The service a terminal started that the app adopts, found by its command line, when it can be (`pick_adopted`).
+fn find_adopted(folders: &Folders, except: Option<u32>) -> Option<(u32, Option<String>)> {
+    let default_state_dir = resolve_folders(&PathEnv::from_process()).state_dir;
+    pick_adopted(
+        &service_processes(),
+        &folders.state_dir,
+        &default_state_dir,
+        except,
+    )
 }
 
 /// Whether the process `pid` is still `events-daemon run`, read from its command line (Review Focus 3). A PID that has
@@ -616,17 +768,23 @@ pub fn installed_version(folders: &Folders, platform: Platform) -> Option<String
     )?)
 }
 
-/// `last-stop.json` as Task 1 writes it, `{"version":1,"pid":…,"at":"<ISO>"}`; anything else is no marker.
+/// `last-stop.json` as Task 1 writes it, `{"version":1,"pid":…,"at":"<ISO>","reason":"request"|"signal"}`;
+/// anything else, a marker without its reason too, is no marker.
 pub fn parse_marker(text: &str) -> Option<StopMarker> {
     #[derive(Deserialize)]
     struct MarkerFile {
         version: u64,
         pid: u64,
         at: String,
+        reason: StopReason,
     }
     let file: MarkerFile = serde_json::from_str(text).ok()?;
     let pid = u32::try_from(file.pid).ok().filter(|pid| *pid > 0)?;
-    (file.version == 1 && parse_iso(&file.at).is_some()).then_some(StopMarker { pid, at: file.at })
+    (file.version == 1 && parse_iso(&file.at).is_some()).then_some(StopMarker {
+        pid,
+        at: file.at,
+        reason: file.reason,
+    })
 }
 
 /// The record kept in `dir`: the default — wanted, nothing known — when there is none, or the app cannot read it.
@@ -850,6 +1008,8 @@ pub struct Supervisor {
     owner: Owner,
     installed_version: Option<String>,
     full_disk_access: String,
+    /// Set, under the supervisor's lock, once the app is quitting: from then on nothing is started.
+    quitting: bool,
 }
 
 impl Supervisor {
@@ -869,6 +1029,7 @@ impl Supervisor {
             owner: Owner::Unknown,
             installed_version: None,
             full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
+            quitting: false,
         }
     }
 
@@ -927,8 +1088,8 @@ impl Supervisor {
     ///
     /// The service writes its marker after its control socket closes, so `status` can say it is not running while its
     /// process still is (Task 1). A recorded PID that is still `events-daemon run` is therefore alive, whatever
-    /// `status` says, and `decide` waits for it. Once it is gone with no marker for it yet, the marker is read once
-    /// more, after `MARKER_GRACE`, before it can count as a crash.
+    /// `status` says, and `decide` waits for it. Once it is gone, or the app's child has exited 0, with no marker for it
+    /// yet, the marker is read once more, after `MARKER_GRACE`, before it can count as a crash.
     fn observe(&mut self, ctx: &RunContext) -> Observation {
         let process = self.process();
         let owner = self.owner_now(ctx);
@@ -936,7 +1097,8 @@ impl Supervisor {
         let installed_version = installed_version(&ctx.folders, ctx.platform);
         self.installed_version = installed_version.clone();
         let mut marker = read_marker(&events);
-        if process == Process::Gone && !stopped_cleanly(&self.record, marker.as_ref()) {
+        let ended = matches!(process, Process::Gone | Process::Exited(ChildExit::Code(0)));
+        if ended && self.record.started_by_app && !marked(&self.record, marker.as_ref()) {
             thread::sleep(MARKER_GRACE);
             marker = read_marker(&events);
         }
@@ -952,7 +1114,7 @@ impl Supervisor {
 
     /// One look: observe, decide, apply. While a restart waits, nothing is asked until it is due.
     pub fn tick(&mut self, ctx: &RunContext, now: SystemTime) {
-        if self.platform == Platform::Windows {
+        if self.platform == Platform::Windows || self.quitting {
             return;
         }
         self.trim_log(ctx);
@@ -996,10 +1158,13 @@ impl Supervisor {
                             .unwrap_or("the version installed")
                     ),
                 );
-                self.stop(ctx);
-                self.record = forget(&self.record);
-                self.restarting = true;
-                self.start(ctx, observed, now);
+                // Started over only once the old one has let go of the database; otherwise its PID stays recorded,
+                // and the next look tries again.
+                if self.stop(ctx) {
+                    self.record = forget(&self.record);
+                    self.restarting = true;
+                    self.start(ctx, observed, now);
+                }
             }
             Action::Restart { after } => {
                 self.note(
@@ -1012,7 +1177,7 @@ impl Supervisor {
                     ),
                 );
                 self.child = None;
-                self.record = recorded(&self.record, action, observed, now);
+                self.record = recorded(&self.record, action, now);
                 self.restart_due = Some(now + after);
                 self.save();
             }
@@ -1026,12 +1191,16 @@ impl Supervisor {
                     ),
                 );
                 self.child = None;
-                self.record = recorded(&self.record, action, observed, now);
+                self.record = recorded(&self.record, action, now);
                 self.save();
             }
             Action::Adopt => {
-                self.child = None;
-                self.record = recorded(&self.record, action, observed, now);
+                let own = self.child.take().map(|child| child.id());
+                self.record = recorded(&self.record, action, now);
+                if let Some((pid, version)) = find_adopted(&ctx.folders, own) {
+                    self.record.pid = Some(pid);
+                    self.record.version = version;
+                }
                 self.save();
             }
             Action::MarkStoppedFromOutside => {
@@ -1042,7 +1211,7 @@ impl Supervisor {
                     .map(|marker| marker.at.clone())
                     .unwrap_or_else(|| iso(now));
                 self.child = None;
-                self.record = recorded(&self.record, action, observed, now);
+                self.record = recorded(&self.record, action, now);
                 self.stopped_from_outside_at = Some(at);
                 self.save();
             }
@@ -1050,9 +1219,12 @@ impl Supervisor {
     }
 
     /// Starts the service, and records it as the app's: its PID, when, and the version installed. A start that fails
-    /// is a failed start, and is counted.
+    /// is a failed start: counted, and tried again after the waits a crash gets.
     fn start(&mut self, ctx: &RunContext, observed: &Observation, now: SystemTime) {
         let restart = std::mem::take(&mut self.restarting);
+        if self.quitting {
+            return;
+        }
         self.first_start_question = false;
         match spawn_service(ctx) {
             Ok(child) => {
@@ -1086,10 +1258,20 @@ impl Supervisor {
                         error.message
                     ),
                 );
+                // A failed start waits as a crash does, 1 s, 5 s, then 30 s, until the fifth gives up.
+                let next = crashed(&self.record, now);
                 self.record = ServiceRecord {
                     recent_failures: with_failure(&self.record, now),
                     ..forget(&self.record)
                 };
+                match next {
+                    Action::Restart { after } => self.restart_due = Some(now + after),
+                    _ => self.note(
+                        ctx,
+                        now,
+                        "It could not start 5 times in 10 minutes, so Agent Comms stopped trying.",
+                    ),
+                }
             }
         }
         self.save();
@@ -1097,28 +1279,36 @@ impl Supervisor {
 
     /// Stops the running service through the events CLI's `stop`, and waits for it to go. Only when that does not stop it
     /// is the recorded PID sent SIGTERM, and only once it is checked to be `events-daemon run` (Review Focus 3).
-    fn stop(&mut self, ctx: &RunContext) {
+    /// Whether it went.
+    fn stop(&mut self, ctx: &RunContext) -> bool {
+        let asked_at = SystemTime::now();
         let asked = matches!(
             run(&Call::EventsStop {}, ctx),
             CliResult::Ok { exit: 0, .. }
         );
-        if !(asked && self.wait_gone(ctx, STOP_WAIT)) && self.terminate() {
-            self.wait_gone(ctx, STOP_WAIT);
+        let mut gone = asked && self.wait_gone(ctx, STOP_WAIT, asked_at);
+        if !gone && self.terminate() {
+            gone = self.wait_gone(ctx, STOP_WAIT, asked_at);
         }
         if let Some(mut child) = self.child.take() {
             let _ = child.try_wait();
         }
         self.owner_now(ctx);
+        gone
     }
 
-    /// Waits, at most `limit`, for the service to go: the app's own process to end, or, for an adopted one, `status` to
-    /// say it no longer runs.
-    fn wait_gone(&mut self, ctx: &RunContext, limit: Duration) -> bool {
+    /// Waits, at most `limit`, for the service to let go of the database: the app's own process to end; an adopted
+    /// one's PID to go, when it is known, or else `status` to say it no longer runs and its marker, newer than the stop
+    /// request at `asked_at`, to be there. Its socket closes before it lets go and writes its marker (Task 1), so `status`
+    /// alone says it has gone too soon.
+    fn wait_gone(&mut self, ctx: &RunContext, limit: Duration, asked_at: SystemTime) -> bool {
         let deadline = Instant::now() + limit;
         loop {
             let gone = match self.process() {
                 Process::Alive => false,
-                Process::NoneRecorded => self.owner_now(ctx) != Owner::Running,
+                Process::NoneRecorded => {
+                    self.owner_now(ctx) != Owner::Running && self.marked_since(ctx, asked_at)
+                }
                 Process::Exited(_) | Process::Gone => true,
             };
             if gone {
@@ -1131,10 +1321,24 @@ impl Supervisor {
         }
     }
 
-    /// SIGTERM to the recorded PID, only while it is `events-daemon run`; whether one was sent.
+    /// Whether a clean-stop marker newer than `asked_at` is there: for the recorded PID, or any when there is none.
+    fn marked_since(&self, ctx: &RunContext, asked_at: SystemTime) -> bool {
+        let since = parse_iso(&iso(asked_at)).unwrap_or(asked_at);
+        read_marker(&events_dir(&ctx.folders)).is_some_and(|marker| {
+            self.record.pid.is_none_or(|pid| marker.pid == pid)
+                && parse_iso(&marker.at).is_some_and(|at| at >= since)
+        })
+    }
+
+    /// SIGTERM to the recorded PID, only for a service the app started, and only while it is `events-daemon run`;
+    /// whether one was sent. An adopted one is only ever asked through the events CLI.
     fn terminate(&self) -> bool {
         #[cfg(unix)]
-        if let Some(pid) = self.record.pid.filter(|pid| is_our_service(*pid)) {
+        if let Some(pid) = self
+            .record
+            .pid
+            .filter(|pid| self.record.started_by_app && is_our_service(*pid))
+        {
             if let Ok(pid) = libc::pid_t::try_from(pid) {
                 // SAFETY: kill takes a PID and a signal and touches no memory; the PID was just checked to be the
                 // service's.
@@ -1250,7 +1454,8 @@ impl Supervisor {
         self.set_wanted(ctx, true, now);
     }
 
-    /// Restart to use it (D5): whatever runs is stopped, then the app starts the version installed now, as its own.
+    /// Restart to use it (D5): whatever runs is stopped, and once it has let go of the database (`wait_gone`) the app
+    /// starts the version installed now, as its own.
     pub fn restart(&mut self, ctx: &RunContext, now: SystemTime) {
         self.restart_due = None;
         self.first_start_question = false;
@@ -1258,8 +1463,12 @@ impl Supervisor {
         self.record.first_start_answered = true;
         self.record.recent_failures.clear();
         let observed = self.observe(ctx);
-        if observed.owner == Owner::Running || observed.process == Process::Alive {
-            self.stop(ctx);
+        let running = observed.owner == Owner::Running || observed.process == Process::Alive;
+        if running && !self.stop(ctx) {
+            // Still holding the database: nothing is started over it, which it would refuse, as a crash. The watchdog
+            // looks again.
+            self.save();
+            return;
         }
         self.child = None;
         self.record = forget(&self.record);
@@ -1282,9 +1491,17 @@ impl Supervisor {
         self.save();
     }
 
+    /// The app is quitting: from now on nothing is started, so a tick that was waiting for the lock cannot start a
+    /// detached service as the app exits. Set before any stop for quitting.
+    pub fn begin_quit(&mut self) {
+        self.quitting = true;
+        self.restart_due = None;
+    }
+
     /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
-    /// The switch stays on, so the app starts it again when it next runs (D2).
+    /// The switch stays on, so the app starts it again when it next runs (D2): it stops for this run only.
     pub fn stop_for_quit(&mut self, ctx: &RunContext) {
+        self.begin_quit();
         if self.app_service_running() {
             self.stop(ctx);
             self.record = forget(&self.record);
@@ -1403,8 +1620,10 @@ pub struct EventService {
     supervisor: Mutex<Option<Supervisor>>,
     shown: Mutex<Shown>,
     wake: Wake,
-    /// Set once Quit asks, or stops the service to quit: a second Quit adds nothing.
-    asking: AtomicBool,
+    /// Set once a remembered Stop it is under way: a second Quit stops nothing more.
+    stopping: AtomicBool,
+    /// Set by the quit question's first answer, the only one acted on.
+    answered: AtomicBool,
     /// Whether a WhatsApp account exists, and when that was asked.
     whatsapp: Mutex<Option<(Instant, bool)>>,
     /// Set while Full Disk Access is being looked at.
@@ -1601,16 +1820,46 @@ pub fn quit_route(app_service_running: bool, answer: Option<QuitAnswer>) -> Quit
     }
 }
 
-/// Whether this Quit is the first to ask: a second while the question is open asks nothing more.
+/// Whether this is the first: set once, by the first caller.
 fn first_to_ask(asking: &AtomicBool) -> bool {
     !asking.swap(true, Ordering::SeqCst)
 }
 
+/// What one Quit does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitStep {
+    /// The caller quits.
+    Quit,
+    /// The window is shown, brought forward, and sent `quit-requested`.
+    ShowAndAsk,
+    /// A thread stops the app's service, then quits.
+    StopThenQuit,
+    /// Already stopping to quit: nothing more.
+    Nothing,
+}
+
+/// What a Quit on `route` does, `stopping` being set once a Stop it is under way.
+pub fn quit_step(route: QuitRoute, stopping: &AtomicBool) -> QuitStep {
+    match route {
+        QuitRoute::Quit => QuitStep::Quit,
+        // Every time: the window may have missed the last one, before React mounted or across a reload, and its dialog
+        // opens once however often it is asked.
+        QuitRoute::Ask => QuitStep::ShowAndAsk,
+        QuitRoute::StopThenQuit if first_to_ask(stopping) => QuitStep::StopThenQuit,
+        QuitRoute::StopThenQuit => QuitStep::Nothing,
+    }
+}
+
+/// Whether this answer to the quit question is the first: the one acted on.
+fn first_answer(answered: &AtomicBool) -> bool {
+    first_to_ask(answered)
+}
+
 /// Quit, from the tray, the app menu (Cmd+Q) or an exit the app did not start itself. Called on the main thread, so it
-/// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown and brought forward,
-/// and the first such Quit sends `quit-requested`; a second, while it asks, only brings the window forward again, and
-/// never quits past the question (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, then quits.
-/// On `Quit` the caller quits.
+/// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown, brought forward and
+/// sent `quit-requested`, every time, so a window that missed it is asked again; nothing quits past the question, and
+/// only its first answer is acted on (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, once,
+/// then quits. On `Quit` the caller quits.
 pub fn on_quit(app: &AppHandle) -> QuitRoute {
     let Some(service) = app.try_state::<EventService>() else {
         return QuitRoute::Quit;
@@ -1619,22 +1868,18 @@ pub fn on_quit(app: &AppHandle) -> QuitRoute {
         let shown = lock(&service.shown);
         quit_route(shown.app_service_running, shown.quit_answer)
     };
-    match route {
-        QuitRoute::Quit => {}
-        QuitRoute::Ask => {
+    match quit_step(route, &service.stopping) {
+        QuitStep::Quit | QuitStep::Nothing => {}
+        QuitStep::ShowAndAsk => {
             window::show(app);
-            if first_to_ask(&service.asking) {
-                let _ = app.emit(QUIT_REQUESTED, ());
-            }
+            let _ = app.emit(QUIT_REQUESTED, ());
         }
-        QuitRoute::StopThenQuit => {
-            if first_to_ask(&service.asking) {
-                let app = app.clone();
-                thread::spawn(move || {
-                    with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
-                    quit(&app);
-                });
-            }
+        QuitStep::StopThenQuit => {
+            let app = app.clone();
+            thread::spawn(move || {
+                with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
+                quit(&app);
+            });
         }
     }
     route
@@ -1646,14 +1891,22 @@ pub fn quit(app: &AppHandle) {
     app.exit(0);
 }
 
-/// `answer_quit`: keeps the answer when asked to, stops a service the app started on Stop it, then quits (P3).
+/// `answer_quit`: keeps the answer when asked to, stops a service the app started on Stop it, then quits (P3). Only
+/// the first answer is acted on.
 pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), AppError> {
+    // Asked on every Quit, answered once: a second answer, while the first quits, does nothing.
+    if let Some(service) = app.try_state::<EventService>() {
+        if !first_answer(&service.answered) {
+            return Ok(());
+        }
+    }
     let answer = if keep {
         QuitAnswer::Keep
     } else {
         QuitAnswer::Stop
     };
     with_supervisor(app, |supervisor, ctx| {
+        supervisor.begin_quit();
         if remember {
             supervisor.remember_quit(answer);
         }
@@ -1772,15 +2025,23 @@ mod tests {
         };
         assert_eq!(decide(&fresh(), &running, now()), Adopt);
         // Asking changes nothing in the record.
-        assert_eq!(recorded(&fresh(), AskFirstStart, &before, now()), fresh());
+        assert_eq!(recorded(&fresh(), AskFirstStart, now()), fresh());
     }
 
     #[test]
     fn child_exit_zero_is_stopped_from_outside_and_turns_the_switch_off() {
-        let stopped = seen(NotRunning, Process::Exited(ChildExit::Code(0)));
+        // A clean exit with its marker for a stop request: the person stopped it.
+        let stopped = Observation {
+            marker: Some(StopMarker {
+                pid: PID,
+                at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
+            }),
+            ..seen(NotRunning, Process::Exited(ChildExit::Code(0)))
+        };
         let action = decide(&app_started(), &stopped, now());
         assert_eq!(action, MarkStoppedFromOutside);
-        let after = recorded(&app_started(), action, &stopped, now());
+        let after = recorded(&app_started(), action, now());
         assert!(!after.wanted, "the switch turns off (D4)");
         assert_eq!(after.pid, None);
         assert_eq!(after.started_at, None);
@@ -1791,6 +2052,79 @@ mod tests {
             decide(&after, &seen(NotRunning, Process::NoneRecorded), now()),
             Nothing
         );
+    }
+
+    /// A logout or a shutdown SIGTERMs the service, which stops cleanly and says so: that is not the person's stop, so
+    /// it is restarted, counted toward giving up, and the switch stays on. Only a stop by request turns it off — on the
+    /// child-exit path and the recorded-PID path alike — and a clean exit with no marker at all is a crash.
+    #[test]
+    fn a_stop_by_signal_is_a_crash_and_only_a_stop_by_request_turns_the_switch_off() {
+        let request = StopMarker {
+            pid: PID,
+            at: "2026-10-25T11:30:00.000Z".into(),
+            reason: StopReason::Request,
+        };
+        let signal = StopMarker {
+            reason: StopReason::Signal,
+            ..request.clone()
+        };
+        let first = Restart {
+            after: Duration::from_secs(1),
+        };
+        for process in [Process::Gone, Process::Exited(ChildExit::Code(0))] {
+            let with = |marker: Option<StopMarker>| Observation {
+                marker,
+                ..seen(NotRunning, process)
+            };
+            // Gone or exited, with a marker for a stop by request: stopped from outside.
+            let stopped = with(Some(request.clone()));
+            assert_eq!(
+                decide(&app_started(), &stopped, now()),
+                MarkStoppedFromOutside,
+                "{process:?}"
+            );
+            // With a marker for a stop by signal: a crash, restarted after its wait, the switch left on.
+            let signalled = with(Some(signal.clone()));
+            let action = decide(&app_started(), &signalled, now());
+            assert_eq!(action, first, "{process:?}");
+            let after = recorded(&app_started(), action, now());
+            assert!(after.wanted, "{process:?}");
+            assert_eq!(after.recent_failures.len(), 1, "counted: {process:?}");
+            // With none: a crash.
+            assert_eq!(
+                decide(&app_started(), &with(None), now()),
+                first,
+                "{process:?}"
+            );
+            // Signalled five times in ten minutes: given up, like any crash.
+            let four = ServiceRecord {
+                recent_failures: failures(&[
+                    "2026-10-25T11:51:00.000Z",
+                    "2026-10-25T11:53:00.000Z",
+                    "2026-10-25T11:55:00.000Z",
+                    "2026-10-25T11:58:00.000Z",
+                ]),
+                ..app_started()
+            };
+            assert_eq!(decide(&four, &signalled, now()), GiveUp, "{process:?}");
+        }
+        // A stop by request for another PID, or from before this start, is no stop of this one.
+        for other in [
+            StopMarker {
+                pid: PID + 1,
+                ..request.clone()
+            },
+            StopMarker {
+                at: "2026-10-25T10:00:00.000Z".into(),
+                ..request.clone()
+            },
+        ] {
+            let exited = Observation {
+                marker: Some(other.clone()),
+                ..seen(NotRunning, Process::Exited(ChildExit::Code(0)))
+            };
+            assert_eq!(decide(&app_started(), &exited, now()), first, "{other:?}");
+        }
     }
 
     #[test]
@@ -1809,7 +2143,7 @@ mod tests {
                 panic!("{exit:?} came to {action:?}")
             };
             waits.push(after.as_secs());
-            let after = recorded(&record, action, &crashed, now());
+            let after = recorded(&record, action, now());
             assert!(after.wanted, "a crash keeps the switch on");
             assert_eq!(after.pid, None, "the crashed one is forgotten");
             // Restarted: the app's own again.
@@ -1838,7 +2172,7 @@ mod tests {
                 pid: Some(PID),
                 started_at: Some(iso(at)),
                 started_by_app: true,
-                ..recorded(&record, action, &crashed, at)
+                ..recorded(&record, action, at)
             };
         }
         let second = Duration::from_secs;
@@ -1885,7 +2219,7 @@ mod tests {
         let crashed = seen(NotRunning, Process::Exited(ChildExit::Code(1)));
         assert_eq!(decide(&four, &crashed, now()), GiveUp);
         assert!(!given_up(&four));
-        let after = recorded(&four, GiveUp, &crashed, now());
+        let after = recorded(&four, GiveUp, now());
         assert!(given_up(&after));
         assert_eq!(after.pid, None);
         // Failures spread over more than ten minutes are not five within ten: two count, so it waits 30 s.
@@ -1904,7 +2238,7 @@ mod tests {
         );
         // And only the ones within ten minutes of the newest are kept.
         assert_eq!(
-            recorded(&spread, Restart { after: second(30) }, &crashed, now()).recent_failures,
+            recorded(&spread, Restart { after: second(30) }, now()).recent_failures,
             failures(&[
                 "2026-10-25T11:52:00.000Z",
                 "2026-10-25T11:58:00.000Z",
@@ -1922,27 +2256,32 @@ mod tests {
         let stopped = gone(StopMarker {
             pid: PID,
             at: "2026-10-25T11:30:00.000Z".into(),
+            reason: StopReason::Request,
         });
         let action = decide(&app_started(), &stopped, now());
         assert_eq!(action, MarkStoppedFromOutside);
-        assert!(!recorded(&app_started(), action, &stopped, now()).wanted);
+        assert!(!recorded(&app_started(), action, now()).wanted);
         // A marker from before this start, or for another PID, says nothing about this one: it crashed.
         for marker in [
             StopMarker {
                 pid: PID,
                 at: "2026-10-25T10:59:59.999Z".into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID,
                 at: STARTED.into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID + 1,
                 at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
             },
             StopMarker {
                 pid: PID,
                 at: "not a time".into(),
+                reason: StopReason::Request,
             },
         ] {
             assert_eq!(
@@ -1965,7 +2304,7 @@ mod tests {
                 after: Duration::from_secs(1)
             }
         );
-        let after = recorded(&app_started(), action, &gone, now());
+        let after = recorded(&app_started(), action, now());
         assert!(after.wanted);
         assert_eq!(after.pid, None);
         assert_eq!(
@@ -2005,6 +2344,7 @@ mod tests {
         let marker = StopMarker {
             pid: PID,
             at: "2026-10-25T11:59:59.000Z".into(),
+            reason: StopReason::Request,
         };
         let stopped = Observation {
             marker: Some(marker),
@@ -2031,7 +2371,7 @@ mod tests {
         let went = seen(NotRunning, Process::NoneRecorded);
         let action = decide(&adopted(), &went, now());
         assert_eq!(action, MarkStoppedFromOutside);
-        let after = recorded(&adopted(), action, &went, now());
+        let after = recorded(&adopted(), action, now());
         assert!(!after.wanted, "the Events screen offers Start (D4)");
         assert_eq!(after.started_at, None);
         assert!(after.recent_failures.is_empty());
@@ -2045,11 +2385,11 @@ mod tests {
 
     #[test]
     fn already_running_owner_when_starting_is_adopted() {
-        // The app's start was refused because a terminal's the events CLI's `run` owns the database (Review Focus 1).
+        // The app's start was refused because one a terminal started owns the database (Review Focus 1).
         let refused = seen(Running, Process::Exited(ChildExit::Code(78)));
         let action = decide(&app_started(), &refused, now());
         assert_eq!(action, Adopt);
-        let after = recorded(&app_started(), action, &refused, now());
+        let after = recorded(&app_started(), action, now());
         assert!(after.wanted);
         assert_eq!(after.pid, None);
         assert!(!after.started_by_app);
@@ -2057,7 +2397,10 @@ mod tests {
             after.started_at.as_deref(),
             Some("2026-10-25T12:00:00.000Z")
         );
-        assert_eq!(after.version.as_deref(), Some("0.26.2"));
+        assert_eq!(
+            after.version, None,
+            "never the installed version: the one running is read from its own command line"
+        );
         assert!(
             after.recent_failures.is_empty(),
             "a refusal because one runs is not a failure"
@@ -2077,6 +2420,217 @@ mod tests {
         assert_eq!(
             decide(&app_started(), &seen(Running, Process::Gone), now()),
             Adopt
+        );
+    }
+
+    /// The events CLI takes its folder pins anywhere, so a terminal may start `run` after them, as the MCP servers on
+    /// this Mac put them before `mcp`: the subcommand is the first word after the CLI's that is no option or value.
+    #[test]
+    fn the_subcommand_is_read_past_the_clis_own_options() {
+        let cli =
+            "/x/runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs";
+        for (args, service) in [
+            (
+                &[
+                    "node",
+                    cli,
+                    "--config-dir",
+                    "/c",
+                    "--state-dir",
+                    "/s",
+                    "run",
+                ][..],
+                true,
+            ),
+            (
+                &[
+                    "node",
+                    cli,
+                    "--json",
+                    "--no-color",
+                    "run",
+                    "--data-dir",
+                    "/d",
+                ],
+                true,
+            ),
+            (&["node", cli, "--state-dir=/s", "run"], true),
+            (
+                &[
+                    "node",
+                    cli,
+                    "--config-dir",
+                    "/c",
+                    "--state-dir",
+                    "/s",
+                    "mcp",
+                ],
+                false,
+            ),
+            // A folder named `run` is a value, not the subcommand.
+            (&["node", cli, "--state-dir", "run", "mcp"], false),
+            (&["node", cli, "--config-dir", "/c"], false),
+        ] {
+            assert_eq!(is_service_command_line(&words(args)), service, "{args:?}");
+        }
+        assert_eq!(
+            running_version(&words(&["node", cli, "--state-dir", "/s", "run"])).as_deref(),
+            Some("0.26.1")
+        );
+    }
+
+    #[test]
+    fn running_version_comes_from_the_runtime_path_on_its_command_line() {
+        let runtime = "/home/example/.local/share/agent-communications/runtime";
+        let cli = "node_modules/@agentcomms/events-daemon/dist/cli.mjs";
+        assert_eq!(
+            running_version(&words(&[
+                "/opt/homebrew/bin/node",
+                &format!("{runtime}/0.26.1-events-daemon/{cli}"),
+                "run",
+            ]))
+            .as_deref(),
+            Some("0.26.1")
+        );
+        assert_eq!(
+            running_version(&words(&[
+                "node",
+                &format!("{runtime}/0.27.0-feat-0.27-events-daemon/{cli}"),
+                "run"
+            ]))
+            .as_deref(),
+            Some("0.27.0-feat-0.27")
+        );
+        // Started some other way, the command line names no version: unknown.
+        for args in [
+            &["/bin/sh", "/x/launch/events-daemon", "run"][..],
+            &["node", "/opt/homebrew/bin/agent-events", "run"],
+            &[
+                "node",
+                "/opt/homebrew/lib/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+                "run",
+            ],
+            &["node", "/x/runtime/0.26.1-gmail/cli.mjs", "run"],
+            &["node", "/x/runtime/latest-events-daemon/cli.mjs", "run"],
+            &["node", "/x/0.26.1-events-daemon/cli.mjs", "run"],
+            &[],
+        ] {
+            assert_eq!(running_version(&words(args)), None, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_adopted_service_is_the_one_run_for_this_state_folder() {
+        let runtime = |version: &str| {
+            format!("/x/runtime/{version}-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs")
+        };
+        let ours = "/home/example/.config/agent-communications/state";
+        let other = "/tmp/elsewhere/state";
+        let service = |pid: u32, version: &str, state: Option<&str>| {
+            let mut args = words(&["/opt/homebrew/bin/node", &runtime(version), "run"]);
+            if let Some(state) = state {
+                args.extend(["--state-dir".to_string(), state.to_string()]);
+            }
+            (pid, args)
+        };
+        // Pinned to this state folder: it, and the version its runtime path names.
+        let processes = vec![
+            (10, words(&["/bin/sleep", "30"])),
+            service(11, "0.26.1", Some(ours)),
+            service(12, "0.26.0", Some(other)),
+        ];
+        assert_eq!(
+            pick_adopted(&processes, ours, ours, None),
+            Some((11, Some("0.26.1".to_string())))
+        );
+        // `--state-dir=…` is the same pin.
+        let joined = vec![(
+            13,
+            words(&[
+                "node",
+                &runtime("0.26.1"),
+                "run",
+                &format!("--state-dir={ours}"),
+            ]),
+        )];
+        assert_eq!(
+            pick_adopted(&joined, ours, ours, None),
+            Some((13, Some("0.26.1".to_string())))
+        );
+        // Started without a pin: it is this folder's only when this folder is the default one.
+        let unpinned = vec![service(14, "0.26.1", None)];
+        assert_eq!(
+            pick_adopted(&unpinned, ours, ours, None),
+            Some((14, Some("0.26.1".to_string())))
+        );
+        assert_eq!(pick_adopted(&unpinned, other, ours, None), None);
+        // A command line with no version: the PID, and the version unknown.
+        let shim = vec![(
+            15,
+            words(&[
+                "/bin/sh",
+                "/x/launch/events-daemon",
+                "run",
+                "--state-dir",
+                ours,
+            ]),
+        )];
+        assert_eq!(pick_adopted(&shim, ours, ours, None), Some((15, None)));
+        // Two, or none, is not knowing which: nothing. The app's own child is never the adopted one.
+        let two = vec![
+            service(16, "0.26.1", Some(ours)),
+            service(17, "0.26.0", Some(ours)),
+        ];
+        assert_eq!(pick_adopted(&two, ours, ours, None), None);
+        assert_eq!(
+            pick_adopted(&two, ours, ours, Some(17)),
+            Some((16, Some("0.26.1".to_string())))
+        );
+        assert_eq!(pick_adopted(&[], ours, ours, None), None);
+        let status = vec![(
+            18,
+            words(&["node", &runtime("0.26.1"), "status", "--state-dir", ours]),
+        )];
+        assert_eq!(pick_adopted(&status, ours, ours, None), None);
+    }
+
+    #[test]
+    fn an_adopted_service_is_never_given_the_installed_version() {
+        let installed = Observation {
+            installed_version: Some("0.27.0".into()),
+            ..seen(Running, Process::NoneRecorded)
+        };
+        let after = recorded(&fresh(), Adopt, now());
+        assert_eq!(after.version, None);
+        // Unknown, so nothing to offer: no newer version, no "Restart to use it".
+        assert_eq!(newer_version(&after, &installed), None);
+        // Known from its command line, and older: reported.
+        let known = ServiceRecord {
+            version: Some("0.26.1".into()),
+            ..after.clone()
+        };
+        assert_eq!(newer_version(&known, &installed).as_deref(), Some("0.27.0"));
+        assert_eq!(
+            decide(&known, &installed, now()),
+            Nothing,
+            "only reported (D5)"
+        );
+        // With its PID found: alive is nothing, gone is a stop from outside, never restarted (D4).
+        let with_pid = ServiceRecord {
+            pid: Some(PID),
+            ..known
+        };
+        assert_eq!(
+            decide(&with_pid, &seen(Running, Process::Alive), now()),
+            Nothing
+        );
+        assert_eq!(
+            decide(&with_pid, &seen(NotRunning, Process::Alive), now()),
+            Nothing
+        );
+        assert_eq!(
+            decide(&with_pid, &seen(NotRunning, Process::Gone), now()),
+            MarkStoppedFromOutside
         );
     }
 
@@ -2453,10 +3007,13 @@ mod tests {
     #[test]
     fn the_clean_stop_marker_is_read_as_task_1_writes_it() {
         assert_eq!(
-            parse_marker("{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\"}\n"),
+            parse_marker(
+                "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"request\"}\n"
+            ),
             Some(StopMarker {
                 pid: 4242,
-                at: "2026-10-25T11:30:00.000Z".into()
+                at: "2026-10-25T11:30:00.000Z".into(),
+                reason: StopReason::Request,
             })
         );
         for bad in [
@@ -2468,9 +3025,21 @@ mod tests {
             "{\"version\":1,\"pid\":\"4242\",\"at\":\"2026-10-25T11:30:00.000Z\"}",
             "{\"version\":1,\"pid\":4242,\"at\":\"yesterday\"}",
             "{\"version\":1,\"pid\":4242}",
+            // Its reason is required: there is no marker without one.
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\"}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"kill\"}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":1}",
+            "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"Request\"}",
         ] {
             assert_eq!(parse_marker(bad), None, "{bad:?}");
         }
+        assert_eq!(
+            parse_marker(
+                "{\"version\":1,\"pid\":4242,\"at\":\"2026-10-25T11:30:00.000Z\",\"reason\":\"signal\"}"
+            )
+            .map(|marker| marker.reason),
+            Some(StopReason::Signal)
+        );
     }
 
     /// A stand-in for `<data>/launch/events-daemon`, in a temporary installation: `status` reads a file, `stop` asks
@@ -2492,12 +3061,28 @@ case $1 in
   run)
     printf '%s\n' "$@" > "$here/run-argv"
     if [ -f "$here/crash" ]; then printf 'the runtime could not start: boom\n' >&2; exit 1; fi
-    if [ -f "$here/refuse" ]; then printf 'another local event service owner is already running\n' >&2; exit 78; fi
-    trap 'rm -f "$here/running"; exit 0' TERM
+    if [ -f "$here/refuse" ] || [ -f "$here/lock" ]; then
+      printf 'another local event service owner is already running\n' >&2; exit 78
+    fi
+    state=
+    previous=
+    for word in "$@"; do
+      [ "$previous" = "--state-dir" ] && state=$word
+      previous=$word
+    done
+    # The clean-stop marker, as the service writes it: to the second, which the tests allow for.
+    marker() {
+      mkdir -p "$state/events"
+      printf '{"version":1,"pid":%s,"at":"%s","reason":"%s"}\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$1" \
+        > "$state/events/last-stop.json.tmp"
+      mv "$state/events/last-stop.json.tmp" "$state/events/last-stop.json"
+    }
+    trap 'rm -f "$here/running"; marker signal; exit 0' TERM
     : > "$here/running"
     printf 'the service runs\n'
     while [ ! -f "$here/stop" ]; do sleep 0.1; done
     rm -f "$here/stop" "$here/running"
+    marker request
     exit 0 ;;
 esac
 exit 64
@@ -2645,6 +3230,54 @@ exit 64
         fake.finish(&mut supervisor);
     }
 
+    /// The app's own service, stopped from outside: a SIGTERM — a logout — restarts it with the switch on; a stop
+    /// request at a terminal turns the switch off.
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_from_outside_restarts_the_service_and_a_stop_request_turns_the_switch_off() {
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        eventually("it runs", || fake.has("running"));
+        // The fake's marker is to the second: past the start's second, so it is newer than the start.
+        std::thread::sleep(Duration::from_millis(1100));
+        let pid = supervisor.record().pid.expect("started");
+        // SAFETY: kill takes a PID and a signal; the PID is this test's own child.
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
+        eventually("it stops", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(0)))
+        });
+        let signalled = SystemTime::now();
+        supervisor.tick(&fake.ctx, signalled);
+        assert!(
+            supervisor.record().wanted,
+            "a logout is not the person's stop"
+        );
+        assert_eq!(supervisor.record().recent_failures.len(), 1);
+        assert!(supervisor.restart_due.is_some());
+        assert_eq!(supervisor.state(&fake.ctx).stopped_from_outside_at, None);
+        // Its 1 s wait, waited for real: the record's start is then the real time the marker is compared with.
+        std::thread::sleep(Duration::from_millis(1100));
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        let again = supervisor.record().pid.expect("restarted");
+        assert_ne!(again, pid);
+        assert_eq!(supervisor.state(&fake.ctx).restarts, 1);
+        eventually("it runs again", || fake.has("running"));
+        std::thread::sleep(Duration::from_millis(1100));
+        // A stop request from outside — `stop` at a terminal — is the person's: the switch turns off.
+        fake.mark("stop");
+        eventually("it stops", || {
+            matches!(supervisor.process(), Process::Exited(ChildExit::Code(0)))
+        });
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!supervisor.record().wanted);
+        assert!(supervisor
+            .state(&fake.ctx)
+            .stopped_from_outside_at
+            .is_some());
+        fake.finish(&mut supervisor);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_crash_is_restarted_after_its_wait_and_a_start_refused_for_another_owner_is_adopted() {
@@ -2709,6 +3342,186 @@ exit 64
         assert_eq!(supervisor.state(&fake.ctx).stopped_from_outside_at, None);
         eventually("it runs", || fake.has("running"));
         supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        fake.finish(&mut supervisor);
+    }
+
+    /// A service a terminal started, as a launcher starts it: adopted with the PID and the version its command line
+    /// names, and offered "Restart to use it" only then; started any other way, its version is unknown.
+    #[cfg(unix)]
+    #[test]
+    fn an_adopted_service_is_read_from_its_own_command_line() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new();
+        let terminal = |path: std::path::PathBuf| {
+            fs::create_dir_all(path.parent().expect("a folder")).expect("its folder");
+            fs::write(&path, "#!/bin/sh\nwhile :; do sleep 1; done\n").expect("a service");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("runnable");
+            let child = std::process::Command::new(&path)
+                .args(["run", "--state-dir", &fake.ctx.folders.state_dir])
+                .spawn()
+                .expect("started");
+            let pid = child.id();
+            eventually("it is events-daemon run", || is_our_service(pid));
+            child
+        };
+        let mut runtime = terminal(fake.dir.path().join(
+            "runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+        ));
+        fake.mark("running");
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!supervisor.record().started_by_app);
+        assert_eq!(supervisor.record().pid, Some(runtime.id()));
+        assert_eq!(supervisor.record().version.as_deref(), Some("0.26.1"));
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.started_by.as_deref(), Some("terminal"));
+        assert_eq!(state.version.as_deref(), Some("0.26.1"));
+        assert_eq!(
+            state.newer_version.as_deref(),
+            Some("0.26.2"),
+            "Restart to use it"
+        );
+        // It goes: not the app's, so not restarted, and the switch is off (D4).
+        let _ = runtime.kill();
+        let _ = runtime.wait();
+        fake.unmark("running");
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!supervisor.record().wanted);
+        assert!(!fake.has("run-argv"));
+        // Started without the launcher's runtime path: its version is unknown, and nothing is offered.
+        let mut other = terminal(fake.dir.path().join("elsewhere/events-daemon"));
+        fake.mark("running");
+        let mut unknown = fake.supervisor(ServiceRecord::default());
+        unknown.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(unknown.record().pid, Some(other.id()));
+        assert_eq!(unknown.record().version, None);
+        let state = unknown.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Running);
+        assert_eq!(state.version, None);
+        assert_eq!(state.newer_version, None);
+        let _ = other.kill();
+        let _ = other.wait();
+        fake.unmark("running");
+        fake.finish(&mut supervisor);
+        fake.finish(&mut unknown);
+    }
+
+    /// Restart to use it, on a service a terminal started: the app starts its own only once the old owner has let go.
+    /// Its socket closes first, so `status` says it is not running while it still holds the database (Task 1): the app
+    /// waits for its PID to go, when it knows it, or for its marker, newer than the stop request, when it does not.
+    #[cfg(unix)]
+    #[test]
+    fn restart_to_use_it_waits_for_the_old_owner_to_let_go() {
+        use std::os::unix::fs::PermissionsExt;
+        // An owner a terminal started: it holds the lock; asked to stop, it closes its socket at once, lets go of the
+        // lock half a second later, writes its marker, and ends half a second after that.
+        const OWNER: &str = r#"#!/bin/sh
+: > "$FAKE_HERE/lock"
+: > "$FAKE_HERE/running"
+while [ ! -f "$FAKE_HERE/stop" ]; do sleep 0.1; done
+rm -f "$FAKE_HERE/stop" "$FAKE_HERE/running"
+sleep 0.5
+rm -f "$FAKE_HERE/lock"
+mkdir -p "$FAKE_STATE/events"
+printf '{"version":1,"pid":%s,"at":"%s","reason":"request"}\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" \
+  > "$FAKE_STATE/events/last-stop.json"
+sleep 0.5
+exit 0
+"#;
+        for (name, known) in [
+            // As the launcher starts it: its PID is found, and waited for.
+            (
+                "runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+                true,
+            ),
+            // As a global install starts it: its command line names no events-daemon, so only its marker tells.
+            ("bin/agent-events", false),
+        ] {
+            let fake = Fake::new();
+            let path = fake.dir.path().join(name);
+            fs::create_dir_all(path.parent().expect("a folder")).expect("its folder");
+            fs::write(&path, OWNER).expect("an owner");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("runnable");
+            let mut old = std::process::Command::new(&path)
+                .args(["run", "--state-dir", &fake.ctx.folders.state_dir])
+                .env("FAKE_HERE", fake.dir.path().join("launch"))
+                .env("FAKE_STATE", &fake.ctx.folders.state_dir)
+                .spawn()
+                .expect("started");
+            eventually("it holds the database", || {
+                fake.has("lock") && fake.has("running")
+            });
+            let mut supervisor = fake.supervisor(ServiceRecord::default());
+            supervisor.tick(&fake.ctx, SystemTime::now());
+            assert!(!supervisor.record().started_by_app, "{name}");
+            assert_eq!(supervisor.record().pid.is_some(), known, "{name}");
+            supervisor.restart(&fake.ctx, SystemTime::now());
+            assert!(
+                supervisor.record().started_by_app,
+                "{name}: the app's own now"
+            );
+            assert!(
+                supervisor.record().recent_failures.is_empty(),
+                "{name}: its start was not refused"
+            );
+            eventually("the new one runs", || fake.has("running"));
+            assert_eq!(supervisor.state(&fake.ctx).restarts, 1, "{name}");
+            if known {
+                assert!(
+                    old.try_wait().expect("asked").is_some(),
+                    "{name}: the old one ended first"
+                );
+            }
+            let _ = old.kill();
+            let _ = old.wait();
+            supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+            fake.finish(&mut supervisor);
+        }
+    }
+
+    /// A start that fails before the service runs — here a launcher others may change, which the app refuses to run
+    /// (DA16) — waits as a crash does, 1 s, 5 s, then 30 s, and gives up at the fifth, never a flat retry.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_that_fails_waits_1s_5s_then_30s_and_gives_up_at_the_fifth() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new();
+        fs::set_permissions(
+            fake.path("events-daemon"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .expect("open to all");
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        let mut at = SystemTime::now();
+        let mut waits = Vec::new();
+        for attempt in 1..=5 {
+            supervisor.tick(&fake.ctx, at);
+            assert_eq!(supervisor.record().pid, None, "refused, attempt {attempt}");
+            assert_eq!(supervisor.record().recent_failures.len(), attempt);
+            let Some(due) = supervisor.restart_due else {
+                waits.push(None);
+                break;
+            };
+            waits.push(due.duration_since(at).ok().map(|wait| wait.as_secs()));
+            // Not before its wait.
+            supervisor.tick(&fake.ctx, at + Duration::from_millis(500));
+            assert_eq!(supervisor.record().recent_failures.len(), attempt);
+            at = due;
+        }
+        assert_eq!(waits, [Some(1), Some(5), Some(30), Some(30), None]);
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::GaveUp);
+        assert!(state
+            .log_tail
+            .iter()
+            .any(|line| line.contains("Agent Comms could not start the event service")));
+        assert!(!fake.has("run-argv"), "the refused launcher never ran");
+        supervisor.tick(&fake.ctx, at + Duration::from_secs(3600));
+        assert_eq!(
+            supervisor.record().recent_failures.len(),
+            5,
+            "no more tries"
+        );
         fake.finish(&mut supervisor);
     }
 
@@ -2812,7 +3625,7 @@ exit 64
         let at = iso(started + Duration::from_secs(30));
         fs::write(
             events.join(MARKER_FILE),
-            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n"),
+            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\",\"reason\":\"request\"}}\n"),
         )
         .expect("a marker");
         let mut supervisor = fake.supervisor(record.clone());
@@ -2830,7 +3643,8 @@ exit 64
         // A marker written just after the PID is seen gone is still read: once more, a moment later (Task 1).
         fs::remove_file(events.join(MARKER_FILE)).expect("removed");
         let late = events.join(MARKER_FILE);
-        let text = format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\"}}\n");
+        let text =
+            format!("{{\"version\":1,\"pid\":{pid},\"at\":\"{at}\",\"reason\":\"request\"}}\n");
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(300));
             fs::write(late, text).expect("a marker");
@@ -2862,11 +3676,27 @@ exit 64
             quit_route(true, Some(QuitAnswer::Stop)),
             QuitRoute::StopThenQuit
         );
-        // Quit pressed twice: the question is asked once (Review Focus 5).
-        let asking = AtomicBool::new(false);
-        assert!(first_to_ask(&asking));
-        assert!(!first_to_ask(&asking));
-        assert!(!first_to_ask(&asking));
+        // Quit pressed while it asks: asked again, every time, since the window may have missed the last one — before
+        // React mounted, or across a reload. Its dialog opens once however often it is asked (Review Focus 5).
+        let stopping = AtomicBool::new(false);
+        for _ in 0..3 {
+            assert_eq!(quit_step(QuitRoute::Ask, &stopping), QuitStep::ShowAndAsk);
+        }
+        assert_eq!(quit_step(QuitRoute::Quit, &stopping), QuitStep::Quit);
+        // A remembered Stop it stops once: a second Quit while it stops does nothing more.
+        assert_eq!(
+            quit_step(QuitRoute::StopThenQuit, &stopping),
+            QuitStep::StopThenQuit
+        );
+        assert_eq!(
+            quit_step(QuitRoute::StopThenQuit, &stopping),
+            QuitStep::Nothing
+        );
+        // However often it was asked, one answer is acted on.
+        let answered = AtomicBool::new(false);
+        assert!(first_answer(&answered));
+        assert!(!first_answer(&answered));
+        assert!(!first_answer(&answered));
     }
 
     /// A service a terminal started is not the app's to ask about; one the app started is, until it stops.
@@ -2891,6 +3721,16 @@ exit 64
         assert!(kept.wanted);
         assert_eq!(kept.pid, None);
         assert_eq!(kept.started_at, None);
+        // Quitting: a tick that was waiting for the lock starts nothing, as the app exits, even when a restart was due.
+        fake.unmark("run-argv");
+        supervisor.restart_due = Some(SystemTime::now());
+        supervisor.tick(&fake.ctx, SystemTime::now() + Duration::from_secs(60));
+        assert!(!fake.has("run-argv"), "nothing started while quitting");
+        assert_eq!(supervisor.record().pid, None);
+        assert!(
+            supervisor.record().wanted,
+            "for this run only: the next starts it again"
+        );
         // A terminal's service: nothing of the app's runs, so Quit does not ask.
         fake.mark("running");
         let mut adopted = fake.supervisor(ServiceRecord::default());

@@ -229,7 +229,8 @@ signal or a non-zero code.
     cleanly on it. Read literally, D4 would then turn the switch off after every restart, and the service would never
     come back at login, against D2.
   - **The rule:** the daemon's clean-stop marker (plan P2) says why it stopped, with `"reason": "request"` (the control
-    socket's stop: `agent-events stop`, `events_stop`, or the app's switch) or `"signal"` (SIGINT, SIGTERM, SIGHUP).
+    socket's stop: `agent-events stop`, `events_stop`, or the app's switch) or `"signal"` (SIGINT, SIGTERM). A SIGHUP,
+    which the daemon does not handle, leaves no marker, and is a crash too.
   - Only `request` turns the switch off. `signal` counts as a crash: the app starts the service again with the usual
     waits, counting toward giving up.
   - This applies both when the app finds its service gone at launch or on a check, and when its own child exits.

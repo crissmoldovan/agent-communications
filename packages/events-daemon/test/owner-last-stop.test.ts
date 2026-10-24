@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -41,7 +42,7 @@ async function lastStopNames(eventsDir: string): Promise<string[]> {
   return (await readdir(eventsDir)).filter((name) => name.startsWith('last-stop')).sort();
 }
 
-test('a clean stop writes last-stop.json with this pid and a time after the start', {
+test('a stop by request writes last-stop.json with this pid, a time after the start and reason request', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-last-stop-');
@@ -64,7 +65,7 @@ test('a clean stop writes last-stop.json with this pid and a time after the star
     assert.ok(typeof marker === 'object' && marker !== null && 'at' in marker);
     const { at } = marker as { at: unknown };
     assert.equal(typeof at, 'string');
-    assert.deepEqual(marker, { version: 1, pid: process.pid, at });
+    assert.deepEqual(marker, { version: 1, pid: process.pid, at, reason: 'request' });
     const atMs = Date.parse(at as string);
     assert.ok(Number.isFinite(atMs), 'at is an ISO 8601 time');
     assert.equal(new Date(atMs).toISOString(), at, 'at is written as ISO 8601');
@@ -76,6 +77,42 @@ test('a clean stop writes last-stop.json with this pid and a time after the star
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  // A logout, a shutdown or a kill is not the person's decision: the desktop app restarts a service stopped so.
+  test(`a stop by ${signal} writes last-stop.json with reason signal`, { skip: WINDOWS_SKIP }, async () => {
+    const stateDir = await shortTempDir('aev-last-stop-signal-');
+    try {
+      const configDir = await emptyConfigDir(stateDir);
+      const eventsDir = eventPaths(stateDir).root;
+      // The owner hears its signals through this seam, so the test runner's own handlers on `process` never fire.
+      const signals = new EventEmitter();
+      const running = runEventOwner({ stateDir, configDir, signals });
+      const client = new EventControlClient({ stateDir, clientName: 'events-daemon-last-stop-signal-test' });
+      let stopped = false;
+      try {
+        await untilAnswering(client, running);
+        assert.equal(signals.listenerCount(signal), 1, `the owner listens for ${signal}`);
+        signals.emit(signal);
+        await running;
+        stopped = true;
+      } finally {
+        // An owner that did not hear the signal is stopped here, so a failure never leaves it running.
+        if (!stopped) {
+          await client.request('stop').catch(() => undefined);
+          await running.catch(() => undefined);
+        }
+      }
+      const marker: unknown = JSON.parse(await readFile(join(eventsDir, 'last-stop.json'), 'utf8'));
+      const { at } = marker as { at: unknown };
+      assert.deepEqual(marker, { version: 1, pid: process.pid, at, reason: 'signal' });
+      assert.equal(signals.listenerCount('SIGTERM') + signals.listenerCount('SIGINT'), 0, 'its listeners are gone');
+      assert.equal((await stat(join(eventsDir, 'last-stop.json'))).mode & 0o777, 0o600);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('an owner that fails to start writes no marker', { skip: WINDOWS_SKIP }, async () => {
   const stateDir = await shortTempDir('aev-last-stop-fail-');
