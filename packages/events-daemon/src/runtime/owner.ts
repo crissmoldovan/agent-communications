@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   type ApprovalStore,
@@ -1586,7 +1586,8 @@ async function startOwnerWithLock(
 
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */
 export async function runEventOwner(options: EventOwnerOptions = {}): Promise<void> {
-  const owner = await startEventOwner(options);
+  const stateDir = options.stateDir ?? resolvePaths().stateDir;
+  const owner = await startEventOwner({ ...options, stateDir });
   const stop = () => {
     void owner.stop();
   };
@@ -1598,6 +1599,30 @@ export async function runEventOwner(options: EventOwnerOptions = {}): Promise<vo
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     await owner.stop();
+  }
+  // Reached only after a clean stop: a start that throws never gets here, and neither does a stop that does.
+  await writeLastStop(eventPaths(stateDir));
+}
+
+const LAST_STOP_FILE = 'last-stop.json';
+
+/**
+ * The clean-stop marker (desktop 0.27.0, P2): `{"version":1,"pid":…,"at":"<ISO 8601>"}` beside the database. A
+ * supervisor that no longer has this process as its child reads it to tell a stop from a crash: a marker for the
+ * service's PID, newer than its start, means it was stopped. Owner-only like the instance record, and written
+ * atomically, so a reader sees the previous marker or this one, never a part of either.
+ */
+async function writeLastStop(paths: EventPaths): Promise<void> {
+  const target = join(paths.root, LAST_STOP_FILE);
+  const temporary = join(paths.root, `${LAST_STOP_FILE}.${randomBytes(8).toString('hex')}.tmp`);
+  const marker = { version: 1, pid: process.pid, at: new Date().toISOString() };
+  try {
+    await writeFile(temporary, `${JSON.stringify(marker)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await chmod(temporary, 0o600);
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
   }
 }
 

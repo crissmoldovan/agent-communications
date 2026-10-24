@@ -24,7 +24,8 @@ agent-events run                     # in a terminal you keep open: the owner of
 ## How it runs
 
 `agent-events run` starts the **foreground owner**. It owns the event database while that terminal runs, and stops
-cleanly on `agent-events stop` or when the terminal closes. There is no background service or autostart in this
+cleanly on `agent-events stop` or when the terminal closes. When it stops cleanly it writes `last-stop.json` beside
+its database: the desktop app reads it to tell a stop from a crash. There is no background service or autostart in this
 release; the desktop app will supervise it later. Its state lives in an owner-only directory. A state directory so
 deep that its control socket's path would pass the system limit (103 bytes on macOS, 107 on Linux) is refused, with
 a hint to pin a shorter one. `agent-events --version` (or `-V`) prints the installed daemon version; a subcommand's
