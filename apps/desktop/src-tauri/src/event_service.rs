@@ -463,7 +463,16 @@ pub fn append_capped(path: &Path, bytes: &[u8], cap: u64) -> io::Result<()> {
             None => old.clear(),
         }
     }
-    file.set_len(0)?;
+    // Emptied through a handle that may write anywhere: an append-only one may not truncate on Windows. Written back
+    // through the append-only one, so a line the service writes meanwhile is never overwritten.
+    let mut truncate = OpenOptions::new();
+    truncate.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        truncate.custom_flags(libc::O_NOFOLLOW);
+    }
+    truncate.open(path)?.set_len(0)?;
     file.write_all(&old)?;
     file.write_all(new)
 }
