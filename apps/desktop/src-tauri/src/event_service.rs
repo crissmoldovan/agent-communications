@@ -126,7 +126,7 @@ pub struct StopMarker {
     pub reason: StopReason,
 }
 
-/// Why an owner stopped cleanly: a stop request through its control socket — `agent-events stop`, the events_stop
+/// Why an owner stopped cleanly: a stop request through its control socket — the events CLI's `stop`, the events_stop
 /// tool, the app's own switch — is the person's; a signal — a logout, a shutdown, a kill — is not, and counts as a
 /// crash (the lead's call, amending D4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
