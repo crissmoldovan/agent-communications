@@ -132,7 +132,9 @@ pub fn copy_text(text: String, app: AppHandle) -> Result<(), AppError> {
     terminal::copy(&app, &text)
 }
 
-/// Opens an `https://` link a doctor fix names, to api.slack.com, myaccount.google.com or console.cloud.google.com.
+/// Opens an `https://` link a doctor fix names, to api.slack.com, myaccount.google.com or console.cloud.google.com; the
+/// events service's README at its Judges section; or a queue item's message on mail.google.com, app.slack.com or a
+/// workspace's slack.com (0.30.0). `links::may_open` decides.
 #[tauri::command]
 pub fn open_link(url: String, app: AppHandle) -> Result<(), AppError> {
     links::open_link(&app, &url)

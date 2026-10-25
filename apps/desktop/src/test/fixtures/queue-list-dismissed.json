@@ -1,0 +1,40 @@
+{
+  "items": [
+    {
+      "id": "qi_01JBH7Z3K90000000000000008",
+      "state": "dismissed",
+      "stateAt": "2026-10-24T11:30:00.000Z",
+      "arrivedAt": "2026-10-24T11:03:00.000Z",
+      "expiresAt": "2026-10-31T11:03:00.000Z",
+      "rule": {
+        "id": "mail-asks",
+        "version": 2,
+        "name": "Mail that asks something"
+      },
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nExample Newsletter\n</untrusted-content boundary=\"q7Tn2bXa\">",
+        "address": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-address\">\nnews@example.com\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "subject": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"subject\">\nTell us what you think\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "gmail",
+        "url": "https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d502"
+      },
+      "judge": {
+        "state": "answered",
+        "id": "jev",
+        "kind": "typesafe",
+        "model": "jev-1",
+        "question": "Does this message ask me to do something?",
+        "answer": "yes",
+        "confidence": 0.55
+      }
+    }
+  ],
+  "more": false
+}

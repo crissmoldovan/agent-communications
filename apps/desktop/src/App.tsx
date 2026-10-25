@@ -13,12 +13,14 @@ import { Doctor } from './screens/Doctor.tsx';
 import { Events } from './screens/Events.tsx';
 import { NotInstalled } from './screens/NotInstalled.tsx';
 import { Overview } from './screens/Overview.tsx';
+import { Queue } from './screens/Queue.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Updates } from './screens/Updates.tsx';
 
 /** A screen may open another, as Overview opens Approvals; the others take nothing. */
 const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void }>> = {
   overview: Overview,
+  queue: Queue,
   accounts: Accounts,
   approvals: Approvals,
   activity: Activity,

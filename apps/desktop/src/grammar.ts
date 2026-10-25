@@ -15,6 +15,8 @@ const MAIL_CONVERSATION = new RegExp(grammar.mailConversation, 'u');
 const RESERVED: readonly string[] = grammar.reserved;
 const ACTS: readonly string[] = grammar.acts;
 const SESSION_KEY = new RegExp(grammar.sessionKey, 'u');
+const QUEUE_ITEM_ID = new RegExp(grammar.queueItemId, 'u');
+const RULE_ID = new RegExp(grammar.ruleId, 'u');
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -51,6 +53,19 @@ export function isActs(value: string): boolean {
 /** An activity session's key, as core makes it: sixteen lowercase hex digits. */
 export function isSessionKey(value: string): boolean {
   return isPlainValue(value) && SESSION_KEY.test(value);
+}
+
+/** A queue item's id, as the event service makes it: `qi_` and 26 of Crockford's letters. */
+export function isQueueItemId(value: string): boolean {
+  return isPlainValue(value) && QUEUE_ITEM_ID.test(value);
+}
+
+/**
+ * A rule's id, as the Queue screen filters by one: a letter or digit, then up to 127 letters, digits, `.`, `_`, `:`,
+ * `@` or `-`. A rule whose id is outside it is shown, and never offered as a filter.
+ */
+export function isRuleId(value: string): boolean {
+  return isPlainValue(value) && RULE_ID.test(value);
 }
 
 /** The acts a rule can allow, in the order the form shows them. */

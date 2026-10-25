@@ -1,0 +1,32 @@
+{
+  "open": 5,
+  "done": 2,
+  "dismissed": 1,
+  "byRule": [
+    {
+      "ruleId": "mail-asks",
+      "name": "Mail that asks something",
+      "open": 1
+    },
+    {
+      "ruleId": "david-on-slack",
+      "name": "David on Slack",
+      "open": 1
+    },
+    {
+      "ruleId": "invoices",
+      "name": "Invoices",
+      "open": 1
+    },
+    {
+      "ruleId": "family-chat",
+      "name": "Family chat",
+      "open": 1
+    },
+    {
+      "ruleId": "receipts",
+      "name": "Receipts",
+      "open": 1
+    }
+  ]
+}

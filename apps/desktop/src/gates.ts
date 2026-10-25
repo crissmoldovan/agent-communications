@@ -7,7 +7,8 @@
  * The first version of each feature. `layaJudge` is the events service's own version (its `--version`), the first that
  * ships phase E2's Laya status and disable (`allowlist.rs`, `LAYA_JUDGE_VERSION`); `judges` is too, the first with
  * judges at all (Phase E, 0.17.0), whose `judge kinds list` and `judges list` the Judges section reads
- * (`JUDGE_KINDS_VERSION`). The rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`).
+ * (`JUDGE_KINDS_VERSION`), and `queue`, the first with the action queue (`QUEUE_VERSION`). The rest are core's:
+ * `activity` is the first with the activity log (`ACTIVITY_VERSION`).
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -17,6 +18,7 @@ export const GATES = {
   layaJudge: '0.25.0',
   judges: '0.17.0',
   activity: '0.29.0',
+  queue: '0.30.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

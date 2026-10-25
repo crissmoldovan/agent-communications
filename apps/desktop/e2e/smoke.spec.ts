@@ -8,7 +8,7 @@ const FOLDERS = {
   secretsDir: '/example/home/.config/agent-communications/secrets',
 };
 
-test('opens on Overview with the eight sections', async ({ page }) => {
+test('opens on Overview with the nine sections', async ({ page }) => {
   await installMockIpc(page, {
     installation: {
       installed: true,
@@ -30,6 +30,7 @@ test('opens on Overview with the eight sections', async ({ page }) => {
   const sections = page.getByRole('navigation', { name: 'Sections' }).getByRole('button');
   await expect(sections).toHaveText([
     'Overview',
+    'Queue',
     'Accounts',
     'Approvals',
     'Activity',
@@ -39,7 +40,8 @@ test('opens on Overview with the eight sections', async ({ page }) => {
     'Doctor',
     'Settings',
   ]);
-  // Only the allowed commands were invoked, and only reads.
+  // Only the allowed commands were invoked, and only reads: the events service's version among them, which says whether
+  // it has the queue (0.30.0).
   const commands = await page.evaluate(() =>
     ((window as unknown as { __calls: { cmd: string; args: { call?: { kind: string } } }[] }).__calls ?? []).map(
       (call) => (call.cmd === 'cli' ? `cli:${call.args.call?.kind}` : call.cmd),
@@ -49,7 +51,7 @@ test('opens on Overview with the eight sections', async ({ page }) => {
   expect(commands).toContain('cli:approvalsPending');
   for (const command of commands) {
     expect(command).toMatch(
-      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor))$/,
+      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor|version))$/,
     );
   }
 });

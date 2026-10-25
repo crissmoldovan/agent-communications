@@ -3,9 +3,10 @@
  * Constraints). A screen's own sentences live with the screen.
  */
 
-/** The app's screens: the eight sections, then Settings. */
+/** The app's screens: the nine sections, then Settings. */
 export type Screen =
   | 'overview'
+  | 'queue'
   | 'accounts'
   | 'approvals'
   | 'activity'
@@ -15,9 +16,13 @@ export type Screen =
   | 'doctor'
   | 'settings';
 
-/** The eight sections in the sidebar's order (DA3; Activity, 0.29.0, between Approvals and Agent), then Settings. */
+/**
+ * The nine sections in the sidebar's order (DA3; Queue, 0.30.0, first after Overview; Activity, 0.29.0, between
+ * Approvals and Agent), then Settings.
+ */
 export const SECTIONS: readonly { screen: Exclude<Screen, 'settings'>; label: string }[] = [
   { screen: 'overview', label: 'Overview' },
+  { screen: 'queue', label: 'Queue' },
   { screen: 'accounts', label: 'Accounts' },
   { screen: 'approvals', label: 'Approvals' },
   { screen: 'activity', label: 'Activity' },

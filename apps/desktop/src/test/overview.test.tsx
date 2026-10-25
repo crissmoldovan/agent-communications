@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest';
 import type { Bridge, Call, CliResult } from '../ipc.ts';
 import { GMAIL_WAITS } from '../screens/Overview.tsx';
+import { QUEUE_COPY } from '../screens/Queue.tsx';
 import {
   cliKinds,
   createFakeBridge,
@@ -11,6 +12,9 @@ import {
   FIXTURES,
   type Fixture,
   failed,
+  fakeQueue,
+  QUEUE_COUNTS,
+  QUEUE_INSTALLATION,
 } from './fake-bridge.ts';
 import doctorEvents from './fixtures/doctor-events-daemon.json';
 import { renderApp } from './render.tsx';
@@ -327,5 +331,54 @@ describe('Overview', () => {
     expect(within(tile).getByText('at a version the app could not read')).toBeTruthy();
     expect(within(tile).getByText('core printed no version')).toBeTruthy();
     expect(reading('agent-communications')).toBeNull();
+  });
+});
+
+/** Core and the events service at `events`, with the queue's fixtures: the Queue tile reads the shared counts. */
+function queueBridge(events = '0.30.0', fixtures: Partial<Record<Call['kind'], Fixture>> = {}) {
+  return createFakeBridge(
+    { installation: async () => QUEUE_INSTALLATION },
+    {
+      ...fakeQueue(),
+      version: (call: Call) =>
+        (call as Extract<Call, { kind: 'version' }>).product === 'events-daemon' ? events : '0.30.0',
+      ...fixtures,
+    },
+  );
+}
+
+/** The queue's tile, beside Approvals waiting (design 2026-10-25-action-queue §4.6). */
+describe('Overview, the Queue tile', () => {
+  it('a Queue tile with the open count opens the Queue', { timeout: 30_000 }, async () => {
+    renderApp(queueBridge());
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    const tile = await screen.findByRole('region', { name: 'Queue' });
+    await waitFor(() => expect(tile.querySelector('[data-slot="tile-reading"]')?.textContent).toBe('5'));
+    // Beside Approvals waiting, after it.
+    const tiles = screen.getAllByRole('region').map((region) => region.getAttribute('aria-labelledby'));
+    const approvals = screen.getByRole('region', { name: 'Approvals waiting' });
+    expect(tiles.indexOf(approvals.getAttribute('aria-labelledby'))).toBe(
+      tiles.indexOf(tile.getAttribute('aria-labelledby')) - 1,
+    );
+    fireEvent.click(within(tile).getByRole('button', { name: 'Open Queue' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Queue' })).toBeTruthy();
+  });
+
+  it('an older events service says what it needs, and nothing open says nothing is waiting', {
+    timeout: 30_000,
+  }, async () => {
+    const older = renderApp(queueBridge('0.29.0'));
+    const tile = await screen.findByRole('region', { name: 'Queue' });
+    expect(await within(tile).findByText('Needs 0.30.0 or later; this machine has 0.29.0.')).toBeTruthy();
+    older.unmount();
+    renderApp(queueBridge('0.30.0', { queueCounts: { ...QUEUE_COUNTS, open: 0 } }));
+    const quiet = await screen.findByRole('region', { name: 'Queue' });
+    expect(await within(quiet).findByText(QUEUE_COPY.nothingWaiting)).toBeTruthy();
+  });
+
+  it('without the events service there is no Queue tile', { timeout: 30_000 }, async () => {
+    renderApp(createFakeBridge({ installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core'] }) }));
+    await screen.findByRole('region', { name: 'Approvals waiting' });
+    expect(screen.queryByRole('region', { name: 'Queue' })).toBeNull();
   });
 });

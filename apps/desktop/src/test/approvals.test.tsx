@@ -184,9 +184,10 @@ describe('Approvals', () => {
       { command: 'openInTerminal', args: { kind: 'approve', product: 'core', approvalId: CHANGE } },
       { command: 'openInTerminal', args: { kind: 'approve', product: 'slack', approvalId: SLACK } },
     ]);
-    // The app approved nothing and changed nothing itself: only reads went to the CLI.
+    // The app approved nothing and changed nothing itself: only reads went to the CLI — with the events service's own
+    // version, which says whether it has the queue (0.30.0).
     for (const kind of cliKinds(bridge))
-      expect(['approvalsPending', 'updateStatus', 'eventsStatus', 'doctor']).toContain(kind);
+      expect(['approvalsPending', 'updateStatus', 'eventsStatus', 'doctor', 'version']).toContain(kind);
   });
 
   it('says so when no terminal opens and the command is copied', async () => {
@@ -351,7 +352,9 @@ describe('Approvals → Recent (S5)', () => {
     expect(view.querySelector('img,script,iframe,[data-slot="from-outside"]')).toBeNull();
     // Nothing but reads went to the CLI.
     for (const kind of cliKinds(bridge)) {
-      expect(['approvalsPending', 'approvalsFinished', 'updateStatus', 'eventsStatus', 'doctor']).toContain(kind);
+      expect(['approvalsPending', 'approvalsFinished', 'updateStatus', 'eventsStatus', 'doctor', 'version']).toContain(
+        kind,
+      );
     }
   });
 

@@ -1,7 +1,7 @@
 //! What the app opens outside itself, besides the terminal (DA7, DA15, DA16): `https://` links to the pages doctor fixes
-//! send a person to, and the events service's README at its Judges section (0.27.1); and a writing profile in
-//! `<config>/compose/`, in the default editor. Both go through the opener
-//! plugin from Rust: the capability file grants the webview none of its commands.
+//! send a person to, the events service's README at its Judges section (0.27.1), and a queue item's message in Gmail or
+//! Slack on the web (0.30.0); and a writing profile in `<config>/compose/`, in the default editor. Both go through the
+//! opener plugin from Rust: the capability file grants the webview none of its commands.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{AppError, CliResult, ProfileOpened};
@@ -32,26 +32,26 @@ const LINK_LIMIT: usize = 2048;
 /// What a link never holds as it is: a URL writes each of these, and anything outside printable ASCII, as `%XX`.
 const NEVER_IN_A_LINK: &[u8] = b"\"<>\\`{}";
 
-/// Whether the app may open `url`: `https://`, then one of `LINK_HOSTS` — with no user, password or port, and every
-/// label letters, digits and inner hyphens — then, if anything, a path, a query or a fragment of printable ASCII with
-/// nothing a URL would have encoded, and never Google's `/url` redirect, which would open anywhere. The UI checks the
-/// same before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
-/// those, `JUDGES_HELP` exactly.
-pub fn allowed_link(url: &str) -> bool {
-    if url == JUDGES_HELP {
-        return true;
-    }
+/// Gmail on the web, where a queue item's "Open in Gmail" goes (0.30.0): this host exactly.
+pub const GMAIL_WEB_HOST: &str = "mail.google.com";
+
+/// Slack's web app, where a queue item's "Open in Slack" goes (0.30.0): this host, or one workspace's own
+/// `<workspace>.slack.com`.
+pub const SLACK_WEB_HOST: &str = "app.slack.com";
+
+/// What every link the app opens is first: `https://`, then a host with no user, password or port, every label letters,
+/// digits and inner hyphens, then, if anything, a path, a query or a fragment of printable ASCII with nothing a URL would
+/// have encoded, and never Google's `/url` redirect, which would open anywhere. Its host, lowercased, or `None`.
+fn checked_host(url: &str) -> Option<String> {
     if url.len() > LINK_LIMIT {
-        return false;
+        return None;
     }
-    let Some(rest) = url.strip_prefix("https://") else {
-        return false;
-    };
+    let rest = url.strip_prefix("https://")?;
     if !rest
         .bytes()
         .all(|byte| (0x21..=0x7E).contains(&byte) && !NEVER_IN_A_LINK.contains(&byte))
     {
-        return false;
+        return None;
     }
     let host = rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())].to_ascii_lowercase();
     let labelled = host.split('.').all(|label| {
@@ -66,14 +66,43 @@ pub fn allowed_link(url: &str) -> bool {
     let after = &rest[host.len()..];
     let path = after[..after.find(['?', '#']).unwrap_or(after.len())].to_ascii_lowercase();
     let redirect = path == "/url" || path.starts_with("/url/");
-    labelled && !redirect && LINK_HOSTS.contains(&host.as_str())
+    (labelled && !redirect).then_some(host)
 }
 
-/// Opens `url` in the default browser, once `allowed_link` takes it.
+/// Whether the app may open `url` for a doctor fix: `checked_host`'s link, on one of `LINK_HOSTS`. The UI checks the same
+/// before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
+/// those, `JUDGES_HELP` exactly.
+pub fn allowed_link(url: &str) -> bool {
+    if url == JUDGES_HELP {
+        return true;
+    }
+    checked_host(url).is_some_and(|host| LINK_HOSTS.contains(&host.as_str()))
+}
+
+/// Whether `url` is a queue item's link the app may open (0.30.0, design 2026-10-25-action-queue §8): `checked_host`'s
+/// link on Gmail's web host, on Slack's web app, or on one workspace's `<workspace>.slack.com` — a single label of
+/// letters, digits and inner hyphens before `.slack.com`, never an internationalised one. No other host of Google's or
+/// Slack's, and no deeper subdomain. The UI checks the same before it offers the link (`queueLink`, `src/queue.ts`).
+pub fn queue_link(url: &str) -> bool {
+    checked_host(url).is_some_and(|host| {
+        if host == GMAIL_WEB_HOST || host == SLACK_WEB_HOST {
+            return true;
+        }
+        host.strip_suffix(".slack.com")
+            .is_some_and(|workspace| !workspace.contains('.') && !workspace.starts_with("xn--"))
+    })
+}
+
+/// Whether `open_link` opens `url`: a doctor fix's link, the Judges README, or a queue item's link.
+pub fn may_open(url: &str) -> bool {
+    allowed_link(url) || queue_link(url)
+}
+
+/// Opens `url` in the default browser, once `may_open` takes it.
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
-    if !allowed_link(url) {
+    if !may_open(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com) and the events service's README at its Judges section",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, and a queue item's message on mail.google.com, app.slack.com or a workspace's slack.com",
         ));
     }
     app.opener()
@@ -293,6 +322,117 @@ mod tests {
             "https://github.com/login?return_to=/crissmoldovan/agent-communications",
         ] {
             assert!(!allowed_link(url), "{url:?} was allowed");
+        }
+    }
+
+    /// A queue item's "Open in Gmail" and "Open in Slack" (0.30.0): Gmail's web host, Slack's web app and a workspace's
+    /// own host, and no other host at all. A doctor fix still opens none of them.
+    #[test]
+    fn queue_links_allow_gmail_and_slack_on_the_web_and_refuse_any_other_host() {
+        let allowed = [
+            "https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5",
+            "https://mail.google.com/mail/u/1/#inbox/FMfcgzQXJWbMnPqRsTtVvWxZ",
+            "https://mail.google.com/mail/?authuser=someone@example.com#all/18c2f0a1b2c3d4e5",
+            "https://MAIL.GOOGLE.COM/mail/u/0/#all/18c2",
+            "https://app.slack.com/client/T0123ABCD/C0123ABCD",
+            "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1712345678.123456",
+            "https://example.slack.com/archives/C0123ABCD/p1712345678123456",
+            "https://acme-team.slack.com/archives/C0123ABCD/p1712345678123456?thread_ts=1712345678.000100&cid=C0123ABCD",
+            "https://Example.Slack.com/archives/C0123ABCD",
+            "https://w1.slack.com/",
+        ];
+        for url in allowed {
+            assert!(queue_link(url), "{url} was refused");
+            assert!(may_open(url), "{url} would not open");
+            // A doctor fix sends nobody there (DA16): its own check is unchanged.
+            assert!(!allowed_link(url), "{url} is a doctor fix's link");
+        }
+        for url in [
+            // Google's and Slack's other hosts.
+            "https://google.com/",
+            "https://www.google.com/",
+            "https://accounts.google.com/",
+            "https://drive.google.com/drive/my-drive",
+            "https://gmail.com/",
+            "https://www.gmail.com/",
+            "https://inbox.google.com/",
+            "https://slack.com/",
+            "https://slack.com/archives/C0123ABCD",
+            "https://example.enterprise.slack.com/archives/C0123ABCD",
+            "https://a.b.slack.com/",
+            "https://xn--slck-loa.slack.com/",
+            "https://slack-redir.net/link?url=https://evil.example/",
+            "https://slack.co/",
+            "https://example.slack.co/",
+            "https://slack-edge.com/",
+            // Lookalikes, and hosts that only end or start like them.
+            "https://mail.google.com.evil.example/",
+            "https://mail-google.com/",
+            "https://evilmail.google.com/",
+            "https://mail.google.co/",
+            "https://mailgoogle.com/",
+            "https://app.slack.com.evil.example/",
+            "https://example.slack.com.evil.example/",
+            "https://evilslack.com/",
+            "https://slack.com.evil.example/",
+            "https://evil.example/",
+            "https://evil.example/mail.google.com",
+            "https://evil.example/#.slack.com",
+            "https://evil.example?.slack.com",
+            "https://evil.example\\@mail.google.com/",
+            "https://mail.google.com@evil.example/",
+            "https://app.slack.com@evil.example/",
+            // Google's redirect, on Gmail's own host.
+            "https://mail.google.com/url?q=https://evil.example/",
+            "https://mail.google.com/URL?q=https://evil.example/",
+            "https://mail.google.com/url/?q=x",
+            // No user, password or port; https, and only https.
+            "https://user@mail.google.com/mail/u/0/",
+            "https://user:pass@app.slack.com/client",
+            "https://mail.google.com:443/mail/u/0/",
+            "https://app.slack.com:8443/client",
+            "http://mail.google.com/mail/u/0/",
+            "http://app.slack.com/client",
+            "HTTPS://mail.google.com/",
+            "https:mail.google.com",
+            "https:/app.slack.com/client",
+            "slack://channel?team=T0123ABCD&id=C0123ABCD",
+            "googlegmail:///co?to=someone@example.com",
+            "javascript:alert(1)//https://mail.google.com/",
+            "file:///etc/passwd",
+            "",
+            // Malformed hosts and paths.
+            "https://.slack.com/",
+            "https://-a.slack.com/",
+            "https://a-.slack.com/",
+            "https://a..slack.com/",
+            "https://mail.google.com./",
+            "https://app.slack.com./client",
+            "https://%61pp.slack.com/",
+            "https://[::1]/",
+            "https://127.0.0.1/",
+            "https://app.slack.com/ client",
+            "https://app.slack.com/\nclient",
+            "https://app.slack.com/\u{202E}tneilc",
+            "https://app.slack.com/\"onclick",
+            "https://app.slack.com/<script>",
+            "https://mail.google.com/mail/u/0/#all/`x`",
+            "https://sl\u{e4}ck.slack.com/",
+        ] {
+            assert!(!queue_link(url), "{url:?} was allowed");
+            assert!(!may_open(url), "{url:?} would open");
+        }
+        let long = format!("https://mail.google.com/mail/u/0/#all/{}", "a".repeat(4096));
+        assert!(!queue_link(&long));
+        assert!(!may_open(&long));
+        // Opening still takes what it took before: the doctor fixes' hosts and the Judges README.
+        for url in [
+            "https://api.slack.com/apps",
+            "https://myaccount.google.com/permissions",
+            "https://console.cloud.google.com/apis/credentials",
+            JUDGES_HELP,
+        ] {
+            assert!(may_open(url), "{url}");
         }
     }
 

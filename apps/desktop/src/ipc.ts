@@ -78,6 +78,16 @@ export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
  */
 export type ActivitySince = '7d' | '30d' | { today: number };
 
+/**
+ * Which of the queue's items `queue list --state` reads (`allowlist.rs`, `QueueState`): one tab's, or all of them.
+ * Closed.
+ */
+export type QueueState = 'open' | 'done' | 'dismissed' | 'all';
+
+/** The channels a queue item comes from, as `queue list --channel` takes them (`allowlist.rs`, `QueueChannel`). */
+export const QUEUE_CHANNELS = ['gmail', 'slack', 'resend', 'whatsapp'] as const;
+export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -87,6 +97,16 @@ export type ActivityShowCall = {
   channel?: ActivityChannel;
   account?: string;
   outcome?: ActivityOutcome;
+};
+
+/** `queue list` (0.30.0): one state's items, the rule a checked id, the channel a closed word, the limit 1 to 200. */
+export type QueueListCall = {
+  kind: 'queueList';
+  state: QueueState;
+  rule?: string;
+  channel?: QueueChannel;
+  since?: ActivitySince;
+  limit?: number;
 };
 
 /**
@@ -126,6 +146,15 @@ export type Call =
   | { kind: 'approvalsFinished'; state: FinishedApprovalState }
   | { kind: 'activitySessions'; since: ActivitySince }
   | ActivityShowCall
+  // The event service's queue (0.30.0): its items and its counts, read; done, dismiss, reopen and clear, which change
+  // only the person's own list, applied by the app itself (DA10). The item is `qi_` and 26 of Crockford's letters.
+  | QueueListCall
+  | { kind: 'queueCounts' }
+  | { kind: 'queueDone'; itemId: string }
+  | { kind: 'queueDismiss'; itemId: string }
+  | { kind: 'queueReopen'; itemId: string }
+  | { kind: 'queueClear' }
+  // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
 
