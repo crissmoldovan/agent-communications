@@ -1,5 +1,5 @@
-import { Button, Panel, Row, SectionHeader, StatusDot, type StatusTone } from '@cueplusplus/ui';
-import type { ReactNode } from 'react';
+import { Button, Grid, InfoTip, Panel, Row, SectionHeader, StatusDot, type StatusTone } from '@cueplusplus/ui';
+import { type ReactNode, useId } from 'react';
 import type { DoctorProduct, DoctorView } from '../cli-types.ts';
 import { productLabel, readApprovals, When } from '../components/ApprovalCard.tsx';
 import { Gated } from '../components/NeedsNewerCli.tsx';
@@ -26,9 +26,16 @@ const DOT_LABELS: Readonly<Record<StatusTone, string>> = {
   idle: 'not run',
 };
 
+/** Why Gmail's doctor waits to be asked: the hint beside its row. */
+export const GMAIL_WAITS = 'Runs only when you ask, from Doctor, because it calls Google.';
+
 /** A status dot that says its state, and carries its tone for anything that reads the page. */
-function Dot({ tone }: { tone: StatusTone }) {
-  return <StatusDot tone={tone} label={DOT_LABELS[tone]} data-tone={tone} />;
+function Dot({ tone, size }: { tone: StatusTone; size?: number }) {
+  return size === undefined ? (
+    <StatusDot tone={tone} label={DOT_LABELS[tone]} data-tone={tone} />
+  ) : (
+    <StatusDot tone={tone} label={DOT_LABELS[tone]} size={size} data-tone={tone} />
+  );
 }
 
 /** A row of a block: what it is, then what it says, at the far end. */
@@ -51,14 +58,58 @@ function Rows<T>({ value, children }: { value: Loadable<T>; children: (value: T)
   );
 }
 
-/** A titled block of the Overview: the label stays when a newer CLI is needed, so the reader knows what is missing. */
-function Block({ label, action, children }: { label: string; action?: ReactNode; children: ReactNode }) {
+/** A titled list of the Overview: the label stays when a newer CLI is needed, so the reader knows what is missing. */
+function Block({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section aria-label={label}>
-      <SectionHeader label={label} action={action}>
-        {children}
-      </SectionHeader>
+      <SectionHeader label={label}>{children}</SectionHeader>
     </section>
+  );
+}
+
+/**
+ * One of the Overview's headline readings (the mockup's tiles): what it is, the reading, and an action under it. The
+ * tile is the region its label names.
+ */
+function Tile({ label, action, children }: { label: string; action?: ReactNode; children: ReactNode }) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="min-w-0">
+      <Panel className="flex h-full flex-col gap-(--cue-space-2) p-(--cue-space-5)">
+        <span id={id} className="text-(length:--cue-text-ui) text-fg-muted">
+          {label}
+        </span>
+        {children}
+        {action === undefined ? null : <div className="mt-auto pt-(--cue-space-2)">{action}</div>}
+      </Panel>
+    </section>
+  );
+}
+
+/** A tile's reading: large, in the page's own face. */
+function Reading({ children }: { children: ReactNode }) {
+  return (
+    <span
+      data-slot="tile-reading"
+      className="flex min-w-0 items-start gap-(--cue-space-3) font-semibold text-(length:--cue-text-title) text-fg tabular-nums leading-tight tracking-tight"
+    >
+      {children}
+    </span>
+  );
+}
+
+/** A tile's line under its reading, or what it says when the reading is not there. */
+function Caption({ children }: { children: ReactNode }) {
+  return <span className="min-w-0 break-words text-(length:--cue-text-ui) text-fg-muted">{children}</span>;
+}
+
+/** A tile's reading once its read is there; until then, its loading or what went wrong, in the caption's place. */
+function TileState<T>({ value, children }: { value: Loadable<T>; children: (value: T) => ReactNode }) {
+  if (value.state === 'ready') return <>{children(value.value)}</>;
+  return (
+    <Caption>
+      <ScreenState value={value}>{() => null}</ScreenState>
+    </Caption>
   );
 }
 
@@ -124,7 +175,15 @@ function doctorState(
 ): { tone: StatusTone; words: ReactNode } {
   if (result === undefined) {
     return product === 'gmail'
-      ? { tone: 'idle', words: 'Runs only when you ask, from Doctor, because it calls Google.' }
+      ? {
+          tone: 'idle',
+          words: (
+            <span className="inline-flex items-center gap-(--cue-space-2)">
+              Only when you ask
+              <InfoTip text={GMAIL_WAITS} label="Why Gmail's doctor waits" />
+            </span>
+          ),
+        }
       : { tone: 'idle', words: 'Not run yet.' };
   }
   if (result.state === 'loading') return { tone: 'busy', words: 'Checking…' };
@@ -157,23 +216,22 @@ function DoctorRows({ present }: { present: readonly DoctorProduct[] }) {
   );
 }
 
-/** How many approvals wait, in words. */
-function waitingWords(count: number): string {
-  if (count === 0) return NOTHING_WAITING;
-  return count === 1 ? '1 approval is waiting.' : `${count} approvals are waiting.`;
-}
-
+/** How many approvals wait: the count, and the empty state's own line when there are none. */
 function ApprovalsWaiting() {
   const { approvals } = useAppData();
   return (
-    <Panel>
-      <Rows value={approvals}>
-        {(value) => {
-          const list = readApprovals(value);
-          return <Row>{list === null ? 'The approvals list could not be read.' : waitingWords(list.length)}</Row>;
-        }}
-      </Rows>
-    </Panel>
+    <TileState value={approvals}>
+      {(value) => {
+        const list = readApprovals(value);
+        if (list === null) return <Caption>The approvals list could not be read.</Caption>;
+        return (
+          <>
+            <Reading>{list.length}</Reading>
+            {list.length === 0 ? <Caption>{NOTHING_WAITING}</Caption> : null}
+          </>
+        );
+      }}
+    </TileState>
   );
 }
 
@@ -241,86 +299,89 @@ function eventsState(status: unknown): { tone: StatusTone; words: string } {
   return { tone: 'ok', words: 'Running' };
 }
 
-function EventsRows() {
+function EventsReading() {
   const { events } = useAppData();
   if (events === 'absent') return null;
   return (
-    <Panel>
-      <Rows value={events}>
-        {(status) => {
-          const { tone, words } = eventsState(status);
-          return (
-            <Row>
+    <TileState value={events}>
+      {(status) => {
+        const { tone, words } = eventsState(status);
+        return isRecord(status) ? (
+          <Reading>
+            <span className="flex h-lh shrink-0 items-center">
+              <Dot tone={tone} size={8} />
+            </span>
+            <span className="min-w-0 text-balance break-words">{words}</span>
+          </Reading>
+        ) : (
+          <Caption>
+            <span className="inline-flex items-center gap-(--cue-space-2)">
               <Dot tone={tone} />
-              <span className="text-fg">{words}</span>
-            </Row>
-          );
-        }}
-      </Rows>
-    </Panel>
+              {words}
+            </span>
+          </Caption>
+        );
+      }}
+    </TileState>
   );
 }
 
 /**
  * The version, the update status, each doctor, what waits, standing approvals and the events service (DA5.1), from
- * the data the app shares. Only the standing approvals are read here, once.
+ * the data the app shares. Only the standing approvals are read here, once. The three readings a person looks for
+ * first are tiles; the rest are quiet lists under them.
  */
 export function Overview({ onScreen }: { onScreen?: (screen: Screen) => void }) {
   const { installation } = useAppData();
   const installed = installation.state === 'ready' ? installation.value : null;
   const present = installed?.present ?? [];
   const version = installed?.version ?? null;
+  const events = present.includes('events-daemon');
 
   return (
     <ScreenFrame title="Overview">
-      <section aria-label="Version">
-        <Panel>
-          <Row>
-            <span className="text-fg">
-              {version === null
-                ? `agent-communications, at ${COPY.unreadableVersion}`
-                : `agent-communications ${version}`}
-            </span>
-          </Row>
-          {installed?.problem ? (
-            <Row>
-              <span className="text-fg-muted">
-                <UntrustedText text={installed.problem} />
-              </span>
-            </Row>
+      <div className="flex flex-col gap-(--cue-space-6)">
+        <Grid cols={events ? 3 : 2} gap={4}>
+          <Tile
+            label="Approvals waiting"
+            action={
+              onScreen === undefined ? undefined : (
+                <Button variant="secondary" size="sm" onClick={() => onScreen('approvals')}>
+                  Open Approvals
+                </Button>
+              )
+            }
+          >
+            <ApprovalsWaiting />
+          </Tile>
+          {events ? (
+            <Tile label="Event service">
+              <EventsReading />
+            </Tile>
           ) : null}
-        </Panel>
-      </section>
-      <Block label="Updates">
-        <Gated feature="updateStatus">
-          <UpdateStatusRows />
-        </Gated>
-      </Block>
-      <Block label="Doctor">
-        <DoctorRows present={present} />
-      </Block>
-      <Block
-        label="Approvals waiting"
-        action={
-          onScreen === undefined ? undefined : (
-            <Button variant="secondary" size="sm" onClick={() => onScreen('approvals')}>
-              Open Approvals
-            </Button>
-          )
-        }
-      >
-        <ApprovalsWaiting />
-      </Block>
-      <Block label="Standing approvals">
-        <Gated feature="standing">
-          <StandingRows />
-        </Gated>
-      </Block>
-      {present.includes('events-daemon') ? (
-        <Block label="Events">
-          <EventsRows />
+          <Tile label="agent-communications">
+            {version === null ? <Caption>{`at ${COPY.unreadableVersion}`}</Caption> : <Reading>{version}</Reading>}
+            {installed?.problem ? (
+              <Caption>
+                <UntrustedText text={installed.problem} />
+              </Caption>
+            ) : null}
+          </Tile>
+        </Grid>
+        <Block label="Doctor">
+          <DoctorRows present={present} />
         </Block>
-      ) : null}
+        <Block label="Standing approvals">
+          <Gated feature="standing">
+            <StandingRows />
+          </Gated>
+        </Block>
+        <Block label="Updates">
+          <Gated feature="updateStatus">
+            <UpdateStatusRows />
+          </Gated>
+        </Block>
+      </div>
     </ScreenFrame>
   );
 }

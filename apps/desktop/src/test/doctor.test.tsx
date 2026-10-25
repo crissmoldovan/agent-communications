@@ -1,12 +1,12 @@
 import { ThemeProvider } from '@cueplusplus/ui/system';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../App.tsx';
 import { BridgeProvider } from '../bridge-context.tsx';
 import { COPY } from '../copy.ts';
 import { AppDataProvider } from '../data.tsx';
-import { allowedLink, linksIn } from '../screens/Doctor.tsx';
+import { allowedLink, GMAIL_NOT_CHECKED, linksIn } from '../screens/Doctor.tsx';
 import { STORAGE_KEY, THEME_DEFAULTS, THEMES } from '../theme.ts';
 import { createFakeBridge, doctorsRun, EXAMPLE_INSTALLATION } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
@@ -14,6 +14,26 @@ import { renderApp } from './render.tsx';
 const STARTUP = ['core', 'events-daemon', 'resend', 'slack', 'whatsapp'];
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
+
+/** What there is to look at, at the top of the screen: each item's product, in the order shown. */
+const lookedAt = (): (string | null)[] =>
+  Array.from(screen.queryByRole('region', { name: 'To look at' })?.querySelectorAll('li') ?? []).map((item) =>
+    item.getAttribute('data-product'),
+  );
+
+/** The thing to look at for a product, once it shows (the first, when it has more than one). */
+async function issue(product: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const found = screen
+      .getByRole('region', { name: 'To look at' })
+      .querySelector<HTMLElement>(`li[data-product="${product}"]`);
+    if (found === null) throw new Error(`nothing to look at for ${product}`);
+    return found;
+  });
+}
+
+/** The page's line under its title. */
+const summary = (): string | null => document.querySelector('[data-slot="doctor-summary"]')?.textContent ?? null;
 
 /** Opens a section from the sidebar, as a person would. */
 async function open(name: string): Promise<void> {
@@ -34,8 +54,11 @@ describe('Doctor', () => {
     await waitFor(() => expect(doctorsRun(bridge)).toHaveLength(10));
     expect([...doctorsRun(bridge).slice(5)].sort()).toEqual(STARTUP);
     expect(await within(region('agent-communications')).findByText('the login keychain answers')).toBeTruthy();
-    // Gmail's is not run: its panel says why, and offers to.
-    expect(within(region('Gmail')).getByText(/runs only when you ask/)).toBeTruthy();
+    // Gmail's is not run: its panel says so, offers to, and says why in a hint the keyboard reaches.
+    expect(within(region('Gmail')).getByText('Not checked')).toBeTruthy();
+    expect(screen.queryByText(GMAIL_NOT_CHECKED)).toBeNull();
+    await act(async () => within(region('Gmail')).getByRole('button', { name: 'Why Gmail is not checked' }).focus());
+    expect((await screen.findByRole('tooltip')).textContent).toBe(GMAIL_NOT_CHECKED);
 
     // Refresh, once the doctors have answered: the same doctors once more, Gmail's still not.
     const refresh = screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement;
@@ -48,27 +71,35 @@ describe('Doctor', () => {
     fireEvent.click(within(region('Gmail')).getByRole('button', { name: 'Check Gmail (asks Google)' }));
     await waitFor(() => expect(doctorsRun(bridge)).toContain('gmail'));
     expect(doctorsRun(bridge).filter((product) => product === 'gmail')).toHaveLength(1);
-    const failing = await within(region('Gmail')).findByText('example/gmail signs in');
-    expect(failing).toBeTruthy();
-    expect(within(region('Gmail')).getByText('fail')).toBeTruthy();
-    expect(within(region('Gmail')).getByText('Google refused the refresh token')).toBeTruthy();
+    // Its failure is at the top, named as Gmail's, before core's warning; its passing check stays in its own list.
+    const gmail = await issue('gmail');
+    expect(within(gmail).getByText('Gmail')).toBeTruthy();
+    expect(within(gmail).getByText('example/gmail signs in')).toBeTruthy();
+    expect(within(gmail).getByText('fail')).toBeTruthy();
+    expect(within(gmail).getByText('Google refused the refresh token')).toBeTruthy();
+    expect(lookedAt()).toEqual(['gmail', 'core']);
+    expect(within(region('Gmail')).getByText('Node')).toBeTruthy();
+    expect(within(region('Gmail')).queryByText('example/gmail signs in')).toBeNull();
+    expect(within(region('Gmail')).getByText('problems')).toBeTruthy();
 
     // Copy puts the fix, exactly, on the clipboard through the app.
-    fireEvent.click(within(region('Gmail')).getByRole('button', { name: COPY.copy }));
+    fireEvent.click(within(gmail).getByRole('button', { name: COPY.copy }));
     await waitFor(() =>
       expect(bridge.calls.filter((call) => call.command === 'copyText')).toEqual([
         { command: 'copyText', args: 'Remove the app at https://myaccount.google.com/connections and sign in again.' },
       ]),
     );
     // The page it names opens through the app.
-    fireEvent.click(within(region('Gmail')).getByRole('button', { name: 'Open link' }));
+    fireEvent.click(within(gmail).getByRole('button', { name: 'Open link' }));
     await waitFor(() =>
       expect(bridge.calls.filter((call) => call.command === 'openLink')).toEqual([
         { command: 'openLink', args: 'https://myaccount.google.com/connections' },
       ]),
     );
     // A core warning with no link has Copy and no Open link.
-    const core = region('agent-communications');
+    const core = await issue('core');
+    expect(within(core).getByText('Gmail has accounts that no client starts')).toBeTruthy();
+    expect(within(core).getByText('warn')).toBeTruthy();
     expect(within(core).getByRole('button', { name: COPY.copy })).toBeTruthy();
     expect(within(core).queryByRole('button', { name: 'Open link' })).toBeNull();
   });
@@ -106,7 +137,7 @@ describe('Doctor', () => {
       { doctor: { ok: false, checks: [{ name: 'links', ok: false, detail: 'one fix, many links', fix }] } },
     );
     renderApp(bridge, { screen: 'doctor' });
-    const core = await screen.findByRole('region', { name: 'agent-communications' });
+    const core = await issue('core');
     await within(core).findByText('links');
     const buttons = within(core).getAllByRole('button', { name: 'Open link' });
     expect(buttons).toHaveLength(2);
@@ -192,14 +223,76 @@ describe('Doctor', () => {
       {},
     );
     renderApp(bridge, { screen: 'doctor' });
-    expect(
-      await within(await screen.findByRole('region', { name: 'Slack' })).findByText('the doctor took too long'),
-    ).toBeTruthy();
-    const core = region('agent-communications');
+    // A doctor that did not run is something to look at, and its header says so.
+    const slack = await issue('slack');
+    expect(within(slack).getByRole('alert').textContent).toBe('the doctor took too long');
+    expect(within(region('Slack')).getByText('did not run')).toBeTruthy();
+    const core = await issue('core');
     expect(await within(core).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(within(core).getByText('</untrusted-content>‮evil')).toBeTruthy();
     expect(within(core).getByText('[x](https://evil)')).toBeTruthy();
     expect(within(core).queryByRole('button', { name: 'Open link' })).toBeNull();
     expect(document.querySelector('main img, main a, main script, main iframe')).toBeNull();
+  });
+
+  it('says how the checks came out in one line, and keeps passing and skipped checks quiet in their own lists', async () => {
+    const bridge = createFakeBridge();
+    renderApp(bridge, { screen: 'doctor' });
+    await issue('core');
+    await waitFor(() => expect(summary()).toBe('10 checks pass · 1 to look at · 1 skipped'));
+    // Only core's warning is at the top; its passing checks stay in its list, each marked as passing.
+    expect(lookedAt()).toEqual(['core']);
+    const core = region('agent-communications');
+    for (const title of ['node', 'folders', 'keychain']) expect(within(core).getByText(title)).toBeTruthy();
+    expect(within(core).queryByText('clients')).toBeNull();
+    expect(within(core).getAllByText('ok')).toHaveLength(3);
+    expect(within(core).getByText('warnings')).toBeTruthy();
+    // A skipped check says so in words, quietly, with its detail.
+    const slack = region('Slack');
+    expect(within(slack).getByText('example/slack signs in')).toBeTruthy();
+    expect(within(slack).getByText('skipped')).toBeTruthy();
+    expect(within(slack).getByText('not checked: --offline')).toBeTruthy();
+    expect(within(slack).getByText('healthy')).toBeTruthy();
+
+    // While the doctors run again, the line says so.
+    const refresh = screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement;
+    await waitFor(() => expect(refresh.disabled).toBe(false));
+    fireEvent.click(refresh);
+    expect(summary()).toBe('Checking…');
+    await waitFor(() => expect(summary()).toBe('10 checks pass · 1 to look at · 1 skipped'));
+  });
+
+  it('a report that says it is not healthy, with no failing check, is something to look at', async () => {
+    const bridge = createFakeBridge(
+      { installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core', 'slack'] }) },
+      {
+        doctor: (call: { product?: string }) =>
+          call.product === 'slack'
+            ? {
+                healthy: false,
+                checks: [{ id: 'config', title: 'Configuration', status: 'ok', detail: 'one workspace' }],
+              }
+            : { ok: true, checks: [{ name: 'node', ok: true, detail: 'Node 22.18.0' }] },
+      },
+    );
+    renderApp(bridge, { screen: 'doctor' });
+    const slack = await issue('slack');
+    expect(within(slack).getByText('Not healthy')).toBeTruthy();
+    expect(lookedAt()).toEqual(['slack']);
+    expect(within(region('Slack')).getByText('Configuration')).toBeTruthy();
+    expect(within(region('Slack')).getByText('problems')).toBeTruthy();
+    expect(summary()).toBe('2 checks pass · 1 to look at');
+  });
+
+  it('with nothing to look at, there is no list of it, and a doctor that ran no checks says so', async () => {
+    const bridge = createFakeBridge(
+      { installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core'] }) },
+      { doctor: { ok: true, checks: [] } },
+    );
+    renderApp(bridge, { screen: 'doctor' });
+    const core = await screen.findByRole('region', { name: 'agent-communications' });
+    expect(await within(core).findByText('This doctor ran no checks.')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'To look at' })).toBeNull();
+    expect(summary()).toBe('0 checks pass');
   });
 });
