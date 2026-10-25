@@ -92,6 +92,7 @@ import {
   TargetResumeControl,
 } from './b3-target-test-control.ts';
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
+import { DELIVERY_ACTIVITY_INTERVAL_MS, DeliveryActivity } from './delivery-activity.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
@@ -1128,6 +1129,8 @@ async function startOwnerWithLock(
     sse,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
+  // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
+  const deliveryActivity = new DeliveryActivity({ store: database, core, config: core.config });
   const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
     const config = await core.config.load();
     const alias = Object.entries(config.inboxes).find(
@@ -1523,6 +1526,8 @@ async function startOwnerWithLock(
         unregisterLayaWorker();
         unregisterLayaInputs();
         unregisterLayaPurge();
+        // The last work's outcomes are recorded while the database is still open; this never throws.
+        await deliveryActivity.stop();
         database.close();
         await removeInstance(paths, instance.instanceId);
         await rm(paths.controlToken, { force: true });
@@ -1582,6 +1587,7 @@ async function startOwnerWithLock(
     }
     await writeInstance(paths, instance);
     scheduler.start();
+    deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     return owner;
   } catch (error) {
     await owner.stop();
