@@ -1,4 +1,14 @@
 import { CommsError, ensureSendEpochConfig, type LegacyDrainReport } from '@agentcomms/core';
+import {
+  describeDeleted,
+  describeDeletionPrepared,
+  describeEdited,
+  describeEditPrepared,
+  describePosted,
+  describePrepared,
+  describeReaction,
+  recordSlack,
+} from '../activity.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { checkFileCount, recordFiles } from '../compose/files.ts';
 import type { SlackContext } from '../context.ts';
@@ -130,6 +140,22 @@ export async function prepareDraftPost(
   request: PrepareRequest,
   slack: SessionDeps = {},
 ): Promise<PreparedPost & LegacyDrainNote> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.post.prepare',
+    'approval',
+    () => preparePostOf(context, alias, request, slack),
+    describePrepared,
+  );
+}
+
+async function preparePostOf(
+  context: SlackContext,
+  alias: string,
+  request: PrepareRequest,
+  slack: SessionDeps,
+): Promise<PreparedPost & LegacyDrainNote> {
   const writing = draftToWrite(request);
   const requested = checkedIdentity(request.as);
   if (writing !== undefined) requireConversation(writing.channel, alias, context.handoffs);
@@ -173,6 +199,23 @@ export async function sendPost(
   input: SendPostInput,
   slack: SessionDeps = {},
 ): Promise<(PostedMessage | PostedFiles) & LegacyDrainNote> {
+  // The outcome recorded around the gate, never through it: `postPrepared` is the one way a post leaves.
+  return recordSlack(
+    context,
+    alias,
+    'slack.post.send',
+    'write',
+    () => postDraftOf(context, alias, input, slack),
+    describePosted(input.draftId),
+  );
+}
+
+async function postDraftOf(
+  context: SlackContext,
+  alias: string,
+  input: SendPostInput,
+  slack: SessionDeps,
+): Promise<(PostedMessage | PostedFiles) & LegacyDrainNote> {
   // First, as every claim does: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const gate = await gateDepsFor(context, alias, slack);
@@ -201,6 +244,29 @@ export async function react(
   slack: SessionDeps = {},
   /** `as`, when the person said who this reaction comes from (design 2026-10-15 S6). Only with no `approvalId`. */
   as?: unknown,
+): Promise<ReactionResult & LegacyDrainNote> {
+  /*
+   * Two rows, one operation: `slack.react` makes the approval and tries it, `slack.react.send` claims a person's. The
+   * first is recorded as preparing an approval and the second as the act (the lead's rule for 0.29.0) — though under
+   * `chat` the first makes the reaction in the same call, its line then `ok` with the approval it used.
+   */
+  return recordSlack(
+    context,
+    alias,
+    approvalId === undefined ? 'slack.react' : 'slack.react.send',
+    approvalId === undefined ? 'approval' : 'write',
+    () => reactOnce(context, alias, wanted, approvalId, slack, as),
+    describeReaction(wanted),
+  );
+}
+
+async function reactOnce(
+  context: SlackContext,
+  alias: string,
+  wanted: ReactionOptions,
+  approvalId: string | undefined,
+  slack: SessionDeps,
+  as: unknown,
 ): Promise<ReactionResult & LegacyDrainNote> {
   const requested = checkedIdentity(as);
   // A channel's name, or anything else that is no conversation id, is refused before the workspace is opened.
@@ -309,6 +375,22 @@ export async function prepareEdit(
   request: EditPrepareRequest,
   slack: SessionDeps = {},
 ): Promise<PreparedEdit & LegacyDrainNote> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.edit.prepare',
+    'approval',
+    () => prepareEditOf(context, alias, request, slack),
+    describeEditPrepared,
+  );
+}
+
+async function prepareEditOf(
+  context: SlackContext,
+  alias: string,
+  request: EditPrepareRequest,
+  slack: SessionDeps,
+): Promise<PreparedEdit & LegacyDrainNote> {
   const writing = editWordsToWrite(request);
   const removeFiles = filesToRemove(request);
   const requested = checkedIdentity(request.as);
@@ -349,6 +431,22 @@ export async function sendEdit(
   input: SendEditInput,
   slack: SessionDeps = {},
 ): Promise<EditedMessage & LegacyDrainNote> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.edit.send',
+    'write',
+    () => editOnce(context, alias, input, slack),
+    describeEdited,
+  );
+}
+
+async function editOnce(
+  context: SlackContext,
+  alias: string,
+  input: SendEditInput,
+  slack: SessionDeps,
+): Promise<EditedMessage & LegacyDrainNote> {
   requireMessageTs(input.ts);
   // First, as every claim does: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
@@ -375,6 +473,22 @@ export async function prepareDelete(
   where: { readonly channel: string; readonly ts: string },
   slack: SessionDeps = {},
 ): Promise<PreparedDeletion & LegacyDrainNote> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.delete.prepare',
+    'approval',
+    () => prepareDeleteOf(context, alias, where, slack),
+    describeDeletionPrepared,
+  );
+}
+
+async function prepareDeleteOf(
+  context: SlackContext,
+  alias: string,
+  where: { readonly channel: string; readonly ts: string },
+  slack: SessionDeps,
+): Promise<PreparedDeletion & LegacyDrainNote> {
   requireMessageAt(where, alias, context.handoffs);
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const gate = await gateDepsFor(context, alias, slack);
@@ -395,6 +509,22 @@ export async function sendDelete(
   alias: string,
   input: SendDeleteInput,
   slack: SessionDeps = {},
+): Promise<DeletedMessage & LegacyDrainNote> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.delete.send',
+    'write',
+    () => deleteOnce(context, alias, input, slack),
+    describeDeleted,
+  );
+}
+
+async function deleteOnce(
+  context: SlackContext,
+  alias: string,
+  input: SendDeleteInput,
+  slack: SessionDeps,
 ): Promise<DeletedMessage & LegacyDrainNote> {
   const where = { channel: input.channel, ts: input.ts };
   requireMessageAt(where, alias, context.handoffs);

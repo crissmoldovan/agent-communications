@@ -1,4 +1,5 @@
 import {
+  type ClientInfo,
   type CliHandoffs,
   CommsError,
   type Config,
@@ -49,6 +50,11 @@ export interface WhatsAppContextOptions {
   sourceIo?: SourceIo | undefined;
   sourceTimeoutMs?: number | undefined;
   platform?: NodeJS.Platform | undefined;
+  /**
+   * What the MCP client said it is (`clientInfo`), for the activity log's session (design 2026-10-25-activity, §4.3):
+   * a function, since the server learns it only once a client has connected. The command line has none.
+   */
+  clientInfo?: (() => ClientInfo | undefined) | undefined;
 }
 
 export interface ResolvedAccount {
@@ -68,6 +74,8 @@ export class WhatsAppContext {
   readonly lists: ChatListStore;
   /** The name a pinned server was started for, as given. */
   readonly pinned: string | undefined;
+  /** What the MCP client said it is, for the activity log; undefined at the command line. */
+  readonly clientInfo: (() => ClientInfo | undefined) | undefined;
   readonly #log: ((line: string) => void) | undefined;
   #migration: Promise<SpikeMigration | null> | null = null;
   #pinnedId: string | undefined;
@@ -95,6 +103,7 @@ export class WhatsAppContext {
     this.handoffs = requireHandoffs(this.core).on(this.platform);
     this.lists = new ChatListStore(this.core.paths.configDir);
     this.pinned = options.account;
+    this.clientInfo = options.clientInfo;
     this.#log = options.log;
     this.#source = { io: options.sourceIo, timeoutMs: options.sourceTimeoutMs, platform: this.platform };
   }

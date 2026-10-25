@@ -47,6 +47,18 @@ import {
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
+import {
+  describeChannels,
+  describeDeletedDraft,
+  describeDownload,
+  describeFiles,
+  describeHistory,
+  describeIcon,
+  describePeople,
+  describeSearch,
+  describeThread,
+  recordSlack,
+} from '../activity.ts';
 import type { FetchLike } from '../api/guard.ts';
 import { exitAfterRefreshes, type SignalHost, settleBeforeExit } from '../auth/exit.ts';
 import { SLACK_CALLER } from '../caller.ts';
@@ -1092,8 +1104,18 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--limit <n>', 'how many to return', '100')
     .action(
       act(async (context, options, flags: Options) => {
-        const { call } = await session(context, String(flags.workspace));
-        const result = await listChannels(call, { all: flags.all === true, limit: limitOf(flags) });
+        // The number first, as the tool's schema checks it before its handler runs; then the call is recorded from the
+        // opening of the workspace on, as `slack_channels` records it. `read`, `thread` and `people` do the same.
+        const limit = limitOf(flags);
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.channels',
+          'read',
+          async () =>
+            listChannels((await session(context, String(flags.workspace))).call, { all: flags.all === true, limit }),
+          describeChannels,
+        );
         writeResult(
           result,
           output(),
@@ -1111,14 +1133,24 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
     .action(
       act(async (context, options, channel: string, flags: Options) => {
-        const { call, name, teamId } = await session(context, String(flags.workspace));
-        const result = await readChannel(call, name, channel, {
-          limit: limitOf(flags),
-          oldest: flags.oldest as string | undefined,
-          latest: flags.latest as string | undefined,
-          cursor: flags.cursor as string | undefined,
-          ourTeamId: teamId,
-        });
+        const limit = limitOf(flags);
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.read',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(context, String(flags.workspace));
+            return readChannel(call, name, channel, {
+              limit,
+              oldest: flags.oldest as string | undefined,
+              latest: flags.latest as string | undefined,
+              cursor: flags.cursor as string | undefined,
+              ourTeamId: teamId,
+            });
+          },
+          describeHistory(channel),
+        );
         writeResult(result, output(), () => renderHistory(result, options.color), streams);
       }),
     );
@@ -1129,12 +1161,22 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
     .action(
       act(async (context, options, channel: string, ts: string, flags: Options) => {
-        const { call, name, teamId } = await session(context, String(flags.workspace));
-        const result = await readThread(call, name, channel, ts, {
-          limit: limitOf(flags),
-          cursor: flags.cursor as string | undefined,
-          ourTeamId: teamId,
-        });
+        const limit = limitOf(flags);
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.thread',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(context, String(flags.workspace));
+            return readThread(call, name, channel, ts, {
+              limit,
+              cursor: flags.cursor as string | undefined,
+              ourTeamId: teamId,
+            });
+          },
+          describeThread,
+        );
         writeResult(result, output(), () => renderThread(result, options.color), streams);
       }),
     );
@@ -1151,13 +1193,22 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         const { limit, page } = searchPaging({ limit: flags.limit, page: flags.page, surface: context.surface });
         // `teamId` too, as `read` and `thread` pass it: without it an author from another organisation was not
         // marked `external` here, while the same search over MCP marked them — one message, two answers.
-        const { call, name, teamId } = await session(context, String(flags.workspace));
-        const result = await searchMessages(call, name, query, {
-          limit,
-          page,
-          ourTeamId: teamId,
-          surface: context.surface,
-        });
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.search',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(context, String(flags.workspace));
+            return searchMessages(call, name, query, {
+              limit,
+              page,
+              ourTeamId: teamId,
+              surface: context.surface,
+            });
+          },
+          describeSearch,
+        );
         writeResult(result, output(), () => renderSearch(result, options.color), streams);
       }),
     );
@@ -1173,13 +1224,20 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         // As typed, and checked before the workspace is opened, as `search` checks them — see `filesPaging`.
         // `slack_files` checks them the same way.
         const { limit, page } = filesPaging({ limit: flags.limit, page: flags.page, surface: context.surface });
-        const { call } = await session(context, String(flags.workspace));
-        const result = await listFiles(call, {
-          channel: flags.channel as string | undefined,
-          limit,
-          page,
-          surface: context.surface,
-        });
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.files',
+          'read',
+          async () =>
+            listFiles((await session(context, String(flags.workspace))).call, {
+              channel: flags.channel as string | undefined,
+              limit,
+              page,
+              surface: context.surface,
+            }),
+          describeFiles,
+        );
         writeResult(result, output(), () => renderFiles(result, options.color), streams);
       }),
     );
@@ -1267,11 +1325,26 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           },
           context.handoffs,
         );
-        const opened = await session(context, workspace);
+        // Opened by the first call, which is the first thing `downloadAtTerminal` does: inside its line, as the tool's is.
+        let opened: ReturnType<typeof session> | undefined;
         const result = await downloadAtTerminal<FileDownloadQuestion>({
           core: context.core,
+          /*
+           * Each call of the operation is a line, as each call of `slack_file_download` is: the question, then — when the
+           * person answers at this terminal — the files saved, under the row the choice id makes it.
+           */
           download: (answer) =>
-            downloadFiles(context, opened, { ...request, ...answer }, { download: deps.fileDownload }),
+            recordSlack(
+              context,
+              workspace,
+              answer.choiceId === undefined ? 'slack.files.download' : 'slack.files.download.answer',
+              answer.choiceId === undefined ? 'approval' : 'read',
+              async () => {
+                opened ??= session(context, workspace);
+                return downloadFiles(context, await opened, { ...request, ...answer }, { download: deps.fileDownload });
+              },
+              describeDownload,
+            ),
           to,
           choice,
           env,
@@ -1300,8 +1373,15 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--limit <n>', 'how many', '200')
     .action(
       act(async (context, options, flags: Options) => {
-        const { call } = await session(context, String(flags.workspace));
-        const result = await listPeople(call, { limit: limitOf(flags) });
+        const limit = limitOf(flags);
+        const result = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.people',
+          'read',
+          async () => listPeople((await session(context, String(flags.workspace))).call, { limit }),
+          describePeople,
+        );
         writeResult(result, output(), () => renderPeople(result, options.color), streams);
       }),
     );
@@ -1319,7 +1399,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .description('make the emoji as a PNG in the data folder, and say where to upload it; changes nothing in Slack')
     .action(
       act(async (context, options, alias: string) => {
-        const result = await makeAgentIcon(context, await session(context, alias));
+        const result = await recordSlack(
+          context,
+          alias,
+          'slack.icon.make',
+          'read',
+          async () => makeAgentIcon(context, await session(context, alias)),
+          describeIcon,
+        );
         writeResult(result, output(), () => renderAgentIcon(result, options.color), streams);
       }),
     );
@@ -1432,9 +1519,18 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .description('throw a draft away')
     .action(
       act(async (context, _options, draftId: string, flags: Options) => {
-        const { account } = requireWorkspace(await context.config(), String(flags.workspace), context.handoffs);
-        const store = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
-        const deleted = await deleteOwnDraft(store, account.id, draftId);
+        const deleted = await recordSlack(
+          context,
+          String(flags.workspace),
+          'slack.draft.delete',
+          'approval',
+          async () => {
+            const { account } = requireWorkspace(await context.config(), String(flags.workspace), context.handoffs);
+            const store = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
+            return deleteOwnDraft(store, account.id, draftId);
+          },
+          describeDeletedDraft,
+        );
         writeResult(deleted, output(), renderDeletedDraft, streams);
       }),
     );

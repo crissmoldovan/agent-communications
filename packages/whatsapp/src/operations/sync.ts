@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError, ensurePrivateDir, handoffSentence, withFileLock } from '@agentcomms/core';
+import { recordWhatsApp } from '../activity.ts';
 import type { WhatsAppAccount } from '../config.ts';
 import type { WhatsAppContext } from '../context.ts';
 import { type IndexStats, rebuildIndex } from '../index-db.ts';
@@ -125,6 +126,18 @@ export async function syncAccount(
   context: WhatsAppContext,
   request: { account?: string | undefined },
 ): Promise<SyncResult> {
+  // A read of WhatsApp's store: how many chats and messages the index now holds, never which (S4).
+  return recordWhatsApp(
+    context,
+    request.account,
+    'whatsapp.sync',
+    'read',
+    () => syncOnce(context, request),
+    (result) => ({ chats: result.chats, messages: result.messages }),
+  );
+}
+
+async function syncOnce(context: WhatsAppContext, request: { account?: string | undefined }): Promise<SyncResult> {
   return withCheckedCopy(context, request, async (copy) => {
     let current = await context.accountById(copy.account.id);
     if (!current) throw removedWhileSyncing(context, copy.accountName, copy.account);

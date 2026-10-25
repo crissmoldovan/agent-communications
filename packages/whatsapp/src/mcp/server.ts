@@ -82,13 +82,16 @@ async function buildInstructions(context: WhatsAppContext): Promise<string> {
 }
 
 export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}): Promise<WhatsAppMcpServer> {
-  const context = new WhatsAppContext({ ...options, surface: 'mcp' });
+  // What the client said it is, once one has connected: the activity log's session names it (design 2026-10-25-activity).
+  const client: { info?: () => { name: string; version?: string } | undefined } = {};
+  const context = new WhatsAppContext({ ...options, surface: 'mcp', clientInfo: () => client.info?.() });
   // A pin naming no WhatsApp account is refused here, so the server does not start serving nothing.
   await context.checkPin();
   const server = new McpServer(
     { name: 'agent-whatsapp', version: VERSION },
     { instructions: await buildInstructions(context) },
   );
+  client.info = () => server.server.getClientVersion();
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text

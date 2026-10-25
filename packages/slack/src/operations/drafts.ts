@@ -11,6 +11,7 @@ import {
   type UnsentStatus,
   unsentReport,
 } from '@agentcomms/core';
+import { describeDraft, describeDrafts, describeDraftView, recordSlack } from '../activity.ts';
 import {
   type Broadcast,
   type ComposedPayload,
@@ -102,6 +103,17 @@ function nothingToPost(): CommsError {
  * checked and recorded, and the draft is written only once every one of them has been.
  */
 export async function createDraft(context: SlackContext, alias: string, input: DraftInput): Promise<SlackDraft> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.draft.create',
+    'approval',
+    () => writeDraft(context, alias, input),
+    describeDraft,
+  );
+}
+
+async function writeDraft(context: SlackContext, alias: string, input: DraftInput): Promise<SlackDraft> {
   const { account } = requireWorkspace(await context.config(), alias, context.handoffs);
   requireConversation(input.channel, alias, context.handoffs);
   const paths = input.files ?? [];
@@ -175,6 +187,23 @@ function mentionsOf(
  * gate says so when the draft is prepared.
  */
 export async function updateDraft(
+  context: SlackContext,
+  alias: string,
+  draftId: string,
+  change: DraftChange,
+): Promise<SlackDraft> {
+  // One capability whichever way the files change: `slack.draft.update.nofiles` is this row with every file taken off.
+  return recordSlack(
+    context,
+    alias,
+    'slack.draft.update',
+    'approval',
+    () => changeDraft(context, alias, draftId, change),
+    describeDraft,
+  );
+}
+
+async function changeDraft(
   context: SlackContext,
   alias: string,
   draftId: string,
@@ -419,6 +448,17 @@ export function viewDraft(draft: SlackDraft, handoffs: CliHandoffs): DraftView {
 
 /** One draft of this workspace, as it would post: `agent-slack draft show` and `slack_draft_get`. */
 export async function showDraft(context: SlackContext, alias: string, draftId: string): Promise<DraftView> {
+  return recordSlack(
+    context,
+    alias,
+    'slack.draft.get',
+    'read',
+    () => draftOf(context, alias, draftId),
+    describeDraftView,
+  );
+}
+
+async function draftOf(context: SlackContext, alias: string, draftId: string): Promise<DraftView> {
   const { account } = requireWorkspace(await context.config(), alias, context.handoffs);
   // Whose it is before what it says: another workspace's draft is absent here, refused or not.
   const draft = await ownDraft(
@@ -437,6 +477,10 @@ export async function showDraft(context: SlackContext, alias: string, draftId: s
  * needs to delete; failing the list for it would hide all the others.
  */
 export async function listDrafts(context: SlackContext, alias: string): Promise<DraftView[]> {
+  return recordSlack(context, alias, 'slack.draft.list', 'read', () => draftsOf(context, alias), describeDrafts);
+}
+
+async function draftsOf(context: SlackContext, alias: string): Promise<DraftView[]> {
   const { account } = requireWorkspace(await context.config(), alias, context.handoffs);
   const drafts = await openDraftStore(context.core.paths.stateDir, context.now, context.handoffs).list(account.id);
   const views = drafts.map((draft): DraftView => {

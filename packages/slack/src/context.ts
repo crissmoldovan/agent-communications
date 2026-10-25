@@ -1,4 +1,5 @@
 import {
+  type ClientInfo,
   type CliHandoffs,
   CommsError,
   type Config,
@@ -79,6 +80,11 @@ export interface SlackContextOptions {
    * after review): core's — 5 to 30 seconds from the CSPRNG — unless a test injects one, so no test waits.
    */
   standingPause?: StandingPause | undefined;
+  /**
+   * What the MCP client said it is (`clientInfo`), for the activity log's session (design 2026-10-25-activity, §4.3):
+   * a function, since the server learns it only once a client has connected. The command line has none.
+   */
+  clientInfo?: (() => ClientInfo | undefined) | undefined;
 }
 
 /**
@@ -158,6 +164,8 @@ export class SlackContext {
   readonly notify: Notifier | undefined;
   /** The pause between deciding a standing act and making it: core's unless a test injects one. */
   readonly standingPause: StandingPause;
+  /** What the MCP client said it is, for the activity log; undefined at the command line. */
+  readonly clientInfo: (() => ClientInfo | undefined) | undefined;
 
   constructor(options: SlackContextOptions = {}) {
     this.env = options.env ?? process.env;
@@ -182,6 +190,7 @@ export class SlackContext {
     this.slackBaseUrl = options.slackBaseUrl;
     this.persist = options.persist;
     this.standingPause = options.standingPause ?? standingPause();
+    this.clientInfo = options.clientInfo;
     // The platform's own notifier unless one is given, as `sendPacing` is core's unless a test injects one (S10).
     this.notify =
       options.notify === null
