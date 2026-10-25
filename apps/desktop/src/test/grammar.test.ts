@@ -6,7 +6,7 @@ import { ALIAS_PATTERN } from '../../../../packages/core/src/config.ts';
 import { APPROVAL_ID_PATTERN } from '../../../../packages/core/src/ids.ts';
 import { NAME_PATTERN } from '../../../../packages/core/src/name-grammar.ts';
 import * as label from '../../../../packages/core/src/operations/label.ts';
-import { isAccountName, isActs, isApprovalId, isConversation, isPlainValue } from '../grammar.ts';
+import { isAccountName, isActs, isApprovalId, isConversation, isPlainValue, isSessionKey } from '../grammar.ts';
 import { formatActs } from '../ipc.ts';
 
 /**
@@ -115,6 +115,34 @@ describe('the grammars', () => {
     }
     expect(formatActs([])).toBe('none');
     expect(formatActs(['reply', 'reaction'])).toBe('reply,reaction');
+  });
+
+  it("a session key is core's own: sixteen lowercase hex digits, and nothing a key could be read past", () => {
+    // Core keeps the pattern to itself (`activity.ts`), so it is read from the source, as the label patterns were.
+    const source = readFileSync(
+      fileURLToPath(new URL('../../../../packages/core/src/activity.ts', import.meta.url)),
+      'utf8',
+    );
+    const match = /const SESSION_KEY = \/(.+)\/([a-z]*);/.exec(source);
+    if (!match?.[1]) throw new Error("core's activity.ts no longer declares SESSION_KEY");
+    const core = new RegExp(match[1], match[2]);
+    const keys = [
+      '3f9a1c2e7b4d5a60',
+      '0000000000000000',
+      'ffffffffffffffff',
+      '3f9a1c2e7b4d5a6',
+      '3f9a1c2e7b4d5a600',
+      '3F9A1C2E7B4D5A60',
+      '3f9a1c2e7b4d5a6g',
+      '-f9a1c2e7b4d5a60',
+      '3f9a1c2e 7b4d5a6',
+      '3f9a1c2e7b4d5a60\n',
+      '3f9a1c2e7b4d5a60 --json',
+      '',
+      ...CORPUS,
+    ];
+    for (const key of keys) expect(isSessionKey(key), JSON.stringify(key)).toBe(core.test(key));
+    expect(isSessionKey('3f9a1c2e7b4d5a60')).toBe(true);
   });
 
   it('the Rust side reads the same file', () => {

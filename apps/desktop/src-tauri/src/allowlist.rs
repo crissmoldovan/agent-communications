@@ -65,6 +65,12 @@ checked_word!(
     grammar::acts,
     "a list of acts"
 );
+checked_word!(
+    /// An activity session's key: sixteen lowercase hex digits, as core makes it (0.29.0).
+    SessionKey,
+    grammar::session_key,
+    "a session key"
+);
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +159,188 @@ impl EndpointJudgeKind {
     }
 }
 
+/// An approval that no longer waits, as `approvals list --state` takes it (design 2026-10-25-activity S5): approved,
+/// used, failed, unknown, expired or revoked. Closed: core's `APPROVAL_STATES` less `pending` (Waiting's), `sending`
+/// (a send in flight, for seconds) and `corrupt`. Approvals → Recent reads one list for each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FinishedApprovalState {
+    Approved,
+    Used,
+    Failed,
+    Unknown,
+    Expired,
+    Revoked,
+}
+
+impl FinishedApprovalState {
+    pub const ALL: [FinishedApprovalState; 6] = [
+        FinishedApprovalState::Approved,
+        FinishedApprovalState::Used,
+        FinishedApprovalState::Failed,
+        FinishedApprovalState::Unknown,
+        FinishedApprovalState::Expired,
+        FinishedApprovalState::Revoked,
+    ];
+
+    /// The state as core names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            FinishedApprovalState::Approved => "approved",
+            FinishedApprovalState::Used => "used",
+            FinishedApprovalState::Failed => "failed",
+            FinishedApprovalState::Unknown => "unknown",
+            FinishedApprovalState::Expired => "expired",
+            FinishedApprovalState::Revoked => "revoked",
+        }
+    }
+}
+
+/// What an activity line did, as `activity show --kind` takes it: core's `ACTIVITY_KINDS`. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityKind {
+    Read,
+    Write,
+    Told,
+    Approval,
+}
+
+impl ActivityKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            ActivityKind::Read => "read",
+            ActivityKind::Write => "write",
+            ActivityKind::Told => "told",
+            ActivityKind::Approval => "approval",
+        }
+    }
+}
+
+/// How an activity line ended, as `activity show --outcome` takes it: core's `ACTIVITY_OUTCOMES`. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityOutcome {
+    Ok,
+    Refused,
+    Failed,
+}
+
+impl ActivityOutcome {
+    pub fn word(self) -> &'static str {
+        match self {
+            ActivityOutcome::Ok => "ok",
+            ActivityOutcome::Refused => "refused",
+            ActivityOutcome::Failed => "failed",
+        }
+    }
+}
+
+/// The channel an activity line is from, as `activity show --channel` takes it: core and the four channels this
+/// release builds in (`channels.generated.ts`, `BuiltInChannel`). Closed: a channel word outside it is shown on a line,
+/// never passed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityChannel {
+    Core,
+    Gmail,
+    Slack,
+    Resend,
+    Whatsapp,
+}
+
+impl ActivityChannel {
+    pub fn word(self) -> &'static str {
+        match self {
+            ActivityChannel::Core => "core",
+            ActivityChannel::Gmail => "gmail",
+            ActivityChannel::Slack => "slack",
+            ActivityChannel::Resend => "resend",
+            ActivityChannel::Whatsapp => "whatsapp",
+        }
+    }
+}
+
+/// How far back the Activity screen reads (design 2026-10-25-activity §4.5): today, 7 days or 30 days. Closed: 7 and 30
+/// days are core's spans; today is the start of the person's day, which only the window knows the time zone of, so it
+/// arrives as a time Rust checks and writes itself. No text the window sends reaches `--since`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActivitySince {
+    #[serde(rename = "today")]
+    Today(StartOfToday),
+    #[serde(rename = "7d")]
+    SevenDays,
+    #[serde(rename = "30d")]
+    ThirtyDays,
+}
+
+impl ActivitySince {
+    /// The range as `--since` takes it: an ISO time for today, a span for the others.
+    pub fn word(self) -> String {
+        match self {
+            ActivitySince::Today(start) => iso_time(start.0),
+            ActivitySince::SevenDays => "7d".into(),
+            ActivitySince::ThirtyDays => "30d".into(),
+        }
+    }
+}
+
+/// The first and the last second a start of today may be: 2020 to the end of 2099.
+const EARLIEST_TODAY: u64 = 1_577_836_800;
+const LATEST_TODAY: u64 = 4_102_444_800;
+
+/// When the person's today began, in whole seconds since the epoch, as the window's clock and time zone have it: a
+/// whole minute (every zone's midnight is one), in 2020 to 2099.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct StartOfToday(u64);
+
+impl TryFrom<u64> for StartOfToday {
+    type Error = AppError;
+
+    fn try_from(seconds: u64) -> Result<Self, Self::Error> {
+        if seconds.is_multiple_of(60) && (EARLIEST_TODAY..LATEST_TODAY).contains(&seconds) {
+            Ok(StartOfToday(seconds))
+        } else {
+            Err(AppError::refused(
+                "the start of today is a whole minute, in seconds since 1970",
+            ))
+        }
+    }
+}
+
+impl From<StartOfToday> for u64 {
+    fn from(start: StartOfToday) -> u64 {
+        start.0
+    }
+}
+
+/// `seconds` since the epoch as the ISO time core reads (`activitySince`): `YYYY-MM-DDTHH:MM:SS.000Z`, in UTC.
+fn iso_time(seconds: u64) -> String {
+    let (year, month, day) = civil_date(seconds / 86_400);
+    let rest = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
+        rest / 3_600,
+        rest % 3_600 / 60,
+        rest % 60
+    )
+}
+
+/// The Gregorian date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`, for days on or after the epoch).
+fn civil_date(days: u64) -> (u64, u64, u64) {
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    (year, month, day)
+}
+
 /// Every call the app may make: the plan's allow-list table, row by row. A row without arguments is written `{}` so
 /// that an unknown field is refused there too.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +355,9 @@ pub enum Call {
     Version { product: Product },
     /// Core `approvals list --state pending`: every channel's, from the one shared store.
     ApprovalsPending {},
+    /// Core `approvals list --state <state>` for a state that no longer waits (0.29.0's Approvals → Recent, design
+    /// 2026-10-25-activity S5): read-only, and only the finished states.
+    ApprovalsFinished { state: FinishedApprovalState },
     /// Core `approvals revoke <id>`.
     ApprovalRevoke { approval_id: ApprovalId },
     /// Core `update --status` (0.24.0).
@@ -245,6 +436,23 @@ pub enum Call {
     /// The events service's `judge kind disable <kind>` for Jev or a local model server: a tightening, applied at once,
     /// as Laya's disable is. The kind is closed; turning one on is the terminal's (`TerminalCommand::JudgeKindEnable`).
     JudgeKindDisable { judge_kind: EndpointJudgeKind },
+    /// Core `activity sessions --since <since>` (0.29.0): every agent session with activity in the range, newest
+    /// first. Read-only.
+    ActivitySessions { since: ActivitySince },
+    /// Core `activity show <session> [--kind <kind>] [--channel <channel>] [--account <name>] [--outcome <outcome>]
+    /// --since <since>` (0.29.0): one session's timeline. Read-only; every argument is a closed word or a checked one.
+    ActivityShow {
+        session: SessionKey,
+        since: ActivitySince,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity_kind: Option<ActivityKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<ActivityChannel>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<AccountName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<ActivityOutcome>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -255,6 +463,10 @@ pub const LAYA_JUDGE_VERSION: &str = "0.25.0";
 /// typesafe and local-endpoint kinds and `judges list` the inventory, where 0.16.0 answered each with Phase E's typed
 /// placeholder. An older one says "Update agent-communications to use this" (DA12).
 pub const JUDGE_KINDS_VERSION: &str = "0.17.0";
+
+/// The first release of core with the activity log (design 2026-10-25-activity): its `activity sessions` and
+/// `activity show`. An older one says "Needs 0.29.0 or later" (DA12).
+pub const ACTIVITY_VERSION: &str = "0.29.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,6 +540,9 @@ impl Call {
                 timeout: TIMEOUT,
             },
             Call::ApprovalsPending {} => core(&["approvals", "list", "--state", "pending"]),
+            Call::ApprovalsFinished { state } => {
+                core(&["approvals", "list", "--state", state.word()])
+            }
             Call::ApprovalRevoke { approval_id } => {
                 core(&["approvals", "revoke", approval_id.as_str()])
             }
@@ -430,6 +645,35 @@ impl Call {
             Call::JudgeKindDisable { judge_kind } => {
                 events(&["judge", "kind", "disable", judge_kind.word()])
             }
+            Call::ActivitySessions { since } => {
+                with(core(&["activity", "sessions", "--since"]), [since.word()])
+            }
+            Call::ActivityShow {
+                session,
+                since,
+                activity_kind,
+                channel,
+                account,
+                outcome,
+            } => {
+                let option = |flag: &str, value: Option<&str>| {
+                    value
+                        .map(|value| [flag.to_string(), value.to_string()])
+                        .into_iter()
+                        .flatten()
+                };
+                with(
+                    core(&["activity", "show", session.as_str()]),
+                    option("--kind", activity_kind.map(ActivityKind::word))
+                        .chain(option("--channel", channel.map(ActivityChannel::word)))
+                        .chain(option(
+                            "--account",
+                            account.as_ref().map(AccountName::as_str),
+                        ))
+                        .chain(option("--outcome", outcome.map(ActivityOutcome::word)))
+                        .chain(["--since".to_string(), since.word()]),
+                )
+            }
         })
     }
 
@@ -464,6 +708,7 @@ impl Call {
             Call::JudgeKindsList {} | Call::JudgesList {} | Call::JudgeKindDisable { .. } => {
                 Some(JUDGE_KINDS_VERSION)
             }
+            Call::ActivitySessions { .. } | Call::ActivityShow { .. } => Some(ACTIVITY_VERSION),
             _ => None,
         }
     }
@@ -484,6 +729,12 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "version", "product": "core" }),
         json!({ "kind": "version", "product": "events-daemon" }),
         json!({ "kind": "approvalsPending" }),
+        json!({ "kind": "approvalsFinished", "state": "approved" }),
+        json!({ "kind": "approvalsFinished", "state": "used" }),
+        json!({ "kind": "approvalsFinished", "state": "failed" }),
+        json!({ "kind": "approvalsFinished", "state": "unknown" }),
+        json!({ "kind": "approvalsFinished", "state": "expired" }),
+        json!({ "kind": "approvalsFinished", "state": "revoked" }),
         json!({ "kind": "approvalRevoke", "approvalId": ID }),
         json!({ "kind": "updateStatus" }),
         json!({ "kind": "updatePause", "days": 1 }),
@@ -529,6 +780,19 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "judgesList" }),
         json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
         json!({ "kind": "judgeKindDisable", "judgeKind": "local-endpoint" }),
+        json!({ "kind": "activitySessions", "since": "7d" }),
+        json!({ "kind": "activitySessions", "since": "30d" }),
+        json!({ "kind": "activitySessions", "since": { "today": TODAY } }),
+        json!({ "kind": "activityShow", "session": SESSION, "since": "7d" }),
+        json!({
+            "kind": "activityShow",
+            "session": SESSION,
+            "since": { "today": TODAY },
+            "activityKind": "read",
+            "channel": "gmail",
+            "account": "example/gmail",
+            "outcome": "refused"
+        }),
     ];
     values
         .into_iter()
@@ -602,6 +866,14 @@ pub(crate) fn desktop_judges_contract_words(
 /// A well-formed approval id, for the tests: `ap_` and 26 of Crockford's letters.
 #[cfg(test)]
 pub(crate) const ID: &str = "ap_0123456789ABCDEFGHJKMNPQRS";
+
+/// A well-formed activity session key, for the tests.
+#[cfg(test)]
+pub(crate) const SESSION: &str = "3f9a1c2e7b4d5a60";
+
+/// The start of 2026-10-25 in UTC, as seconds since the epoch: a today, for the tests.
+#[cfg(test)]
+pub(crate) const TODAY: u64 = 1_792_886_400;
 
 #[cfg(test)]
 mod tests {
@@ -1618,5 +1890,313 @@ mod tests {
             );
         }
         assert!(serde_json::from_value::<EndpointJudgeKind>(json!("laya")).is_err());
+    }
+
+    /// The whole line a call runs: the launcher, its words, `--json`, then the four pins, and nothing else.
+    fn whole_line(value: serde_json::Value) -> Vec<String> {
+        let folders = crate::paths::Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let program = crate::launchers::Program {
+            program: "/home/example/.local/share/agent-communications/launch/core".into(),
+            leading: vec![],
+        };
+        let built = call(value.clone()).words().expect("words");
+        assert_eq!(built.product, Product::Core, "{value}");
+        assert_eq!(built.shape, Shape::Envelope, "{value}");
+        assert!(built.pins, "{value}");
+        assert!(built.quiet_updates, "{value}");
+        assert_eq!(built.timeout, Duration::from_secs(30), "{value}");
+        let line = crate::runner::argv(&built, &program, &folders, true);
+        let mut tail = vec!["--json".to_string()];
+        tail.extend(folders.pins());
+        assert!(line.ends_with(&tail), "{value}: {line:?}");
+        assert_eq!(line[0], program.program, "{value}");
+        line[1..line.len() - tail.len()].to_vec()
+    }
+
+    /// Approvals → Recent (S5): `approvals list --state <state>` for each finished state, and only those.
+    #[test]
+    fn finished_approvals_list_each_finished_state_and_no_other() {
+        for state in FinishedApprovalState::ALL {
+            let word = state.word();
+            assert_eq!(
+                whole_line(json!({ "kind": "approvalsFinished", "state": word })),
+                ["approvals", "list", "--state", word]
+            );
+            assert_eq!(
+                serde_json::to_value(state).expect("json"),
+                json!(word),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            FinishedApprovalState::ALL.map(FinishedApprovalState::word),
+            ["approved", "used", "failed", "unknown", "expired", "revoked"]
+        );
+        // Waiting's state is Waiting's call; a send in flight, a corrupt record and any other word are no state here.
+        for state in [
+            json!("pending"),
+            json!("sending"),
+            json!("corrupt"),
+            json!("answered"),
+            json!("Used"),
+            json!("used "),
+            json!("used --json"),
+            json!(""),
+            json!(null),
+            json!(["used"]),
+            json!(7),
+        ] {
+            refused(json!({ "kind": "approvalsFinished", "state": state }));
+        }
+        refused(json!({ "kind": "approvalsFinished" }));
+        refused(json!({ "kind": "approvalsFinished", "state": "used", "inbox": "example/gmail" }));
+        refused(json!({ "kind": "approvalsFinished", "state": "used", "approvalId": ID }));
+        // Pending stays a call of its own, without a state.
+        refused(json!({ "kind": "approvalsPending", "state": "pending" }));
+        for state in FinishedApprovalState::ALL {
+            let call = Call::ApprovalsFinished { state };
+            assert_eq!(call.needs(), None, "{state:?}");
+            assert!(!call.prepares_change(), "{state:?}");
+        }
+    }
+
+    /// The activity calls (0.29.0): `activity sessions` and `activity show`, each with `--since` from the closed range,
+    /// and `show`'s filters each a closed word, or an account name the grammar checks.
+    #[test]
+    fn activity_calls_build_exactly_their_words() {
+        assert_eq!(
+            whole_line(json!({ "kind": "activitySessions", "since": "7d" })),
+            ["activity", "sessions", "--since", "7d"]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activitySessions", "since": "30d" })),
+            ["activity", "sessions", "--since", "30d"]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activitySessions", "since": { "today": TODAY } })),
+            [
+                "activity",
+                "sessions",
+                "--since",
+                "2026-10-25T00:00:00.000Z"
+            ]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activityShow", "session": SESSION, "since": "7d" })),
+            ["activity", "show", SESSION, "--since", "7d"]
+        );
+        assert_eq!(
+            whole_line(json!({
+                "kind": "activityShow",
+                "session": SESSION,
+                "since": { "today": 1_792_882_800u64 },
+                "activityKind": "approval",
+                "channel": "whatsapp",
+                "account": "example/gmail-work",
+                "outcome": "failed"
+            })),
+            [
+                "activity",
+                "show",
+                SESSION,
+                "--kind",
+                "approval",
+                "--channel",
+                "whatsapp",
+                "--account",
+                "example/gmail-work",
+                "--outcome",
+                "failed",
+                "--since",
+                "2026-10-24T23:00:00.000Z"
+            ]
+        );
+        for (field, value, flag) in [
+            ("activityKind", "told", "--kind"),
+            ("channel", "core", "--channel"),
+            ("account", "work", "--account"),
+            ("outcome", "ok", "--outcome"),
+        ] {
+            let mut given = json!({ "kind": "activityShow", "session": SESSION, "since": "30d" });
+            given[field] = json!(value);
+            assert_eq!(
+                whole_line(given),
+                ["activity", "show", SESSION, flag, value, "--since", "30d"],
+                "{field}"
+            );
+        }
+        for value in [
+            json!({ "kind": "activitySessions", "since": "7d" }),
+            json!({ "kind": "activityShow", "session": SESSION, "since": "7d" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.29.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(ACTIVITY_VERSION, "0.29.0");
+        assert!(!crate::version::at_least("0.28.0", ACTIVITY_VERSION));
+        assert!(crate::version::at_least("0.29.0", ACTIVITY_VERSION));
+        assert!(crate::version::at_least(
+            "0.29.0-feat-0.29",
+            ACTIVITY_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches the activity commands' words unchecked: the key matches core's exactly, every
+    /// filter is a closed word, the account is a name, and the range is 7 or 30 days or a whole-minute start of today.
+    #[test]
+    fn activity_calls_refuse_every_word_outside_their_shapes() {
+        for session in [
+            json!(""),
+            json!("3f9a1c2e7b4d5a6"),
+            json!("3f9a1c2e7b4d5a600"),
+            json!("3F9A1C2E7B4D5A60"),
+            json!("3f9a1c2e7b4d5a6g"),
+            json!("-f9a1c2e7b4d5a60"),
+            json!("3f9a1c2e7b4d5a60 --json"),
+            json!("3f9a1c2e7b4d5a60\n"),
+            json!("../../etc/passwd"),
+            json!(7),
+            json!(null),
+        ] {
+            refused(json!({ "kind": "activityShow", "session": session, "since": "7d" }));
+        }
+        for since in [
+            json!("today"),
+            json!("1d"),
+            json!("7"),
+            json!("12h"),
+            json!("365d"),
+            json!("2026-10-25T00:00:00.000Z"),
+            json!("7d --kind read"),
+            json!({ "today": 1_792_886_401u64 }),
+            json!({ "today": 1_792_886_430u64 }),
+            json!({ "today": 0 }),
+            json!({ "today": 1_577_836_740u64 }),
+            json!({ "today": 4_102_444_800u64 }),
+            json!({ "today": -60 }),
+            json!({ "today": "1792886400" }),
+            json!({ "today": 1_792_886_400.5 }),
+            json!({ "today": 1_792_886_400u64, "zone": "Europe/London" }),
+            json!({ "yesterday": 1_792_886_400u64 }),
+            json!(null),
+            json!(7),
+        ] {
+            refused(json!({ "kind": "activitySessions", "since": since }));
+            refused(json!({ "kind": "activityShow", "session": SESSION, "since": since }));
+        }
+        // `since` is never left out: the range is always the screen's.
+        refused(json!({ "kind": "activitySessions" }));
+        refused(json!({ "kind": "activityShow", "session": SESSION }));
+        refused(json!({ "kind": "activityShow", "since": "7d" }));
+        for (field, value) in [
+            ("activityKind", json!("Read")),
+            ("activityKind", json!("send")),
+            ("activityKind", json!("read,write")),
+            ("activityKind", json!("")),
+            ("channel", json!("teams")),
+            ("channel", json!("events-daemon")),
+            ("channel", json!("Gmail")),
+            ("channel", json!("gmail --json")),
+            ("account", json!("Example/gmail")),
+            ("account", json!("-x")),
+            ("account", json!("example/gmail --outcome ok")),
+            ("account", json!("in_01EXAMPLE0000000000000000")),
+            ("outcome", json!("success")),
+            ("outcome", json!("OK")),
+            ("kind", json!("read")),
+            ("since", json!("forever")),
+            ("limit", json!(5)),
+            ("mine", json!(true)),
+            ("approval", json!(ID)),
+            ("args", json!(["--all"])),
+        ] {
+            let mut given = json!({ "kind": "activityShow", "session": SESSION, "since": "7d" });
+            if field == "kind" {
+                // The filter is `activityKind`: a second `kind` is no field of a call.
+                let text = format!(
+                    r#"{{"kind":"activityShow","session":"{SESSION}","since":"7d","kind":{value}}}"#
+                );
+                assert!(serde_json::from_str::<Call>(&text).is_err(), "{text}");
+                continue;
+            }
+            given[field] = value;
+            refused(given);
+        }
+        refused(json!({ "kind": "activitySessions", "since": "7d", "session": SESSION }));
+        refused(json!({ "kind": "activitySessions", "since": "7d", "channel": "gmail" }));
+        // `mine` and the settings are no call of the app's: the app reads, and never changes what is recorded.
+        for kind in [
+            "activityMine",
+            "activitySettings",
+            "activityRecord",
+            "activityRetention",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "since": "7d" }));
+        }
+    }
+
+    /// Today's start is written as core reads an ISO time, in UTC, for any day from 2020 to 2099.
+    #[test]
+    fn the_start_of_today_is_written_as_an_iso_time() {
+        for (seconds, iso) in [
+            (1_577_836_800u64, "2020-01-01T00:00:00.000Z"),
+            (1_792_886_400, "2026-10-25T00:00:00.000Z"),
+            (1_792_882_800, "2026-10-24T23:00:00.000Z"),
+            (1_835_440_440, "2028-02-29T12:34:00.000Z"),
+            (4_102_444_740, "2099-12-31T23:59:00.000Z"),
+        ] {
+            let since: ActivitySince =
+                serde_json::from_value(json!({ "today": seconds })).expect("a start of today");
+            assert_eq!(since.word(), iso, "{seconds}");
+            assert_eq!(
+                serde_json::to_value(since).expect("json"),
+                json!({ "today": seconds })
+            );
+        }
+        assert_eq!(ActivitySince::SevenDays.word(), "7d");
+        assert_eq!(ActivitySince::ThirtyDays.word(), "30d");
+        assert_eq!(
+            serde_json::to_value(ActivitySince::SevenDays).expect("json"),
+            json!("7d")
+        );
+        // Every day of a leap year and its neighbours: the date the window would write, day after day.
+        let mut seconds = 1_704_067_200u64; // 2024-01-01
+        let mut expected = (2024u64, 1u64, 1u64);
+        let lengths = |year: u64| {
+            let leap =
+                year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+            [
+                31,
+                if leap { 29 } else { 28 },
+                31,
+                30,
+                31,
+                30,
+                31,
+                31,
+                30,
+                31,
+                30,
+                31,
+            ]
+        };
+        for _ in 0..(366 + 365 + 365) {
+            assert_eq!(civil_date(seconds / 86_400), expected, "{seconds}");
+            seconds += 86_400;
+            let (year, month, day) = expected;
+            expected = if day < lengths(year)[(month - 1) as usize] {
+                (year, month, day + 1)
+            } else if month < 12 {
+                (year, month + 1, 1)
+            } else {
+                (year + 1, 1, 1)
+            };
+        }
     }
 }
