@@ -202,32 +202,34 @@ pub fn take_deep_link(app: AppHandle) -> Result<Option<DeepLinkTarget>, AppError
 }
 
 /// Where the event service the app runs stands (0.27.0 D2). Off the main thread, as every event-service command is:
-/// each waits for the supervisor, which runs the events CLI.
+/// each takes the supervisor's lock, which its watchdog holds while it runs the events CLI.
 #[tauri::command]
 pub async fn event_service_state(app: AppHandle) -> Result<EventServiceState, AppError> {
     blocking(move || event_service::current(&app)).await
 }
 
-/// The switch: on starts the service, or adopts one running, even when it was already on; off stops it through the
-/// events CLI's `stop`.
+/// The switch: on has the watchdog start the service, or adopt one running, even when it was already on; off has it
+/// stop it through the events CLI's `stop`. Recorded and answered at once, with the service starting (0.27.1).
 #[tauri::command]
 pub async fn set_event_service(on: bool, app: AppHandle) -> Result<EventServiceState, AppError> {
     blocking(move || event_service::set_wanted(&app, on)).await
 }
 
-/// Try again, after the app gave up restarting the service.
+/// Try again, after the app gave up restarting the service: answered at once, with the service starting.
 #[tauri::command]
 pub async fn event_service_retry(app: AppHandle) -> Result<EventServiceState, AppError> {
     blocking(move || event_service::retry(&app)).await
 }
 
-/// Restart to use it: stops the service that runs, and starts the version installed now (D5).
+/// Restart to use it: the watchdog stops the service that runs, and starts the version installed now (D5). Answered at
+/// once, with the service starting.
 #[tauri::command]
 pub async fn restart_event_service(app: AppHandle) -> Result<EventServiceState, AppError> {
     blocking(move || event_service::restart(&app)).await
 }
 
-/// The first-start question's answer (P1): Start, or Not now, which leaves the switch off.
+/// The first-start question's answer (P1): Start, or Not now, which leaves the switch off. Kept and answered at once;
+/// the watchdog starts the service.
 #[tauri::command]
 pub async fn answer_first_start(
     start: bool,
