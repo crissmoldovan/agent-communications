@@ -259,8 +259,14 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
         <>
           <DescriptionList.Root>
             <DescriptionList.Term>Where</DescriptionList.Term>
-            <DescriptionList.Detail className="font-mono">
-              {job.where === null ? 'nowhere yet' : <UntrustedText text={job.where} />}
+            <DescriptionList.Detail>
+              {job.where === null ? (
+                'nowhere yet'
+              ) : (
+                <span className="font-mono">
+                  <UntrustedText text={job.where} />
+                </span>
+              )}
             </DescriptionList.Detail>
             <DescriptionList.Term>Set up</DescriptionList.Term>
             <DescriptionList.Detail>

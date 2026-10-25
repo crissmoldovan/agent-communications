@@ -200,14 +200,18 @@ function FolderSettings({ settings, onChange }: { settings: AppSettings; onChang
           {RESOLVED.map(({ key, label }) => (
             <Fragment key={key}>
               <DescriptionList.Term>{label}</DescriptionList.Term>
-              <DescriptionList.Detail className="font-mono">
-                <UntrustedText text={settings.resolved[key]} />
+              <DescriptionList.Detail>
+                <span className="font-mono">
+                  <UntrustedText text={settings.resolved[key]} />
+                </span>
               </DescriptionList.Detail>
             </Fragment>
           ))}
           <DescriptionList.Term>Launcher</DescriptionList.Term>
-          <DescriptionList.Detail className="font-mono">
-            <UntrustedText text={settings.launcher} />
+          <DescriptionList.Detail>
+            <span className="font-mono">
+              <UntrustedText text={settings.launcher} />
+            </span>
           </DescriptionList.Detail>
         </DescriptionList.Root>
         {settings.launcherProblem === null ? null : (
