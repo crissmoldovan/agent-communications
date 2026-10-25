@@ -618,16 +618,11 @@ export class ActivityLog {
    * Appends one line, unless recording is off. True when it was written. Never throws: a line that cannot be written
    * is said once per process (`warn`, stderr by default), recorded beside the log for `doctor`, and returns false.
    *
-   * The first line a process writes on each day also prunes days older than the retention in force — the log's
-   * daily maintenance, best effort.
+   * The first call a process makes on each day — this, or any read — first prunes days older than the retention in
+   * force, whether or not recording is on: the log's daily maintenance, best effort.
    */
   async append(input: ActivityLineInput): Promise<boolean> {
-    let settings: ActivitySettings;
-    try {
-      settings = await this.#settings();
-    } catch {
-      settings = UNREADABLE;
-    }
+    const settings = await this.#maintained();
     if (settings.record !== 'on') return false;
     try {
       const line = activityLineOf(input, this.#now());
@@ -641,7 +636,6 @@ export class ActivityLog {
       await this.#failed(error);
       return false;
     }
-    await this.#dailyPrune(settings);
     return true;
   }
 
@@ -668,11 +662,32 @@ export class ActivityLog {
     await writeFileAtomic(this.#failureFile, `${JSON.stringify(failure)}\n`).catch(() => undefined);
   }
 
-  async #dailyPrune(settings: ActivitySettings): Promise<void> {
+  /** The settings in force, read afresh; a reader that throws reads as `UNREADABLE` — off, and every day kept. */
+  async #settingsNow(): Promise<ActivitySettings> {
+    try {
+      return await this.#settings();
+    } catch {
+      return UNREADABLE;
+    }
+  }
+
+  /**
+   * The settings in force, after the day's maintenance: the first call a process makes on a day — an append or a read,
+   * recording on or off — deletes the days past the retention. Never throws.
+   */
+  async #maintained(): Promise<ActivitySettings> {
+    const settings = await this.#settingsNow();
     const today = isoDay(this.#now().getTime());
-    if (this.#prunedDay === today) return;
-    this.#prunedDay = today;
-    await this.prune(settings.retentionDays).catch(() => undefined);
+    if (this.#prunedDay !== today) {
+      this.#prunedDay = today;
+      await this.prune(settings.retentionDays).catch(() => undefined);
+    }
+    return settings;
+  }
+
+  /** The first day the retention in force keeps: any day before it is never shown, deleted yet or not. */
+  #cutoff(retentionDays: number): string {
+    return isoDay(this.#now().getTime() - retentionDays * DAY_MS);
   }
 
   /** The days held, oldest first. */
@@ -699,7 +714,7 @@ export class ActivityLog {
         `the activity log keeps a whole number of days, ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, not ${String(retentionDays)}`,
       );
     }
-    const cutoff = isoDay(this.#now().getTime() - retentionDays * DAY_MS);
+    const cutoff = this.#cutoff(retentionDays);
     const deleted: string[] = [];
     for (const day of await this.days()) {
       if (day >= cutoff) continue;
@@ -756,12 +771,17 @@ export class ActivityLog {
     return sessions;
   }
 
-  /** Every session with a line at or after `since` (every day held, when left out), newest first. */
+  /**
+   * Every session with a line at or after `since` (every day the retention keeps, when left out), newest first. A day
+   * past the retention is never read, whether or not it has been deleted yet.
+   */
   async sessions(options: { since?: string | undefined } = {}): Promise<ActivitySessionSummary[]> {
     const since = options.since;
     const today = isoDay(this.#now().getTime());
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
     const groups = new Map<string, Aggregate>();
     for (const day of await this.days()) {
+      if (day < cutoff) continue;
       if (since !== undefined && `${day}T23:59:59.999Z` < since) continue;
       const whole = since === undefined || since <= `${day}T00:00:00.000Z`;
       if (whole && day < today) {
@@ -779,10 +799,11 @@ export class ActivityLog {
 
   /**
    * One session's lines, newest first, that match every filter given; and its summary over the time asked. Only
-   * lines whose session key is exactly `key` are ever read into the answer.
+   * lines whose session key is exactly `key` are ever read into the answer, and none of a day past the retention.
    */
   async show(key: string, filters: ActivityFilters = {}): Promise<ActivityShown> {
     if (!SESSION_KEY.test(key)) throw new CommsError('USAGE', `"${cut(key, 40)}" is not a session key`);
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
     const limit = filters.limit ?? DEFAULT_SHOW_LIMIT;
     const since = filters.since;
     // A session key is hex, and a quote inside any string a line holds is written `\"`: this finds only the key.
@@ -790,7 +811,7 @@ export class ActivityLog {
     const lines: ActivityLine[] = [];
     let more = false;
     let summary: Aggregate | null = null;
-    const days = (await this.days()).reverse();
+    const days = (await this.days()).filter((day) => day >= cutoff).reverse();
     for (const day of days) {
       if (since !== undefined && `${day}T23:59:59.999Z` < since) break;
       const text = await this.#text(day);
@@ -877,8 +898,12 @@ export class ActivityLog {
     return mine.at >= stored.at ? mine : stored;
   }
 
-  /** What `doctor` shows of the log. Reads only: it creates nothing. */
+  /**
+   * What `doctor` shows of the log. It creates nothing; like every read it first deletes the days past the retention,
+   * once a day per process, so the days it lists past the retention are those that could not be deleted.
+   */
   async health(): Promise<ActivityHealth> {
+    await this.#maintained();
     const today = isoDay(this.#now().getTime());
     let exists = false;
     let isDirectory = true;

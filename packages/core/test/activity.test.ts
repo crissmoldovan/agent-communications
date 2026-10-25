@@ -854,3 +854,64 @@ test('activity record and retention from a terminal: off and fewer days at once,
   assert.equal(cli(m, ['activity', 'retention', '0']).status, 64);
   assert.equal(cli(m, ['activity', 'record', 'maybe']).status, 64);
 });
+
+// ── Retention holds whatever is recorded (0.29.0 review) ───────────────────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A day's file written as an earlier process left it: one line, for `key`, at `at`. */
+function dayFile(state: string, at: string, key: string): void {
+  const dir = join(state, 'activity');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, `${at.slice(0, 10)}.jsonl`), `${JSON.stringify(line({ at, session: session({ key }) }))}\n`, {
+    flag: 'a',
+    mode: 0o600,
+  });
+}
+
+test('retention holds while recording is off: a read prunes, and no read shows a day past it', async () => {
+  const m = machine({ activity: { record: 'off', retentionDays: 7 } });
+  const state = m.core.paths.stateDir;
+  const key = '9999999999999999';
+  const old = new Date(Date.now() - 20 * DAY_MS).toISOString();
+  const recent = new Date(Date.now() - 60_000).toISOString();
+
+  // A process that has pruned already today: the old day appears after, and no read of it shows it.
+  const settings = async () => readActivitySettings(await m.core.config.load());
+  const pruned = new ActivityLog(state, { settings });
+  await pruned.sessions();
+  dayFile(state, old, key);
+  dayFile(state, recent, key);
+  const listed = await pruned.sessions();
+  assert.deepEqual(
+    listed.map((each) => each.firstSeen),
+    [recent],
+    'a day past the retention is never shown, even before it is deleted',
+  );
+  const shown = await pruned.show(key);
+  assert.deepEqual(
+    shown.lines.map((each) => each.at),
+    [recent],
+  );
+  assert.equal(shown.summary?.firstSeen, recent);
+  assert.ok(filesOf(join(state, 'activity')).includes(`${old.slice(0, 10)}.jsonl`), 'not deleted by that process');
+
+  // The doctor sees it waiting, though nothing is recorded.
+  const waiting = await activityDoctorCheck({ ...m.core, activity: pruned });
+  assert.match(waiting.detail, /^off/);
+  assert.match(waiting.detail, /1 older than that/);
+
+  // A process that has not pruned today does so on its first read, though recording is off.
+  const fresh = new ActivityLog(state, { settings });
+  await fresh.sessions();
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${recent.slice(0, 10)}.jsonl`]);
+  const after = await activityDoctorCheck({ ...m.core, activity: new ActivityLog(state, { settings }) });
+  assert.doesNotMatch(after.detail, /older than that/);
+  assert.equal(after.warn, undefined);
+
+  // And an append while off, in a process that has not pruned today, prunes too.
+  dayFile(state, old, key);
+  const appending = new ActivityLog(state, { settings });
+  assert.equal(await appending.append(line()), false, 'off: nothing written');
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${recent.slice(0, 10)}.jsonl`]);
+});

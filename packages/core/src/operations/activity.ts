@@ -435,12 +435,18 @@ export async function activityDoctorCheck(
   const problems = settings.problems.length > 0 ? `; ${settings.problems.join('; ')}` : '';
   const failure = health.failure;
   const failing = failure !== null && (health.lastWritten === null || failure.at > health.lastWritten);
+  // Retention holds whether or not anything is recorded: a day past it is never shown, and the day's first read or
+  // call deletes it. One still here is one that could not be deleted yet.
+  const cutoff = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const overdue = health.days.filter((day) => day < cutoff).length;
+  const waiting =
+    overdue > 0 ? `; ${overdue} older than that, never shown, and deleted by the day's first read or call` : '';
   if (settings.record === 'off') {
     return {
       name,
       ok: true,
-      ...(problems ? { warn: true as const } : {}),
-      detail: `off: nothing is recorded; ${health.days.length} ${health.days.length === 1 ? 'day' : 'days'} held, kept ${kept}${problems}`,
+      ...(problems || overdue > 0 ? { warn: true as const } : {}),
+      detail: `off: nothing is recorded; ${health.days.length} ${health.days.length === 1 ? 'day' : 'days'} held, kept ${kept}${waiting}${problems}`,
     };
   }
   if (!health.writable) {
@@ -459,8 +465,6 @@ export async function activityDoctorCheck(
       fix: remedy(`Make ${dir} a folder its owner can write: recording resumes with the next call.`),
     };
   }
-  const cutoff = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const overdue = health.days.filter((day) => day < cutoff).length;
   const held =
     health.days.length === 0
       ? 'nothing recorded yet'
@@ -471,6 +475,6 @@ export async function activityDoctorCheck(
     name,
     ok: true,
     ...(problems || overdue > 0 ? { warn: true as const } : {}),
-    detail: `on, kept ${kept}: ${held}${overdue > 0 ? `; ${overdue} older than that, deleted with the next call recorded` : ''}${past}${problems}`,
+    detail: `on, kept ${kept}: ${held}${waiting}${past}${problems}`,
   };
 }
