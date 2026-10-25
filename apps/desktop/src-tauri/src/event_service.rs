@@ -22,7 +22,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -1101,6 +1101,9 @@ pub struct Supervisor {
     requested: Requested,
     /// Set from Quit's Stop it until its stop is done, so the window says it is stopping.
     stopping_for_quit: bool,
+    /// Set, by the window's thread, the moment Quit is pressed (`on_quit`): from then on nothing is started, unless the
+    /// person answers Keep running (`start_before_quit`).
+    quit_pressed: Arc<AtomicBool>,
 }
 
 impl Supervisor {
@@ -1130,11 +1133,20 @@ impl Supervisor {
             quitting: false,
             requested,
             stopping_for_quit: false,
+            quit_pressed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn record(&self) -> &ServiceRecord {
         &self.record
+    }
+
+    /// The supervisor, told by `quit_pressed` when Quit is pressed, which the app sets without waiting for it.
+    pub fn sharing_quit(self, quit_pressed: Arc<AtomicBool>) -> Self {
+        Supervisor {
+            quit_pressed,
+            ..self
+        }
     }
 
     fn save(&self) {
@@ -1337,6 +1349,12 @@ impl Supervisor {
             return;
         }
         self.first_start_question = false;
+        // Quit was pressed: nothing is started over it. The start waits, and counts as the app's service, so the quit
+        // question asks about it, and Keep running makes it (`start_before_quit`).
+        if self.quit_pressed.load(Ordering::SeqCst) {
+            self.requested = Requested::Start;
+            return;
+        }
         match spawn_service(ctx) {
             Ok(child) => {
                 let pid = child.id();
@@ -1480,6 +1498,32 @@ impl Supervisor {
     /// Whether a service the app started runs: what the quit question is asked about (P3).
     pub fn app_service_running(&mut self) -> bool {
         self.record.started_by_app && self.process() == Process::Alive
+    }
+
+    /// Whether a start the person asked for, or one Quit held back, waits to be made: a Restart to use it too.
+    pub fn start_pending(&self) -> bool {
+        matches!(self.requested, Requested::Start | Requested::Restart)
+    }
+
+    /// What the quit question is about: a service the app started runs, or one it is about to start. A start that
+    /// waits counts, so Quit never quits past a service the watchdog may start a moment later.
+    pub fn asks_at_quit(&mut self) -> bool {
+        self.app_service_running() || self.start_pending()
+    }
+
+    /// Keep running, answered while a start waits: it is made now, before the app quits, so the answer holds. The one
+    /// start after Quit was pressed.
+    pub fn start_before_quit(&mut self, ctx: &RunContext, now: SystemTime) {
+        if !self.start_pending() || self.quitting {
+            return;
+        }
+        let held = self.quit_pressed.swap(false, Ordering::SeqCst);
+        self.tick(ctx, now);
+        self.quit_pressed.store(held, Ordering::SeqCst);
+        // Quit still holds: a start that could not be made now is left for the next run, the switch on.
+        if self.start_pending() {
+            self.requested = Requested::Nothing;
+        }
     }
 
     /// The state the window is shown.
@@ -1783,6 +1827,8 @@ struct Shown {
     quit_answer: Option<QuitAnswer>,
     /// The switch was turned off, and the watchdog has yet to stop what runs.
     stop_pending: bool,
+    /// A start waits to be made (`Supervisor::start_pending`).
+    start_pending: bool,
 }
 
 /// The event service as the app holds it. The supervisor is none on Windows, where nothing is ever started.
@@ -1796,6 +1842,8 @@ pub struct EventService {
     wake: Wake,
     /// Set once a remembered Stop it is under way: a second Quit stops nothing more.
     stopping: AtomicBool,
+    /// Set the moment Quit is pressed, shared with the supervisor, which starts nothing from then on.
+    quit_pressed: Arc<AtomicBool>,
     /// Set by the quit question's first answer, the only one acted on.
     answered: AtomicBool,
     /// Whether a WhatsApp account exists, and when that was asked.
@@ -1816,7 +1864,10 @@ pub fn start(app: &AppHandle) {
     };
     let dir = settings::settings_dir(app).ok();
     let record = dir.as_deref().map(load_record).unwrap_or_default();
-    *lock(&service.supervisor) = Some(Supervisor::new(record, dir, Platform::current()));
+    *lock(&service.supervisor) = Some(
+        Supervisor::new(record, dir, Platform::current())
+            .sharing_quit(service.quit_pressed.clone()),
+    );
     let app = app.clone();
     let _ = thread::Builder::new()
         .name("event-service".into())
@@ -1873,8 +1924,9 @@ fn held_work<T>(
     let answer = work(supervisor, ctx);
     take_requests(service, supervisor);
     let state = supervisor.state(ctx);
-    let running = supervisor.app_service_running();
+    let running = supervisor.asks_at_quit();
     let stop_pending = supervisor.stop_pending();
+    let start_pending = supervisor.start_pending();
     let quit_answer = supervisor.record().quit_answer;
     drop(held);
     let changed = {
@@ -1882,6 +1934,7 @@ fn held_work<T>(
         shown.app_service_running = running;
         shown.quit_answer = quit_answer;
         shown.stop_pending = stop_pending;
+        shown.start_pending = start_pending;
         let changed = shown.state.as_ref() != Some(&state);
         shown.state = Some(state.clone());
         changed
@@ -1932,6 +1985,10 @@ fn asked(
             let shown = {
                 let mut shown = lock(&service.shown);
                 shown.stop_pending = request.stops();
+                shown.start_pending = !request.stops();
+                if shown.start_pending {
+                    shown.app_service_running = true;
+                }
                 shown.state.clone()
             };
             return match shown {
@@ -2100,7 +2157,12 @@ fn quit_plan(service: &EventService) -> QuitRoute {
     if !lock(&service.requests).is_empty() {
         return QuitRoute::Later;
     }
-    route_for(&lock(&service.shown))
+    let shown = lock(&service.shown);
+    // Keep running, remembered, while a start waits: the thread makes it before quitting, as the answer says.
+    if shown.start_pending && shown.quit_answer == Some(QuitAnswer::Keep) {
+        return QuitRoute::Later;
+    }
+    route_for(&shown)
 }
 
 /// What a Quit comes to, from what the supervisor last published: with the switch just turned off and its stop not yet
@@ -2167,11 +2229,17 @@ pub fn on_quit(app: &AppHandle) -> QuitRoute {
     let Some(service) = app.try_state::<EventService>() else {
         return QuitRoute::Quit;
     };
+    // From now on nothing is started, unless the person answers Keep running.
+    service.quit_pressed.store(true, Ordering::SeqCst);
     let route = quit_plan(&service);
     if route == QuitRoute::Later {
         let app = app.clone();
         thread::spawn(move || {
-            with_supervisor(&app, |_, _| {});
+            with_supervisor(&app, |supervisor, ctx| {
+                if supervisor.record().quit_answer == Some(QuitAnswer::Keep) {
+                    supervisor.start_before_quit(ctx, SystemTime::now());
+                }
+            });
             let Some(service) = app.try_state::<EventService>() else {
                 return quit(&app);
             };
@@ -2226,7 +2294,11 @@ pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), Ap
         QuitAnswer::Stop
     };
     // First what the answer is, published, so the window says the service is stopping while it stops; then the stop.
-    let stopping = with_supervisor(app, |supervisor, _| {
+    let stopping = with_supervisor(app, |supervisor, ctx| {
+        // Keep running, with a start not yet made: made now, as the answer says.
+        if keep {
+            supervisor.start_before_quit(ctx, SystemTime::now());
+        }
         supervisor.begin_quit();
         if remember {
             supervisor.remember_quit(answer);
@@ -4010,6 +4082,93 @@ exit 64
         service
     }
 
+    /// Once Quit is pressed nothing is started, unless the person answers Keep running: a start the watchdog was about
+    /// to make waits, and counts as the app's service, so Quit asks about it rather than quitting past it. Keep running
+    /// makes it before the app quits; Stop it, or no answer, never does.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_starts_after_quit_is_pressed_unless_keep_running_is_answered() {
+        let fake = Fake::new();
+        let quit_pressed = Arc::new(AtomicBool::new(false));
+        let mut supervisor = fake
+            .supervisor(ServiceRecord::default())
+            .sharing_quit(quit_pressed.clone());
+        // The watchdog's first look would start it, but Quit was pressed a moment before.
+        quit_pressed.store(true, Ordering::SeqCst);
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(fake.calls(), ["status"], "nothing started");
+        assert!(supervisor.child.is_none());
+        assert!(supervisor.start_pending(), "the start waits");
+        assert!(supervisor.asks_at_quit(), "and counts as the app's service");
+        assert_eq!(quit_route(supervisor.asks_at_quit(), None), QuitRoute::Ask);
+        // Looked at again while the question is open: still nothing.
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.calls().contains(&"run".to_string()));
+        // Keep running: the start is made, before the app quits, and nothing after.
+        supervisor.start_before_quit(&fake.ctx, SystemTime::now());
+        assert!(supervisor.child.is_some(), "Keep running made it");
+        eventually("it runs", || fake.has("running"));
+        assert!(quit_pressed.load(Ordering::SeqCst), "Quit still holds");
+        assert!(!supervisor.start_pending());
+        assert!(supervisor.asks_at_quit());
+        fake.finish(&mut supervisor);
+
+        // A start asked for, and Quit with Stop it: never made; the switch stays on, for the next run.
+        fake.unmark("stop");
+        fake.unmark("calls");
+        let quit_pressed = Arc::new(AtomicBool::new(false));
+        let mut stopped = fake
+            .supervisor(ServiceRecord {
+                wanted: false,
+                ..ServiceRecord::default()
+            })
+            .sharing_quit(quit_pressed.clone());
+        stopped.set_wanted(true);
+        assert!(stopped.asks_at_quit(), "a start asked for is asked about");
+        quit_pressed.store(true, Ordering::SeqCst);
+        stopped.stop_for_quit(&fake.ctx);
+        stopped.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.calls().contains(&"run".to_string()), "never made");
+        assert!(stopped.child.is_none());
+        assert!(stopped.record().wanted, "for this run only");
+        fake.finish(&mut stopped);
+    }
+
+    /// What Quit reads of a start the app has not made yet: it asks; with Keep running remembered, a thread makes the
+    /// start before quitting; with Stop it remembered, nothing is started.
+    #[test]
+    fn quit_asks_about_a_start_not_yet_made() {
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        assert_eq!(
+            quit_plan(&service),
+            QuitRoute::Quit,
+            "nothing asked for, nothing running"
+        );
+        held_work(
+            &service,
+            &ctx,
+            lock(&service.supervisor),
+            |supervisor, _| supervisor.answer_first_start(true),
+        )
+        .expect("recorded");
+        assert!(lock(&service.shown).app_service_running);
+        assert_eq!(quit_plan(&service), QuitRoute::Ask);
+        for (answer, route) in [
+            (QuitAnswer::Keep, QuitRoute::Later),
+            (QuitAnswer::Stop, QuitRoute::StopThenQuit),
+        ] {
+            held_work(
+                &service,
+                &ctx,
+                lock(&service.supervisor),
+                |supervisor, _| supervisor.remember_quit(answer),
+            )
+            .expect("kept");
+            assert_eq!(quit_plan(&service), route, "{answer:?}");
+        }
+    }
+
     /// The switch turned off while the watchdog holds the supervisor, looking, and Quit pressed before it lets go:
     /// Quit reads what waits beside the supervisor, so the stop is done first, never lost. A start asked for in that
     /// moment, the switch or the first-start question's Start, is recorded before Quit chooses too.
@@ -4087,6 +4246,7 @@ exit 64
             app_service_running: true,
             quit_answer: Some(QuitAnswer::Keep),
             stop_pending,
+            start_pending: false,
         };
         assert_eq!(route_for(&shown(true)), QuitRoute::StopThenQuit);
         assert_eq!(route_for(&shown(false)), QuitRoute::Quit);
