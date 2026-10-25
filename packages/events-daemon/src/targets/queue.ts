@@ -67,6 +67,7 @@ export function renderQueueItem(item: QueueItemV1): string {
     `Queue item ${item.id} — ${item.state} since ${item.stateAt}`,
     `Rule ${item.rule.id}@${item.rule.version} · ${item.channel} · ${item.account.alias ?? item.account.id} · arrived ${item.arrivedAt} · content kept until ${item.expiresAt}`,
   ];
+  if (item.lane !== null) lines.push(`Lane: ${item.lane}`);
   if (item.from.name !== undefined) lines.push(`From (name): ${item.from.name}`);
   if (item.from.address !== undefined) lines.push(`From (address): ${item.from.address}`);
   if (item.subject !== undefined) lines.push(`Subject: ${item.subject}`);

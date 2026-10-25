@@ -1253,6 +1253,36 @@ target (D2).
   items in the same transaction. So do judge-kind disable, `disable-all`, account removal and D9's WhatsApp list
   changes. Done, dismissed and clear change only the person's own list.
 
+**Note, 2026-10-26 (0.31.0; routing design 2026-10-25, §3 and §6 B1–B7).** A queue target may be a **lane**: its
+version binds `lane: { name }` (lowercase letters, digits and hyphens, 1 to 40), in its canonical form and so in the
+D2 digest, and the activation preview says "Items in lane <name> can be read by the agent window you bind to it."
+Appendix A's catalogue is unchanged.
+- **One more reader, named by the person.** A lane's items are queue items in every respect of this section and D8.
+  The one agent window the person binds to the lane may also read an item — through the event service's MCP server's
+  `events_lane_item`, under the same read fences as `queue show`, every sender-written field enveloped — and only an
+  item that arrived, and was appended, after the binding. Every other MCP caller is told nothing of a lane's items:
+  `events_queue_items`, `_counts`, `_done`, `_dismiss` and `_reopen` leave them out. The CLI and the app see all.
+- **Binding is the person's act at a terminal** (`lane bind <lane> --window <id>`, refused inside the event service's
+  MCP server), so it needs no approval record and no MCP tool performs it. Unbinding is a tightening and applies at
+  once. Binding again starts a new `since`.
+- **A lane is its name.** Activating a rule whose queue target carries a lane that another active rule's different
+  target carries is refused at every authority gate, the final pointer swap included (`LANE_NAME_IN_USE`). A binding
+  is keyed by the name: it follows the lane across target versions the person approves, and ends — through triggers
+  on every rule-pointer change, so no revoking path can miss it — when no active rule's queue target carries the
+  name, and with `disable-all`.
+- **The wake carries no content.** `events_watch` answers, only when the request declares the
+  `io.modelcontextprotocol/tasks` extension, with a task held in the owner that completes on the lane's next item.
+  Its result is a pointer the service writes: the lane, the item id, the channel and the rule. `events_wait` is the
+  long-poll for clients without the extension. Tasks are in memory; a restart ends them, and the window watches again.
+- **New durable state, no content** (migration 25): `lane_bindings` (lane, the window's Claude Code session id and
+  activity key, its folder and client as reported, since) and `lane_windows` (the windows the MCP server has
+  reported, kept 30 days). Neither holds event content, so neither is in D8's table.
+- **D12's MCP server** now serves stdio through the SDK's `serveStdio`, so it negotiates 2026-07-28 with a client that
+  offers it and serves a 2025-era `initialize` as before. Its window identity — `CLAUDE_CODE_SESSION_ID` and core's
+  `sessionIdentity` — is self-reported by a process running as the person, the same boundary as activity's S3.
+- **D10 parity:** `lane list` and `lane unbind` are paired rows; `lane bind` is a terminal exception; `events_watch`,
+  `events_wait`, `events_lane_item` and `events_lane_whoami` are MCP-only exceptions, each with its reason.
+
 Every matched target creates one delivery, and the rule's rolling cap counts **deliveries**, not attempts or reads.
 For a webhook the first attempt transaction charges the slot once and records `capChargedAt`; every retry is another
 attempt of that same delivery and never consumes another slot. For dry-run and SSE, the append transaction charges
