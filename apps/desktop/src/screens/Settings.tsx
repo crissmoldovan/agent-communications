@@ -6,14 +6,17 @@ import {
   FieldError,
   type FieldIssue,
   FieldLabel,
+  InfoTip,
   Input,
+  Row as Line,
+  Panel,
+  SectionHeader,
   Switch,
 } from '@cueplusplus/ui';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useId, useState } from 'react';
 import { z } from 'zod';
 import { useBridge } from '../bridge-context.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
-import { SectionPanel } from '../components/SectionPanel.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { type Loadable, useAppData } from '../data.tsx';
 import { type AppSettings, errorMessage, type FolderOverrides, type Folders, type UpdaterState } from '../ipc.ts';
@@ -69,13 +72,58 @@ function draftsOf(overrides: FolderOverrides): Drafts {
   };
 }
 
+/** The padding of what a panel holds that is not one of its rows, so it lines up with them. */
+const INSET = 'px-(--cue-pad-row-x) py-(--cue-space-3)';
+
 /** What Settings say when macOS did not answer whether the app starts at login (`loginItem` null). */
-export const LOGIN_ITEM_UNKNOWN =
-  "macOS isn't answering whether Agent Comms starts at login: its login-items service is not responding. Restarting the Mac usually brings it back.";
+export const LOGIN_ITEM_UNKNOWN = "macOS isn't answering. Restarting the Mac usually brings it back.";
+
+/** The screen's words: its groups and rows, and each explanation moved into a hint beside what it explains. */
+export const SETTINGS_COPY = {
+  thisApp: 'This app',
+  updates: 'Updates',
+  updatesRegion: 'Updates for this app',
+  startAtLogin: 'Start at login',
+  loginItemNotOffered: "Starting at login isn't offered here.",
+  loginItemUnknownWhy:
+    "macOS's login-items service is not responding, so whether Agent Comms starts at login can't be read or changed.",
+  loginItemUnknownLabel: 'Why macOS is not answering',
+  folders: 'Folders',
+  inUse: 'Folders in use',
+  inUseWhy: 'Every call pins these four folders, and starts the launcher in the data folder.',
+  inUseLabel: 'What these folders are',
+  changeFolders: 'Change folders…',
+  elsewhereWhy:
+    'An app started from the Dock or the Start menu sees no shell variables, so it needs the same folders named here.',
+  elsewhereLabel: 'Why name them here',
+} as const;
+
+/** A row's name, and a quiet line or more beneath it: the shape of each row of This app. */
+function RowText({ id, title, children }: { id?: string; title: string; children?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
+      <span id={id} className="text-(length:--cue-text-body) font-medium text-fg">
+        {title}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** A line and its hint: the line says what is true, the hint (a focusable "i") why. */
+function Hinted({ children, hint, label }: { children: ReactNode; hint: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-(--cue-space-2)">
+      <span>{children}</span>
+      <InfoTip text={hint} label={label} />
+    </span>
+  );
+}
 
 /** Start at login: a switch that takes effect at once, through the app (`set_login_item`). */
 function LoginItem({ settings, onChange }: { settings: AppSettings; onChange: (next: AppSettings) => void }) {
   const bridge = useBridge();
+  const labelId = useId();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const toggle = async (on: boolean) => {
@@ -90,29 +138,38 @@ function LoginItem({ settings, onChange }: { settings: AppSettings; onChange: (n
     }
   };
   return (
-    <>
+    <Line className="items-start py-(--cue-space-3)">
+      <RowText id={labelId} title={SETTINGS_COPY.startAtLogin}>
+        {settings.loginItemAvailable ? null : <p className="text-fg-muted">{SETTINGS_COPY.loginItemNotOffered}</p>}
+        {settings.loginItemAvailable && settings.loginItem === null ? (
+          <p className="text-fg-muted">
+            <Hinted hint={SETTINGS_COPY.loginItemUnknownWhy} label={SETTINGS_COPY.loginItemUnknownLabel}>
+              {LOGIN_ITEM_UNKNOWN}
+            </Hinted>
+          </p>
+        ) : null}
+        {problem === null ? null : (
+          <p role="alert" className="text-danger">
+            <UntrustedText text={problem} />
+          </p>
+        )}
+      </RowText>
       <Switch
-        label="Start at login"
+        aria-labelledby={labelId}
+        size="lg"
         checked={settings.loginItem === true}
         disabled={!settings.loginItemAvailable || settings.loginItem === null || busy}
         onCheckedChange={(on) => void toggle(on)}
       />
-      {settings.loginItemAvailable ? null : <p className="text-fg-muted">Starting at login isn't offered here.</p>}
-      {settings.loginItemAvailable && settings.loginItem === null ? (
-        <p className="text-fg-muted">{LOGIN_ITEM_UNKNOWN}</p>
-      ) : null}
-      {problem === null ? null : (
-        <p role="alert" className="text-danger">
-          <UntrustedText text={problem} />
-        </p>
-      )}
-    </>
+    </Line>
   );
 }
 
 /**
- * The folders: config, state and data, as the `AGENT_COMMS_*` variables a Dock launch cannot see would set them
- * (DA12). Saving re-reads the installation through them, and the four folders every call pins show beneath.
+ * The folders: the four every call pins, as literal paths, with the launcher; and, behind "Change folders…", the config,
+ * state and data folders as the `AGENT_COMMS_*` variables a Dock launch cannot see would set them (DA12). Those are
+ * needed only by someone who keeps agent-communications' folders elsewhere, so they are open from the start only when
+ * one is set. Saving re-reads the installation through them, and the folders in use show what they came to.
  */
 function FolderSettings({ settings, onChange }: { settings: AppSettings; onChange: (next: AppSettings) => void }) {
   const bridge = useBridge();
@@ -122,6 +179,9 @@ function FolderSettings({ settings, onChange }: { settings: AppSettings; onChang
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Open from the start only for someone who has named a folder: then what they named is in view.
+  const [open, setOpen] = useState(() => FOLDER_FIELDS.some(({ key }) => draftsOf(settings.folders)[key] !== ''));
+  const formId = useId();
 
   const save = async () => {
     setSaved(false);
@@ -159,67 +219,100 @@ function FolderSettings({ settings, onChange }: { settings: AppSettings; onChang
 
   return (
     <>
-      <p className="text-fg-muted">
-        An app started from the Dock or the Start menu sees no shell variables. If you keep agent-communications'
-        folders elsewhere with AGENT_COMMS_* variables, name the same folders here.
-      </p>
-      {FOLDER_FIELDS.map(({ key, label, variable }) => (
-        <Field key={key} name={key} invalid={(issues[key]?.length ?? 0) > 0}>
-          <FieldLabel>{label}</FieldLabel>
-          <Input
-            value={drafts[key]}
-            spellCheck={false}
-            autoComplete="off"
-            onValueChange={(value: string) => {
-              setSaved(false);
-              setDrafts((current) => ({ ...current, [key]: value }));
-            }}
-          />
-          <FieldDescription>Leave it empty to use {variable}, or the default.</FieldDescription>
-          <FieldError issues={issues[key] ?? []} />
-        </Field>
-      ))}
-      <div className="flex items-center gap-(--cue-space-3)">
-        <Button variant="primary" loading={busy} onClick={() => void save()}>
-          Save
-        </Button>
-        {saved ? (
-          <p role="status" className="text-fg-muted">
-            Saved.
-          </p>
-        ) : null}
-      </div>
-      {problem === null ? null : (
-        <p role="alert" className="text-danger">
-          <UntrustedText text={problem} />
-        </p>
-      )}
-      <section aria-label="Folders in use" className="flex flex-col gap-(--cue-space-2)">
-        <p className="text-fg-muted">Every call pins these four folders, and starts the launcher in the data folder:</p>
-        <DescriptionList.Root>
-          {RESOLVED.map(({ key, label }) => (
-            <Fragment key={key}>
-              <DescriptionList.Term>{label}</DescriptionList.Term>
-              <DescriptionList.Detail>
-                <span className="font-mono">
-                  <UntrustedText text={settings.resolved[key]} />
-                </span>
-              </DescriptionList.Detail>
-            </Fragment>
-          ))}
-          <DescriptionList.Term>Launcher</DescriptionList.Term>
-          <DescriptionList.Detail>
-            <span className="font-mono">
-              <UntrustedText text={settings.launcher} />
-            </span>
-          </DescriptionList.Detail>
-        </DescriptionList.Root>
-        {settings.launcherProblem === null ? null : (
-          <p role="alert" className="text-warn">
-            <UntrustedText text={settings.launcherProblem} />
-          </p>
-        )}
+      <section aria-label={SETTINGS_COPY.inUse}>
+        <SectionHeader
+          label={
+            <Hinted hint={SETTINGS_COPY.inUseWhy} label={SETTINGS_COPY.inUseLabel}>
+              {SETTINGS_COPY.inUse}
+            </Hinted>
+          }
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={open}
+              aria-controls={open ? formId : undefined}
+              onClick={() => setOpen((shown) => !shown)}
+            >
+              {SETTINGS_COPY.changeFolders}
+            </Button>
+          }
+        >
+          <Panel>
+            <div className={INSET}>
+              <DescriptionList.Root>
+                {RESOLVED.map(({ key, label }) => (
+                  <Fragment key={key}>
+                    <DescriptionList.Term>{label}</DescriptionList.Term>
+                    <DescriptionList.Detail>
+                      <span className="font-mono">
+                        <UntrustedText text={settings.resolved[key]} />
+                      </span>
+                    </DescriptionList.Detail>
+                  </Fragment>
+                ))}
+                <DescriptionList.Term>Launcher</DescriptionList.Term>
+                <DescriptionList.Detail>
+                  <span className="font-mono">
+                    <UntrustedText text={settings.launcher} />
+                  </span>
+                </DescriptionList.Detail>
+              </DescriptionList.Root>
+            </div>
+            {settings.launcherProblem === null ? null : (
+              <p role="alert" className={`${INSET} text-warn`}>
+                <UntrustedText text={settings.launcherProblem} />
+              </p>
+            )}
+          </Panel>
+        </SectionHeader>
       </section>
+      {open ? (
+        <Panel id={formId}>
+          <div className="flex flex-col gap-(--cue-space-4) p-(--cue-space-4)">
+            <p className="text-fg-muted">
+              <Hinted hint={SETTINGS_COPY.elsewhereWhy} label={SETTINGS_COPY.elsewhereLabel}>
+                Only if you keep agent-communications' folders elsewhere, with{' '}
+                <span className="font-mono">AGENT_COMMS_*</span> variables.
+              </Hinted>
+            </p>
+            {FOLDER_FIELDS.map(({ key, label, variable }) => (
+              <Field key={key} name={key} invalid={(issues[key]?.length ?? 0) > 0}>
+                <FieldLabel>{label}</FieldLabel>
+                <Input
+                  value={drafts[key]}
+                  placeholder="Default"
+                  spellCheck={false}
+                  autoComplete="off"
+                  onValueChange={(value: string) => {
+                    setSaved(false);
+                    setDrafts((current) => ({ ...current, [key]: value }));
+                  }}
+                />
+                <FieldDescription>
+                  Leave it empty to use <span className="font-mono">{variable}</span>, or the default.
+                </FieldDescription>
+                <FieldError issues={issues[key] ?? []} />
+              </Field>
+            ))}
+            <div className="flex items-center gap-(--cue-space-3)">
+              <Button variant="primary" loading={busy} onClick={() => void save()}>
+                Save
+              </Button>
+              {saved ? (
+                <p role="status" className="text-fg-muted">
+                  Saved.
+                </p>
+              ) : null}
+            </div>
+            {problem === null ? null : (
+              <p role="alert" className="text-danger">
+                <UntrustedText text={problem} />
+              </p>
+            )}
+          </div>
+        </Panel>
+      ) : null}
     </>
   );
 }
@@ -245,6 +338,9 @@ function updaterLine(state: UpdaterState): string {
       return state.message ?? 'The check for updates did not work.';
   }
 }
+
+/** The states whose line is news to act on, said in the page's ink rather than its quiet one. */
+const NEWS: ReadonlySet<UpdaterState['status']> = new Set(['available', 'ready', 'error']);
 
 /**
  * The app's own updater (DA8): where it stands, Check for Updates, and Install and restart when an update is
@@ -289,9 +385,18 @@ function AppUpdater() {
   const current = state.state === 'ready' ? state.value : null;
   const working = current?.status === 'checking' || current?.status === 'downloading';
   return (
-    <SectionPanel
-      title="Updates for this app"
-      actions={
+    <section aria-label={SETTINGS_COPY.updatesRegion}>
+      <Line className="flex-wrap py-(--cue-space-3)">
+        <RowText title={SETTINGS_COPY.updates}>
+          <div className={current !== null && NEWS.has(current.status) ? 'text-fg' : 'text-fg-muted'}>
+            <ScreenState value={state}>{(value) => <UntrustedText text={updaterLine(value)} />}</ScreenState>
+          </div>
+        </RowText>
+        {current?.status === 'available' ? (
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => void act(() => bridge.installUpdate())}>
+            Install and restart
+          </Button>
+        ) : null}
         <Button
           size="sm"
           loading={busy}
@@ -304,36 +409,20 @@ function AppUpdater() {
         >
           Check for Updates
         </Button>
-      }
-    >
-      <ScreenState value={state}>
-        {(value) => (
-          <>
-            <p className="text-fg">
-              <UntrustedText text={updaterLine(value)} />
-            </p>
-            {value.status === 'available' ? (
-              <div>
-                <Button variant="primary" disabled={busy} onClick={() => void act(() => bridge.installUpdate())}>
-                  Install and restart
-                </Button>
-              </div>
-            ) : null}
-          </>
-        )}
-      </ScreenState>
+      </Line>
       {problem === null ? null : (
-        <p role="alert" className="text-danger">
+        <p role="alert" className={`${INSET} text-danger`}>
           <UntrustedText text={problem} />
         </p>
       )}
-    </SectionPanel>
+    </section>
   );
 }
 
 /**
- * Start at login, the folders the CLI calls pin, and the app's own updater. Nothing here runs a CLI call, so it works
- * before anything is installed, when the person names the folders they keep it in.
+ * This app first (its updater and Start at login, design D3), then the folders the CLI calls pin. Nothing here runs a
+ * CLI call, so it works before anything is installed, when the person names the folders they keep it in. The appearance
+ * menu stays in the window's bar.
  */
 export function Settings() {
   const bridge = useBridge();
@@ -356,13 +445,29 @@ export function Settings() {
 
   return (
     <ScreenFrame title="Settings">
-      <SectionPanel title="At login">
-        <ScreenState value={settings}>{(value) => <LoginItem settings={value} onChange={changed} />}</ScreenState>
-      </SectionPanel>
-      <SectionPanel title="Folders">
-        <ScreenState value={settings}>{(value) => <FolderSettings settings={value} onChange={changed} />}</ScreenState>
-      </SectionPanel>
-      <AppUpdater />
+      <div className="flex flex-col gap-(--cue-space-6)">
+        <section aria-label={SETTINGS_COPY.thisApp}>
+          <SectionHeader label={SETTINGS_COPY.thisApp}>
+            <Panel>
+              <AppUpdater />
+              {settings.state === 'ready' ? (
+                <LoginItem settings={settings.value} onChange={changed} />
+              ) : (
+                <div className={INSET}>
+                  <ScreenState value={settings}>{() => null}</ScreenState>
+                </div>
+              )}
+            </Panel>
+          </SectionHeader>
+        </section>
+        <section aria-label={SETTINGS_COPY.folders} className="flex flex-col gap-(--cue-space-3)">
+          {settings.state === 'ready' ? (
+            <FolderSettings settings={settings.value} onChange={changed} />
+          ) : (
+            <ScreenState value={settings}>{() => null}</ScreenState>
+          )}
+        </section>
+      </div>
     </ScreenFrame>
   );
 }

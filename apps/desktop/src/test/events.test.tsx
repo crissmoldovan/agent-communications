@@ -67,6 +67,29 @@ const versions =
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
 
+/** The Events screen's tabs, by the name each starts with: its badge, when it has one, follows. */
+const TAB_NAMES = ['Service', 'Judges', 'Rules', 'Deliveries'] as const;
+type TabName = (typeof TAB_NAMES)[number];
+
+/** A tab, once the screen shows its tabs. */
+async function findTab(name: TabName): Promise<HTMLElement> {
+  return screen.findByRole('tab', { name: new RegExp(`^${name}\\b`) });
+}
+
+/** What a hint says, once its "i" has the keyboard's focus: a hint reachable without a pointer. */
+async function hint(trigger: HTMLElement): Promise<string> {
+  await act(async () => {
+    trigger.focus();
+  });
+  return (await screen.findByRole('tooltip')).textContent ?? '';
+}
+
+/** Opens a tab, as a click on it does. */
+async function openTab(name: TabName): Promise<void> {
+  fireEvent.click(await findTab(name));
+  await waitFor(async () => expect((await findTab(name)).getAttribute('aria-selected')).toBe('true'));
+}
+
 describe('Events', () => {
   it('Events: absent, loading, error, populated; Pause and Resume run', { timeout: RENDER_LOOP_MS }, async () => {
     // Absent: no launcher, so the screen says so and nothing of the events service is asked.
@@ -88,7 +111,8 @@ describe('Events', () => {
     const main = await screen.findByRole('main');
     await within(main).findAllByRole('status', { name: COPY.loading });
     await waitFor(() => expect(cliKinds(waiting)).toContain('eventsJudgeModelStatus'));
-    expect(within(main).getAllByRole('status', { name: COPY.loading })).toHaveLength(4);
+    // Every view is read when the screen opens, the ones behind a tab too: the status, Laya's, the rules and deliveries.
+    expect(within(main).getAllByRole('status', { name: COPY.loading, hidden: true })).toHaveLength(4);
     second.unmount();
 
     // An error: each part says what went wrong, as text.
@@ -126,6 +150,7 @@ describe('Events', () => {
     expect(await within(status).findByText('running')).toBeTruthy();
     expect(within(status).getByText('on')).toBeTruthy();
 
+    await openTab('Rules');
     const ruleTable = await screen.findByRole('table', { name: 'Rules' });
     const ruleRows = within(ruleTable).getAllByRole('row');
     expect(ruleRows).toHaveLength(1 + rules.length);
@@ -134,6 +159,7 @@ describe('Events', () => {
     expect(within(ruleTable).getByText('superseded')).toBeTruthy();
     expect(within(ruleTable).getByText('ap_1A2B3C4D5E6F7G8H9J0K1M2N3P')).toBeTruthy();
 
+    await openTab('Deliveries');
     const deliveryTable = await screen.findByRole('table', { name: 'Recent deliveries' });
     expect(within(deliveryTable).getAllByRole('row')).toHaveLength(1 + deliveries.length);
     expect(within(deliveryTable).getByText('dlv_example_1')).toBeTruthy();
@@ -141,6 +167,7 @@ describe('Events', () => {
     expect(deliveryTable.querySelector(`time[datetime="${new Date(1760950800000).toISOString()}"]`)).not.toBeNull();
 
     // Pause runs `eventsPause`, the status is read again, and Resume runs `eventsResume`.
+    await openTab('Service');
     const resume = within(status).getByRole('button', { name: 'Resume' }) as HTMLButtonElement;
     expect(resume.disabled).toBe(true);
     fireEvent.click(within(status).getByRole('button', { name: 'Pause' }));
@@ -163,8 +190,10 @@ describe('Events', () => {
     expect(await within(status).findByText('not running')).toBeTruthy();
     expect((within(status).getByRole('button', { name: 'Pause' }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(status).getByRole('button', { name: 'Resume' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(await screen.findByText('No rules yet.')).toBeTruthy();
-    expect(await screen.findByText('No deliveries yet.')).toBeTruthy();
+    await openTab('Rules');
+    expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
+    await openTab('Deliveries');
+    expect(await within(region('Recent deliveries')).findByText('No deliveries yet.')).toBeTruthy();
   });
 
   it('a list in a shape the app does not know says so, and hostile text stays text', async () => {
@@ -176,11 +205,109 @@ describe('Events', () => {
       },
     );
     renderApp(bridge, { screen: 'events' });
-    expect(await screen.findByText('The list could not be read.')).toBeTruthy();
+    await openTab('Rules');
+    expect(await within(region('Rules')).findByText('The list could not be read.')).toBeTruthy();
+    await openTab('Deliveries');
     const deliveryTable = await screen.findByRole('table', { name: 'Recent deliveries' });
     expect(within(deliveryTable).getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(within(deliveryTable).getByText('</untrusted-content>')).toBeTruthy();
     expect(deliveryTable.querySelector('img')).toBeNull();
+  });
+
+  it('Events: four tabs, Service first; each shows its own view, and every view is read when the screen opens', async () => {
+    const bridge = bridgeWith(
+      {},
+      { version: versions('0.27.0'), eventsRules: rules, eventsDeliveries: deliveries, eventsStatus: running },
+    );
+    renderApp(bridge, { screen: 'events' });
+    const list = await screen.findByRole('tablist', { name: 'Events' });
+    const names = within(list)
+      .getAllByRole('tab')
+      .map((tab) => TAB_NAMES.find((name) => (tab.textContent ?? '').startsWith(name)));
+    expect(names).toEqual([...TAB_NAMES]);
+    // The view that matters now is the first: the event service and its status.
+    expect((await findTab('Service')).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('region', { name: 'Event service' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Status' })).toBeTruthy();
+    // The others wait behind their tabs, and are read all the same, as the screen always read them.
+    for (const name of ['Judges', 'Rules', 'Recent deliveries']) {
+      expect(screen.queryByRole('region', { name }), name).toBeNull();
+    }
+    await waitFor(() =>
+      expect(cliKinds(bridge)).toEqual(
+        expect.arrayContaining(['eventsStatus', 'eventsRules', 'eventsDeliveries', 'judgeKindsList', 'judgesList']),
+      ),
+    );
+    const reads = () => cliKinds(bridge).filter((kind) => kind !== 'eventsStatus' && kind !== 'version').length;
+    await waitFor(() => expect(screen.getByRole('tab', { name: `Deliveries ${deliveries.length}` })).toBeTruthy());
+    const before = reads();
+    // Each tab shows its own view, and only it.
+    const views: Record<TabName, string[]> = {
+      Service: ['Event service', 'Status'],
+      Judges: ['Judges'],
+      Rules: ['Rules'],
+      Deliveries: ['Recent deliveries'],
+    };
+    for (const tab of ['Judges', 'Rules', 'Deliveries', 'Service'] as const) {
+      await openTab(tab);
+      for (const [owner, names] of Object.entries(views)) {
+        for (const name of names) {
+          expect(screen.queryByRole('region', { name }) !== null, `${tab}: ${name}`).toBe(owner === tab);
+        }
+      }
+    }
+    // Moving between tabs reads nothing again.
+    expect(reads()).toBe(before);
+  });
+
+  it('the Rules and Deliveries tabs say how many each lists, and nothing when there are none or the list is unread', async () => {
+    const first = renderApp(bridgeWith({}, { eventsRules: rules, eventsDeliveries: deliveries }), { screen: 'events' });
+    // Two versions of one rule are one rule; every delivery counts.
+    expect(await screen.findByRole('tab', { name: 'Rules 1' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: `Deliveries ${deliveries.length}` })).toBeTruthy();
+    first.unmount();
+
+    for (const [what, bridge, rulesSay, deliveriesSay] of [
+      ['empty', bridgeWith({}, { eventsRules: [], eventsDeliveries: [] }), 'No rules yet.', 'No deliveries yet.'],
+      [
+        'unread',
+        bridgeWith({
+          eventsRules: failed('CLI_FAILED', 'the rules could not be read'),
+          eventsDeliveries: failed('CLI_FAILED', 'the deliveries could not be read'),
+        }),
+        'the rules could not be read',
+        'the deliveries could not be read',
+      ],
+    ] as const) {
+      const view = renderApp(bridge, { screen: 'events' });
+      await openTab('Rules');
+      expect(await within(region('Rules')).findByText(rulesSay), what).toBeTruthy();
+      await openTab('Deliveries');
+      expect(await within(region('Recent deliveries')).findByText(deliveriesSay), what).toBeTruthy();
+      expect(screen.getByRole('tab', { name: 'Rules' }), what).toBeTruthy();
+      expect(screen.getByRole('tab', { name: 'Deliveries' }), what).toBeTruthy();
+      view.unmount();
+    }
+  });
+
+  it('beyond the 100 deliveries shown, a line says how many there are, and its hint where every one is listed', async () => {
+    const many = Array.from({ length: 120 }, (_, index) => ({
+      ...deliveries[0],
+      deliveryId: `dlv_${index}`,
+      expiresAt: 1760947200000 + index,
+    }));
+    renderApp(bridgeWith({}, { eventsRules: [], eventsDeliveries: many }), { screen: 'events' });
+    expect(await screen.findByRole('tab', { name: 'Deliveries 120' })).toBeTruthy();
+    await openTab('Deliveries');
+    const view = region('Recent deliveries');
+    expect(await within(view).findByText('The 100 most recent of 120.')).toBeTruthy();
+    expect(within(within(view).getByRole('table')).getAllByRole('row')).toHaveLength(101);
+    // The newest first: the last made is the first shown.
+    expect(within(view).getByText('dlv_119')).toBeTruthy();
+    expect(within(view).queryByText('dlv_0')).toBeNull();
+    expect(await hint(within(view).getByRole('button', { name: 'Where every one is listed' }))).toBe(
+      'The events CLI and MCP list every one.',
+    );
   });
 });
 
@@ -425,18 +552,22 @@ describe('The event service', () => {
     });
     renderApp(bridge, { screen: 'events' });
     expect(await within(await screen.findByRole('region', { name: 'Status' })).findByText('not running')).toBeTruthy();
+    await openTab('Rules');
     await waitFor(() =>
       expect(within(region('Rules')).getByText('the local event service is not running')).toBeTruthy(),
     );
+    await openTab('Deliveries');
     await waitFor(() =>
       expect(within(region('Recent deliveries')).getByText('the local event service is not running')).toBeTruthy(),
     );
 
     up = true;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
-    expect(await within(region('Status')).findByText('running')).toBeTruthy();
-    expect(await screen.findByRole('table', { name: 'Rules' })).toBeTruthy();
     expect(await screen.findByRole('table', { name: 'Recent deliveries' })).toBeTruthy();
+    await openTab('Rules');
+    expect(await screen.findByRole('table', { name: 'Rules' })).toBeTruthy();
+    await openTab('Service');
+    expect(await within(region('Status')).findByText('running')).toBeTruthy();
 
     // A word that changes nothing of whether it runs reads nothing again.
     const reads = cliKinds(bridge).length;
@@ -526,6 +657,44 @@ describe('The event service', () => {
     expect(await screen.findByText("The events service isn't installed.")).toBeTruthy();
     expect(screen.queryByRole('region', { name: SERVICE })).toBeNull();
     expect(bridge.calls.map((call) => call.command)).not.toContain('eventServiceState');
+    // Nor are there tabs to hide anything behind.
+    expect(screen.queryByRole('tab')).toBeNull();
+  });
+
+  it('the Service tab counts what waits in it, so it shows from any tab: gave up, a newer version, Full Disk Access', {
+    timeout: RENDER_LOOP_MS,
+  }, async () => {
+    const cases: [string, EventServiceState, number][] = [
+      ['running', EVENT_SERVICE.running, 0],
+      ['gave up', EVENT_SERVICE.gaveUp, 1],
+      ['a newer version', EVENT_SERVICE.olderAdopted, 1],
+      ['Full Disk Access', EVENT_SERVICE.fullDiskAccessMissing, 1],
+      ['gave up, and Full Disk Access', { ...EVENT_SERVICE.gaveUp, fullDiskAccess: 'missing' }, 2],
+      // A newer version is offered only to one that runs, as the section offers it; Windows offers nothing.
+      ['stopped, with a newer version', { ...EVENT_SERVICE.stopped, newerVersion: '0.27.0' }, 0],
+      ['Windows', { ...EVENT_SERVICE.windows, fullDiskAccess: 'missing' }, 0],
+    ];
+    for (const [what, state, count] of cases) {
+      const view = renderApp(serviceBridge(state), { screen: 'events' });
+      await shownService();
+      await openTab('Rules');
+      const name = count === 0 ? 'Service' : `Service ${count} to look at`;
+      const tab = await screen.findByRole('tab', { name });
+      expect(tab, what).toBeTruthy();
+      // A caution, said in the shared status vocabulary.
+      expect(tab.querySelector('[data-slot="tab-attention"]') !== null, what).toBe(count > 0);
+      view.unmount();
+    }
+    // It follows the supervisor: a service that gives up while another tab is open says so on its tab.
+    const bridge = serviceBridge(EVENT_SERVICE.running);
+    renderApp(bridge, { screen: 'events' });
+    await shownService();
+    await openTab('Judges');
+    expect(screen.getByRole('tab', { name: 'Service' })).toBeTruthy();
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.gaveUp));
+    expect(await screen.findByRole('tab', { name: 'Service 1 to look at' })).toBeTruthy();
+    await openTab('Service');
+    expect(within(region(SERVICE)).getByRole('alert')).toBeTruthy();
   });
 });
 
@@ -667,6 +836,7 @@ function layaBridge(
 const ROWS_MS = 10_000;
 
 async function layaRegion(): Promise<HTMLElement> {
+  await openTab('Judges');
   return screen.findByRole('region', { name: LAYA }, { timeout: ROWS_MS });
 }
 
@@ -916,6 +1086,7 @@ it('E2 desktop Laya contract: a download in progress follows the screen poll, an
       answers.shift()?.(ok(copy('downloading')));
       await vi.advanceTimersByTimeAsync(0);
     });
+    fireEvent.click(screen.getByRole('tab', { name: /^Judges\b/ }));
     const region = screen.getByRole('region', { name: LAYA });
     expect(within(region).getByText('81 of 154 bytes')).toBeTruthy();
     // The screen's next poll reads it again, while the download goes on.
@@ -1005,6 +1176,7 @@ describe('Judges', () => {
 
   /** The section once its kinds are shown. */
   async function shownJudges(): Promise<HTMLElement> {
+    await openTab('Judges');
     const section = await screen.findByRole('region', { name: 'Judges' }, { timeout: ROWS_MS });
     await waitFor(() => expect(within(section).getByRole('region', { name: JEV })).toBeTruthy(), {
       timeout: ROWS_MS,
@@ -1234,6 +1406,7 @@ describe('Judges', () => {
   }, async () => {
     const bridge = judgesBridge(at('both-on'), { version: '0.16.0' });
     const older = renderApp(bridge, { screen: 'events' });
+    await openTab('Judges');
     const section = await screen.findByRole('region', { name: 'Judges' });
     expect(await within(section).findByText(COPY.updateToUse)).toBeTruthy();
     expect(within(section).getByText('Needs 0.17.0 or later; this machine has 0.16.0.')).toBeTruthy();
@@ -1259,6 +1432,7 @@ describe('Judges', () => {
     // The whole list unreadable: the section says so, and offers nothing.
     for (const kinds of [{ kinds: [] }, null, 'typesafe']) {
       const view = renderApp(judgesBridge({ ...fresh, kinds: kinds as never }), { screen: 'events' });
+      await openTab('Judges');
       const section = await screen.findByRole('region', { name: 'Judges' });
       expect(await within(section).findByText('The judge kinds could not be read.')).toBeTruthy();
       expect(within(section).queryAllByRole('button')).toEqual([]);
@@ -1346,8 +1520,45 @@ describe('Judges', () => {
       judgesBridge(at('fresh'), { results: { judgeKindsList: failed('CLI_FAILED', 'the kinds could not be listed') } }),
       { screen: 'events' },
     );
+    await openTab('Judges');
     const section = await screen.findByRole('region', { name: 'Judges' });
     expect(await within(section).findByText('the kinds could not be listed')).toBeTruthy();
+    await openTab('Rules');
     expect(await screen.findByRole('region', { name: 'Rules' })).toBeTruthy();
+  });
+
+  it('Judges: the tab counts the kinds on with no judge, the rows that say what is next, and claims nothing unread', {
+    timeout: RENDER_LOOP_MS,
+  }, async () => {
+    for (const [name, count] of [
+      ['fresh', 0],
+      ['typesafe-on', 1],
+      ['typesafe-on-with-jev', 0],
+      ['both-on', 1],
+      ['both-on-with-local', 0],
+      ['local-removed', 1],
+      ['typesafe-off', 1],
+      ['all-off', 0],
+    ] as const) {
+      const view = renderApp(judgesBridge(at(name)), { screen: 'events' });
+      const tab = count === 0 ? 'Judges' : `Judges ${count} to look at`;
+      expect(await screen.findByRole('tab', { name: tab }, { timeout: ROWS_MS }), name).toBeTruthy();
+      const section = await shownJudges();
+      await waitFor(() => expect(within(section).queryAllByText(/^Next: /), name).toHaveLength(count));
+      expect(screen.getByRole('tab', { name: tab }), name).toBeTruthy();
+      view.unmount();
+    }
+    // An events service older than judges, or a judges list the app cannot read: the rows claim nothing, nor does the tab.
+    for (const [what, bridge] of [
+      ['older', judgesBridge(at('typesafe-on'), { version: '0.16.0' })],
+      ['unreadable', judgesBridge({ ...at('typesafe-on'), judges: { judges: [] } as never })],
+    ] as const) {
+      const view = renderApp(bridge, { screen: 'events' });
+      await openTab('Judges');
+      const section = await screen.findByRole('region', { name: 'Judges' });
+      await within(section).findByText(what === 'older' ? COPY.updateToUse : 'The judges could not be read.');
+      expect(screen.getByRole('tab', { name: 'Judges' }), what).toBeTruthy();
+      view.unmount();
+    }
   });
 });
