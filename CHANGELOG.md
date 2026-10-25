@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.30.0
 
 **The action queue: matches you work through, in the app.** The second step the owner asked for, after activity: a
 rule can now send its matches to a **queue**, and each match becomes an item you mark done or dismiss.
