@@ -33,5 +33,7 @@
   "acts": ["post", "reply", "reaction", "edit", "delete", "file", "send"],
   "sessionKey": "^[0-9a-f]{16}$",
   "queueItemId": "^qi_[0-9A-HJKMNP-TV-Z]{26}$",
-  "ruleId": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
+  "ruleId": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$",
+  "laneName": "^[a-z0-9-]{1,40}$",
+  "windowId": "^(?:[0-9a-f]{16}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 }

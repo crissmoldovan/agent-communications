@@ -48,6 +48,7 @@ export const EXAMPLE_INSTALLATION: Installation = {
   present: [...PRODUCTS],
   folders: EXAMPLE_FOLDERS,
   problem: null,
+  home: '/example/home',
 };
 
 /** The event service running, started by the app at 0.27.0: what every test sees unless it says otherwise. */

@@ -2,7 +2,8 @@
 //! `src/grammar.ts` reads too. Each is core's own: an approval id (`ids.ts`), a version-1 alias (`config.ts`), an
 //! account name (`name-grammar.ts`, its look-ahead written as a list of reserved words), the two conversation forms
 //! (`operations/label.ts`), and an activity session's key (`activity.ts`). Two are the event service's (0.30.0, design
-//! 2026-10-25-action-queue §8): a queue item's id, and a rule's id as the Queue screen filters by one.
+//! 2026-10-25-action-queue §8): a queue item's id, and a rule's id as the Queue screen filters by one. Two are its
+//! lanes' (0.31.0, design 2026-10-25-routing §3.1 and B1): a lane's name, and the id of the agent window bound to one.
 
 use regex::Regex;
 use serde::Deserialize;
@@ -25,6 +26,8 @@ struct Source {
     session_key: String,
     queue_item_id: String,
     rule_id: String,
+    lane_name: String,
+    window_id: String,
 }
 
 struct Grammar {
@@ -38,6 +41,8 @@ struct Grammar {
     session_key: Regex,
     queue_item_id: Regex,
     rule_id: Regex,
+    lane_name: Regex,
+    window_id: Regex,
 }
 
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
@@ -56,6 +61,8 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         session_key: pattern(&source.session_key),
         queue_item_id: pattern(&source.queue_item_id),
         rule_id: pattern(&source.rule_id),
+        lane_name: pattern(&source.lane_name),
+        window_id: pattern(&source.window_id),
     }
 });
 
@@ -133,6 +140,18 @@ pub fn rule_id(value: &str) -> bool {
     plain(value) && GRAMMAR.rule_id.is_match(value)
 }
 
+/// A lane's name, as the event service takes one (design 2026-10-25-routing §3.1): 1 to 40 lowercase letters, digits
+/// and `-`. A name that starts with `-` is refused with every other value that does, so it is never read as an option.
+pub fn lane_name(value: &str) -> bool {
+    plain(value) && GRAMMAR.lane_name.is_match(value)
+}
+
+/// The agent window a lane is bound to, as `lane bind --window` takes it (B1): a Claude Code session id, a lowercase
+/// UUID; or an activity session's key, sixteen lowercase hex digits, as core makes it.
+pub fn window_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.window_id.is_match(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +217,73 @@ mod tests {
             "r".repeat(129).as_str(),
         ] {
             assert!(!rule_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn lane_names_are_one_to_forty_lowercase_letters_digits_and_hyphens() {
+        for good in [
+            "david",
+            "billing",
+            "david-on-slack",
+            "a",
+            "0",
+            "lane-2",
+            "x".repeat(40).as_str(),
+        ] {
+            assert!(lane_name(good), "{good}");
+        }
+        for bad in [
+            "",
+            "-david",
+            "--json",
+            "David",
+            "DAVID",
+            "david_slack",
+            "david.slack",
+            "david slack",
+            "david/slack",
+            "david\\slack",
+            "david\n",
+            "david\u{202e}",
+            "david\u{200b}",
+            "d\u{e9}vid",
+            "david;rm",
+            "david$(x)",
+            "david --window 3f9a1c2e7b4d5a60",
+            "x".repeat(41).as_str(),
+        ] {
+            assert!(!lane_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn window_ids_are_a_lowercase_uuid_or_an_activity_key() {
+        for good in [
+            "3f9a1c2e7b4d5a60",
+            "0000000000000000",
+            "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90",
+            "00000000-0000-0000-0000-000000000000",
+        ] {
+            assert!(window_id(good), "{good}");
+        }
+        for bad in [
+            "",
+            "3f9a1c2e7b4d5a6",
+            "3f9a1c2e7b4d5a600",
+            "3F9A1C2E7B4D5A60",
+            "0F8B5C3E-2D41-4A7E-9C11-5B2E8D7F6A90",
+            "0f8b5c3e2d414a7e9c115b2e8d7f6a90",
+            "{0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90}",
+            "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a9",
+            "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90 --json",
+            "-f9a1c2e7b4d5a60",
+            "3f9a1c2e7b4d5a60\n",
+            "3f9a1c2e7b4d5a6g",
+            "../3f9a1c2e7b4d5",
+            "david",
+        ] {
+            assert!(!window_id(bad), "{bad:?}");
         }
     }
 
