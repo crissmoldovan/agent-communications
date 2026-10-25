@@ -764,9 +764,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
   queue
     .command('clear')
-    .description('remove done and dismissed queue items now; open items stay')
+    .description('remove done and dismissed queue items now; open items stay (a person at a terminal or in the app)')
     .action(async () => {
       ran = true;
+      // An agent must not be able to make the person's queue disappear: clear is the terminal's and the app's.
+      assertNotMcpServer(env, 'clear');
       print(await queueClear(controlOptions(program)));
     });
 

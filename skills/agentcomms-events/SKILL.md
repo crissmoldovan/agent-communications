@@ -74,9 +74,9 @@ before anything is prepared. Report that state.
 A rule with a `queue` target puts each match in the person's queue, which they work through in the app or at their
 terminal. `events_queue_items` lists its items without what they say (id, rule, channel, account, state and times),
 and `events_queue_counts` says how many are open, done and dismissed. When the person asks, mark an item with
-`events_queue_done`, `events_queue_dismiss` or `events_queue_reopen`, or remove the done and dismissed ones with
-`events_queue_clear`. None of them tells you who sent an item or what it says, and nothing else does either: that is
-the person's to read.
+`events_queue_done`, `events_queue_dismiss` or `events_queue_reopen`: a done or dismissed item stays in the person's
+Done or Dismissed tab for its retention. None of them tells you who sent an item or what it says, and nothing else
+does either: that is the person's to read. Clearing the queue is the person's too, at their terminal or in the app.
 
 ## Approval handoff
 
@@ -88,12 +88,14 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 
 ## Human-only boundaries
 
-Do not invoke dry-run record reads, queue item reads, retained rule tests, target resume, held decisions, standing
-approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it to the person:
+Do not invoke dry-run record reads, queue item reads, clearing the queue, retained rule tests, target resume, held
+decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it
+to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
 - Queue item list and show: “Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says.”
+- Queue clear: “an agent must not be able to make the person's queue disappear.”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”

@@ -106,7 +106,7 @@ const EXPECTED_QUEUE_ROWS = [
   ['events-daemon.queue.done', 'queue done', 'events_queue_done', 'both', 'queueDone'],
   ['events-daemon.queue.dismiss', 'queue dismiss', 'events_queue_dismiss', 'both', 'queueDismiss'],
   ['events-daemon.queue.reopen', 'queue reopen', 'events_queue_reopen', 'both', 'queueReopen'],
-  ['events-daemon.queue.clear', 'queue clear', 'events_queue_clear', 'both', 'queueClear'],
+  ['events-daemon.queue.clear', 'queue clear', null, 'exception', 'queueClear'],
 ] as const;
 
 const rowShape = (row: Capability) => ({
@@ -252,6 +252,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.dryrun.show',
     'events-daemon.queue.list',
     'events-daemon.queue.show',
+    'events-daemon.queue.clear',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

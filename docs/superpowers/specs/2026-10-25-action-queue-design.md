@@ -106,6 +106,12 @@ says the queue is "a rule target that puts each match in a list in the app, with
   - Through MCP, an agent may mark an item done (a step toward routing) but never read its content.
 - **Content-free counts:** `queue counts`, for the sidebar badge and an agent's "is there anything waiting".
 
+**Note, 2026-10-25 (0.30.0 review).** `queue clear` is terminal and app only, not MCP: an agent must not be able to
+make the person's queue disappear. Its `capabilities.json` row is a CLI-only exception with that reason, and the CLI
+refuses it inside the event service's MCP server as it refuses the content reads. Done, dismiss and reopen stay on
+MCP: a done or dismissed item stays in the person's Done or Dismissed tab for its retention, so marking one takes
+nothing away. The §8 contract's `queue clear --json` shape is unchanged; only its MCP tool is gone.
+
 ### 4.5 The Queue screen
 - **A sidebar section, Queue, first after Overview,** with the open count as a badge.
 - **Each item is a card** in the soft look:

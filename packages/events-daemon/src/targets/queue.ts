@@ -13,15 +13,23 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
   env[MCP_SERVER_MARKER] = name;
 }
 
-/** The queue's content-read gate (Q1): a separate gate from dry-run's terminal-only one, which is unchanged. */
-export function assertNotMcpServer(env: NodeJS.ProcessEnv): void {
+/**
+ * The queue's person-only gate: its content reads (Q1), and `queue clear`, which an agent must not be able to use to
+ * make the person's queue disappear. A separate gate from dry-run's terminal-only one, which is unchanged.
+ */
+export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'clear' = 'read'): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker !== undefined && marker !== '')
     throw new CommsError(
       'APPROVAL_REQUIRED',
-      'queue item content is for a person, at a terminal or in the app — an MCP server cannot read it',
+      action === 'read'
+        ? 'queue item content is for a person, at a terminal or in the app — an MCP server cannot read it'
+        : "clearing the queue is for a person, at a terminal or in the app — the event service's MCP server cannot clear it",
       {
-        hint: 'queue items and queue counts give an agent what is waiting, without what it says.',
+        hint:
+          action === 'read'
+            ? 'queue items and queue counts give an agent what is waiting, without what it says.'
+            : 'An agent may mark an item done, dismissed or reopened; done and dismissed items stay for their retention.',
         details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER },
       },
     );

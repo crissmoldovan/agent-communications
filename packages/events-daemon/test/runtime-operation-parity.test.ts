@@ -107,11 +107,13 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_queue_done',
         'events_queue_dismiss',
         'events_queue_reopen',
-        'events_queue_clear',
       ].sort(),
     );
-    for (const contentRead of ['events_queue_list', 'events_queue_show'])
-      assert.ok(!names.includes(contentRead), `${contentRead}: no MCP tool reads what a queue item says`);
+    for (const contentRead of ['events_queue_list', 'events_queue_show', 'events_queue_clear'])
+      assert.ok(
+        !names.includes(contentRead),
+        `${contentRead}: no MCP tool reads what a queue item says or clears the person's queue`,
+      );
     assert.ok(!names.includes('events_run'), 'the owner-starting command is not an MCP tool');
     assert.ok(!names.includes('events_approve'), 'standing disclosure approval is terminal-only');
     assert.ok(!names.includes('events_dryrun_list'), 'retained local content has no MCP selection surface');
