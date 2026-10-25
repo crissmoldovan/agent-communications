@@ -230,7 +230,7 @@ describe('the shell', () => {
     expect(within(navigation).getByRole('button', { name: 'Doctor' }).getAttribute('aria-current')).toBe('page');
   });
 
-  it('the appearance menu offers cue and terminal, every density and three modes', async () => {
+  it('the appearance menu offers soft, cue and terminal, every density and three modes', async () => {
     renderApp(createFakeBridge());
     const trigger = await screen.findByRole('button', { name: 'Appearance' });
     fireEvent.click(trigger);
@@ -239,6 +239,7 @@ describe('the shell', () => {
       .getAllByRole('menuitemcheckbox')
       .map((item) => item.textContent?.trim());
     expect(items).toEqual([
+      'soft',
       'cue',
       'terminal',
       'ultra-compact',
@@ -250,12 +251,28 @@ describe('the shell', () => {
       'light',
       'system',
     ]);
-    // The defaults are checked: cue, compact, system.
+    // The defaults are checked: soft, normal, system.
     const checked = within(menu)
       .getAllByRole('menuitemcheckbox')
       .filter((item) => item.getAttribute('aria-checked') === 'true')
       .map((item) => item.textContent?.trim());
-    expect(checked).toEqual(['cue', 'compact', 'system']);
+    expect(checked).toEqual(['soft', 'normal', 'system']);
+  });
+
+  it('the app opens on soft, and cue and terminal can still be chosen from the appearance menu', async () => {
+    renderApp(createFakeBridge());
+    await screen.findByRole('button', { name: 'Appearance' });
+    const root = document.documentElement;
+    await waitFor(() => expect(root.getAttribute('data-theme')).toBe('soft'));
+    expect(root.getAttribute('data-density')).toBe('normal');
+    // A choice keeps the menu open, so each is made from the one menu.
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    const menu = await screen.findByRole('menu');
+    for (const theme of ['cue', 'terminal', 'soft']) {
+      fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: theme }));
+      await waitFor(() => expect(root.getAttribute('data-theme')).toBe(theme));
+      expect(JSON.parse(window.localStorage.getItem('agent-comms') ?? '{}')).toMatchObject({ theme });
+    }
   });
 });
 
