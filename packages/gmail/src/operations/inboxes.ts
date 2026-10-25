@@ -21,6 +21,7 @@ import {
   withCredentialsLock,
   writeOutcome,
 } from '@agentcomms/core';
+import { recorded } from '../activity.ts';
 import { revokeToken } from '../auth/oauth.ts';
 import { type Capability, capabilitiesOf, tierOf } from '../auth/scopes.ts';
 import type { GmailContext } from '../context.ts';
@@ -494,7 +495,22 @@ export interface WhoamiResult {
   threadsTotal: number;
 }
 
+/**
+ * Asks Google which account a mailbox is. It reads the mailbox's profile, so it is recorded in the activity log — by
+ * nothing more than that it was asked, and how it ended.
+ */
 export async function whoami(context: GmailContext, alias: string): Promise<WhoamiResult> {
+  return recorded(
+    context,
+    'gmail.whoami',
+    'read',
+    alias,
+    () => profileOf(context, alias),
+    () => ({}),
+  );
+}
+
+async function profileOf(context: GmailContext, alias: string): Promise<WhoamiResult> {
   const config = await context.config();
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');

@@ -1,4 +1,5 @@
 import {
+  type ClientInfo,
   type CliHandoffs,
   CommsError,
   type Config,
@@ -66,6 +67,11 @@ export class ResendContext {
   readonly now: () => Date;
   readonly platform: NodeJS.Platform;
   readonly surface: 'cli' | 'mcp';
+  /**
+   * What the MCP client said it is (`clientInfo`), for the activity log's session: set by the server once it exists,
+   * read when a line is written, since a client says it only on connecting. Never set for the CLI.
+   */
+  clientInfo: (() => ClientInfo | undefined) | undefined = undefined;
   /**
    * What every result, refusal and hint names for a person to run: Resend's own CLI as this installation runs it, or
    * core's through its installed dependency (`own`, `core`), quoted for `platform` — or why there is none here.

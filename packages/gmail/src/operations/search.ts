@@ -10,6 +10,7 @@ import {
   TaintCollector,
   wrapUntrusted,
 } from '@agentcomms/core';
+import { itemOf, recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
@@ -323,7 +324,28 @@ export async function resolveInboxes(
   return requested;
 }
 
+/**
+ * Searches one or more mailboxes, and records it in the activity log: the query, how many rows came back, and each
+ * row's id (its thread's, or its message's for a search of messages), subject and sender.
+ */
 export async function search(context: GmailContext, options: SearchOptions): Promise<SearchResult> {
+  return recorded(
+    context,
+    'gmail.search',
+    'read',
+    options.inboxes,
+    () => searchMailboxes(context, options),
+    (result) => ({
+      count: result.returned,
+      items: result.rows.map((row) =>
+        itemOf(result.kind === 'messages' ? row.messageId : row.threadId, row.subject, row.from),
+      ),
+    }),
+    options.query,
+  );
+}
+
+async function searchMailboxes(context: GmailContext, options: SearchOptions): Promise<SearchResult> {
   // Checked before anything is read, so a word that is not a kind is refused the same way from either surface.
   const kind = oneOf(options.kind, SEARCH_KINDS, 'a kind of result') ?? 'threads';
   // And a limit that is not a number in range, which used to be clamped into one — or searched with as NaN.

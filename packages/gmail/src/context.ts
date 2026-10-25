@@ -1,5 +1,6 @@
 import {
   type ClientConfig,
+  type ClientInfo,
   type CliHandoffs,
   CommsError,
   type Config,
@@ -71,6 +72,11 @@ export class GmailContext {
   readonly platform: NodeJS.Platform;
   readonly surface: 'cli' | 'mcp';
   readonly cwd: string;
+  /**
+   * What the MCP client said it is (`clientInfo`), for the activity log's session: set by the server once it exists,
+   * read when a line is written, since a client says it only on connecting. Never set for the CLI.
+   */
+  clientInfo: (() => ClientInfo | undefined) | undefined = undefined;
   readonly #createTransport: (request: TransportRequest) => GmailTransport;
   #historyCache: HistoryCache | undefined;
   readonly #transports = new Map<string, GmailTransport>();

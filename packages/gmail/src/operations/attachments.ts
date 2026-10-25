@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { type FileHandle, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
+  type ActivityDetail,
+  type ActivityItem,
   askWhereToSave,
   CommsError,
   checkDownloadAnswer,
@@ -32,6 +34,7 @@ import {
   type WarnedFile,
   writeFileAtomic,
 } from '@agentcomms/core';
+import { itemOf, plain, recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { type DecodedPart, headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
@@ -128,9 +131,52 @@ export function attachmentQuery(options: AttachmentFilters): string {
   return parts.join(' ');
 }
 
+/**
+ * Finds attachments across mailboxes, recorded in the activity log with the query it ran and each attachment found —
+ * by its message and part, its file name and size, and its message's subject and sender.
+ */
 export async function findAttachments(
   context: GmailContext,
   options: FindAttachmentsOptions = {},
+): Promise<FindAttachmentsResult> {
+  return recorded(
+    context,
+    'gmail.attachments.find',
+    'read',
+    options.inboxes,
+    () => findAttachmentsIn(context, options),
+    (result) => ({
+      query: result.query,
+      count: result.rows.length,
+      items: result.rows.map((row) => attachmentItem(row)),
+    }),
+    options.query,
+  );
+}
+
+/**
+ * An attachment as a line keeps it: `<message id>/<part id>`, as the audit names a saved part; the name the sender gave
+ * it and its size; and its message's subject and sender.
+ */
+function attachmentItem(row: {
+  messageId: string;
+  partId: string;
+  filename: string;
+  size: number;
+  subject: string;
+  from: string | null;
+}): ActivityItem {
+  const name = row.filename === '(unnamed)' ? undefined : plain(row.filename);
+  return {
+    ...itemOf(`${row.messageId}/${row.partId}`, row.subject, { address: row.from }),
+    ...(name === undefined ? {} : { name }),
+    size: row.size,
+  };
+}
+
+async function findAttachmentsIn(
+  context: GmailContext,
+  options: FindAttachmentsOptions,
 ): Promise<FindAttachmentsResult> {
   // Checked before anything is read, so a number out of range is refused the same way from either surface.
   const minBytes = numberOption(context, options.minBytes, MIN_BYTES);
@@ -396,6 +442,37 @@ export async function downloadAttachments(
   alias: string,
   targets: Array<{ messageId: string; partId?: string | undefined; filename?: string | undefined }>,
   options: DownloadOptions = {},
+): Promise<DownloadQuestion | DownloadResult> {
+  /*
+   * Recorded in the activity log by each file — its name and size, and its message's subject and sender — and the
+   * question's id. A question records what it would save (`toSave`); an answer, what it saved (`saved`).
+   */
+  return recorded(
+    context,
+    'gmail.attachments.download',
+    'read',
+    alias,
+    () => downloadAttachmentsOf(context, alias, targets, options),
+    (result): ActivityDetail => {
+      const asked = typeof options.choiceId === 'string' ? options.choiceId : undefined;
+      const choiceId = result.destinationRequired ? result.choiceId : asked;
+      const files = result.destinationRequired ? result.files : result.files.filter((file) => !file.duplicate);
+      return {
+        items: files.map((file) => attachmentItem(file)),
+        counts: result.destinationRequired
+          ? { toSave: files.length, skipped: result.skipped.length }
+          : { saved: files.length, skipped: result.skipped.length },
+        ...(choiceId === undefined ? {} : { approvalId: choiceId }),
+      };
+    },
+  );
+}
+
+async function downloadAttachmentsOf(
+  context: GmailContext,
+  alias: string,
+  targets: Array<{ messageId: string; partId?: string | undefined; filename?: string | undefined }>,
+  options: DownloadOptions,
 ): Promise<DownloadQuestion | DownloadResult> {
   // Before the mailbox is read or a folder made: no messages at all made a folder, wrote a manifest of nothing and
   // answered `files: []`, as if there had been nothing to save. The command takes one message id or more.
