@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.27.1
 
 **The desktop app, `desktop-v0.27.1`: Start shows that it is starting, and Events shows every judge, Jev among them.**
 Both came from the owner's first run of 0.27.0.
