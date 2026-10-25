@@ -1050,6 +1050,19 @@ test('a process in /, the home folder or a system folder is never grouped, so on
   }
   assert.equal(sharedFolder('C:\\Users\\jo\\work\\acme', 'C:\\Users\\jo', 'win32'), false);
   assert.equal(sharedFolder('/tmp/acme', '/Users/jo', 'linux'), false, 'a project in a temporary folder is one');
+  // The event service serves no project, and launchd starts it in /: it stays one session since it started.
+  const launchd: ProcessProbe = async () => ({ ppid: 0, startedAt: 'Sun Oct 25 08:00:00 2026', name: 'launchd' });
+  const service = (pid: number) =>
+    sessionIdentity('daemon', undefined, {
+      pid,
+      ppid: 1,
+      cwd: () => '/',
+      probe: launchd,
+      platform: 'darwin',
+      home: '/Users/jo',
+    });
+  assert.equal((await service(201)).grouped, true);
+  assert.equal((await service(201)).key, (await service(202)).key);
 });
 
 // ── Grouping is worked out in the background, and a timeout is not kept (0.29.0 review) ─────────────────────────

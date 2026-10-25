@@ -1430,8 +1430,9 @@ export function sharedFolder(folder: string, home: string, platform: NodeJS.Plat
  * - **A CLI call** (`cli`) reads up to three processes above it, within about 200 ms. When one of them is the parent
  *   of a server process that recorded a line today (or yesterday) in `options.log`, the call joins that window's
  *   session; otherwise it is a session of its own. Its `ancestors` name those processes either way.
- * - **The event service** (`daemon`) is grouped by its parent too, process 1 included: one session since it started.
- *   It waits for the whole read: it records on a timer, and keeps what it is given.
+ * - **The event service** (`daemon`) is grouped by its parent too, process 1 included, whatever its folder — it serves
+ *   no project — so it is one session since it started. It waits for the whole read: it records on a timer, and keeps
+ *   what it is given.
  * - **On Windows** no process is grouped: a query of a process's parent and start does not answer within the bound.
  *
  * `clientInfo` is what an MCP client said it is; it is stored as that, and nothing depends on it.
@@ -1532,7 +1533,9 @@ async function identityOf(
   const base = { process: processId, pid, folder, surface };
   const parent = parentOfChain(chain, 0);
   const home = options.home ?? homedir();
-  if (parent === undefined || folder === null || sharedFolder(folder, home, options.platform ?? process.platform)) {
+  // The event service serves no project, so its folder — `/`, as launchd starts it — merges none: it is not held to it.
+  const shared = !initIsParent && folder !== null && sharedFolder(folder, home, options.platform ?? process.platform);
+  if (parent === undefined || folder === null || shared) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
   }
   return { key: windowKey(parent, folder, options.connection), ...base, parent, grouped: true };
