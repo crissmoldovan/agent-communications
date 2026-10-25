@@ -23,6 +23,10 @@ import doctorWhatsapp from './fixtures/doctor-whatsapp.json';
 import layaDisabled from './fixtures/events-judge-model-status.disabled.json';
 import eventsStatus from './fixtures/events-status.running.json';
 import label from './fixtures/label.populated.json';
+import queueCounts from './fixtures/queue-counts.json';
+import queueDismissed from './fixtures/queue-list-dismissed.json';
+import queueDone from './fixtures/queue-list-done.json';
+import queueOpen from './fixtures/queue-list-open.json';
 import standingList from './fixtures/standing-list.json';
 import updateStatus from './fixtures/update-status.json';
 
@@ -161,10 +165,100 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
     (call as Extract<Call, { kind: 'activityShow' }>).session === activityShowDaemon.session.key
       ? activityShowDaemon
       : activityShow,
+  // The action queue (0.30.0), from fixtures written to the contract until the event service's own output replaces
+  // them. Its calls run only where the events service's version is 0.30.0 or later, which no test has unless it says so.
+  queueList: (call: Call) => queueListAnswer(call),
+  queueCounts,
+  queueDone: queueChangeAnswer,
+  queueDismiss: queueChangeAnswer,
+  queueReopen: queueChangeAnswer,
+  queueClear: { cleared: 3 },
 };
 
 /** An installation with every product at 0.29.0, the first core with the activity log. */
 export const ACTIVITY_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.29.0' };
+
+/** Every product at 0.30.0, the first events service with the action queue: core's version, and each `--version`. */
+export const QUEUE_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.30.0' };
+
+/** The queue's lists, by the state each holds (written from the contract, design 2026-10-25-action-queue §8). */
+export const QUEUE_LISTS = { open: queueOpen, done: queueDone, dismissed: queueDismissed } as const;
+
+/** The queue's counts, as the lists above hold them. */
+export const QUEUE_COUNTS = queueCounts;
+
+type QueueListCall = Extract<Call, { kind: 'queueList' }>;
+
+/**
+ * `queue list` from the fixtures, as the event service would answer it: the state's items (every state's for `all`),
+ * newest first, only those of the rule and the channel asked for, and at most the limit, with `more` past it.
+ */
+export function queueListAnswer(
+  call: Call,
+  lists: Record<'open' | 'done' | 'dismissed', { items: unknown[] }> = QUEUE_LISTS,
+) {
+  const { state, rule, channel, limit } = call as QueueListCall;
+  const pool =
+    state === 'all' ? [...lists.open.items, ...lists.done.items, ...lists.dismissed.items] : lists[state].items;
+  const items = (pool as { arrivedAt: string; rule: { id: string }; channel: string }[])
+    .filter(
+      (item) => (rule === undefined || item.rule.id === rule) && (channel === undefined || item.channel === channel),
+    )
+    .sort((a, b) => b.arrivedAt.localeCompare(a.arrivedAt));
+  const shown = limit === undefined ? items : items.slice(0, limit);
+  return { items: shown, more: shown.length < items.length };
+}
+
+/**
+ * A queue that keeps what is done to it, as the event service does: done, dismiss and reopen move an item between the
+ * lists, clear purges the done and dismissed, and the lists and counts answer from what is left. Each call of this
+ * starts again from the fixtures.
+ */
+export function fakeQueue(): Partial<Record<Call['kind'], Fixture>> {
+  type Item = (typeof QUEUE_LISTS.open.items)[number];
+  let items: Item[] = JSON.parse(
+    JSON.stringify([...QUEUE_LISTS.open.items, ...QUEUE_LISTS.done.items, ...QUEUE_LISTS.dismissed.items]),
+  );
+  const inState = (state: string) => ({ items: items.filter((item) => item.state === state) });
+  const count = (state: string) => items.filter((item) => item.state === state).length;
+  const change = (call: Call) => {
+    const answer = queueChangeAnswer(call);
+    const item = items.find((each) => each.id === answer.item.id);
+    if (item !== undefined) {
+      item.state = answer.item.state;
+      item.stateAt = answer.item.stateAt;
+    }
+    return answer;
+  };
+  return {
+    queueList: (call: Call) =>
+      queueListAnswer(call, { open: inState('open'), done: inState('done'), dismissed: inState('dismissed') }),
+    queueCounts: () => ({
+      open: count('open'),
+      done: count('done'),
+      dismissed: count('dismissed'),
+      byRule: QUEUE_COUNTS.byRule.map((rule) => ({
+        ...rule,
+        open: items.filter((item) => item.state === 'open' && item.rule.id === rule.ruleId).length,
+      })),
+    }),
+    queueDone: change,
+    queueDismiss: change,
+    queueReopen: change,
+    queueClear: () => {
+      const before = items.length;
+      items = items.filter((item) => item.state === 'open');
+      return { cleared: before - items.length };
+    },
+  };
+}
+
+/** What `queue done|dismiss|reopen` answers: the item's id and its new state, at a fixed moment. */
+export function queueChangeAnswer(call: Call) {
+  const { kind, itemId } = call as Extract<Call, { kind: 'queueDone' | 'queueDismiss' | 'queueReopen' }>;
+  const state = kind === 'queueDone' ? 'done' : kind === 'queueDismiss' ? 'dismissed' : 'open';
+  return { item: { id: itemId, state, stateAt: '2026-10-25T10:00:00.000Z' } };
+}
 
 /** An `ok` result carrying `data`. */
 export function ok(data: unknown, exit = 0): CliResult {
