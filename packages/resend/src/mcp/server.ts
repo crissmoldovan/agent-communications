@@ -133,6 +133,8 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     { name: 'agent-resend', version: VERSION },
     { instructions: await buildInstructions(context, pinned) },
   );
+  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
+  context.clientInfo = () => server.server.getClientVersion();
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text

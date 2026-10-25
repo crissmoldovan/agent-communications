@@ -1,5 +1,6 @@
 import { CommsError, type GatedChange, toCommsError } from '@agentcomms/core';
 import { keyPermissionOf } from '../accounts.ts';
+import { recorded } from '../activity.ts';
 import { resendRequest } from '../api/client.ts';
 import { closedPermit, spendOn } from '../api/guard.ts';
 import { SendRecords } from '../compose/store.ts';
@@ -34,7 +35,45 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Cancelling one scheduled email, as a change the shared change flow plans and applies. Recorded in the activity log
+ * as the write it is — the email's id, and how many recipients it had — when it is applied, or when the look before it
+ * refuses; a call that only prepares the change's approval writes nothing to the account, and the approval store keeps
+ * it.
+ */
 export function cancelScheduledChange(context: ResendContext, name: string, id: unknown): GatedChange<CancelledEmail> {
+  const change = cancelChange(context, name, id);
+  return {
+    ...change,
+    plan: async (config) => {
+      try {
+        return await change.plan(config);
+      } catch (error) {
+        // The look refused it, or failed: the same line a refused cancel records, then the same error on.
+        await recorded(
+          context,
+          'resend.scheduled.cancel',
+          'write',
+          name,
+          () => Promise.reject(error),
+          () => ({}),
+        ).catch(() => undefined);
+        throw error;
+      }
+    },
+    apply: (consent, request) =>
+      recorded(
+        context,
+        'resend.scheduled.cancel',
+        'write',
+        name,
+        () => change.apply(consent, request),
+        (cancelled) => ({ items: [{ id: cancelled.id }], counts: { recipients: cancelled.recipients } }),
+      ),
+  };
+}
+
+function cancelChange(context: ResendContext, name: string, id: unknown): GatedChange<CancelledEmail> {
   const emailId = resendId(id, 'email id');
   const look = async () => {
     const named = await context.accounts.require(name);

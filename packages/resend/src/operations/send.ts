@@ -44,6 +44,7 @@ import {
   withSendingLease,
 } from '@agentcomms/core';
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
+import { itemOf, plain, recorded } from '../activity.ts';
 import { resendRequest, sendThrottleOf, throttledRefusal, type WriteOutcome } from '../api/client.ts';
 import { APPROVAL_TAG, closedPermit, type FetchLike, spendOn } from '../api/guard.ts';
 import { addressField, type Envelope, wrapField } from '../compose/inbound.ts';
@@ -584,6 +585,27 @@ async function attachPolicy(context: ResendContext) {
  * this exact content. Nothing is sent; preparing twice is free.
  */
 export async function prepareSend(context: ResendContext, name: string, input: PrepareInput): Promise<SendPreparation> {
+  // Recorded in the activity log as an approval asked for: its id, the email's subject, and the recipients.
+  return recorded(
+    context,
+    'resend.send.prepare',
+    'approval',
+    name,
+    () => prepareOneSend(context, name, input),
+    (prepared) => ({
+      approvalId: prepared.approvalId,
+      items: [itemOf(prepared.approvalId, prepared.expect.subject)],
+      recipients: activityRecipients(prepared.expect),
+    }),
+  );
+}
+
+/** A send's recipients as its activity line keeps them: To, Cc and Bcc, as addresses. */
+function activityRecipients(expect: Pick<Expectation, 'to' | 'cc' | 'bcc'>): string[] {
+  return [...expect.to, ...expect.cc, ...expect.bcc].flatMap((address) => plain(address) ?? []);
+}
+
+async function prepareOneSend(context: ResendContext, name: string, input: PrepareInput): Promise<SendPreparation> {
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const named = await context.accounts.require(name);
@@ -881,6 +903,30 @@ function acceptedSaid(withId: boolean, scheduledAt: string | null): string {
  * request, send — never retried, because a retried send may deliver twice.
  */
 export async function executeSend(
+  context: ResendContext,
+  name: string,
+  options: { approvalId: string; expect?: Expectation | undefined },
+): Promise<SendResult> {
+  /*
+   * Recorded in the activity log around the send, never inside it: the line is written once the send below has ended,
+   * whichever way — Resend's id for the email (or the approval's, when it gave none), its subject, the recipients and
+   * the approval. A line that cannot be written changes nothing here: the audit log is the send's record.
+   */
+  return recorded(
+    context,
+    'resend.send.execute',
+    'write',
+    name,
+    () => sendApproved(context, name, options),
+    (sent) => ({
+      approvalId: sent.approvalId,
+      items: [itemOf(sent.resendId ?? sent.approvalId, sent.subject)],
+      recipients: activityRecipients(sent),
+    }),
+  );
+}
+
+async function sendApproved(
   context: ResendContext,
   name: string,
   options: { approvalId: string; expect?: Expectation | undefined },
@@ -1272,6 +1318,21 @@ function outcomeWords(outcome: CurrentOutcome): string {
  * machine's own record of a cancellation Resend confirmed; without it, a cancellation is as Resend reports it.
  */
 export async function sendStatus(context: ResendContext, name: string, approvalId: string): Promise<SendStatus> {
+  // Recorded as a read: the approval it asked about, and the email Resend knows it by, when it does.
+  return recorded(
+    context,
+    'resend.send.status',
+    'read',
+    name,
+    () => statusOf(context, name, approvalId),
+    (status) => ({
+      approvalId: status.approvalId,
+      ...(status.resend === null ? {} : { items: [{ id: status.resend.id }] }),
+    }),
+  );
+}
+
+async function statusOf(context: ResendContext, name: string, approvalId: string): Promise<SendStatus> {
   const named = await context.accounts.require(name);
   const local = await new SendRecords(context.core.paths.stateDir, context.now).summary(named.account.id, approvalId);
   /*
