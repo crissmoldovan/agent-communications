@@ -1067,6 +1067,13 @@ pub enum Request {
     FirstStart(bool),
 }
 
+impl Request {
+    /// Whether it asks for the service to stop: the switch off, or Not now.
+    pub fn stops(self) -> bool {
+        matches!(self, Request::Switch(false) | Request::FirstStart(false))
+    }
+}
+
 /// The supervisor: the record, the app's own child, and what the window is told. `decide` chooses; this does it.
 pub struct Supervisor {
     record: ServiceRecord,
@@ -1842,15 +1849,30 @@ fn with_supervisor<T>(
 fn on_held<T>(
     app: &AppHandle,
     service: &EventService,
-    mut held: MutexGuard<'_, Option<Supervisor>>,
+    held: MutexGuard<'_, Option<Supervisor>>,
     work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
 ) -> Option<(T, EventServiceState)> {
     let ctx = context(&app.state::<AppState>());
+    let (answer, state, changed) = held_work(service, &ctx, held, work)?;
+    if changed {
+        let _ = app.emit(CHANGED, &state);
+    }
+    Some((answer, state))
+}
+
+/// `on_held`, but for telling the window: `work`'s answer, the state, and whether it changed since it was last
+/// published, which the main thread reads (`Shown`).
+fn held_work<T>(
+    service: &EventService,
+    ctx: &RunContext,
+    mut held: MutexGuard<'_, Option<Supervisor>>,
+    work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
+) -> Option<(T, EventServiceState, bool)> {
     let supervisor = held.as_mut()?;
     take_requests(service, supervisor);
-    let answer = work(supervisor, &ctx);
+    let answer = work(supervisor, ctx);
     take_requests(service, supervisor);
-    let state = supervisor.state(&ctx);
+    let state = supervisor.state(ctx);
     let running = supervisor.app_service_running();
     let stop_pending = supervisor.stop_pending();
     let quit_answer = supervisor.record().quit_answer;
@@ -1864,10 +1886,7 @@ fn on_held<T>(
         shown.state = Some(state.clone());
         changed
     };
-    if changed {
-        let _ = app.emit(CHANGED, &state);
-    }
-    Some((answer, state))
+    Some((answer, state, changed))
 }
 
 /// Records, in order, the requests commands left beside the supervisor.
@@ -1885,24 +1904,45 @@ fn command(app: &AppHandle, request: Request) -> EventServiceState {
     let Some(service) = app.try_state::<EventService>() else {
         return unavailable();
     };
-    let record = |supervisor: &mut Supervisor, _: &RunContext| supervisor.request(request);
-    let state = match service.supervisor.try_lock() {
-        Ok(held) => on_held(app, &service, held, record).map(|(_, state)| state),
-        Err(TryLockError::Poisoned(poisoned)) => {
-            on_held(app, &service, poisoned.into_inner(), record).map(|(_, state)| state)
+    let ctx = context(&app.state::<AppState>());
+    let state = asked(&service, &ctx, request).map(|(state, changed)| {
+        if changed {
+            let _ = app.emit(CHANGED, &state);
         }
-        Err(TryLockError::WouldBlock) => {
-            lock(&service.requests).push(request);
-            let shown = lock(&service.shown).state.clone();
-            match shown {
-                Some(shown) => Some(requested_state(&shown, request)),
-                // Nothing told yet: the window has shown nothing to ask about, so this is waited for.
-                None => with_supervisor(app, |_, _| {}).map(|(_, state)| state),
-            }
-        }
-    };
+        state
+    });
     service.wake.notify();
     state.unwrap_or_else(unavailable)
+}
+
+/// `command`'s work: the request recorded on a free supervisor, or left beside a busy one, and the state it comes to,
+/// with whether the window is to be told it by an event too. A request left waiting says at once, to what Quit reads
+/// without the supervisor (`Shown`), whether it is a stop.
+fn asked(
+    service: &EventService,
+    ctx: &RunContext,
+    request: Request,
+) -> Option<(EventServiceState, bool)> {
+    let record = |supervisor: &mut Supervisor, _: &RunContext| supervisor.request(request);
+    let held = match service.supervisor.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            lock(&service.requests).push(request);
+            let shown = {
+                let mut shown = lock(&service.shown);
+                shown.stop_pending = request.stops();
+                shown.state.clone()
+            };
+            return match shown {
+                Some(shown) => Some((requested_state(&shown, request), false)),
+                // Nothing told yet: the window has shown nothing to ask about, so this is waited for.
+                None => held_work(service, ctx, lock(&service.supervisor), |_, _| {})
+                    .map(|(_, state, changed)| (state, changed)),
+            };
+        }
+    };
+    held_work(service, ctx, held, record).map(|(_, state, changed)| (state, changed))
 }
 
 /// What a request comes to, from the state the window was last told: what `Supervisor::state` says once it is
@@ -2049,6 +2089,18 @@ pub enum QuitRoute {
     /// Stop it was remembered, or the switch was just turned off and its stop is not done yet: the service is stopped,
     /// then the app quits.
     StopThenQuit,
+    /// Commands wait beside the supervisor, which the watchdog holds: a thread records them, then chooses the route
+    /// from what they came to, and acts on it, quitting too.
+    Later,
+}
+
+/// What a Quit comes to now: `Later` while commands wait beside the supervisor, so none is lost; otherwise
+/// `route_for` what the supervisor last published. Never waits for the supervisor.
+fn quit_plan(service: &EventService) -> QuitRoute {
+    if !lock(&service.requests).is_empty() {
+        return QuitRoute::Later;
+    }
+    route_for(&lock(&service.shown))
 }
 
 /// What a Quit comes to, from what the supervisor last published: with the switch just turned off and its stop not yet
@@ -2096,7 +2148,7 @@ pub fn quit_step(route: QuitRoute, stopping: &AtomicBool) -> QuitStep {
         // opens once however often it is asked.
         QuitRoute::Ask => QuitStep::ShowAndAsk,
         QuitRoute::StopThenQuit if first_to_ask(stopping) => QuitStep::StopThenQuit,
-        QuitRoute::StopThenQuit => QuitStep::Nothing,
+        QuitRoute::StopThenQuit | QuitRoute::Later => QuitStep::Nothing,
     }
 }
 
@@ -2109,12 +2161,32 @@ fn first_answer(answered: &AtomicBool) -> bool {
 /// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown, brought forward and
 /// sent `quit-requested`, every time, so a window that missed it is asked again; nothing quits past the question, and
 /// only its first answer is acted on (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, once,
-/// then quits. On `Quit` the caller quits.
+/// then quits. On `Quit` the caller quits. On `Later`, commands wait beside the supervisor: a thread records them, then
+/// chooses among those and acts, quitting itself, so a switch turned off a moment before Quit is never lost.
 pub fn on_quit(app: &AppHandle) -> QuitRoute {
     let Some(service) = app.try_state::<EventService>() else {
         return QuitRoute::Quit;
     };
-    let route = route_for(&lock(&service.shown));
+    let route = quit_plan(&service);
+    if route == QuitRoute::Later {
+        let app = app.clone();
+        thread::spawn(move || {
+            with_supervisor(&app, |_, _| {});
+            let Some(service) = app.try_state::<EventService>() else {
+                return quit(&app);
+            };
+            let route = route_for(&lock(&service.shown));
+            if quit_as(&app, &service, route) == QuitRoute::Quit {
+                quit(&app);
+            }
+        });
+        return route;
+    }
+    quit_as(app, &service, route)
+}
+
+/// What one Quit on `route` does (`quit_step`); the route, for the caller to quit on `Quit`.
+fn quit_as(app: &AppHandle, service: &EventService, route: QuitRoute) -> QuitRoute {
     match quit_step(route, &service.stopping) {
         QuitStep::Quit | QuitStep::Nothing => {}
         QuitStep::ShowAndAsk => {
@@ -3911,6 +3983,98 @@ exit 64
             after(&stopped, Request::FirstStart(false)),
             EventServiceStatus::Stopping
         );
+    }
+
+    /// A context with folders of its own and no launcher: nothing in it can run.
+    fn bare_context() -> (tempfile::TempDir, RunContext) {
+        let folders = tempfile::tempdir().expect("a folder");
+        let data = folders.path().to_string_lossy().into_owned();
+        let ctx = RunContext {
+            folders: Folders {
+                config_dir: format!("{data}/config"),
+                state_dir: format!("{data}/state"),
+                data_dir: data.clone(),
+                secrets_dir: format!("{data}/secrets"),
+            },
+            platform: Platform::current(),
+            node: None,
+        };
+        (folders, ctx)
+    }
+
+    /// The app as it holds the service, with a supervisor that runs nothing, and the state it first publishes.
+    fn held_service(record: ServiceRecord, ctx: &RunContext) -> EventService {
+        let service = EventService::default();
+        *lock(&service.supervisor) = Some(Supervisor::new(record, None, Platform::MacOs));
+        held_work(&service, ctx, lock(&service.supervisor), |_, _| {}).expect("published");
+        service
+    }
+
+    /// The switch turned off while the watchdog holds the supervisor, looking, and Quit pressed before it lets go:
+    /// Quit reads what waits beside the supervisor, so the stop is done first, never lost. A start asked for in that
+    /// moment, the switch or the first-start question's Start, is recorded before Quit chooses too.
+    #[test]
+    fn a_request_waiting_beside_a_busy_supervisor_is_recorded_before_quit_chooses() {
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        {
+            // The app's own service runs, and Keep running was remembered: Quit would quit, and leave it running.
+            let mut shown = lock(&service.shown);
+            shown.app_service_running = true;
+            shown.quit_answer = Some(QuitAnswer::Keep);
+        }
+        assert_eq!(quit_plan(&service), QuitRoute::Quit);
+        let looking = lock(&service.supervisor);
+        let (state, changed) = asked(&service, &ctx, Request::Switch(false)).expect("answered");
+        assert!(!state.wanted);
+        assert!(!changed, "told by the answer, not by an event");
+        assert_eq!(lock(&service.requests).as_slice(), [Request::Switch(false)]);
+        assert!(
+            lock(&service.shown).stop_pending,
+            "Quit reads it without the supervisor"
+        );
+        // Quit, while the watchdog still looks: chosen once the request is recorded, on a thread.
+        assert_eq!(quit_plan(&service), QuitRoute::Later);
+        drop(looking);
+        held_work(&service, &ctx, lock(&service.supervisor), |_, _| {}).expect("recorded");
+        assert!(lock(&service.requests).is_empty());
+        assert_eq!(quit_plan(&service), QuitRoute::StopThenQuit);
+        let supervisor = lock(&service.supervisor);
+        let supervisor = supervisor.as_ref().expect("a supervisor");
+        assert!(
+            !supervisor.record().wanted,
+            "the switch is off, and kept so"
+        );
+        assert!(supervisor.stop_pending());
+
+        // A start asked for in that moment: no stop is said to wait, and it is recorded before Quit chooses.
+        for request in [Request::Switch(true), Request::FirstStart(true)] {
+            let (_folders, ctx) = bare_context();
+            let service = held_service(
+                ServiceRecord {
+                    wanted: false,
+                    ..fresh()
+                },
+                &ctx,
+            );
+            let looking = lock(&service.supervisor);
+            asked(&service, &ctx, request).expect("answered");
+            assert!(!lock(&service.shown).stop_pending, "{request:?}");
+            assert_eq!(quit_plan(&service), QuitRoute::Later, "{request:?}");
+            drop(looking);
+            held_work(&service, &ctx, lock(&service.supervisor), |_, _| {}).expect("recorded");
+            let supervisor = lock(&service.supervisor);
+            let record = supervisor.as_ref().expect("a supervisor").record();
+            assert!(record.wanted && record.first_start_answered, "{request:?}");
+        }
+
+        // With nothing waiting, a free supervisor records a request at once.
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        let (state, changed) = asked(&service, &ctx, Request::Switch(false)).expect("answered");
+        assert!(!state.wanted);
+        assert!(changed, "told by an event too");
+        assert!(lock(&service.requests).is_empty());
     }
 
     /// The switch turned off, and Quit before the watchdog has stopped what runs: Quit stops it first, and asks
