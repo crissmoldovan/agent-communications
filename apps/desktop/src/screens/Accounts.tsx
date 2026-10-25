@@ -188,8 +188,10 @@ function ChannelTabs({
         </Tabs.List>
         {current === 'whatsapp' ? null : <AddAccount key={current} product={current} />}
       </div>
+      {/* Kept mounted, as Agent's and Events' are: a row's sign-in still opening, and what it or its profile came to,
+          stay through a change of tab, so a second sign-in cannot start while the first is still opening. */}
       {channels.map((channel) => (
-        <Tabs.Panel key={channel} value={channel}>
+        <Tabs.Panel key={channel} value={channel} keepMounted>
           <ChannelList channel={channel} list={lists[channel]} shared={shared} />
         </Tabs.Panel>
       ))}

@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { InboxView } from '../cli-types.ts';
-import type { Call } from '../ipc.ts';
+import type { Call, TerminalOutcome } from '../ipc.ts';
 import { PROFILE_HINT } from '../screens/Accounts.tsx';
 import { cliKinds, createFakeBridge, EXAMPLE_FOLDERS, EXAMPLE_INSTALLATION, failed } from './fake-bridge.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
@@ -272,6 +272,43 @@ describe('Accounts', () => {
     expect(within(resend).queryByRole('button', { name: 'Sign in again' })).toBeNull();
     const whatsapp = row(await table('WhatsApp accounts'), 'example/whatsapp');
     expect(within(whatsapp).queryByRole('button', { name: 'Sign in again' })).toBeNull();
+  });
+
+  it("a row's sign-in and profile keep what they came to, and a sign-in stays busy, across a change of tab", async () => {
+    let open = (_outcome: TerminalOutcome) => {};
+    const bridge = createFakeBridge({
+      openInTerminal: () =>
+        new Promise<TerminalOutcome>((resolve) => {
+          open = resolve;
+        }),
+    });
+    renderApp(bridge, { screen: 'accounts' });
+    const gmail = () => table('Gmail mailboxes').then((list) => row(list, 'example/gmail'));
+    const signIn = async () => within(await gmail()).getByRole('button', { name: 'Sign in again' });
+
+    // A profile opened, and a sign-in still opening in Terminal.
+    fireEvent.click(within(await gmail()).getByRole('button', { name: 'Open writing profile' }));
+    const created = `Created ${EXAMPLE_FOLDERS.configDir}/compose/example/gmail.md`;
+    await waitFor(async () => expect((await gmail()).textContent).toContain(created));
+    fireEvent.click(await signIn());
+    await waitFor(async () => expect((await signIn()).getAttribute('aria-busy')).toBe('true'));
+
+    // Away to Slack and back: the sign-in is still busy, so it cannot be started twice, and the path is still said.
+    await choose(TAB.slack);
+    await screen.findByRole('list', { name: 'Slack workspaces' });
+    expect((await signIn()).getAttribute('aria-busy')).toBe('true');
+    expect((await gmail()).textContent).toContain(created);
+    fireEvent.click(await signIn());
+    expect(bridge.calls.filter((call) => call.command === 'openInTerminal')).toHaveLength(1);
+
+    // It opens; away and back again, what it came to is still there.
+    await act(async () => open({ outcome: 'opened', via: 'Terminal', revoked: null }));
+    expect(await within(await gmail()).findByText('Opened in Terminal.')).toBeTruthy();
+    expect((await signIn()).getAttribute('aria-busy')).toBeNull();
+    await choose(TAB.resend);
+    await screen.findByRole('list', { name: 'Resend accounts' });
+    expect(within(await gmail()).getByText('Opened in Terminal.')).toBeTruthy();
+    expect((await gmail()).textContent).toContain(created);
   });
 
   it('workspace-written text is shown as text', async () => {
