@@ -9,6 +9,7 @@ import {
   type StandingPlaces,
   truncateDisplay,
 } from '@agentcomms/core';
+import { describeStanding, recordSlack } from '../activity.ts';
 import type { SlackContext } from '../context.ts';
 import { readPlace } from './places.ts';
 import { openWorkspace, type SessionDeps } from './session.ts';
@@ -94,6 +95,24 @@ export async function prepareStandingAdd(
   request: StandingAddRequest,
   slack: SessionDeps = {},
   options: StandingAddOptions = {},
+): ReturnType<typeof prepareStanding> {
+  // An approval the person gives at their terminal, prepared here: recorded as that kind, with the places it names.
+  return recordSlack(
+    context,
+    alias,
+    'slack.standing.add',
+    'approval',
+    () => prepareStandingOf(context, alias, request, slack, options),
+    describeStanding(request.places),
+  );
+}
+
+async function prepareStandingOf(
+  context: SlackContext,
+  alias: string,
+  request: StandingAddRequest,
+  slack: SessionDeps,
+  options: StandingAddOptions,
 ): ReturnType<typeof prepareStanding> {
   const contents = {
     ...(request.reactions === undefined ? {} : { reactions: [...request.reactions] }),
