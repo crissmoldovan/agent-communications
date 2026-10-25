@@ -16,8 +16,9 @@ The design is the mockup the owner approved on 2026-10-25.
   12 px. Monospace is kept only for literal values: paths, ids, commands.
 - **Every screen is reworked,** with nothing taken away. Every status, warning, number and action is still there.
   - Each screen says what is true in a few words. Explanations move into hints or behind "Learn more".
-  - Where a screen has distinct views, it has a tab bar: Accounts by channel, Approvals, and Events (Service, Judges,
-    Rules, Deliveries). A tab holding a warning or something waiting shows its count, so nothing hides behind a tab.
+  - Where a screen has distinct views, it has a tab bar: Accounts by channel, Agent (Label, Behaviour rules, Standing
+    approvals), and Events (Service, Judges, Rules, Deliveries). A tab holding a warning or something waiting shows its
+    count, so nothing hides behind a tab. Approvals shows what is waiting, with its count.
   - Settings puts updates and Start at login first. The folder overrides sit behind "Change folders…".
 - **Built on `@cueplusplus/ui` 0.30.0.** A few pieces of the look aren't in cue-ui yet: a gliding highlight on tabs,
   swiping between tabs, a soft panel, and labels that all follow the label face (cue-ui-77 to 80 and 82). Until cue-ui
