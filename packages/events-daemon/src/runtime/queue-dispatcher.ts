@@ -19,7 +19,6 @@ import {
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
 import { EventExpiry } from './expiry.ts';
-import { newLocalResetBarrier } from './reset.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
@@ -327,8 +326,13 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
     if (changed === 1) this.#dropRetainedTargetReference(row.id, this.#now());
   }
 
+  /**
+   * D8: content that cannot be authenticated or read ends its own work, terminal `content-unreadable`, with its record
+   * purged. Unlike dry-run, it closes no reset barrier: nothing in production reopens a local barrier, and one bad
+   * record must not stop every later match from reaching the person's queue. Doctor counts these deliveries.
+   */
   #markUnreadable(row: ClaimedDelivery): void {
-    const marked = this.#store.immediate(() => {
+    this.#store.immediate(() => {
       const changed = this.#store.database
         .prepare(
           `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL
@@ -336,10 +340,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
         )
         .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
       if (changed === 1) this.#dropRetainedTargetReference(row.id, this.#now());
-      return changed === 1;
     });
-    // As dry-run: unreadable local work closes this target version's barrier until a person resumes it (D8).
-    if (marked) newLocalResetBarrier(this.#store, row.targetId, row.targetVersion);
   }
 
   #purgeAccount(source: CanonicalFullRuleDocument['source']['channel'], accountId: string): void {

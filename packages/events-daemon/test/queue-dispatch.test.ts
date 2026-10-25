@@ -6,6 +6,7 @@ import { isQueueItemId } from '../src/domain/queue-target.ts';
 import { DeliveryDispatcher, type DispatchResult } from '../src/runtime/dispatcher.ts';
 import { QueueDispatcher } from '../src/runtime/queue-dispatcher.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { RecordStorageError } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ACCOUNT = 'ibx_QUEUEDISPATCH00';
@@ -85,7 +86,7 @@ async function fixture(rule: ReturnType<typeof queueRule>) {
   store.database
     .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
     .run('queue-dispatch@1', 'queue-dispatch', 1, target, sha256Hex(target));
-  const insert = (id: string, occurredAt = clock - 5_000) => {
+  const insert = (id: string, occurredAt = clock - 5_000, bytes: Buffer = record) => {
     store.database
       .prepare(
         `INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
@@ -104,7 +105,7 @@ async function fixture(rule: ReturnType<typeof queueRule>) {
                                 target_kind, encrypted_record, expires_at, state, switch_generation)
          VALUES (?, ?, ?, ?, 1, 'queue:queue-dispatch:1', 'queue-dispatch', 1, 'queue', ?, ?, 'queued', 7)`,
       )
-      .run(id, `decision-${id}`, ACCOUNT, rule.ruleId, record, clock + 7 * DAY);
+      .run(id, `decision-${id}`, ACCOUNT, rule.ruleId, bytes, clock + 7 * DAY);
   };
   const dispatcher = (options: Record<string, unknown> = {}) =>
     new QueueDispatcher({
@@ -267,4 +268,55 @@ test('QUEUE-A: the routing facade sends a queue delivery to the queue handler, a
   });
   await assert.rejects(unrouted.dispatch('queued'), /queue/);
   assert.deepEqual(calls, ['queue:queued'], 'no other adapter can claim a queue delivery');
+});
+
+test('QUEUE-A: an unreadable queue delivery ends content-unreadable without a barrier, and the next match still lands', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture(queueRule({ queueMs: 7 * DAY, targetRetentionMs: 7 * DAY, cap: 10 }));
+  try {
+    setup.insert('corrupt', clock - 9_000, Buffer.from('{"kind":"queue-item","item":"not an item"}'));
+    setup.insert('unauthenticated', clock - 8_000);
+    setup.insert('next', clock - 7_000);
+    const failing = {
+      ...cipher,
+      async decrypt(location: { key: readonly { value: unknown }[] }, bytes: Uint8Array) {
+        if (location.key[0]?.value === 'unauthenticated')
+          throw new RecordStorageError('RECORD_UNREADABLE_RESET_REQUIRED', 'synthetic authentication failure');
+        return Buffer.from(bytes);
+      },
+    };
+    for (const id of ['corrupt', 'unauthenticated']) {
+      assert.deepEqual(await setup.dispatcher({ cipher: failing }).dispatch(id), {
+        state: 'unreadable',
+        deliveryId: id,
+      });
+      assert.deepEqual(
+        {
+          ...(setup.store.database.prepare('SELECT state, encrypted_record FROM deliveries WHERE id = ?').get(id) as
+            | Record<string, unknown>
+            | undefined),
+        },
+        { state: 'content-unreadable', encrypted_record: null },
+        `${id}: terminal, its record purged`,
+      );
+    }
+    assert.equal(count(setup.store, 'reset_barriers'), 0, 'no barrier closes the queue');
+    assert.deepEqual(await setup.dispatcher({ cipher: failing }).dispatch('next'), {
+      state: 'delivered',
+      deliveryId: 'next',
+    });
+    const items = setup.store.database.prepare('SELECT delivery_id, state FROM queue_items').all() as Array<{
+      delivery_id: string;
+      state: string;
+    }>;
+    assert.deepEqual(
+      items.map((row) => ({ ...row })),
+      [{ delivery_id: 'next', state: 'open' }],
+      'the next match is an open item',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
 });

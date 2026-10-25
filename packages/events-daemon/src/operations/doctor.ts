@@ -264,6 +264,11 @@ export interface DoctorReportV3 extends Omit<DoctorReportV2, 'schemaVersion' | '
     )[];
     readonly laya: LayaDoctorStatus;
   };
+  /**
+   * The action queue (0.30.0): how many queue deliveries ended `content-unreadable`. Each one ended alone, with no
+   * reset barrier, so later matches kept reaching the queue; this count is how a person learns any were lost.
+   */
+  readonly queue: { readonly unreadableDeliveries: number };
 }
 
 const DOCTOR_REPORT_V3_JUDGE_KEYS = ['kinds', 'budget', 'reservations', 'holds', JUDGE_KIND_LAYA] as const;
@@ -286,8 +291,13 @@ function exactlyKeys(value: object, keys: readonly string[]): boolean {
 
 /** The projection boundary: a v3 report, its judge entry and its Laya entry each have exactly their fields. */
 export function assertDoctorReportV3(report: DoctorReportV3): DoctorReportV3 {
-  if (Object.keys(report).some((key) => !DOCTOR_REPORT_V2_KEYS.includes(key as (typeof DOCTOR_REPORT_V2_KEYS)[number])))
+  if (
+    Object.keys(report).some(
+      (key) => key !== 'queue' && !DOCTOR_REPORT_V2_KEYS.includes(key as (typeof DOCTOR_REPORT_V2_KEYS)[number]),
+    )
+  )
     throw new Error('doctor-v3 report is closed');
+  if (!exactlyKeys(report.queue, ['unreadableDeliveries'])) throw new Error('doctor-v3 queue entry is closed');
   if (!exactlyKeys(report.judge, DOCTOR_REPORT_V3_JUDGE_KEYS)) throw new Error('doctor-v3 judge entry is closed');
   if (!exactlyKeys(report.judge.laya, DOCTOR_REPORT_V3_LAYA_KEYS)) throw new Error('doctor-v3 Laya entry is closed');
   return report;
