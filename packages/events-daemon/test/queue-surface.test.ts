@@ -35,7 +35,7 @@ async function cli(argv: readonly string[], env: NodeJS.ProcessEnv) {
   return { code, out, err };
 }
 
-test('QUEUE-A: queue list and show refuse inside an MCP server’s process, before they ask the owner (Q1)', async () => {
+test('QUEUE-A: queue list, show and clear refuse inside the event service’s MCP server, before they ask the owner (Q1)', async () => {
   const stateDir = await shortTempDir('events-queue-gate-');
   try {
     const base = ['--state-dir', stateDir];
@@ -47,7 +47,12 @@ test('QUEUE-A: queue list and show refuse inside an MCP server’s process, befo
     ]) {
       const refused = await cli(argv, { [MCP_SERVER_MARKER]: 'events' });
       assert.equal(refused.code, 10, `${argv.join(' ')}: ${refused.err}`);
-      assert.match(refused.err, argv.includes('clear') ? /cannot clear it/u : /an MCP server cannot read it/u);
+      assert.match(
+        refused.err,
+        argv.includes('clear')
+          ? /the event service's MCP server cannot clear it/u
+          : /the event service's MCP server cannot read it/u,
+      );
       assert.equal(refused.out, '', 'nothing is printed');
     }
     // The server marks its own process, so every program it starts is refused too.

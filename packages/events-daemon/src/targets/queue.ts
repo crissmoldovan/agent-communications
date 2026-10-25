@@ -2,9 +2,11 @@ import { CommsError } from '@agentcomms/core';
 import type { QueueItemV1, QueueJudgeV1, QueueListResultV1 } from '../runtime/queue.ts';
 
 /**
- * The environment variable an MCP server sets in its own process, so every program it starts inherits it. The queue's
- * content reads refuse when it is set (action queue design Q1): no MCP server, and no agent through one, can read the
- * queue. A shell an agent runs is the person's own and is not refused — no CLI gate could make that true.
+ * The environment variable the event service's MCP server (`agent-events mcp`) sets in its own process, so every
+ * program it starts inherits it. The queue's content reads and `queue clear` refuse when it is set (action queue design
+ * Q1): that server, and no agent through it, can read or clear the queue. Core's and the channels' MCP servers do not
+ * set it, and do not run the event service's CLI. A shell an agent runs is the person's own and is not refused — no
+ * CLI gate could make that true.
  */
 export const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
 
@@ -23,7 +25,7 @@ export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'cle
     throw new CommsError(
       'APPROVAL_REQUIRED',
       action === 'read'
-        ? 'queue item content is for a person, at a terminal or in the app — an MCP server cannot read it'
+        ? "queue item content is for a person, at a terminal or in the app — the event service's MCP server cannot read it"
         : "clearing the queue is for a person, at a terminal or in the app — the event service's MCP server cannot clear it",
       {
         hint:
